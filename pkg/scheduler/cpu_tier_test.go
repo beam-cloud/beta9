@@ -15,6 +15,15 @@ func spotRequest() *types.ContainerRequest {
 	return &types.ContainerRequest{Cpu: 1000, Memory: 1024, OpportunisticOnly: true, Evictable: true, DrainSeconds: 30, Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"cpu_tier":"spot"}`}}}
 }
 
+// tierScheduler is a scheduler with only these pools, for worker selection.
+func tierScheduler(pools map[string]types.WorkerPoolConfig) *Scheduler {
+	s := &Scheduler{workerPoolManager: NewWorkerPoolManager(), config: types.AppConfig{Worker: types.WorkerConfig{Pools: pools}}}
+	for name, p := range pools {
+		s.workerPoolManager.SetPool(name, p, nil)
+	}
+	return s
+}
+
 func TestRunMarksOnlySpotEvictable(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	require.NoError(t, err)
@@ -32,13 +41,7 @@ func TestRunMarksOnlySpotEvictable(t *testing.T) {
 }
 
 func TestCPUTierPlacementAndWorkerCompatibility(t *testing.T) {
-	s := &Scheduler{workerPoolManager: NewWorkerPoolManager()}
-	for name, p := range map[string]types.WorkerPoolConfig{
-		"legacy": {}, "shared": sharedPool,
-		"performance": {CPUClass: types.CPUTierPerformance},
-	} {
-		s.workerPoolManager.SetPool(name, p, &LocalWorkerPoolControllerForTest{name: name})
-	}
+	s := tierScheduler(map[string]types.WorkerPoolConfig{"legacy": {}, "shared": sharedPool, "performance": {CPUClass: types.CPUTierPerformance}})
 	for _, tc := range []struct {
 		tier string
 		want []string
@@ -60,8 +63,7 @@ func TestCPUTierPlacementAndWorkerCompatibility(t *testing.T) {
 }
 
 func TestTieredCPUUsesFreeCapacityBeforeReclaimingSpot(t *testing.T) {
-	s := &Scheduler{workerPoolManager: NewWorkerPoolManager()}
-	s.workerPoolManager.SetPool("shared", sharedPool, nil)
+	s := tierScheduler(map[string]types.WorkerPoolConfig{"shared": sharedPool})
 	full := &types.Worker{Id: "full", PoolName: "shared", CPUTierProtocol: types.CPUTierProtocolVersion, Status: types.WorkerStatusAvailable, TotalCpu: 8000, TotalMemory: 16000, FreeCpu: 0, FreeMemory: 0, EvictableCpu: 4000, EvictableMemory: 8000, Priority: 100}
 	free := *full
 	free.Id, free.FreeCpu, free.FreeMemory, free.Priority = "free", 4000, 8000, 0
@@ -102,13 +104,22 @@ func TestSpotWaitsForSpareCapacity(t *testing.T) {
 	status, err := scheduler.containerRepo.GetContainerRequestStatus(request.ContainerId)
 	require.NoError(t, err)
 	require.Equal(t, types.ContainerRequestStatusFailed, status)
+
+	// A managed endpoint replica is opportunistic and evictable on any tier,
+	// but only Spot waits: the replica fails at once and its controller retries.
+	replica := spotRequest()
+	replica.Stub.Config, replica.DrainSeconds, replica.Timestamp = `{"cpu_tier":"shared"}`, 0, time.Now()
+	setPendingSchedulerRequests(t, scheduler, replica)
+	newSchedulingAttempt(scheduler, replica, nil).run()
+	status, err = scheduler.containerRepo.GetContainerRequestStatus(replica.ContainerId)
+	require.NoError(t, err)
+	require.Equal(t, types.ContainerRequestStatusFailed, status)
 }
 
 func TestSpotSkipsWorkersHoldingPoolHeadroom(t *testing.T) {
 	shared := sharedPool
 	shared.PoolSizing = types.WorkerPoolJobSpecPoolSizingConfig{MinFreeCPU: "4000m", MinFreeMemory: "0", MinFreeGPU: "0"}
-	s := &Scheduler{workerPoolManager: NewWorkerPoolManager(), config: types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{"shared": shared}}}}
-	s.workerPoolManager.SetPool("shared", shared, nil)
+	s := tierScheduler(map[string]types.WorkerPoolConfig{"shared": shared})
 	worker := func(id string) *types.Worker {
 		return &types.Worker{Id: id, PoolName: "shared", CPUTierProtocol: types.CPUTierProtocolVersion, Status: types.WorkerStatusAvailable, TotalCpu: 8000, TotalMemory: 16000, FreeCpu: 8000, FreeMemory: 16000}
 	}
