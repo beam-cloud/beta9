@@ -1,0 +1,280 @@
+{
+  "run_id": "burst-ebdcc8243bb4",
+  "timestamp": "2026-11-04T15:09:58.257370+00:00",
+  "config": {
+    "context": "staging-admin",
+    "pool": "microvm-cpu",
+    "worker_id": "74a6ebe9",
+    "image_id": "e4dfe91b656cf522",
+    "count": 10,
+    "cpu": 0.1,
+    "memory": 512,
+    "disk_size": "1GiB",
+    "cycles": 1,
+    "okteto": true,
+    "trace_startup": false,
+    "retain_mismatches": true,
+    "cold_client_connections": false,
+    "post_launch_gate": null,
+    "post_startup_gate": null,
+    "post_pause_gate": null,
+    "launch_gate": "/tmp/microvm-release-v49-n10-r01.launch",
+    "startup_budget_ms": 1500,
+    "pause_budget_ms": 8000,
+    "restore_budget_ms": 5000,
+    "output": "/Users/luke/.codex/worktrees/efda/beta9/benchmarks/results/release-validation-20261104/runs/n10-r01.json"
+  },
+  "samples": [
+    {
+      "name": "burst-ebdcc8243bb4-0",
+      "proof": "a9ce2b710a3342baa4348dd38a990123",
+      "launch_started_ns": 1793805083768835000,
+      "id": "vm-e42e4356a983cebc",
+      "container_id": "vm-c0c4d6ec-724c-4b92-aecc-f3ba9c268731-aff416ce",
+      "launch_ms": 461.7995419539511,
+      "worker_id": "74a6ebe9",
+      "verify_launch_started_ns": 1793805084414427000,
+      "verify_launch_ms": 11077.951041981578,
+      "verify_launch_error": "sandbox process manager client not ready within timeout: rpc error: code = DeadlineExceeded desc = context deadline exceeded while waiting for connections to become ready",
+      "removed": true
+    },
+    {
+      "name": "burst-ebdcc8243bb4-1",
+      "proof": "4c357cad0438448d9b81d83556652800",
+      "launch_started_ns": 1793805083769207000,
+      "id": "vm-6ae80a141def3d00",
+      "container_id": "vm-eda95e77-39e8-4f37-b1e4-983584014292-68602ad1",
+      "launch_ms": 592.2907078638673,
+      "worker_id": "74a6ebe9",
+      "verify_launch_started_ns": 1793805084414525000,
+      "seed_command": {
+        "pid": 788,
+        "exit_code": 0,
+        "stdout": "91b36961-c4ac-4d54-b385-ff92aef0d99b\n4c357cad0438448d9b81d835566528004c357cad0438448d9b81d83556652800",
+        "stderr": ""
+      },
+      "guest_proof": "91b36961-c4ac-4d54-b385-ff92aef0d99b\n4c357cad0438448d9b81d835566528004c357cad0438448d9b81d83556652800",
+      "verify_launch_ms": 641.9200003147125,
+      "removed": true
+    },
+    {
+      "name": "burst-ebdcc8243bb4-2",
+      "proof": "e431a19bbbfe454a8684e49a32b9ca5e",
+      "launch_started_ns": 1793805083771393000,
+      "id": "vm-d4f0caf9ec42143e",
+      "container_id": "vm-8fbb0959-cc5a-4543-8caf-a626e5b7ecc5-3ce0edda",
+      "launch_ms": 574.6872923336923,
+      "worker_id": "74a6ebe9",
+      "verify_launch_started_ns": 1793805084415769000,
+      "seed_command": {
+        "pid": 789,
+        "exit_code": 0,
+        "stdout": "ca787b57-ef5b-40d4-aa07-bc1b3289fd04\ne431a19bbbfe454a8684e49a32b9ca5ee431a19bbbfe454a8684e49a32b9ca5e",
+        "stderr": ""
+      },
+      "guest_proof": "ca787b57-ef5b-40d4-aa07-bc1b3289fd04\ne431a19bbbfe454a8684e49a32b9ca5ee431a19bbbfe454a8684e49a32b9ca5e",
+      "verify_launch_ms": 680.4034998640418,
+      "removed": true
+    },
+    {
+      "name": "burst-ebdcc8243bb4-3",
+      "proof": "3544108de45c472a89c0f5fae2e3e6a3",
+      "launch_started_ns": 1793805083769249000,
+      "id": "vm-c19c31b495704471",
+      "container_id": "vm-21fc4f3e-aa41-4545-ab00-0621bd0c741a-6dd5fada",
+      "launch_ms": 538.787083234638,
+      "worker_id": "74a6ebe9",
+      "verify_launch_started_ns": 1793805084414597000,
+      "seed_command": {
+        "pid": 803,
+        "exit_code": 0,
+        "stdout": "64661dbd-f103-407b-8982-720d971b9e57\n3544108de45c472a89c0f5fae2e3e6a33544108de45c472a89c0f5fae2e3e6a3",
+        "stderr": ""
+      },
+      "guest_proof": "64661dbd-f103-407b-8982-720d971b9e57\n3544108de45c472a89c0f5fae2e3e6a33544108de45c472a89c0f5fae2e3e6a3",
+      "verify_launch_ms": 723.6629170365632,
+      "removed": true
+    },
+    {
+      "name": "burst-ebdcc8243bb4-4",
+      "proof": "2d82a870465d41c2b441d3ccaab1eb87",
+      "launch_started_ns": 1793805083769773000,
+      "id": "vm-f9c576c7986b25b5",
+      "container_id": "vm-cab8e451-1f87-4416-a620-ad4375778eb9-3826feab",
+      "launch_ms": 521.7786668799818,
+      "worker_id": "74a6ebe9",
+      "verify_launch_started_ns": 1793805084416474000,
+      "verify_launch_ms": 11033.205040730536,
+      "verify_launch_error": "sandbox process manager client not ready within timeout: rpc error: code = DeadlineExceeded desc = context deadline exceeded while waiting for connections to become ready",
+      "removed": true
+    },
+    {
+      "name": "burst-ebdcc8243bb4-5",
+      "proof": "5eb42bf1f9d9479389ec1f4052fe9770",
+      "launch_started_ns": 1793805083770948000,
+      "id": "vm-53673989200bd5fe",
+      "container_id": "vm-e5437a2d-8295-4e30-915b-068435e7dd91-3ce15148",
+      "launch_ms": 538.6974159628153,
+      "worker_id": "74a6ebe9",
+      "verify_launch_started_ns": 1793805084415270000,
+      "verify_launch_ms": 123991.36437475681,
+      "verify_launch_error": "<_InactiveRpcError of RPC that terminated with:\n\tstatus = StatusCode.DEADLINE_EXCEEDED\n\tdetails = \"Deadline Exceeded\"\n\tdebug_error_string = \"UNKNOWN:Error received from peer  {grpc_status:4, grpc_message:\"Deadline Exceeded\"}\"\n>",
+      "removed": true
+    },
+    {
+      "name": "burst-ebdcc8243bb4-6",
+      "proof": "e1a76a8455fa48c6b8df1bd70e36ff95",
+      "launch_started_ns": 1793805083771757000,
+      "id": "vm-662bfdd4e4eaebd8",
+      "container_id": "vm-7e96b877-290b-477a-8fdd-e3131dd48f45-89f41a91",
+      "launch_ms": 536.6177498362958,
+      "worker_id": "74a6ebe9",
+      "verify_launch_started_ns": 1793805084414947000,
+      "seed_command": {
+        "pid": 803,
+        "exit_code": 0,
+        "stdout": "d5441a97-54de-449d-8338-50fa36e31b8b\ne1a76a8455fa48c6b8df1bd70e36ff95e1a76a8455fa48c6b8df1bd70e36ff95",
+        "stderr": ""
+      },
+      "guest_proof": "d5441a97-54de-449d-8338-50fa36e31b8b\ne1a76a8455fa48c6b8df1bd70e36ff95e1a76a8455fa48c6b8df1bd70e36ff95",
+      "verify_launch_ms": 1121.1547497659922,
+      "removed": true
+    },
+    {
+      "name": "burst-ebdcc8243bb4-7",
+      "proof": "15a736dfaa4247eab9b52716099f260d",
+      "launch_started_ns": 1793805083769477000,
+      "id": "vm-b9e944ca259b674c",
+      "container_id": "vm-089c89c3-95be-496b-8503-5dab69aa20d6-04292dc7",
+      "launch_ms": 529.3381670489907,
+      "worker_id": "74a6ebe9",
+      "verify_launch_started_ns": 1793805084417238000,
+      "seed_command": {
+        "pid": 803,
+        "exit_code": 0,
+        "stdout": "7cb79641-6ac3-400c-9b8c-707198590e41\n15a736dfaa4247eab9b52716099f260d15a736dfaa4247eab9b52716099f260d",
+        "stderr": ""
+      },
+      "guest_proof": "7cb79641-6ac3-400c-9b8c-707198590e41\n15a736dfaa4247eab9b52716099f260d15a736dfaa4247eab9b52716099f260d",
+      "verify_launch_ms": 1065.2928329072893,
+      "removed": true
+    },
+    {
+      "name": "burst-ebdcc8243bb4-8",
+      "proof": "4e40fe085dd34e509c6e114673e3ec90",
+      "launch_started_ns": 1793805083769517000,
+      "id": "vm-40d0c0cc71452ab4",
+      "container_id": "vm-70619677-c98d-47c3-ad40-a02264796efa-9fc47602",
+      "launch_ms": 508.2938331179321,
+      "worker_id": "74a6ebe9",
+      "verify_launch_started_ns": 1793805084415836000,
+      "verify_launch_ms": 10533.546749968082,
+      "verify_launch_error": "sandbox process manager client not ready within timeout: rpc error: code = DeadlineExceeded desc = context deadline exceeded while waiting for connections to become ready",
+      "removed": true
+    },
+    {
+      "name": "burst-ebdcc8243bb4-9",
+      "proof": "22584b5227464f91a650929e89c85c19",
+      "launch_started_ns": 1793805083770441000,
+      "id": "vm-6ce159c402aa4ec6",
+      "container_id": "vm-38d4fa43-9ba4-4e2f-aad1-a409d8d72fbc-99956d08",
+      "launch_ms": 390.63158305361867,
+      "worker_id": "74a6ebe9",
+      "verify_launch_started_ns": 1793805084415911000,
+      "seed_command": {
+        "pid": 802,
+        "exit_code": 0,
+        "stdout": "000535a0-67c1-4d1e-83c7-5edf8f41acc5\n22584b5227464f91a650929e89c85c1922584b5227464f91a650929e89c85c19",
+        "stderr": ""
+      },
+      "guest_proof": "000535a0-67c1-4d1e-83c7-5edf8f41acc5\n22584b5227464f91a650929e89c85c1922584b5227464f91a650929e89c85c19",
+      "verify_launch_ms": 818.9932079985738,
+      "removed": true
+    }
+  ],
+  "phases": [
+    {
+      "phase": "launch",
+      "wall_ms": 592.8942081518471,
+      "started_ns": 1793805083768671000,
+      "finished_ns": 1793805084361566000,
+      "client_user_cpu_ms": 15.904000000000028,
+      "client_system_cpu_ms": 7.759000000000071,
+      "count": 10,
+      "p50_ms": 529.3381670489907,
+      "p95_ms": 592.2907078638673,
+      "p99_ms": 592.2907078638673,
+      "max_ms": 592.2907078638673,
+      "errors": [],
+      "budget_ms": 1500,
+      "passed": true
+    },
+    {
+      "phase": "verify_launch",
+      "wall_ms": 123992.4300420098,
+      "started_ns": 1793805084414355000,
+      "finished_ns": 1793805208406788000,
+      "client_user_cpu_ms": 896.3370000000001,
+      "client_system_cpu_ms": 1768.8310000000004,
+      "count": 6,
+      "p50_ms": 723.6629170365632,
+      "p95_ms": 1121.1547497659922,
+      "p99_ms": 1121.1547497659922,
+      "max_ms": 1121.1547497659922,
+      "errors": [
+        {
+          "name": "burst-ebdcc8243bb4-8",
+          "error": "sandbox process manager client not ready within timeout: rpc error: code = DeadlineExceeded desc = context deadline exceeded while waiting for connections to become ready"
+        },
+        {
+          "name": "burst-ebdcc8243bb4-4",
+          "error": "sandbox process manager client not ready within timeout: rpc error: code = DeadlineExceeded desc = context deadline exceeded while waiting for connections to become ready"
+        },
+        {
+          "name": "burst-ebdcc8243bb4-0",
+          "error": "sandbox process manager client not ready within timeout: rpc error: code = DeadlineExceeded desc = context deadline exceeded while waiting for connections to become ready"
+        },
+        {
+          "name": "burst-ebdcc8243bb4-5",
+          "error": "<_InactiveRpcError of RPC that terminated with:\n\tstatus = StatusCode.DEADLINE_EXCEEDED\n\tdetails = \"Deadline Exceeded\"\n\tdebug_error_string = \"UNKNOWN:Error received from peer  {grpc_status:4, grpc_message:\"Deadline Exceeded\"}\"\n>"
+        }
+      ]
+    }
+  ],
+  "worker": {
+    "id": "74a6ebe9",
+    "status": "available",
+    "totalCpu": "90000",
+    "totalMemory": "180224",
+    "freeCpu": "78000",
+    "freeMemory": "149504",
+    "poolName": "microvm-cpu",
+    "machineId": "machine-2e91b508-f28d-4051-b3e1-a1cb824d6c47",
+    "priority": 1000,
+    "buildVersion": "ll-merge-ready-v49-20261104",
+    "activeContainers": [
+      {
+        "containerId": "vm-68d313aa-29f2-4798-9afc-8369f7cd44fb-b2041e0a",
+        "status": "RUNNING",
+        "scheduledAt": "2026-11-04T15:09:48Z",
+        "workspaceId": "6a96a1ce-bc17-4f47-9fc7-3a040c6933be"
+      },
+      {
+        "containerId": "vm-21ef6fda-fde7-46a9-89ce-5daff75a1ae2-93fdc20a",
+        "status": "RUNNING",
+        "scheduledAt": "2026-11-04T15:09:48Z",
+        "workspaceId": "6a96a1ce-bc17-4f47-9fc7-3a040c6933be"
+      },
+      {
+        "containerId": "vm-302f7359-f1d8-439e-b514-5bd5e7f25942-5d018c5a",
+        "status": "RUNNING",
+        "scheduledAt": "2026-11-04T15:09:48Z",
+        "workspaceId": "6a96a1ce-bc17-4f47-9fc7-3a040c6933be"
+      }
+    ],
+    "workerImageOverride": "683656326989.dkr.ecr.us-east-1.amazonaws.com/stage/beta9-worker:ll-merge-ready-v49-20261104"
+  },
+  "prepared_at": "2026-11-04T15:09:59.381317+00:00",
+  "error": "verify_launch: 4 VM(s) failed; see report",
+  "passed": false
+}

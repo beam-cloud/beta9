@@ -1,0 +1,229 @@
+{
+  "commit": "c877158ccb0a32d301cf561bb59d0d4864f149b7",
+  "worker_sha256": "8f82790554c215bc442203384a8b6bf5bbb78b0f421129556af47682b44ec5a9",
+  "image_digest": "sha256:faf7101b52aa80556a85c2d7c7726a9be2191e0e48c0f09e5f6de5dc46d1810a",
+  "gateway": "Normal Okteto Air supervisor; no custom diagnostic gateway or startup profiling",
+  "fixture": {
+    "cpu": 0.1,
+    "memory_mib": 512,
+    "disk": "1GiB",
+    "image_prepared_outside_clock": true,
+    "client_connections_prepared_outside_clock": true,
+    "per_vm_smt_isolation_preserved": true,
+    "recent_stub_ttl_seconds": 604800,
+    "postgres_connections": 32,
+    "vm_batch_cap": 128
+  },
+  "total_vms": 200,
+  "initial_and_restored_proofs_exact": true,
+  "fresh_boot_ids_globally_unique": true,
+  "all_owned_vms_removed": true,
+  "all_phase_budgets_passed": true,
+  "cohorts": {
+    "10": {
+      "bursts": 10,
+      "samples": 100,
+      "per_vm": {
+        "launch": {
+          "count": 100,
+          "p50_ms": 435.203,
+          "p95_ms": 504.011,
+          "p99_ms": 521.293,
+          "max_ms": 522.254
+        },
+        "pause_0": {
+          "count": 100,
+          "p50_ms": 1961.28,
+          "p95_ms": 3356.596,
+          "p99_ms": 3750.966,
+          "max_ms": 5448.622
+        },
+        "restore_0": {
+          "count": 100,
+          "p50_ms": 634.526,
+          "p95_ms": 762.801,
+          "p99_ms": 771.636,
+          "max_ms": 775.189
+        },
+        "verify_launch": {
+          "count": 100,
+          "p50_ms": 947.298,
+          "p95_ms": 1291.749,
+          "p99_ms": 1401.213,
+          "max_ms": 1413.197
+        },
+        "verify_restore_0": {
+          "count": 100,
+          "p50_ms": 772.318,
+          "p95_ms": 1067.483,
+          "p99_ms": 1133.706,
+          "max_ms": 1171.038
+        }
+      },
+      "burst_wall_ms": {
+        "launch": [
+          522.9,
+          425.729,
+          460.72,
+          472.876,
+          457.269,
+          465.512,
+          470.609,
+          504.951,
+          460.245,
+          461.267
+        ],
+        "pause_0": [
+          3751.17,
+          2271.364,
+          2399.58,
+          2460.52,
+          2293.391,
+          2409.501,
+          3262.03,
+          2446.654,
+          5448.844,
+          2547.299
+        ],
+        "restore_0": [
+          705.347,
+          586.993,
+          627.559,
+          628.194,
+          722.339,
+          702.969,
+          775.328,
+          764.271,
+          571.807,
+          762.729
+        ],
+        "verify_launch": [
+          1248.21,
+          1413.369,
+          1267.708,
+          1249.72,
+          1137.806,
+          1401.942,
+          1294.626,
+          1214.01,
+          1377.584,
+          1322.594
+        ],
+        "verify_restore_0": [
+          1133.865,
+          1086.737,
+          820.969,
+          955.021,
+          911.283,
+          955.389,
+          1171.252,
+          940.602,
+          1068.231,
+          928.492
+        ]
+      }
+    },
+    "50": {
+      "bursts": 2,
+      "samples": 100,
+      "per_vm": {
+        "launch": {
+          "count": 100,
+          "p50_ms": 1233.351,
+          "p95_ms": 1334.133,
+          "p99_ms": 1353.797,
+          "max_ms": 1366.494
+        },
+        "pause_0": {
+          "count": 100,
+          "p50_ms": 3461.028,
+          "p95_ms": 4811.364,
+          "p99_ms": 7140.89,
+          "max_ms": 7544.854
+        },
+        "restore_0": {
+          "count": 100,
+          "p50_ms": 4517.832,
+          "p95_ms": 4832.459,
+          "p99_ms": 4834.516,
+          "max_ms": 4840.269
+        },
+        "verify_launch": {
+          "count": 100,
+          "p50_ms": 1135.545,
+          "p95_ms": 1387.991,
+          "p99_ms": 1532.468,
+          "max_ms": 1576.354
+        },
+        "verify_restore_0": {
+          "count": 100,
+          "p50_ms": 871.747,
+          "p95_ms": 1105.079,
+          "p99_ms": 1176.373,
+          "max_ms": 1267.888
+        }
+      },
+      "burst_wall_ms": {
+        "launch": [
+          1371.922,
+          1354.974
+        ],
+        "pause_0": [
+          7549.338,
+          7141.245
+        ],
+        "restore_0": [
+          4557.731,
+          4844.478
+        ],
+        "verify_launch": [
+          1546.103,
+          1582.855
+        ],
+        "verify_restore_0": [
+          1122.237,
+          1270.486
+        ]
+      }
+    }
+  },
+  "failed_preceding_candidate": {
+    "version": "v49",
+    "burst_size": 10,
+    "startup_wall_ms": 592.894,
+    "exec_failures_after_readiness": 4,
+    "cause": "Deferred stale network sweep deleted newly prepared/assigned slots from the replacement process",
+    "all_owned_vms_removed": true,
+    "included_in_successful_candidate_quantiles": false
+  },
+  "retention": {
+    "simulated_inactivity_days": 8,
+    "normal_maintenance_pruned_after_seconds": 58.915830249898136,
+    "remaining_local_copies": {
+      "native": false,
+      "archive": false,
+      "cas": false,
+      "qcow": false
+    },
+    "origin_restore_ram_disk_boot_exact": true,
+    "probe_removed": true,
+    "worker_restarted_same_image_to_reload_aged_index": true,
+    "three_existing_vm_boot_ids_preserved": true
+  },
+  "dependencies": {
+    "clip": "v0.0.0-20261104145530-f6838982cfe2",
+    "goproc": "v0.1.18-0.20261104145146-a70f7739dd77",
+    "local_replacements_for_either": false
+  },
+  "tests": {
+    "affected_linux_race_packages": 8,
+    "full_worker_race_rerun_after_network_fix": true,
+    "network_fence_race_repetitions": 10,
+    "real_qcow_allocation_map_cases": 12,
+    "privileged_fuse_read_mmap_busy_reader_directory_cookie_checks": true,
+    "privileged_idle_image_expiry_and_read_only_guest_init_checks": true,
+    "sdk_readiness_cases": 7,
+    "verified_source_files": 1073
+  },
+  "comparison_note": "The earlier profiling study and release study differ in gateway supervision, logging and workload (startup-only vs full lifecycle); their timing differences are not a controlled ablation. Release startup p95 was 504/1334ms at 10/50 versus 458/1116ms in the earlier profiling study. No speedup from the cleanup itself is claimed."
+}

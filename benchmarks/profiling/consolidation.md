@@ -53,3 +53,47 @@ the closed-pool regression explicitly starts past that fence. This is a confirme
 correctness fix, not an inferred dependency or guest-boot performance issue. The
 failed cohort is retained in the validation evidence and excluded from successful
 cohort latency statistics.
+
+
+## Final staging validation
+
+Commit `c877158ccb0a32d301cf561bb59d0d4864f149b7`, normal Okteto gateway,
+merged CLIP/goproc heads, per-VM SMT isolation retained. Fixture: 0.1 CPU,
+512MiB RAM, fresh 1GiB root, prepared image and HTTP connections outside timing.
+Ten bursts of 10 and two bursts of 50 provide 100 samples at each size.
+
+| Burst | Startup p50 / p95 / p99 | Worst burst start | Worst durable pause | Worst restore |
+| --- | --- | --- | --- | --- |
+| 10 | 435 / 504 / 521ms | 523ms | 5.449s | 0.775s |
+| 50 | 1,233 / 1,334 / 1,354ms | 1.372s | 7.549s | 4.844s |
+
+All 200 initial and restored RAM/disk/boot proofs matched, fresh boot IDs were
+unique across the study, all owned VMs were removed, and every timing budget
+passed. The failed pre-fix v49 cohort remains separate from these quantiles.
+
+An owned paused probe was aged eight days in stub recency and filesystem
+metadata. Restarting the same release image reloaded that aged cache index;
+normal maintenance removed its native checkpoint, archive/CAS and qcow copies
+in 58.916s. Origin-backed restore preserved its RAM, disk and boot identity.
+The probe was removed; all three pre-existing VMs also retained boot identities
+across the restart. Busy image readers and unpublished qcow zero writes remained
+protected in real filesystem tests.
+
+Affected Linux race suites passed; the full worker race suite was rerun after
+the network fix, with ten focused race repetitions. Privileged qcow/FUSE/init
+checks and seven SDK readiness cases passed. 1,073 source files in Okteto matched
+the committed source hashes. Binary build information confirms the merged
+CLIP/goproc versions without local replacements.
+
+The prior profiling-only study reported startup p95 458/1,116ms at 10/50; the
+release study reports 504/1,334ms. Gateway supervision, logging and lifecycle
+workloads differ, so this is not a controlled ablation and cleanup itself is not
+claimed to improve startup. The release preserves the requested timing budgets
+and fixes the reproduced network failure.
+
+Remaining: guest-boot scaling at larger bursts, tight pause/restore tail margins
+at 50, and the original 100-VM subsecond objective (not demonstrated here).
+These staging observations do not establish production tail-latency guarantees
+for larger memory sizes or cold image downloads.
+
+[Raw cohorts, failed cohort and expiry evidence](../results/release-validation-20261104/summary.json).
