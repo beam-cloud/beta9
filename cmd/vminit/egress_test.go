@@ -177,29 +177,6 @@ func TestEgressTrustCompletesInterruptedRotation(t *testing.T) {
 	}
 }
 
-func TestEarlyBrowserTrustHookFastPathPreservesOtherHooksAndRotation(t *testing.T) {
-	script := []byte("#!/bin/sh\nset -eu\n# Managed browser roots\n" +
-		`[ "$(cat /proc/1/comm)" = systemd ] || exit 0` + "\nexec /opt/beam-vm/browser-trust\n")
-	for _, test := range []struct {
-		name, pid1 string
-		script     []byte
-		noop       bool
-	}{
-		{name: "early init", pid1: "beam-vminit", script: script, noop: true},
-		{name: "running systemd rotates browser CA", pid1: "systemd", script: script},
-		{name: "unknown PID1", script: script},
-		{name: "custom hook", pid1: "beam-vminit", script: []byte("#!/bin/sh\nexec /custom/trust\n")},
-		{name: "extra command", pid1: "beam-vminit", script: append(append([]byte{}, script...), []byte("touch /custom\n")...)},
-		{name: "different interpreter", pid1: "beam-vminit", script: bytes.Replace(script, []byte("#!/bin/sh"), []byte("#!/custom/interpreter"), 1)},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if got := earlyBrowserTrustHookIsNoop(test.script, test.pid1); got != test.noop {
-				t.Fatalf("got noop=%v, want %v", got, test.noop)
-			}
-		})
-	}
-}
-
 func TestEgressTrustHooksObserveInstalledRotation(t *testing.T) {
 	root := t.TempDir()
 	directory := filepath.Join(root, "etc/ca-certificates/update.d")

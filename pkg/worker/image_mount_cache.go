@@ -83,7 +83,6 @@ func (c *ImageClient) pruneIdleMounts(cutoff time.Time, inUse func(string) bool,
 			}
 			// Do not force or lazily detach: a late reader must keep its mount.
 			if err := unmount(id, server); err != nil {
-				log.Debug().Err(err).Str("image_id", id).Msg("inactive image mount remains busy")
 				return
 			}
 			c.mountedFuseServers.Delete(id)

@@ -803,7 +803,6 @@ type requiredContentCacheEntry struct {
 // before bumping the score, so an unchanged score means the cached items are
 // current. Only stubs with new activity cost an S2 read per cycle.
 func (m *WorkerCacheManager) loadRecentRequiredContent(stubs []cache.RecentStub) ([]recentStubContent, bool) {
-	started := time.Now()
 	type result struct {
 		items []types.CacheRequiredContentItem
 		err   error
@@ -811,14 +810,12 @@ func (m *WorkerCacheManager) loadRecentRequiredContent(stubs []cache.RecentStub)
 	results := make([]result, len(stubs))
 	var loads errgroup.Group
 	loads.SetLimit(requiredContentLoadConcurrency)
-	fetched := 0
 	for i, stub := range stubs {
 		key := stub.WorkspaceID + "|" + stub.StubID
 		if entry, ok := m.requiredContentCache[key]; ok && entry.lastSeen.Equal(stub.LastSeen) {
 			results[i].items = entry.items
 			continue
 		}
-		fetched++
 		loads.Go(func() error {
 			results[i].items, results[i].err = m.eventRepo.ReadStubCacheRequiredContent(m.ctx, stub.WorkspaceID, stub.StubID)
 			return nil // Resolve every stub; one failed read must not cancel others.
@@ -840,9 +837,6 @@ func (m *WorkerCacheManager) loadRecentRequiredContent(stubs []cache.RecentStub)
 		content = append(content, recentStubContent{stub: stub, items: items})
 	}
 	m.requiredContentCache = next
-	if time.Since(started) > time.Second {
-		log.Info().Int("recent_stubs", len(stubs)).Int("fetched_stubs", fetched).Bool("complete", complete).Dur("duration", time.Since(started)).Msg("loaded cache working-set requirements")
-	}
 	return content, complete
 }
 
