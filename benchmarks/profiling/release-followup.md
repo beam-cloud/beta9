@@ -89,3 +89,22 @@ Image digest: `sha256:f17418b50b10748b0beb0affbedabae765dfcc0f23168a56ee2ff28acd
 [expiry proof](../results/release-dry-followup-20261104/retention.json),
 [CI and test evidence](../results/release-dry-followup-20261104/validation.json),
 [final handoff](../results/release-dry-followup-20261104/handoff.json).
+
+## Subsequent file consolidation
+
+Production commit `e7e474f0` groups VM persistence, artifacts and advisory locking
+in `pkg/repository/vm.go`; mutation/stub/disk batching and shared stub upserts in
+`vm_batch.go`. VM tests are in the two corresponding test files. Checkpoint
+capture IO and disk-publication helpers and tests move into the existing
+`pkg/worker/criu.go` / `criu_test.go`. Net reduction: 12 files and 122 lines.
+
+Tokenized non-import declarations match before/after across both packages:
+1,385 repository and 3,203 worker declarations, including SQL and tests.
+The affected Linux race suites and five real Postgres integration cases pass,
+including 100 independent VM locks acquired in 32.151ms. Okteto source hashes
+match for all 131 synchronized files; all 13 superseded files are absent. The
+normal gateway reports HTTP 200. The lifecycle timings above remain measurements
+of `d429f4ce`; file moves do not establish a new performance result.
+
+[Consolidation verification](../results/release-dry-followup-20261104/consolidation.json)
+and [test output](../results/release-dry-followup-20261104/consolidation-validation.log).

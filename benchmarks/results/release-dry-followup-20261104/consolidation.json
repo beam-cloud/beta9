@@ -1,0 +1,45 @@
+{
+  "commit": "e7e474f0f0120ab377dc964dd8cc430e2b449815",
+  "parent": "d429f4ceec91583d39a8001718f44d9e6e5890e6",
+  "purpose": "Mechanical VM repository and checkpoint file consolidation",
+  "implementation": {
+    "pkg/repository/vm.go": "VM persistence, artifacts and advisory locking",
+    "pkg/repository/vm_batch.go": "VM mutation/stub/disk batching and shared stub upserts",
+    "pkg/worker/criu.go": "Existing checkpoint implementation plus capture IO and disk-publication helpers"
+  },
+  "tests": "VM tests in vm_test.go and vm_batch_test.go; checkpoint tests in criu_test.go",
+  "net_files_removed": 12,
+  "net_lines_removed": 122,
+  "declaration_verification": {
+    "method": "Compare multisets of tokenized non-import declarations, ignoring comments and normalizing inserted semicolons",
+    "fingerprints_before_sha256": "872726c8920c4e18376accd3ecbdde385b4fd043e556a344fbe34033c1abc67b",
+    "fingerprints_after_sha256": "872726c8920c4e18376accd3ecbdde385b4fd043e556a344fbe34033c1abc67b",
+    "identical": true,
+    "repository_declarations": 1385,
+    "worker_declarations": 3203
+  },
+  "staging_source_verification": {
+    "files_verified": 131,
+    "superseded_files_verified_absent": 13
+  },
+  "linux_race_packages": [
+    "pkg/repository",
+    "pkg/worker",
+    "pkg/abstractions/vm",
+    "pkg/gateway/services",
+    "pkg/gateway/services/repository"
+  ],
+  "race_result": "passed; existing privileged pack-overlay case excluded (already passed on the node for the preceding release; its declaration is unchanged)",
+  "real_postgres_integration": [
+    "GetOrCreateStub",
+    "VMMutationBatch",
+    "VMStubBatch",
+    "DiskBurstBatch",
+    "VMLockPool"
+  ],
+  "postgres_result": "passed; four data cases use isolated temporary tables; lock case uses random advisory lock keys",
+  "concurrent_vm_locks": 100,
+  "lock_acquisition_ms": 32.151183,
+  "gateway_health_http": 200,
+  "performance_evidence": "The prior 200-VM study remains associated with d429f4ce; no new performance claim from file moves."
+}

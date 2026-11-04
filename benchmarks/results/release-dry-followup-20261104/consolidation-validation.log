@@ -1,0 +1,30 @@
+Synced consolidated sources and removed superseded files
+Verified 131 synchronized source files and 13 deletions
+ok  	github.com/beam-cloud/beta9/pkg/repository	12.863s
+ok  	github.com/beam-cloud/beta9/pkg/worker	66.310s
+ok  	github.com/beam-cloud/beta9/pkg/abstractions/vm	3.796s
+ok  	github.com/beam-cloud/beta9/pkg/gateway/services	1.935s
+ok  	github.com/beam-cloud/beta9/pkg/gateway/services/repository	1.618s
+=== RUN   TestGetOrCreateStubIntegration
+=== RUN   TestGetOrCreateStubIntegration/reuse_updates_activity
+=== RUN   TestGetOrCreateStubIntegration/different_app
+=== RUN   TestGetOrCreateStubIntegration/forced_creation
+=== RUN   TestGetOrCreateStubIntegration/different_config
+=== RUN   TestGetOrCreateStubIntegration/activity_failure_rolls_back_creation
+--- PASS: TestGetOrCreateStubIntegration (0.09s)
+    --- PASS: TestGetOrCreateStubIntegration/reuse_updates_activity (0.01s)
+    --- PASS: TestGetOrCreateStubIntegration/different_app (0.00s)
+    --- PASS: TestGetOrCreateStubIntegration/forced_creation (0.00s)
+    --- PASS: TestGetOrCreateStubIntegration/different_config (0.00s)
+    --- PASS: TestGetOrCreateStubIntegration/activity_failure_rolls_back_creation (0.01s)
+=== RUN   TestVMMutationBatchIntegration
+--- PASS: TestVMMutationBatchIntegration (0.10s)
+=== RUN   TestVMStubBatchIntegration
+--- PASS: TestVMStubBatchIntegration (0.09s)
+=== RUN   TestDiskBurstBatchIntegration
+--- PASS: TestDiskBurstBatchIntegration (0.24s)
+=== RUN   TestVMLockPoolIntegration
+    vm_test.go:323: 100 independent VM locks acquired in 32.151183ms
+--- PASS: TestVMLockPoolIntegration (0.17s)
+PASS
+Consolidated Linux race and real Postgres checks passed
