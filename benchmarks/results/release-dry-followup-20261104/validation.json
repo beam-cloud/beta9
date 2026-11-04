@@ -1,0 +1,22 @@
+{
+  "source_commit": "d429f4ceec91583d39a8001718f44d9e6e5890e6",
+  "linux_race_packages": [
+    "cmd/vminit",
+    "pkg/disk",
+    "pkg/runtime",
+    "pkg/repository",
+    "pkg/abstractions/vm",
+    "pkg/gateway/services",
+    "pkg/gateway/services/repository",
+    "pkg/worker"
+  ],
+  "linux_race_result": "passed; privileged pack-overlay case run separately on the node",
+  "focused_race": "common batch helper ten repetitions and cache watermark regression passed",
+  "real_postgres": "isolated temporary tables: GetOrCreateStub, DiskBurstBatch, VMMutationBatch and VMStubBatch integration tests passed",
+  "sdk_readiness_cases": 7,
+  "privileged_node_checks": "read-only shared init, checkpoint executable pinning, quota/weight restore and serialization, capture IO/publication fences, idle image expiry with real FUSE/busy-reader fences, overlay packing and private-netns firewall batch/cancellation/preservation checks passed",
+  "performance_result": "all startup <=1500ms and pause <=8000ms; one 50-VM restore exceeded 5000ms at 5294.105ms",
+  "lifecycle_integrity": "200/200 exact RAM/disk/boot proofs; 200 distinct fresh boot identities; all owned VMs removed",
+  "retention": "owned probe recency/filesystem metadata aged eight days; same-image restart reloads aged index; normal maintenance removes native/archive/CAS/qcow; exact origin-backed recovery; probe removed",
+  "build_scope": "Staging overlay replaces worker/init with exact committed-source builds and downloads/verifies the goproc CI asset. Production Dockerfile source-build stage removal reviewed; complete base-image rebuild not repeated."
+}

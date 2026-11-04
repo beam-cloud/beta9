@@ -1,0 +1,12 @@
+[
+  {
+    "name": "goproc-0.1.18-linux-amd64",
+    "sha256": "206a2532e099eddc36bc7ab34bc524dc321696ef351e783cedd5c11da8048853",
+    "github_digest": "sha256:206a2532e099eddc36bc7ab34bc524dc321696ef351e783cedd5c11da8048853"
+  },
+  {
+    "name": "goproc-0.1.18-linux-arm64",
+    "sha256": "bcaeeb1ad4ac8bb60d50edaac04fe699e04ed524a838cc2c4bf654a912f58309",
+    "github_digest": "sha256:bcaeeb1ad4ac8bb60d50edaac04fe699e04ed524a838cc2c4bf654a912f58309"
+  }
+]

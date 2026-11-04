@@ -1,0 +1,29 @@
+{
+  "remaining_running_vms": 3,
+  "only_pre_existing_vms": true,
+  "boot_identities_preserved": true,
+  "worker_uncordoned": true,
+  "normal_okteto_air_running": true,
+  "gateway_health_http": 200,
+  "network_capacity": "Prepared network capacity verified {\"prepared_namespaces\": 253, \"target\": 256}",
+  "host": {
+    "image": "683656326989.dkr.ecr.us-east-1.amazonaws.com/stage/beta9-worker:ll-merge-ready-v51-20261104",
+    "binary_sha256": {
+      "/usr/local/bin/worker": "060c2938c6dd42b9da931c7586af88f2cd6060f64740562e94b16c0dc5df6fe7",
+      "/usr/local/bin/beam-vminit": "25b3eb4f84a24ba21a80f4dfbd5e0514fd53131c8c993a00ebaf3718d20773c6",
+      "/usr/local/bin/goproc": "206a2532e099eddc36bc7ab34bc524dc321696ef351e783cedd5c11da8048853"
+    },
+    "settings": {
+      "WORKER_CONTAINER_START_CONCURRENCY": "128",
+      "CONTAINER_NETWORK_SLOT_POOL_SIZE": "256",
+      "BETA9_MICROVM_CHECKPOINT_CONCURRENCY": "100",
+      "BETA9_MICROVM_SNAPSHOT_IO_CONCURRENCY": "32",
+      "BETA9_CHECKPOINT_ARCHIVE_CONCURRENCY": "32",
+      "BETA9_CHECKPOINT_UPLOAD_CONCURRENCY": "32",
+      "BETA9_CHECKPOINT_DISK_PIPELINE": "1",
+      "BETA9_NETWORK_CLEANUP_BATCH": "1"
+    },
+    "nvme_available_bytes": 1691961835520,
+    "nvme_used_pct": 51.9
+  }
+}

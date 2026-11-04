@@ -1,0 +1,207 @@
+{
+  "commit": "d429f4ceec91583d39a8001718f44d9e6e5890e6",
+  "worker_sha256": "060c2938c6dd42b9da931c7586af88f2cd6060f64740562e94b16c0dc5df6fe7",
+  "image_digest": "sha256:f17418b50b10748b0beb0affbedabae765dfcc0f23168a56ee2ff28acd0b5de2",
+  "gateway": "Normal Okteto Air supervisor; no custom diagnostic gateway or startup profiling",
+  "fixture": {
+    "cpu": 0.1,
+    "memory_mib": 512,
+    "disk": "1GiB",
+    "image_prepared_outside_clock": true,
+    "client_connections_prepared_outside_clock": true,
+    "per_vm_smt_isolation_preserved": true,
+    "recent_stub_ttl_seconds": 604800,
+    "postgres_connections": 32,
+    "vm_batch_cap": 128
+  },
+  "goproc": {
+    "version": "v0.1.18",
+    "commit": "a70f7739dd771769faa7af3df8c9579f5aec429b",
+    "release": "https://github.com/beam-cloud/goproc/releases/tag/v0.1.18",
+    "ci_run": "https://github.com/beam-cloud/goproc/actions/runs/41861454053",
+    "sha256_amd64": "206a2532e099eddc36bc7ab34bc524dc321696ef351e783cedd5c11da8048853",
+    "sha256_arm64": "bcaeeb1ad4ac8bb60d50edaac04fe699e04ed524a838cc2c4bf654a912f58309"
+  },
+  "total_vms": 200,
+  "initial_and_restored_proofs_exact": true,
+  "fresh_boot_ids_globally_unique": true,
+  "all_owned_vms_removed": true,
+  "all_phase_budgets_passed": false,
+  "all_startup_and_pause_budgets_passed": true,
+  "failed_budgets": [
+    {
+      "cohort": "n50-burst-4283197bc3f4",
+      "phase": "restore_0",
+      "wall_ms": 5294.105,
+      "budget_ms": 5000
+    }
+  ],
+  "cohorts": {
+    "10": {
+      "bursts": 10,
+      "samples": 100,
+      "per_vm": {
+        "launch": {
+          "count": 100,
+          "p50_ms": 433.432,
+          "p95_ms": 503.922,
+          "p99_ms": 527.739,
+          "max_ms": 530.434
+        },
+        "pause_0": {
+          "count": 100,
+          "p50_ms": 1961.028,
+          "p95_ms": 2928.512,
+          "p99_ms": 4229.203,
+          "max_ms": 7275.468
+        },
+        "restore_0": {
+          "count": 100,
+          "p50_ms": 592.366,
+          "p95_ms": 780.815,
+          "p99_ms": 787.511,
+          "max_ms": 787.972
+        },
+        "verify_launch": {
+          "count": 100,
+          "p50_ms": 950.261,
+          "p95_ms": 1246.643,
+          "p99_ms": 1386.053,
+          "max_ms": 1393.468
+        },
+        "verify_restore_0": {
+          "count": 100,
+          "p50_ms": 783.187,
+          "p95_ms": 1007.505,
+          "p99_ms": 1067.243,
+          "max_ms": 1104.274
+        }
+      },
+      "burst_wall_ms": {
+        "launch": [
+          459.834,
+          533.021,
+          436.971,
+          452.992,
+          446.525,
+          475.931,
+          462.02,
+          457.499,
+          463.779,
+          465.024
+        ],
+        "pause_0": [
+          2549.094,
+          3018.407,
+          2607.613,
+          4231.012,
+          2254.399,
+          2957.734,
+          2928.742,
+          3075.785,
+          7275.932,
+          2683.216
+        ],
+        "restore_0": [
+          790.183,
+          535.275,
+          538.662,
+          524.22,
+          595.857,
+          792.227,
+          763.126,
+          744.429,
+          569.095,
+          702.085
+        ],
+        "verify_launch": [
+          1394.226,
+          1230.595,
+          1151.299,
+          1114.966,
+          1247.175,
+          1324.902,
+          1333.517,
+          1386.376,
+          1164.186,
+          1216.121
+        ],
+        "verify_restore_0": [
+          923.968,
+          1061.014,
+          982.299,
+          1008.121,
+          1020.695,
+          996.232,
+          906.686,
+          1068.164,
+          1104.45,
+          891.106
+        ]
+      }
+    },
+    "50": {
+      "bursts": 2,
+      "samples": 100,
+      "per_vm": {
+        "launch": {
+          "count": 100,
+          "p50_ms": 1128.926,
+          "p95_ms": 1235.774,
+          "p99_ms": 1248.857,
+          "max_ms": 1252.873
+        },
+        "pause_0": {
+          "count": 100,
+          "p50_ms": 3828.975,
+          "p95_ms": 4560.715,
+          "p99_ms": 4802.491,
+          "max_ms": 4943.156
+        },
+        "restore_0": {
+          "count": 100,
+          "p50_ms": 4659.498,
+          "p95_ms": 5286.808,
+          "p99_ms": 5288.129,
+          "max_ms": 5293.137
+        },
+        "verify_launch": {
+          "count": 100,
+          "p50_ms": 1073.852,
+          "p95_ms": 1404.152,
+          "p99_ms": 1512.148,
+          "max_ms": 1533.057
+        },
+        "verify_restore_0": {
+          "count": 100,
+          "p50_ms": 861.945,
+          "p95_ms": 1076.141,
+          "p99_ms": 1163.432,
+          "max_ms": 1231.764
+        }
+      },
+      "burst_wall_ms": {
+        "launch": [
+          1254.715,
+          1254.158
+        ],
+        "pause_0": [
+          4557.041,
+          4950.408
+        ],
+        "restore_0": [
+          4723.431,
+          5294.105
+        ],
+        "verify_launch": [
+          1525.342,
+          1539.365
+        ],
+        "verify_restore_0": [
+          1164.694,
+          1232.534
+        ]
+      }
+    }
+  }
+}

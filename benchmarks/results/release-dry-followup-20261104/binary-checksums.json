@@ -1,0 +1,18 @@
+{
+  "worker.merge-ready-v51": {
+    "bytes": 166189941,
+    "sha256": "060c2938c6dd42b9da931c7586af88f2cd6060f64740562e94b16c0dc5df6fe7"
+  },
+  "vminit.merge-ready-v51": {
+    "bytes": 4899000,
+    "sha256": "25b3eb4f84a24ba21a80f4dfbd5e0514fd53131c8c993a00ebaf3718d20773c6"
+  },
+  "runtime.merge-ready-v51.test": {
+    "bytes": 39869364,
+    "sha256": "1fff26f524a5ef76860f73cd2f0e77357893c5c404082d2ea7e7c457eaf5c144"
+  },
+  "worker.merge-ready-v51.test": {
+    "bytes": 170139378,
+    "sha256": "5b9d7f7704f65456480d01eee3af7c98730ed7173fd5179cccc661995480d413"
+  }
+}

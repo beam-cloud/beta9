@@ -93,3 +93,6 @@ necessarily improve whole-burst latency.
 
 Release decisions and their supporting measurements: [consolidation.md](consolidation.md).
 The reproduced deferred network-sweep fix is carried here as well.
+
+Latest release validation after the goproc CI release and duplication cleanup:
+[release-followup.md](release-followup.md).
