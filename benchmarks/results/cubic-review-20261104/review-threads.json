@@ -50,7 +50,7 @@
       "path": "pkg/repository/backend_postgres.go",
       "resolved": true,
       "previously_resolved": true,
-      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nThe batch query duplicates `getOrCreateStub`’s matching, create/touch, and app-activity logic, so changes to these rules can drift between paths. Extract the common upsert semantics while keeping the batch-specific set handling separate.",
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nThe batch query duplicates `getOrCreateStub`\u2019s matching, create/touch, and app-activity logic, so changes to these rules can drift between paths. Extract the common upsert semantics while keeping the batch-specific set handling separate.",
       "resolved_by": "cubic-dev-ai[bot]"
     },
     {
@@ -66,7 +66,7 @@
       "path": "pkg/runtime/microvm_guest_init_linux.go",
       "resolved": true,
       "previously_resolved": true,
-      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nThis repeats `bindIntoCanvas`’s bind, submount-registration, and read-only remount sequence. Extract the shared mount-and-registration logic into a helper to keep the behavior consistent.",
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nThis repeats `bindIntoCanvas`\u2019s bind, submount-registration, and read-only remount sequence. Extract the shared mount-and-registration logic into a helper to keep the behavior consistent.",
       "resolved_by": "cubic-dev-ai[bot]"
     },
     {
@@ -202,7 +202,7 @@
       "path": "pkg/disk/layer.go",
       "resolved": true,
       "previously_resolved": false,
-      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nThis repeats the environment-integer parsing and range check in `pkg/runtime/microvm_boot_admission.go`. Extract a shared bounded-integer parser and keep each caller’s fallback policy local.",
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nThis repeats the environment-integer parsing and range check in `pkg/runtime/microvm_boot_admission.go`. Extract a shared bounded-integer parser and keep each caller\u2019s fallback policy local.",
       "resolved_by": "luke-lombardi"
     },
     {
@@ -218,7 +218,7 @@
       "path": "pkg/repository/postgres_pool_test.go",
       "resolved": true,
       "previously_resolved": true,
-      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nAll four tests in this file repeat the same mock setup: `db, _, err := sqlmock.New()`, `require.NoError(t, err)`, `defer db.Close()`, and (in three of them) `db.SetMaxOpenConns(...)`. Extract a shared helper — e.g. `func newMockDB(t *testing.T, maxOpen int) (*sql.DB, sqlmock.Sqlmock)` that calls `sqlmock.New()`, requires no error, sets max open conns, and registers `t.Cleanup(func() { db.Close() })` — and have each test call it. The repo already centralizes test setup this way in pkg/repository/testutils.go, and a single helper keeps future changes to mock construction or connection limits in one place.",
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nAll four tests in this file repeat the same mock setup: `db, _, err := sqlmock.New()`, `require.NoError(t, err)`, `defer db.Close()`, and (in three of them) `db.SetMaxOpenConns(...)`. Extract a shared helper \u2014 e.g. `func newMockDB(t *testing.T, maxOpen int) (*sql.DB, sqlmock.Sqlmock)` that calls `sqlmock.New()`, requires no error, sets max open conns, and registers `t.Cleanup(func() { db.Close() })` \u2014 and have each test call it. The repo already centralizes test setup this way in pkg/repository/testutils.go, and a single helper keeps future changes to mock construction or connection limits in one place.",
       "resolved_by": "cubic-dev-ai[bot]"
     },
     {
@@ -226,7 +226,7 @@
       "path": "pkg/worker/microvm_boot_cpu_test.go",
       "resolved": true,
       "previously_resolved": false,
-      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nThis assertion recomputes the expected weight with the same expression used by production (`pkg/runtime/microvm_linux.go`, `applyMicroVMCPUContext`: `weight := 1 + (shares-2)*9999/262142`). The identical formula now exists in two places, and because the test re-derives the expected value instead of asserting independent values, a regression in the runc weight mapping would pass the test unnoticed. Assert hard-coded boundary weights (e.g. shares 2→1, 262144→10000) or extract the conversion into a shared helper used by both the runtime and this test.",
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\nThis assertion recomputes the expected weight with the same expression used by production (`pkg/runtime/microvm_linux.go`, `applyMicroVMCPUContext`: `weight := 1 + (shares-2)*9999/262142`). The identical formula now exists in two places, and because the test re-derives the expected value instead of asserting independent values, a regression in the runc weight mapping would pass the test unnoticed. Assert hard-coded boundary weights (e.g. shares 2\u21921, 262144\u219210000) or extract the conversion into a shared helper used by both the runtime and this test.",
       "resolved_by": "luke-lombardi"
     },
     {
@@ -538,7 +538,7 @@
       "path": "pkg/repository/vm_batch_test.go",
       "resolved": true,
       "previously_resolved": false,
-      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\n`TestVMMutationBatchDoesNotReplayAmbiguousFailure`, `TestVMStubBatchDoesNotReplayAmbiguousFailure`, and `TestDiskBurstBatchDoesNotReplayAmbiguousFailure` are near-identical: each builds two requests, expects a `context.DeadlineExceeded` query, flushes the batch, and asserts both result channels return the same error. They differ only in the request factory, SQL matcher, and batcher/result-channel type. Extract the shared skeleton (expect query error → flush → assert `DeadlineExceeded` on both channels → check mock expectations) into one helper, e.g. parameterized by the matcher, a flush closure, and an error accessor, so replay-semantics changes are made once instead of in three places.",
+      "comment": "P2: Custom agent: **Prevent Redundant Code Duplication**\n\n`TestVMMutationBatchDoesNotReplayAmbiguousFailure`, `TestVMStubBatchDoesNotReplayAmbiguousFailure`, and `TestDiskBurstBatchDoesNotReplayAmbiguousFailure` are near-identical: each builds two requests, expects a `context.DeadlineExceeded` query, flushes the batch, and asserts both result channels return the same error. They differ only in the request factory, SQL matcher, and batcher/result-channel type. Extract the shared skeleton (expect query error \u2192 flush \u2192 assert `DeadlineExceeded` on both channels \u2192 check mock expectations) into one helper, e.g. parameterized by the matcher, a flush closure, and an error accessor, so replay-semantics changes are made once instead of in three places.",
       "resolved_by": "cubic-dev-ai[bot]"
     },
     {
@@ -557,5 +557,10 @@
       "comment": "P3: This promotes the cleanup error log to Warn, but a routine prune deadline now hits this branch every minute on a busy worker. Keep Debug for deadline-exceeded errors, or log at Warn only for non-timeout failures.",
       "resolved_by": "cubic-dev-ai[bot]"
     }
-  ]
+  ],
+  "test_only_followup": {
+    "commit": "715cca5bd8be547515cd6f2c1c58792085694be9",
+    "production_code_unchanged": true,
+    "cancellation_race_repetitions": 20
+  }
 }

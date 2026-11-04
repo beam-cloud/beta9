@@ -41,6 +41,11 @@ using isolated temporary tables or random advisory-lock keys. A server-rejected
 lock query left the original owner fenced against a second gateway; 100
 independent locks acquired in 41.295ms while leaving query capacity available.
 
+All five GitHub checks passed for the production-fix revision. Follow-up
+`715cca5b` changes only the cancellation test's query gate; 20 race repetitions
+passed with the database outcome held explicitly instead of relying on a delay.
+The staging image's production code is unchanged by that test-only follow-up.
+
 Both architecture-specific goproc download/checksum build paths passed with the
 actual Docker ignore rules. A deliberately corrupted digest failed the build.
 The pinned zstd package downloaded successfully from the Ubuntu repository.
@@ -74,6 +79,7 @@ with HTTP health 200. Image digest:
 [Review audit](../results/cubic-review-20261104/review-threads.json),
 [smoke summary and raw cohorts](../results/cubic-review-20261104/summary.json),
 [Linux race results](../results/cubic-review-20261104/linux-race.log),
+[cancellation repetitions](../results/cubic-review-20261104/cancellation-repeat.log),
 [Postgres results](../results/cubic-review-20261104/postgres.log),
 [packaging checks](../results/cubic-review-20261104/packaging.json),
 [privileged checks](../results/cubic-review-20261104/privileged.log),
