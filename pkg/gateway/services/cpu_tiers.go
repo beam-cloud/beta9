@@ -11,6 +11,13 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
+type cpuTierPool struct {
+	CPUClass      types.CPUTier   `json:"cpu_class"`
+	Valid         bool            `json:"valid"`
+	Ready         bool            `json:"ready"`
+	ReadyRuntimes map[string]bool `json:"ready_runtimes"`
+}
+
 func (gws *GatewayService) GetCPUTierCatalog(ctx context.Context, _ *pb.GetCPUTierCatalogRequest) (*pb.GetCPUTierCatalogResponse, error) {
 	info, _ := auth.AuthInfoFromContext(ctx)
 	if info == nil || info.Workspace == nil {
@@ -31,28 +38,23 @@ func (gws *GatewayService) GetCPUTierCatalog(ctx context.Context, _ *pb.GetCPUTi
 	if err != nil {
 		return nil, err
 	}
-	ready := map[string]map[string]bool{}
-	for _, worker := range workers {
-		if worker.CPUTierProtocol == types.CPUTierProtocolVersion && worker.Status == types.WorkerStatusAvailable && worker.TotalCpu > 0 && worker.TotalMemory > 0 {
-			if ready[worker.PoolName] == nil {
-				ready[worker.PoolName] = map[string]bool{}
-			}
-			ready[worker.PoolName][worker.Runtime] = true
-		}
-	}
-	pools := map[string]any{}
+	pools := map[string]*cpuTierPool{}
 	for name, p := range gws.scheduler.PoolConfigs() {
 		if p.CPUClass != "" {
-			pools[name] = map[string]any{"cpu_class": p.CPUClass, "multiplier": p.CPUShareMultiplier, "valid": p.CPUClass.MatchesPool(p), "runtime": p.ContainerRuntime, "ready": len(ready[name]) > 0, "ready_runtimes": ready[name]}
+			pools[name] = &cpuTierPool{CPUClass: p.CPUClass, Valid: p.CPUClass.MatchesPool(p), ReadyRuntimes: map[string]bool{}}
 		}
 	}
-	catalog["pools"] = pools
-	catalog["capabilities"] = []string{"cpu_tiers", "immutable_cpu_prices", "durable_spot_stop"}
+	for _, w := range workers {
+		if p := pools[w.PoolName]; p != nil && w.CPUTierProtocol == types.CPUTierProtocolVersion && w.Status == types.WorkerStatusAvailable && w.TotalCpu > 0 && w.TotalMemory > 0 {
+			p.Ready, p.ReadyRuntimes[w.Runtime] = true, true
+		}
+	}
+	catalog["pools"], catalog["capabilities"] = pools, []string{"cpu_tiers", "immutable_cpu_prices", "durable_spot_stop"}
 	data, err := json.Marshal(catalog)
 	return &pb.GetCPUTierCatalogResponse{Catalog: string(data)}, err
 }
 
 func (gws *GatewayService) IsHostedCPUPool(name string) bool {
 	p, ok := gws.scheduler.PoolConfig(name)
-	return ok && p.GPUType == "" && !p.Mode.AgentHosted()
+	return ok && p.HostedCPU()
 }

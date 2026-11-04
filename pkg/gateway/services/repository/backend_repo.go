@@ -41,15 +41,11 @@ type diskSnapshotObjectCacheEntry struct {
 	keys      map[string]struct{}
 }
 
-func NewBackendRepositoryService(ctx context.Context, backendRepo repository.BackendRepository, containers ...repository.ContainerRepository) *BackendRepositoryService {
-	var containerRepo repository.ContainerRepository
-	if len(containers) > 0 {
-		containerRepo = containers[0]
-	}
+func NewBackendRepositoryService(ctx context.Context, backendRepo repository.BackendRepository, containers repository.ContainerRepository) *BackendRepositoryService {
 	return &BackendRepositoryService{
 		ctx:                     ctx,
 		backendRepo:             backendRepo,
-		containers:              containerRepo,
+		containers:              containers,
 		diskSnapshotObjectCache: make(map[string]diskSnapshotObjectCacheEntry),
 	}
 }
@@ -69,9 +65,6 @@ func (s *BackendRepositoryService) AuthorizeRequest(ctx context.Context, req int
 	}
 	switch req := req.(type) {
 	case *pb.PreemptVMRequest:
-		if s.containers == nil {
-			return auth.ErrContainerNotAssigned
-		}
 		_, err := worker.Container(s.containers, req.ContainerId)
 		return err
 	case *pb.GetCheckpointByIdRequest, *pb.ListCheckpointsRequest:
@@ -536,9 +529,8 @@ func diskSnapshotFromProto(in *pb.DiskSnapshot) *types.DiskSnapshot {
 	}
 }
 
-// PreemptVM records stopped intent under the normal lifecycle lock. The VM
-// reconciler owns snapshot, shutdown and detach; the worker cannot kill it as
-// a shortcut when persistence or reconciliation is unavailable.
+// PreemptVM asks the VM reconciler to snapshot and stop a Spot VM under its
+// lifecycle lock; workers never kill a VM to reclaim it.
 func (s *BackendRepositoryService) PreemptVM(ctx context.Context, req *pb.PreemptVMRequest) (*pb.PreemptVMResponse, error) {
 	repo, ok := s.backendRepo.(repository.VMRepository)
 	if !ok {
@@ -557,20 +549,10 @@ func (s *BackendRepositoryService) PreemptVM(ctx context.Context, req *pb.Preemp
 	if err != nil {
 		return nil, err
 	}
-	stub, err := s.backendRepo.GetStubByExternalId(ctx, v.StubID)
-	if err != nil {
-		return nil, err
-	}
-	cfg, err := stub.UnmarshalConfig()
-	if err != nil {
-		return nil, err
-	}
-	if v.ContainerID != req.ContainerId || cfg.CPUTier != types.CPUTierSpot || v.DesiredState == types.VMStateDeleted {
+	if v.ContainerID != req.ContainerId || v.Spec.CPUTier != types.CPUTierSpot || v.DesiredState == types.VMStateDeleted {
 		return nil, status.Error(codes.FailedPrecondition, "runtime is not a reclaimable Spot VM")
 	}
-	v.StopReason = types.VMStopReasonPreempted
-	v.Status = types.VMStateStopping
-	v.DesiredState = types.VMStateStopped
+	v.StopReason, v.Status, v.DesiredState = types.VMStopReasonPreempted, types.VMStateStopping, types.VMStateStopped
 	if err := repo.SaveVM(ctx, v); err != nil {
 		return nil, err
 	}

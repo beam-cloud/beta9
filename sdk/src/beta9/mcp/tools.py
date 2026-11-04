@@ -33,6 +33,7 @@ from ..config import (
     get_settings,
     set_settings,
 )
+from ..type import CPU_TIERS
 
 if TYPE_CHECKING:
     from ..deployment.images import Registry
@@ -226,7 +227,7 @@ def deploy_definition(cli: str, cwd: str) -> Dict[str, Any]:
                     "description": "CPU cores, e.g. 0.5 or 2; must be positive.",
                 },
                 "memory": {**STRING, "description": "e.g. 2Gi"},
-                "cpu_tier": {"type": "string", "enum": ["spot", "shared", "performance"]},
+                "cpu_tier": {"type": "string", "enum": list(CPU_TIERS)},
                 "gpu": {
                     **STRING,
                     "description": "Discover current choices with capabilities; omit for CPU.",

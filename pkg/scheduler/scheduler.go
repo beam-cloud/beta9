@@ -77,7 +77,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		return nil, err
 	}
 	for name, pool := range config.Worker.Pools {
-		if pool.CPUClass != "" && (pool.CPUClass != types.CPUTierShared && pool.CPUClass != types.CPUTierPerformance || !pool.CPUClass.MatchesPool(pool)) {
+		if pool.CPUClass != "" && !pool.CPUClass.MatchesPool(pool) {
 			return nil, fmt.Errorf("worker pool %q: CPU class requires hosted CPU capacity with Shared 2.5x or Performance 1x", name)
 		}
 		if err := pool.CPUShareMultiplier.Validate(); err != nil {
@@ -368,15 +368,11 @@ func firstNonEmpty(values ...string) string {
 }
 
 func (s *Scheduler) Run(request *types.ContainerRequest) error {
-	if request.CPUTier() != "" {
-		if _, err := request.CPUConfig(); err != nil {
-			return err
-		}
-		request.Evictable = request.CPUTier() == types.CPUTierSpot
-		request.OpportunisticOnly = request.Evictable
-		if request.Evictable {
-			request.DrainSeconds = 30
-		}
+	if _, err := request.CPUPricing(); err != nil {
+		return err
+	}
+	if request.CPUTier() == types.CPUTierSpot {
+		request.Evictable, request.OpportunisticOnly, request.DrainSeconds = true, true, types.SpotDrainSeconds
 	}
 	if !s.buildPoolAllowed(request.PoolSelector, request) {
 		requestLog(log.Info(), request).Msg("run request rejected: pool reserved for image builds")
@@ -703,9 +699,10 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 	// type before widening.
 	controllers = append(controllers, s.failoverControllers(chain, controllers)...)
 	controllers = filterControllersByFlagsForFailover(controllers, request, chain)
+	tier := request.CPUTier()
 	controllers = slices.DeleteFunc(controllers, func(controller WorkerPoolController) bool {
-		p, ok := s.PoolConfig(controller.Name())
-		return !s.buildPoolAllowed(controller.Name(), request) || ok && !request.CPUTier().MatchesPool(p) || !ok && request.CPUTier() != ""
+		pool, _ := s.PoolConfig(controller.Name())
+		return !s.buildPoolAllowed(controller.Name(), request) || !tier.MatchesPool(pool)
 	})
 	controllers = s.filterControllersByCheckpointAccelerator(controllers, request)
 	if len(controllers) == 0 {
@@ -1483,8 +1480,9 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	// same tier, storage-backed work prefers agent capacity so local workers
 	// remain available to workspaces that cannot run on agents. Explicit chain
 	// order still takes precedence over ordinary pool priority.
+	tiered := request.CPUTier() != ""
 	sort.Slice(scoredWorkers, func(i, j int) bool {
-		if request.CPUTier() != "" && scoredWorkers[i].evictionRank != scoredWorkers[j].evictionRank {
+		if tiered && scoredWorkers[i].evictionRank != scoredWorkers[j].evictionRank {
 			return scoredWorkers[i].evictionRank < scoredWorkers[j].evictionRank
 		}
 		if scoredWorkers[i].failoverRank != scoredWorkers[j].failoverRank {
@@ -1824,8 +1822,9 @@ func calculateBackoffDelay(retryCount int) time.Duration {
 }
 
 func (s *Scheduler) filterWorkersByCPUTier(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	tier := request.CPUTier()
 	return slices.DeleteFunc(workers, func(w *types.Worker) bool {
-		p, ok := s.PoolConfig(workerPoolSelector(w))
-		return request.CPUTier() != "" && w.CPUTierProtocol != types.CPUTierProtocolVersion || ok && !request.CPUTier().MatchesPool(p) || !ok && request.CPUTier() != ""
+		pool, _ := s.PoolConfig(workerPoolSelector(w))
+		return !tier.MatchesPool(pool) || tier != "" && w.CPUTierProtocol != types.CPUTierProtocolVersion
 	})
 }

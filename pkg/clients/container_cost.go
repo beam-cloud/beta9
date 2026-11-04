@@ -26,12 +26,13 @@ const (
 )
 
 type ContainerCostResponse struct {
+	CostPerMs      string `json:"cost_per_ms"`
+	PricingVersion string `json:"pricing_version,omitempty"`
+	EffectiveAt    string `json:"effective_at,omitempty"`
+	ValidUntil     string `json:"valid_until,omitempty"`
+
 	CPUPricing     *types.CPUPriceBinding `json:"cpu_pricing,omitempty"`
 	CPUTierCatalog json.RawMessage        `json:"cpu_tier_catalog,omitempty"`
-	CostPerMs      string                 `json:"cost_per_ms"`
-	PricingVersion string                 `json:"pricing_version,omitempty"`
-	EffectiveAt    string                 `json:"effective_at,omitempty"`
-	ValidUntil     string                 `json:"valid_until,omitempty"`
 }
 
 // ContainerCostQuote is a validated quote returned by the billing service.
@@ -47,18 +48,17 @@ type ContainerCostQuote struct {
 }
 
 type ContainerCostRequest struct {
-	CPUTier         types.CPUTier `json:"cpu_tier,omitempty"`
-	ResolveCPUTier  bool          `json:"resolve_cpu_tier,omitempty"`
-	CPUTierEligible bool          `json:"cpu_tier_eligible"`
-	NativeVM        bool          `json:"native_vm,omitempty"`
-	CatalogOnly     bool          `json:"catalog_only,omitempty"`
-	WorkspaceId     string        `json:"workspace_id,omitempty"`
-	Cpu             int64         `json:"cpu"`
-	Memory          int64         `json:"memory"`
-	Gpu             string        `json:"gpu"`
-	GpuCount        uint32        `json:"gpu_count"`
-	Sandbox         bool          `json:"sandbox"`
-	VM              bool          `json:"vm,omitempty"`
+	WorkspaceId string `json:"workspace_id,omitempty"`
+	Cpu         int64  `json:"cpu"`
+	Memory      int64  `json:"memory"`
+	Gpu         string `json:"gpu"`
+	GpuCount    uint32 `json:"gpu_count"`
+	Sandbox     bool   `json:"sandbox"`
+	VM          bool   `json:"vm,omitempty"`
+
+	CPUTier        types.CPUTier `json:"cpu_tier,omitempty"`
+	ResolveCPUTier bool          `json:"resolve_cpu_tier,omitempty"`
+	CatalogOnly    bool          `json:"catalog_only,omitempty"`
 }
 
 type containerCostCacheEntry struct {
@@ -99,24 +99,22 @@ func NewContainerCostClient(config types.ContainerCostHookConfig) *ContainerCost
 // GetContainerCostQuote caches by workspace, stub kind and resources for five minutes (or valid_until).
 // A failed refresh returns the last good quote and retries on a later lookup.
 func (c *ContainerCostClient) GetContainerCostQuote(ctx context.Context, request *types.ContainerRequest) (ContainerCostQuote, error) {
+	binding, err := request.CPUPricing()
+	if err != nil {
+		return ContainerCostQuote{}, err
+	}
+	if binding != nil {
+		cost, err := binding.CostPerMs(request.Cpu, request.Memory)
+		return ContainerCostQuote{CostPerMs: cost, PricingVersion: binding.Version, Valid: err == nil}, err
+	}
+	if c == nil {
+		return ContainerCostQuote{}, fmt.Errorf("container cost client is not configured")
+	}
 	if request == nil {
 		return ContainerCostQuote{}, fmt.Errorf("container cost request is nil")
 	}
 	if ctx == nil {
 		ctx = context.Background()
-	}
-
-	if request.CPUTier() != "" {
-		cfg, err := request.CPUConfig()
-		if err != nil {
-			return ContainerCostQuote{}, err
-		}
-		cost, err := cfg.CPUPricing.CostPerMs(request.Cpu, request.Memory)
-		return ContainerCostQuote{CostPerMs: cost, PricingVersion: cfg.CPUPricing.Version, CPUPricing: cfg.CPUPricing, Valid: err == nil}, err
-	}
-
-	if c == nil {
-		return ContainerCostQuote{}, fmt.Errorf("container cost client is not configured")
 	}
 
 	key := ContainerCostRequest{
@@ -314,12 +312,52 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 	return nil
 }
 
-// ResolveCPU selects a server-owned binding at stub creation, without the
-// resource quote cache (catalog revisions must affect new stubs immediately).
+// ResolveCPU skips the quote cache so catalog revisions reach new stubs immediately.
 func (c *ContainerCostClient) ResolveCPU(ctx context.Context, request ContainerCostRequest) (ContainerCostQuote, error) {
 	if c == nil {
 		return ContainerCostQuote{}, fmt.Errorf("CPU tier billing is not configured")
 	}
 	quote, _, err := c.fetch(ctx, request)
 	return quote, err
+}
+
+// BindStubCPU gives every new stub (created, cloned or redeployed) current
+// server prices; prices from a parent stub or a client are never kept.
+func (c *ContainerCostClient) BindStubCPU(ctx context.Context, workspaceID string, kind types.StubType, config *types.StubConfigV1, poolConfig func(string) (types.WorkerPoolConfig, bool), eligible bool) error {
+	config.CPUPricing = nil
+	selector := config.PoolSelector()
+	pool, known := poolConfig(selector)
+	if !eligible || selector != "" && !(known && pool.HostedCPU()) || kind.IsPlatformWorkload() || config.RequiresGPU() {
+		if config.CPUTier != "" {
+			return fmt.Errorf("CPU tiers apply only to hosted CPU workloads")
+		}
+		return nil
+	}
+	if c == nil && config.CPUTier == "" {
+		return nil
+	}
+	quote, err := c.ResolveCPU(ctx, ContainerCostRequest{
+		WorkspaceId: workspaceID, Cpu: config.Runtime.Cpu, Memory: config.Runtime.Memory,
+		Sandbox: kind.Kind() == types.StubTypeSandbox, VM: kind.Kind() == types.StubTypeVM,
+		CPUTier: config.CPUTier, ResolveCPUTier: true,
+	})
+	binding := quote.CPUPricing
+	switch {
+	case err != nil:
+		return err
+	case binding == nil && config.CPUTier == "":
+		return nil
+	case binding == nil || config.CPUTier != "" && binding.Tier != config.CPUTier:
+		return fmt.Errorf("billing did not resolve the requested CPU tier")
+	case selector != "" && !binding.Tier.MatchesPool(pool):
+		return fmt.Errorf("pool does not support the selected CPU tier")
+	}
+	if err := binding.Tier.Validate(config.Runtime.Cpu, config.Runtime.Memory, config.UseVM, false); err != nil {
+		return err
+	}
+	if _, err := binding.CostPerMs(config.Runtime.Cpu, config.Runtime.Memory); err != nil {
+		return err
+	}
+	config.CPUTier, config.CPUPricing = binding.Tier, binding
+	return nil
 }

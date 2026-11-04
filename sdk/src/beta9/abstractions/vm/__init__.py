@@ -617,8 +617,10 @@ class VM:
             vm.close()
             raise
 
-    def update(self, *, ttl=None, idle_action=None, auto_resume=None, metadata=None, cpu_tier=None) -> "VM":
-        """Change idle stopping and metadata without replacing the VM or URLs.
+    def update(
+        self, *, ttl=None, idle_action=None, auto_resume=None, metadata=None, cpu_tier=None
+    ) -> "VM":
+        """Change idle stopping, metadata or a stopped VM's CPU tier without replacing the VM or URLs.
 
         Metadata replaces the complete map; pass {} to clear it. It is visible
         in management responses, so use workspace secrets for credentials.
@@ -701,7 +703,8 @@ class VM:
         return self._action("template", name=name or self.name, description=description)
 
     def fork(self, name=None, wait=True, *, cpu_tier=None) -> "VM":
-        info = self._action("fork", name=name or "", ssh_public_key=public_key(), **({"cpu_tier": cpu_tier} if cpu_tier else {}))
+        tier = {"cpu_tier": cpu_tier} if cpu_tier else {}
+        info = self._action("fork", name=name or "", ssh_public_key=public_key(), **tier)
         # SDK-owned children have independent connections; caller-owned
         # clients retain their explicit shared lifetime.
         child = (

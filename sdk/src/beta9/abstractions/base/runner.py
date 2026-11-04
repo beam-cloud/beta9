@@ -20,7 +20,6 @@ from ...clients.gateway import (
     ExportWorkspaceConfigRequest,
     GatewayServiceStub,
     GetOrCreateStubRequest,
-    GetCpuTierCatalogRequest,
     GetOrCreateStubResponse,
     GetUrlRequest,
     GetUrlResponse,
@@ -696,7 +695,6 @@ class RunnerAbstraction(BaseAbstraction):
         inputs: Optional[SchemaProto],
         outputs: Optional[SchemaProto],
     ) -> GetOrCreateStubRequest:
-        self._resolve_native_vm_defaults()
         return GetOrCreateStubRequest(
             object_id=self.object_id,
             image_id=self.image_id,
@@ -765,16 +763,6 @@ class RunnerAbstraction(BaseAbstraction):
             interval_seconds=int(self.checkpoint_readiness_interval),
         )
 
-    def cpu_tiers(self):
-        """Return the authenticated CPU tier catalog and resolved account default."""
-        return json.loads(self.gateway_stub.get_cpu_tier_catalog(GetCpuTierCatalogRequest()).catalog)
-
-    def _resolve_native_vm_defaults(self):
-        if not self.use_vm or self.gpu or not getattr(self, "_default_vm_memory", False):
-            return
-        if self.cpu_tier or (not self.pool_config and self.cpu_tiers().get("default_cpu_tier")):
-            self.memory = 1024
-
     def _get_or_create_stub(self, stub_request: GetOrCreateStubRequest) -> GetOrCreateStubResponse:
         if _stub_created_for_current_workspace():
             return self.gateway_stub.get_or_create_stub(stub_request)
@@ -794,7 +782,6 @@ class RunnerAbstraction(BaseAbstraction):
         if stub_response.ok:
             self.stub_created = True
             self.stub_id = stub_response.stub_id
-            self.cpu_pricing = json.loads(stub_response.cpu_pricing) if stub_response.cpu_pricing else None
             if stub_response.warn_msg:
                 terminal.warn(stub_response.warn_msg)
             return True

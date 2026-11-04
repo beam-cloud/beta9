@@ -1,9 +1,10 @@
 package scheduler
 
 import (
+	"testing"
+
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestCPUTierPlacementAndWorkerCompatibility(t *testing.T) {

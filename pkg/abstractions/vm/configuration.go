@@ -292,13 +292,11 @@ func (s *Service) update(c echo.Context) error {
 		if v.Status != types.VMStateStopped || v.DesiredState != types.VMStateStopped {
 			return echo.NewHTTPError(http.StatusConflict, "stop the VM before changing CPU tier")
 		}
-		oldStub, oldTier, oldPool := v.StubID, v.Spec.CPUTier, v.Spec.Pool
-		if err := s.changeCPUTier(&v.Spec, *req.CPUTier); err != nil {
-			return apiError(err)
+		if !s.cpuTierEligible(v.Spec) {
+			return apiError(fmt.Errorf("CPU tiers apply only to hosted CPU VMs"))
 		}
-		v.StubID, v.Spec.CPUTier = "", *req.CPUTier
+		v.Spec.CPUTier, v.Spec.Pool, v.StubID = *req.CPUTier, "", ""
 		if err := s.prepare(ctx, v); err != nil {
-			v.StubID, v.Spec.CPUTier, v.Spec.Pool = oldStub, oldTier, oldPool
 			return apiError(err)
 		}
 	}
@@ -559,15 +557,7 @@ func (s *Service) configurePort(ctx context.Context, v *types.VM, action string,
 }
 
 // A public pool injected by the old VM default is a placement default, not a
-// private/BYOC choice. Opting into a tier releases that legacy public selector.
-func (s *Service) changeCPUTier(spec *types.VMSpec, tier types.CPUTier) error {
-	if spec.Pool != "" {
-		pools, ok := s.gateway.(interface{ IsHostedCPUPool(string) bool })
-		if !ok || !pools.IsHostedCPUPool(spec.Pool) {
-			return fmt.Errorf("CPU tiers apply only to hosted CPU VMs")
-		}
-		spec.Pool = ""
-	}
-	spec.CPUTier = tier
-	return nil
+// private/BYOC choice, so a CPU tier may replace it.
+func (s *Service) cpuTierEligible(spec types.VMSpec) bool {
+	return spec.GPU == "" && (spec.Pool == "" || s.gateway.IsHostedCPUPool(spec.Pool))
 }

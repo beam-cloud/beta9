@@ -1,5 +1,4 @@
 import http
-import json
 import os
 import uuid
 from pathlib import Path
@@ -53,12 +52,6 @@ class Client:
 
         self.base_url: str = api_url.rstrip("/") if api_url else self._get_base_url()
         self._load_workspace()
-
-    def cpu_tiers(self):
-        """Current CPU capacity tiers and this account's default."""
-        response = make_request(token=self.token, url=self.base_url, method="GET", path="/api/v1/gateway/cpu-tiers")
-        response.raise_for_status()
-        return json.loads(response.json()["catalog"])
 
     def _load_workspace(self):
         response = make_request(

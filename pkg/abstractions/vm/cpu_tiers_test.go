@@ -45,13 +45,28 @@ func TestTierChangeRequiresStoppedVMAndNewStub(t *testing.T) {
 	require.Equal(t, disk, rootDisk(saved))
 }
 
-func TestTierCannotReplacePrivatePool(t *testing.T) {
-	s, v, _, _, gateway := fixture()
+func TestTierReplacesOnlyHostedPools(t *testing.T) {
+	s, v, info, _, gateway := fixture()
 	s.gateway = &tierVMGateway{gateway}
+	ctx := auth.ContextWithAuthInfo(context.Background(), info)
+	child, err := s.createVM(ctx, info, types.VMCreateOptions{Name: "from-template", Spec: types.VMSpec{ImageID: "image", Pool: "old-public-pool", CPUTier: types.CPUTierShared}})
+	require.NoError(t, err)
+	require.Empty(t, child.Error)
+	require.Empty(t, child.Spec.Pool)
+	require.Nil(t, gateway.stub.Pool)
+	require.Equal(t, types.CPUTierShared, child.Spec.CPUTier)
+	_, err = s.createVM(ctx, info, types.VMCreateOptions{Name: "private", Spec: types.VMSpec{ImageID: "image", Pool: "private-pool", CPUTier: types.CPUTierShared}})
+	require.ErrorContains(t, err, "hosted CPU")
+
 	v.Spec.Pool = "private-pool"
-	require.ErrorContains(t, s.changeCPUTier(&v.Spec, types.CPUTierShared), "hosted CPU")
-	require.Equal(t, "private-pool", v.Spec.Pool)
-	require.Empty(t, v.Spec.CPUTier)
+	v.DesiredState, v.Status, v.ContainerID = types.VMStateStopped, types.VMStateStopped, ""
+	rec := vmRequest(managementAPI(s, info), "PATCH", "/"+info.Workspace.ExternalId+"/"+v.Name, `{"cpu_tier":"shared"}`)
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "hosted CPU")
+	saved, err := s.repo.GetVM(context.Background(), v.WorkspaceID, v.ID)
+	require.NoError(t, err)
+	require.Equal(t, "private-pool", saved.Spec.Pool)
+	require.Empty(t, saved.Spec.CPUTier)
 }
 
 func TestPreemptionReasonSurvivesDurableStopAndBlocksTrafficResume(t *testing.T) {

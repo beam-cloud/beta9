@@ -127,11 +127,10 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 
 	v.CPUPricing = nil
 	if resp.CpuPricing != "" {
-		var binding types.CPUPriceBinding
-		if err := json.Unmarshal([]byte(resp.CpuPricing), &binding); err != nil {
+		if err := json.Unmarshal([]byte(resp.CpuPricing), &v.CPUPricing); err != nil {
 			return err
 		}
-		v.Spec.CPUTier, v.CPUPricing = binding.Tier, &binding
+		v.Spec.CPUTier = v.CPUPricing.Tier
 	}
 	v.StubID = resp.StubId
 	// start persists the stub and runtime identities together before enqueue.

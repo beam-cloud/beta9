@@ -70,7 +70,7 @@ func apiError(err error) error {
 // values in management responses or template listings.
 func (s *Service) response(v *types.VM) types.VM {
 	copy := *v
-	eligible := v.Spec.GPU == "" && (v.Spec.Pool == "" || s.hostedCPUPool(v.Spec.Pool))
+	eligible := s.cpuTierEligible(v.Spec)
 	copy.CPUTierEligible = &eligible
 	copy.Spec = redactedSpec(v.Spec)
 	copy.CreationDigest = ""
@@ -425,32 +425,26 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 		}
 	}
 
-	if opts.Spec.CPUTier != "" && opts.Spec.Pool == "" && spec.Pool != "" {
-		if err := s.changeCPUTier(&spec, spec.CPUTier); err != nil {
+	eligible := s.cpuTierEligible(spec)
+	if eligible && spec.CPUTier == "" {
+		result, err := s.gateway.GetCPUTierCatalog(ctx, &pb.GetCPUTierCatalogRequest{})
+		if err != nil {
 			return nil, err
 		}
-	}
-	if spec.GPU == "" && spec.CPUTier == "" && (spec.Pool == "" || s.hostedCPUPool(spec.Pool)) {
-		if catalog, ok := s.gateway.(interface {
-			GetCPUTierCatalog(context.Context, *pb.GetCPUTierCatalogRequest) (*pb.GetCPUTierCatalogResponse, error)
-		}); ok {
-			result, err := catalog.GetCPUTierCatalog(ctx, &pb.GetCPUTierCatalogRequest{})
-			if err != nil {
-				return nil, err
-			}
-			var defaults struct {
-				Tier types.CPUTier `json:"default_cpu_tier"`
-			}
-			if err := json.Unmarshal([]byte(result.Catalog), &defaults); err != nil {
-				return nil, err
-			}
-			spec.CPUTier = defaults.Tier
-			if defaults.Tier != "" {
-				spec.Pool = ""
-			}
+		var catalog struct {
+			DefaultCPUTier types.CPUTier `json:"default_cpu_tier"`
 		}
+		if err := json.Unmarshal([]byte(result.Catalog), &catalog); err != nil {
+			return nil, err
+		}
+		spec.CPUTier = catalog.DefaultCPUTier
 	}
-	if spec.Pool == "" && spec.GPU == "" && spec.CPUTier == "" {
+	switch {
+	case spec.CPUTier != "" && !eligible:
+		return nil, fmt.Errorf("CPU tiers apply only to hosted CPU VMs")
+	case spec.CPUTier != "":
+		spec.Pool = ""
+	case spec.Pool == "" && spec.GPU == "":
 		spec.Pool = s.config.DefaultPool
 	}
 
@@ -544,15 +538,15 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 }
 
 type actionRequest struct {
-	CPUTier      *types.CPUTier `json:"cpu_tier,omitempty"`
-	Name         string         `json:"name,omitempty"`
-	NoSnapshot   bool           `json:"no_snapshot,omitempty"`
-	Port         uint32         `json:"port,omitempty"`
-	SSHPublicKey string         `json:"ssh_public_key,omitempty"`
-	Description  string         `json:"description,omitempty"`
-	Protected    *bool          `json:"protected,omitempty"`
-	TTL          int64          `json:"ttl,omitempty"`
-	Cold         bool           `json:"cold,omitempty"`
+	CPUTier      string `json:"cpu_tier,omitempty"`
+	Name         string `json:"name,omitempty"`
+	NoSnapshot   bool   `json:"no_snapshot,omitempty"`
+	Port         uint32 `json:"port,omitempty"`
+	SSHPublicKey string `json:"ssh_public_key,omitempty"`
+	Description  string `json:"description,omitempty"`
+	Protected    *bool  `json:"protected,omitempty"`
+	TTL          int64  `json:"ttl,omitempty"`
+	Cold         bool   `json:"cold,omitempty"`
 }
 
 func (s *Service) action(c echo.Context) error {
@@ -698,10 +692,8 @@ func (s *Service) action(c echo.Context) error {
 		}
 
 		spec := v.Spec
-		if req.CPUTier != nil {
-			if err := s.changeCPUTier(&spec, *req.CPUTier); err != nil {
-				return apiError(err)
-			}
+		if req.CPUTier != "" {
+			spec.CPUTier = types.CPUTier(req.CPUTier)
 		}
 		spec.SourceSnapshotID = v.RootSnapshotID
 		spec.SSHPublicKey = req.SSHPublicKey
@@ -831,9 +823,4 @@ func (s *Service) removeArtifact(c echo.Context) error {
 	}
 
 	return c.NoContent(http.StatusNoContent)
-}
-
-func (s *Service) hostedCPUPool(name string) bool {
-	pools, ok := s.gateway.(interface{ IsHostedCPUPool(string) bool })
-	return ok && pools.IsHostedCPUPool(name)
 }

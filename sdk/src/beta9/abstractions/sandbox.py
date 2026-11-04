@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import io
+import json
 import os
 import shlex
 import time
@@ -21,7 +22,12 @@ from ..abstractions.image import Image
 from ..abstractions.pod import Pod
 from ..abstractions.volume import CloudBucket, Volume
 from ..channel import RECOVERY_TIMEOUT, rpc_timeout
-from ..clients.gateway import GatewayServiceStub, StopContainerRequest, StopContainerResponse
+from ..clients.gateway import (
+    GatewayServiceStub,
+    GetCpuTierCatalogRequest,
+    StopContainerRequest,
+    StopContainerResponse,
+)
 from ..clients.pod import (
     CreatePodRequest,
     CreatePodResponse,
@@ -396,6 +402,15 @@ class Sandbox(Pod):
             print(f"Sandbox created with ID: {instance.sandbox_id()}")
             ```
         """
+
+        # CPU tier VMs need 1 GiB; without a tier or pool, the account default decides.
+        if self._default_vm_memory and self.use_vm and not self.gpu:
+            tier = self.cpu_tier
+            if not tier and not self.pool_config:
+                catalog = self.gateway_stub.get_cpu_tier_catalog(GetCpuTierCatalogRequest()).catalog
+                tier = json.loads(catalog).get("default_cpu_tier")
+            if tier:
+                self.memory = 1024
 
         if not self.prepare_runtime(
             stub_type=SANDBOX_STUB_TYPE,

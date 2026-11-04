@@ -8,13 +8,14 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// spotContainers reports the worker's Spot containers and whether it runs nothing else.
 func (s *Worker) spotContainers() (ids []string, onlySpot bool) {
 	onlySpot = true
 	if s.containerInstances == nil {
 		return
 	}
 	s.containerInstances.Range(func(id string, instance *ContainerInstance) bool {
-		if instance == nil || instance.Request == nil || instance.Request.CPUTier() != types.CPUTierSpot {
+		if instance == nil || instance.Request.CPUTier() != types.CPUTierSpot {
 			onlySpot = false
 		} else {
 			ids = append(ids, id)
@@ -24,23 +25,19 @@ func (s *Worker) spotContainers() (ids []string, onlySpot bool) {
 	return
 }
 
-// Borrowed work must give protected headroom back and must not pin an idle or retiring worker. Reuse the
-// same eviction/durability barrier as replacement requests; never kill a VM
-// merely because its durable stop is slow or unavailable.
+// Spot work must not hold pool headroom or keep an idle or draining worker
+// alive. It is evicted like a replacement request's victims, so Spot VMs stop
+// durably instead of being killed.
 func (s *Worker) reclaimSpotCapacity(last, now time.Time) {
 	ids, onlySpot := s.spotContainers()
 	if len(ids) == 0 || s.spotScaleIn.Load() {
 		return
 	}
-	// Reclaim reserved headroom without retiring its worker.
 	if !s.draining && !(onlySpot && s.poolHeadroom.Load()) {
 		if s.persistent || !onlySpot || now.Sub(last).Seconds() <= defaultWorkerSpindownTimeS {
 			return
 		}
-		if err := s.setWorkerKeepAlive(); err != nil || s.poolHeadroom.Load() {
-			return
-		}
-		if err := s.disableScheduling(); err != nil {
+		if s.setWorkerKeepAlive() != nil || s.poolHeadroom.Load() || s.disableScheduling() != nil {
 			return
 		}
 		s.draining, s.drainStartedAt = true, now
@@ -50,9 +47,9 @@ func (s *Worker) reclaimSpotCapacity(last, now time.Time) {
 	}
 	go func() {
 		defer s.spotScaleIn.Store(false)
-		ctx, cancel := context.WithTimeout(s.ctx, 3*time.Minute)
+		ctx, cancel := context.WithTimeout(s.ctx, spotReleaseTimeout)
 		defer cancel()
-		if err := s.evictForRequest(ctx, &types.ContainerRequest{EvictContainerIds: ids, EvictDrainSeconds: 30}); err != nil {
+		if err := s.evictForRequest(ctx, &types.ContainerRequest{EvictContainerIds: ids, EvictDrainSeconds: types.SpotDrainSeconds}); err != nil {
 			log.Warn().Err(err).Str("worker_id", s.workerId).Msg("Spot scale-in is waiting for durable release")
 		}
 	}()

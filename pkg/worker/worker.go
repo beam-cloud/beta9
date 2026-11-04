@@ -1726,8 +1726,7 @@ func (s *Worker) setWorkerKeepAlive() error {
 	ctx, cancel := context.WithTimeout(s.ctx, workerShutdownRPCTimeout)
 	defer cancel()
 
-	_, onlySpot := s.spotContainers()
-	idle := s.containerInstances == nil || s.containerInstances.Len() == 0 || onlySpot
+	_, idle := s.spotContainers()
 	resp, err := handleGRPCResponse(s.workerRepoClient.SetWorkerKeepAlive(ctx, &pb.SetWorkerKeepAliveRequest{
 		WorkerId:                   s.workerId,
 		CpuTierProtocol:            types.CPUTierProtocolVersion,

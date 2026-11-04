@@ -17,7 +17,6 @@ import (
 )
 
 type GatewayService struct {
-	cpuPricing       *clients.ContainerCostClient
 	ctx              context.Context
 	appConfig        types.AppConfig
 	backendRepo      repository.BackendRepository
@@ -37,6 +36,7 @@ type GatewayService struct {
 	keyEventManager  *common.KeyEventManager
 	endpointRepo     repository.ManagedEndpointRepository // nil when managed endpoints are disabled
 	imageService     pb.ImageServiceServer                // optional; needed to create database services
+	cpuPricing       *clients.ContainerCostClient         // nil when the billing hook is not configured
 	pb.UnimplementedGatewayServiceServer
 }
 

@@ -325,8 +325,7 @@ func TestSpotVMEvictionRequiresDurableRelease(t *testing.T) {
 		t.Run(fmt.Sprint(fail), func(t *testing.T) {
 			worker, rt := evictionWorkerForTest(false)
 			victim := addRunningInstance(worker, rt, "spot-vm")
-			victim.Request.UseVM = true
-			victim.Request.WorkspaceId = "workspace"
+			victim.Request.UseVM, victim.Request.WorkspaceId = true, "workspace"
 			victim.Request.Env = []string{"BEAM_VM_SYSTEMD=1", "BEAM_VM_ID=vm-id"}
 			victim.Request.Stub.Config = `{"cpu_tier":"spot"}`
 			var stopped bool
@@ -367,8 +366,7 @@ func TestSpotReturnsProtectedHeadroomWithoutRetiringWorker(t *testing.T) {
 	worker.persistent = true
 	worker.poolHeadroom.Store(true)
 	victim := addRunningInstance(worker, rt, "spot-headroom")
-	victim.Request.UseVM = true
-	victim.Request.WorkspaceId = "workspace"
+	victim.Request.UseVM, victim.Request.WorkspaceId = true, "workspace"
 	victim.Request.Env = []string{"BEAM_VM_SYSTEMD=1", "BEAM_VM_ID=vm-id"}
 	victim.Request.Stub.Config = `{"cpu_tier":"spot"}`
 	stopped := make(chan *pb.PreemptVMRequest, 1)

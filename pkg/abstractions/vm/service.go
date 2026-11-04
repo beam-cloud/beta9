@@ -28,6 +28,8 @@ type Runtime interface {
 type Gateway interface {
 	GetOrCreateStub(context.Context, *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error)
 	StopContainer(context.Context, *pb.StopContainerRequest) (*pb.StopContainerResponse, error)
+	GetCPUTierCatalog(context.Context, *pb.GetCPUTierCatalogRequest) (*pb.GetCPUTierCatalogResponse, error)
+	IsHostedCPUPool(string) bool
 }
 
 type ImageVerifier interface {
