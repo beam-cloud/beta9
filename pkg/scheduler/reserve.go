@@ -44,11 +44,18 @@ func (a *schedulingAttempt) run() {
 }
 
 func (a *schedulingAttempt) runWaitingOrProvisioning() {
-	// Opportunistic requests (managed endpoint replicas) only ever fill idle
-	// capacity. They never queue against pending workers
-	// or provision new ones; the controller retries on its own cadence.
+	// Opportunistic requests only ever fill idle capacity. They never queue
+	// against pending workers or provision new ones. Spot waits for capacity
+	// to free up; managed endpoint replicas fail at once, and their controller
+	// retries on its own cadence.
 	if a.request.OpportunisticOnly {
-		metrics.RecordSchedulerWorkerWait(time.Since(a.request.Timestamp), a.request, string(types.ContainerSchedulingFailureNoOpportunisticCapacity))
+		waited := time.Since(a.request.Timestamp)
+		if a.request.CPUTier() == types.CPUTierSpot && waited < maxScheduleRetryDuration {
+			metrics.RecordSchedulerWorkerWait(waited, a.request, "spare_capacity_wait")
+			a.requeueForWorkerWait()
+			return
+		}
+		metrics.RecordSchedulerWorkerWait(waited, a.request, string(types.ContainerSchedulingFailureNoOpportunisticCapacity))
 		a.fail(types.ContainerSchedulingFailureNoOpportunisticCapacity)
 		return
 	}

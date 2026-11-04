@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
@@ -53,6 +54,31 @@ func TestTieredCPUUsesFreeCapacityBeforeReclaimingSpot(t *testing.T) {
 	worker, err = s.selectWorkerFromWorkers([]*types.Worker{full, &free}, request)
 	require.NoError(t, err)
 	require.Equal(t, "free", worker.Id)
+}
+
+func TestSpotWaitsForSpareCapacity(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	require.NoError(t, err)
+	controller := &LocalWorkerPoolControllerForTest{ctx: scheduler.ctx, name: "shared", config: scheduler.config, workerRepo: scheduler.workerRepo}
+	scheduler.workerPoolManager.SetPool("shared", types.WorkerPoolConfig{CPUClass: types.CPUTierShared, CPUShareMultiplier: 2.5}, controller)
+	request := &types.ContainerRequest{Cpu: 1000, Memory: 1024, OpportunisticOnly: true, Evictable: true, Timestamp: time.Now(), Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"cpu_tier":"spot"}`}}}
+	setPendingSchedulerRequests(t, scheduler, request)
+
+	// Without spare capacity, Spot stays pending in the backlog and adds no worker.
+	newSchedulingAttempt(scheduler, request, nil).run()
+	require.Equal(t, 0, controller.AddWorkerCallCount())
+	require.Equal(t, int64(1), scheduler.requestBacklog.Len())
+	state, err := scheduler.containerRepo.GetContainerState(request.ContainerId)
+	require.NoError(t, err)
+	require.Equal(t, types.ContainerStatusPending, state.Status)
+
+	// It gives up when the scheduling window ends.
+	request.Timestamp = time.Now().Add(-maxScheduleRetryDuration)
+	newSchedulingAttempt(scheduler, request, nil).run()
+	require.Equal(t, 0, controller.AddWorkerCallCount())
+	status, err := scheduler.containerRepo.GetContainerRequestStatus(request.ContainerId)
+	require.NoError(t, err)
+	require.Equal(t, types.ContainerRequestStatusFailed, status)
 }
 
 func TestSpotSkipsWorkersHoldingPoolHeadroom(t *testing.T) {
