@@ -77,6 +77,7 @@ var checkpointOriginSlots = make(chan struct{}, checkpointOriginConcurrency)
 var checkpointOriginUploadSlots = make(chan struct{}, checkpointConcurrencyFromEnv("BETA9_CHECKPOINT_UPLOAD_CONCURRENCY", checkpointOriginUploadConcurrency))
 var checkpointArchiveSlots = make(chan struct{}, checkpointConcurrencyFromEnv("BETA9_CHECKPOINT_ARCHIVE_CONCURRENCY", checkpointArchiveConcurrency))
 var microVMCheckpointSlots = make(chan struct{}, microVMCheckpointCaptureLimit())
+var microVMSnapshotIOSlots = newMicroVMSnapshotIOSlots(os.Getenv("BETA9_MICROVM_SNAPSHOT_IO_CONCURRENCY"))
 var checkpointArchiveCacheSlots = make(chan struct{}, checkpointCacheConcurrency)
 var errCheckpointOriginInactive = errors.New("memory checkpoint download made no progress before the inactivity deadline")
 
@@ -1555,6 +1556,114 @@ func acquireCheckpointSlot(ctx context.Context, slots chan struct{}) (func(), er
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+func newMicroVMSnapshotIOSlots(value string) chan struct{} {
+	n, err := strconv.Atoi(value)
+	if err != nil || n < 1 || n > 128 {
+		return nil
+	}
+	return make(chan struct{}, n)
+}
+
+// The existing capture lease bounds all unarchived checkpoints. This separate
+// gate limits pivots and memory writes after the guest has paused. Queued
+// guests must stop using CPU before compression of earlier captures begins.
+// Release after capture joins so compression can overlap the next capture.
+func withCheckpointCaptureIO(ctx context.Context, runtimeName string, slots chan struct{}, capture func(admit func(context.Context) error) (string, error)) (string, error) {
+	if runtimeName != types.ContainerRuntimeMicroVM.String() || slots == nil {
+		return capture(func(context.Context) error { return nil })
+	}
+	var once sync.Once
+	release := func() {}
+	var admissionErr error
+	admit := func(pausedCtx context.Context) error {
+		once.Do(func() {
+
+			var slotRelease func()
+			slotRelease, admissionErr = acquireCheckpointSlot(pausedCtx, slots)
+			if admissionErr == nil {
+				release = slotRelease
+			}
+		})
+		return admissionErr
+	}
+	defer func() { release() }()
+	return capture(admit)
+}
+
+// Memory can be captured after the disk pivot is durable while its immutable
+// layers upload. Keep the first rollout narrow: terminal native snapshots with
+// exactly one writable qcow disk. Other checkpoint kinds retain the serial path.
+func checkpointDiskPipelineEnabled(request *types.ContainerRequest, runtimeName string, terminal bool) bool {
+	if os.Getenv("BETA9_CHECKPOINT_DISK_PIPELINE") != "1" || !terminal || runtimeName != types.ContainerRuntimeMicroVM.String() || request == nil {
+		return false
+	}
+	writable := 0
+	for i := range request.Mounts {
+		mount := &request.Mounts[i]
+		if mount.DurableDisk == nil || mount.ReadOnly {
+			continue
+		}
+		if !isQcowDurableDiskMount(mount) {
+			return false
+		}
+		writable++
+	}
+	return writable == 1
+}
+
+type checkpointDiskPublication struct {
+	sealed, done chan struct{}
+	cancel       context.CancelFunc
+	snapshots    []*types.DiskSnapshot
+	err          error
+}
+
+func startCheckpointDiskPublication(ctx context.Context, publish func(context.Context, func()) ([]*types.DiskSnapshot, error)) *checkpointDiskPublication {
+	ctx, cancel := context.WithCancel(ctx)
+	p := &checkpointDiskPublication{sealed: make(chan struct{}), done: make(chan struct{}), cancel: cancel}
+	onSealed := sync.OnceFunc(func() { close(p.sealed) })
+	go func() {
+		defer close(p.done)
+		p.snapshots, p.err = publish(ctx, onSealed)
+	}()
+	return p
+}
+
+func (p *checkpointDiskPublication) waitSealed(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-p.sealed:
+		return ctx.Err()
+	case <-p.done:
+		if p.err != nil {
+			return p.err
+		}
+		select {
+		case <-p.sealed:
+			return ctx.Err()
+		default:
+			return errors.New("disk publication completed without a seal fence")
+		}
+	}
+}
+
+func (p *checkpointDiskPublication) wait(ctx context.Context) ([]*types.DiskSnapshot, error) {
+	select {
+	case <-ctx.Done():
+		p.cancel()
+		<-p.done // Never detach or release a disk while publication still uses it.
+		return p.snapshots, errors.Join(ctx.Err(), p.err)
+	case <-p.done:
+		return p.snapshots, p.err
+	}
+}
+
+func (p *checkpointDiskPublication) cancelAndWait() {
+	p.cancel()
+	<-p.done
 }
 
 func (s *Worker) markCheckpointFailed(ctx context.Context, opts *CreateCheckpointOpts, runtimeName string, metadata *checkpointCacheMetadata) {
