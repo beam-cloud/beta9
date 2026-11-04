@@ -5,6 +5,8 @@ Production PR: https://github.com/beam-cloud/beta9/pull/2107
 Latest validation after the goproc CI release and duplication cleanup:
 [release-followup.md](release-followup.md). The earlier release measurements
 below remain historical; the follow-up records a 5.294s restore tail miss at 50.
+Its latest cleanup section also records an 8.279s pause outlier and a 6.572s
+repeat after removing hook-name special casing and boot/debug instrumentation.
 
 This branch preserves the complete research snapshot. The release branch drops
 instrumentation and non-improving experiments. Measurements below support

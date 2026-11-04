@@ -1,0 +1,59 @@
+=== RUN   TestMicroVMGuestInitReadOnlySharedMount
+--- PASS: TestMicroVMGuestInitReadOnlySharedMount (0.00s)
+=== RUN   TestMicroVMCPUWeightAppliesWhileQuotaIsDeferred
+--- PASS: TestMicroVMCPUWeightAppliesWhileQuotaIsDeferred (0.00s)
+=== RUN   TestMicroVMCPUWeightBoundsAndFailures
+--- PASS: TestMicroVMCPUWeightBoundsAndFailures (0.00s)
+=== RUN   TestMicroVMSnapshotSealsDisksBeforeCapture
+--- PASS: TestMicroVMSnapshotSealsDisksBeforeCapture (0.00s)
+=== RUN   TestMicroVMSnapshotOtherErrorsAreNotSafeToRetry
+--- PASS: TestMicroVMSnapshotOtherErrorsAreNotSafeToRetry (0.00s)
+=== RUN   TestMicroVMSnapshotCPUQuotaOnlyLiftedDuringPausedCapture
+=== RUN   TestMicroVMSnapshotCPUQuotaOnlyLiftedDuringPausedCapture/false
+=== RUN   TestMicroVMSnapshotCPUQuotaOnlyLiftedDuringPausedCapture/true
+--- PASS: TestMicroVMSnapshotCPUQuotaOnlyLiftedDuringPausedCapture (0.00s)
+    --- PASS: TestMicroVMSnapshotCPUQuotaOnlyLiftedDuringPausedCapture/false (0.00s)
+    --- PASS: TestMicroVMSnapshotCPUQuotaOnlyLiftedDuringPausedCapture/true (0.00s)
+=== RUN   TestMicroVMSnapshotCPUQuotaRejectsRunningGuest
+--- PASS: TestMicroVMSnapshotCPUQuotaRejectsRunningGuest (0.00s)
+=== RUN   TestMicroVMSnapshotWeightRestoredWithUnlimitedQuota
+--- PASS: TestMicroVMSnapshotWeightRestoredWithUnlimitedQuota (0.00s)
+=== RUN   TestMicroVMSnapshotCPUQuotaSerializesResourceUpdate
+--- PASS: TestMicroVMSnapshotCPUQuotaSerializesResourceUpdate (0.02s)
+=== RUN   TestMicroVMSnapshotSealFailureResumesBeforeAnyCapture
+--- PASS: TestMicroVMSnapshotSealFailureResumesBeforeAnyCapture (0.00s)
+=== RUN   TestMicroVMSnapshotLostPauseResponseResolvesActualState
+--- PASS: TestMicroVMSnapshotLostPauseResponseResolvesActualState (0.00s)
+=== RUN   TestRestoreCanvasKeepsCheckpointExecutable
+--- PASS: TestRestoreCanvasKeepsCheckpointExecutable (0.00s)
+PASS
+=== RUN   TestCheckpointCaptureIOCancellationAndFailureRelease
+--- PASS: TestCheckpointCaptureIOCancellationAndFailureRelease (0.00s)
+=== RUN   TestCheckpointDiskPipelineSealPrecedesCaptureButPublicationStillFencesAvailability
+--- PASS: TestCheckpointDiskPipelineSealPrecedesCaptureButPublicationStillFencesAvailability (0.02s)
+=== RUN   TestCheckpointDiskPipelineFailuresAndCancellationJoinPublisher
+--- PASS: TestCheckpointDiskPipelineFailuresAndCancellationJoinPublisher (0.00s)
+=== RUN   TestCheckpointDiskPipelineRejectsMissingSealAndLateOriginFailure
+--- PASS: TestCheckpointDiskPipelineRejectsMissingSealAndLateOriginFailure (0.00s)
+=== RUN   TestCheckpointDiskPipelineEligibility
+--- PASS: TestCheckpointDiskPipelineEligibility (0.00s)
+=== RUN   TestIdleImageMountExpiryKeepsActiveRecentAndUnknownMounts
+--- PASS: TestIdleImageMountExpiryKeepsActiveRecentAndUnknownMounts (0.00s)
+=== RUN   TestIdleImageMountExpiryNeverForcesBusyUnmount
+--- PASS: TestIdleImageMountExpiryNeverForcesBusyUnmount (0.00s)
+=== RUN   TestIdleImageMountExpiryFencesConcurrentHotImageLoad
+--- PASS: TestIdleImageMountExpiryFencesConcurrentHotImageLoad (0.01s)
+=== RUN   TestIdleImageMountExpiryDoesNotRecursivelyRemoveFiles
+--- PASS: TestIdleImageMountExpiryDoesNotRecursivelyRemoveFiles (0.00s)
+=== RUN   TestIdleImageMountExpiryRealFUSE
+{"level":"warn","error":"remove /tmp/TestIdleImageMountExpiryDoesNotRecursivelyRemoveFiles2570219749/001/image: directory not empty","image_id":"image","time":"2026-11-04T16:43:20Z","message":"could not remove retired image mountpoint"}
+--- PASS: TestIdleImageMountExpiryRealFUSE (0.29s)
+=== RUN   TestPackOverlayLayersPacksUpperDirAsOCILayer
+--- PASS: TestPackOverlayLayersPacksUpperDirAsOCILayer (0.00s)
+=== RUN   TestNetworkRuleCleanupBatchBurstAndFailure
+--- PASS: TestNetworkRuleCleanupBatchBurstAndFailure (0.00s)
+=== RUN   TestNetworkRuleCleanupBatchJoinsDeletionAfterWorkerCancellation
+--- PASS: TestNetworkRuleCleanupBatchJoinsDeletionAfterWorkerCancellation (0.00s)
+=== RUN   TestNetworkRuleCleanupBatchRealFirewallPreservesOtherAddresses
+--- PASS: TestNetworkRuleCleanupBatchRealFirewallPreservesOtherAddresses (0.08s)
+PASS

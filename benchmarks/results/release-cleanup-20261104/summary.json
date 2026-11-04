@@ -1,0 +1,101 @@
+{
+  "commit": "5da4664930ecfc11f401d46927f5ac3b7ccfe9dc",
+  "image_digest": "sha256:4ae97d50455e29e9bb465cd3467aab44b3d402dfbebc864d7a8e534107f07c82",
+  "fixture": "Same configured microvm-cpu node: 0.1 CPU, 512MiB, fresh 1GiB disk; prepared image/connections; per-VM SMT isolation retained",
+  "total_vms": 110,
+  "exact_initial_and_restored_proofs": true,
+  "globally_unique_fresh_boots": true,
+  "all_owned_vms_removed": true,
+  "all_phase_budgets_passed": false,
+  "cohorts": {
+    "10": {
+      "bursts": 1,
+      "samples": 10,
+      "burst_wall_ms": {
+        "launch": [
+          538.988
+        ],
+        "pause_0": [
+          2622.99
+        ],
+        "restore_0": [
+          586.996
+        ]
+      },
+      "per_vm": {
+        "launch": {
+          "p50_ms": 494.627,
+          "p95_ms": 538.62,
+          "p99_ms": 538.62,
+          "max_ms": 538.62
+        },
+        "pause_0": {
+          "p50_ms": 1986.646,
+          "p95_ms": 2622.431,
+          "p99_ms": 2622.431,
+          "max_ms": 2622.431
+        },
+        "restore_0": {
+          "p50_ms": 548.129,
+          "p95_ms": 586.337,
+          "p99_ms": 586.337,
+          "max_ms": 586.337
+        }
+      }
+    },
+    "50": {
+      "bursts": 2,
+      "samples": 100,
+      "burst_wall_ms": {
+        "launch": [
+          1249.853,
+          1162.689
+        ],
+        "pause_0": [
+          8278.538,
+          6571.827
+        ],
+        "restore_0": [
+          4142.331,
+          4440.019
+        ]
+      },
+      "per_vm": {
+        "launch": {
+          "p50_ms": 1098.122,
+          "p95_ms": 1224.12,
+          "p99_ms": 1237.383,
+          "max_ms": 1247.258
+        },
+        "pause_0": {
+          "p50_ms": 3551.859,
+          "p95_ms": 4794.549,
+          "p99_ms": 6564.741,
+          "max_ms": 8271.945
+        },
+        "restore_0": {
+          "p50_ms": 4138.337,
+          "p95_ms": 4426.802,
+          "p99_ms": 4434.156,
+          "max_ms": 4438.371
+        }
+      }
+    }
+  },
+  "failed_budgets": [
+    {
+      "run_id": "burst-ede5ae386659",
+      "phase": "pause_0",
+      "wall_ms": 8278.538,
+      "budget_ms": 8000
+    }
+  ],
+  "outlier": {
+    "checkpoint_id": "881b3e25-6318-41ba-a828-6d362b04efe1",
+    "archive_bytes": 39168172,
+    "archive_ms": 676.152643,
+    "upload_with_reader_ms": 6296.514121,
+    "interpretation": "UploadWithReader elapsed begins after upload admission. This locates the slow call, not the division between client/file IO/network/origin service. The failed timing sample is retained."
+  },
+  "scope": "One 10-VM smoke cohort plus two 50-VM cohorts, not a replacement for the earlier 100-sample-per-size study or a controlled performance ablation."
+}

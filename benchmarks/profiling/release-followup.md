@@ -2,6 +2,9 @@
 
 Production PR: https://github.com/beam-cloud/beta9/pull/2107
 
+Latest cleanup and staging smoke: [guest diagnostics cleanup](#guest-diagnostics-cleanup).
+The earlier 200-VM study below remains associated with its original commit.
+
 Validated production commit `d429f4ceec91583d39a8001718f44d9e6e5890e6` in
 Okteto and on the staging `microvm-cpu` node. This follows the earlier
 [release consolidation](consolidation.md); its results remain historical.
@@ -108,3 +111,53 @@ of `d429f4ce`; file moves do not establish a new performance result.
 
 [Consolidation verification](../results/release-dry-followup-20261104/consolidation.json)
 and [test output](../results/release-dry-followup-20261104/consolidation-validation.log).
+
+## Guest diagnostics cleanup
+
+Production commit `5da46649` removes the browser-name special case and all
+script-content matching from CA hook dispatch. Every valid executable hook runs
+through the ordinary path; its own script controls early-init behavior. The
+special-case-only test is removed; the existing trust installation, rotation,
+generic hook and PATH tests pass.
+
+Removed boot-phase logs, elapsed-boot prefixes, process-start/sync timing output,
+the logging-only TCP readiness poller and cache working-set timing diagnostics.
+Removed expected-busy image-unmount debug output. Actual qcow cleanup failures
+remain visible as warnings. No new Debug/Trace calls remain in the production
+diff. Net follow-up change: three added lines, 113 removed.
+
+Linux guest-init and worker race suites passed. The matching staging overlay
+passed privileged checkpoint/cgroup, real-FUSE, firewall and overlay checks.
+All 1,065 checked source files matched the commit. The CI-released goproc binary
+remains unchanged and verified.
+
+One burst of 10 and two bursts of 50 exercised 110 fresh launches and durable
+pause/restores using the same fixture/settings. This is a smoke test and repeat,
+not a replacement for the earlier 100-sample-per-size study or an isolated
+performance ablation.
+
+| Cohort | Whole-burst start | Durable pause | Restore |
+| --- | --- | --- | --- |
+| 10 | 0.539s | 2.623s | 0.587s |
+| First 50 | 1.250s | **8.279s** | 4.142s |
+| Repeat 50 | 1.163s | 6.572s | 4.440s |
+
+Every initial/restored RAM, disk and boot proof matched; all 110 boot identities
+were distinct, and all owned VMs were removed. The first 50-VM pause missed 8s
+by 279ms. Its slow checkpoint spent 676ms archiving 39,168,172 bytes and 6,297ms
+inside `UploadWithReader`, measured after upload-slot admission. This identifies
+the slow call but does not distinguish file IO, client/retries, network and origin
+service time. The failed timing sample remains in the evidence. The repeat met
+all budgets; these observations do not establish an 8s pause-tail guarantee.
+
+The three existing VMs retained boot identities across the rollout. Final
+handoff: only those three running, worker uncordoned, normal Air supervision,
+HTTP health 200 and 253 prepared network namespaces.
+
+Image: `sha256:4ae97d50455e29e9bb465cd3467aab44b3d402dfbebc864d7a8e534107f07c82`.
+
+[Summary and raw cohorts](../results/release-cleanup-20261104/summary.json),
+[Linux tests](../results/release-cleanup-20261104/linux-validation.log),
+[privileged checks](../results/release-cleanup-20261104/privileged-validation.log),
+[slow-upload receipt](../results/release-cleanup-20261104/pause-upload-outlier.log),
+[handoff](../results/release-cleanup-20261104/handoff.json).
