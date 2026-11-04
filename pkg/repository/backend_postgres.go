@@ -1230,7 +1230,7 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 	}
 
 	if stubType == string(types.StubTypeVM) && !forceCreate && r.config.VMBurstBatchSize > 1 {
-		return r.getOrCreateVMStubBatched(ctx, stubUpsertInput{
+		return r.getOrCreateVMStubBatched(ctx, types.StubUpsertInput{
 			Name: name, Type: stubType, Config: configJSON,
 			ObjectID: objectId, WorkspaceID: workspaceId, AppID: appId,
 		})
@@ -1239,7 +1239,7 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 }
 
 func (r *PostgresBackendRepository) getOrCreateStub(ctx context.Context, name, stubType, configJSON string, objectId, workspaceId uint, forceCreate bool, appId uint) (types.Stub, error) {
-	input, err := json.Marshal(stubUpsertInput{Name: name, Type: stubType, Config: json.RawMessage(configJSON), ObjectID: objectId, WorkspaceID: workspaceId, AppID: appId})
+	input, err := json.Marshal(types.StubUpsertInput{Name: name, Type: stubType, Config: json.RawMessage(configJSON), ObjectID: objectId, WorkspaceID: workspaceId, AppID: appId})
 	if err != nil {
 		return types.Stub{}, err
 	}

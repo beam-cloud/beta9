@@ -11,9 +11,11 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 func idleImageClient(t *testing.T, ids ...string) *ImageClient {
@@ -57,14 +59,29 @@ func TestIdleImageMountExpiryNeverForcesBusyUnmount(t *testing.T) {
 
 func TestIdleImageMountGraceStartsWhenContainerReleasesImage(t *testing.T) {
 	c := idleImageClient(t, "long-running")
-	w := &Worker{imageClient: c, containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	repo := &imageReleaseRepo{}
+	w := &Worker{imageClient: c, containerInstances: common.NewSafeMap[*ContainerInstance](), containerRepoClient: repo}
 	w.containerInstances.Set("container", &ContainerInstance{Request: &types.ContainerRequest{ImageId: "long-running"}})
 	w.deleteContainer("container")
+	require.False(t, repo.cleanupFinishedAt.IsZero())
+	used, ok := c.mountLastUsed.Load("long-running")
+	require.True(t, ok)
+	require.False(t, used.(time.Time).Before(repo.cleanupFinishedAt), "idle grace must include time spent cleaning up remote state")
 	inUse := func(string) bool { return false }
 	unmount := func(string, *fuse.Server) error { return nil }
 	require.Zero(t, c.pruneIdleMounts(time.Now().Add(-7*24*time.Hour), inUse, unmount), "a recently released image needs a full idle grace period")
 	require.True(t, c.mountedImageReady("long-running"))
 	require.Equal(t, 1, c.pruneIdleMounts(time.Now().Add(time.Minute), inUse, unmount), "an inactive image must remain eligible for eventual expiry")
+}
+
+type imageReleaseRepo struct {
+	pb.ContainerRepositoryServiceClient
+	cleanupFinishedAt time.Time
+}
+
+func (r *imageReleaseRepo) DeleteContainerState(context.Context, *pb.DeleteContainerStateRequest, ...grpc.CallOption) (*pb.DeleteContainerStateResponse, error) {
+	r.cleanupFinishedAt = time.Now()
+	return &pb.DeleteContainerStateResponse{Ok: true}, nil
 }
 
 func TestIdleImageMountReleaseDoesNotRetainUnknownImageLocks(t *testing.T) {

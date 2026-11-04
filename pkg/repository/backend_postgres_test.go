@@ -437,7 +437,7 @@ func TestGetOrCreateStubTouchesExistingAppScopedStub(t *testing.T) {
 	mock.ExpectQuery(`WITH input AS MATERIALIZED`).
 		WithArgs(sqlArgumentMatcher(func(value driver.Value) bool {
 			encoded, ok := value.(string)
-			var input stubUpsertInput
+			var input types.StubUpsertInput
 			return ok && json.Unmarshal([]byte(encoded), &input) == nil &&
 				input.Name == "stub-name" && input.Type == string(types.StubTypeFunction) &&
 				input.ObjectID == 7 && input.WorkspaceID == 11 && input.AppID == 13 && len(input.Config) > 0

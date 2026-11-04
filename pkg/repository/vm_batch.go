@@ -14,6 +14,11 @@ import (
 	"github.com/lib/pq"
 )
 
+const (
+	vmBurstBatchLimit       = 128
+	vmBatchOperationTimeout = 30 * time.Second
+)
+
 // Data/constraint errors and explicit rollback codes have no committed effects.
 // Class 40 also includes statement_completion_unknown, which must not be replayed.
 func retryVMBatchIndividually(err error) bool {
@@ -31,18 +36,9 @@ func retryVMBatchIndividually(err error) bool {
 	return false
 }
 
-type stubUpsertInput struct {
-	Name        string          `json:"name"`
-	Type        string          `json:"type"`
-	Config      json.RawMessage `json:"config"`
-	ObjectID    uint            `json:"object_id"`
-	WorkspaceID uint            `json:"workspace_id"`
-	AppID       uint            `json:"app_id"`
-}
-
 // Normalize nested config key ordering before comparing stub inputs.
 // UseNumber preserves integers larger than float64 can represent exactly.
-func canonicalStubInput(input stubUpsertInput) ([]byte, error) {
+func canonicalStubInput(input types.StubUpsertInput) ([]byte, error) {
 	decoder := json.NewDecoder(bytes.NewReader(input.Config))
 	decoder.UseNumber()
 	var config any
@@ -130,7 +126,7 @@ func nullableVMAddress(address string) *string {
 
 func (r *PostgresBackendRepository) mutateVMBatched(ctx context.Context, input vmMutationInput) error {
 	r.vmMutationBatchOnce.Do(func() {
-		limit := min(r.config.VMBurstBatchSize, 128)
+		limit := min(r.config.VMBurstBatchSize, vmBurstBatchLimit)
 		r.vmMutationBatch = &vmMutationBatcher{repo: r, queue: make(chan *vmMutationRequest, limit*2)}
 		go common.RunBatchQueue(r.vmMutationBatch.queue, limit, r.vmMutationBatch.flush)
 	})
@@ -178,7 +174,7 @@ func (b *vmMutationBatcher) flush(batch []*vmMutationRequest) {
 		inputs[i] = request.input
 	}
 	encoded, err := json.Marshal(inputs)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), vmBatchOperationTimeout)
 	defer cancel()
 
 	var ids []string
@@ -245,7 +241,7 @@ type vmStubResult struct {
 
 type vmStubRequest struct {
 	ctx   context.Context
-	input stubUpsertInput
+	input types.StubUpsertInput
 	done  chan vmStubResult
 }
 
@@ -254,9 +250,9 @@ type vmStubBatcher struct {
 	queue chan *vmStubRequest
 }
 
-func (r *PostgresBackendRepository) getOrCreateVMStubBatched(ctx context.Context, input stubUpsertInput) (types.Stub, error) {
+func (r *PostgresBackendRepository) getOrCreateVMStubBatched(ctx context.Context, input types.StubUpsertInput) (types.Stub, error) {
 	r.vmStubBatchOnce.Do(func() {
-		limit := min(r.config.VMBurstBatchSize, 128)
+		limit := min(r.config.VMBurstBatchSize, vmBurstBatchLimit)
 		r.vmStubBatch = &vmStubBatcher{repo: r, queue: make(chan *vmStubRequest, limit*2)}
 		go common.RunBatchQueue(r.vmStubBatch.queue, limit, r.vmStubBatch.flush)
 	})
@@ -292,7 +288,7 @@ func (b *vmStubBatcher) flush(batch []*vmStubRequest) {
 	}
 	// Identical inputs share a result, rather than inserting duplicate stubs
 	// within the same statement. Normalize nested config keys before comparing.
-	inputs := make([]stubUpsertInput, 0, len(active))
+	inputs := make([]types.StubUpsertInput, 0, len(active))
 	indices := make([]int, len(active))
 	seen := make(map[string]int, len(active))
 	for i, request := range active {
@@ -314,7 +310,7 @@ func (b *vmStubBatcher) flush(batch []*vmStubRequest) {
 	}
 	encoded, err := json.Marshal(inputs)
 	var rows []vmStubBatchRow
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), vmBatchOperationTimeout)
 	defer cancel()
 
 	if err == nil {
@@ -376,15 +372,6 @@ func vmDiskBurstEnabled(ctx context.Context) bool {
 	return enabled
 }
 
-type vmDiskInput struct {
-	WorkspaceID uint   `json:"workspace_id"`
-	Name        string `json:"name"`
-	Size        string `json:"size"`
-	Filesystem  string `json:"filesystem"`
-	Driver      string `json:"driver"`
-	MountPath   string `json:"mount_path"`
-}
-
 type vmDiskKey struct {
 	workspace uint
 	name      string
@@ -397,7 +384,7 @@ type vmDiskResult struct {
 
 type vmDiskRequest struct {
 	ctx   context.Context
-	input vmDiskInput
+	input types.DiskCreateInput
 	done  chan vmDiskResult
 }
 
@@ -406,9 +393,9 @@ type vmDiskBatcher struct {
 	queue chan *vmDiskRequest
 }
 
-func (r *PostgresBackendRepository) createVMDiskBatched(ctx context.Context, input vmDiskInput) (*types.Disk, error) {
+func (r *PostgresBackendRepository) createVMDiskBatched(ctx context.Context, input types.DiskCreateInput) (*types.Disk, error) {
 	r.vmDiskBatchOnce.Do(func() {
-		limit := min(r.config.VMBurstBatchSize, 128)
+		limit := min(r.config.VMBurstBatchSize, vmBurstBatchLimit)
 		r.vmDiskBatch = &vmDiskBatcher{repo: r, queue: make(chan *vmDiskRequest, limit*2)}
 		go common.RunBatchQueue(r.vmDiskBatch.queue, limit, r.vmDiskBatch.flush)
 	})
@@ -425,7 +412,7 @@ func (r *PostgresBackendRepository) createVMDiskBatched(ctx context.Context, inp
 
 func (b *vmDiskBatcher) flush(batch []*vmDiskRequest) {
 	active := batch[:0]
-	inputs := make([]vmDiskInput, 0, len(batch))
+	inputs := make([]types.DiskCreateInput, 0, len(batch))
 	seen := make(map[vmDiskKey]bool, len(batch))
 	for _, request := range batch {
 		if err := request.ctx.Err(); err != nil {
@@ -447,7 +434,7 @@ func (b *vmDiskBatcher) flush(batch []*vmDiskRequest) {
 		return
 	}
 	encoded, err := json.Marshal(inputs)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), vmBatchOperationTimeout)
 	defer cancel()
 
 	var rows []types.Disk

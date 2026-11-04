@@ -99,7 +99,7 @@ func (r *PostgresBackendRepository) GetOrCreateDisk(ctx context.Context, workspa
 		return nil, err
 	}
 
-	input := vmDiskInput{WorkspaceID: workspaceId, Name: name, Size: strings.TrimSpace(disk.Size),
+	input := types.DiskCreateInput{WorkspaceID: workspaceId, Name: name, Size: strings.TrimSpace(disk.Size),
 		Filesystem: strings.TrimSpace(filesystem), Driver: driver, MountPath: strings.TrimSpace(disk.MountPath)}
 	if vmDiskBurstEnabled(ctx) && r.config.VMBurstBatchSize > 1 {
 		return r.createVMDiskBatched(ctx, input)
@@ -107,7 +107,7 @@ func (r *PostgresBackendRepository) GetOrCreateDisk(ctx context.Context, workspa
 	return r.insertDisk(ctx, input)
 }
 
-func (r *PostgresBackendRepository) insertDisk(ctx context.Context, input vmDiskInput) (*types.Disk, error) {
+func (r *PostgresBackendRepository) insertDisk(ctx context.Context, input types.DiskCreateInput) (*types.Disk, error) {
 	query := fmt.Sprintf(`
 		INSERT INTO disk (workspace_id, name, size, filesystem, driver, mount_path)
 		VALUES ($1, $2, $3, $4, $5, $6)

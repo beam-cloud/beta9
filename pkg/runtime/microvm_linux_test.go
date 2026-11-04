@@ -110,73 +110,69 @@ func snapshotTestInstance(t *testing.T, serve func(http.ResponseWriter, *http.Re
 	return inst
 }
 
+type snapshotActions struct {
+	mu     sync.Mutex
+	values []string
+}
+
+func (a *snapshotActions) record(action string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.values = append(a.values, action)
+}
+
+func (a *snapshotActions) serve(w http.ResponseWriter, r *http.Request) {
+	a.record(r.URL.Path)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *snapshotActions) require(t *testing.T, want ...string) {
+	t.Helper()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	require.Equal(t, want, a.values)
+}
+
 func resumableSnapshotTestInstance(t *testing.T) (*microVMInstance, func(bool)) {
 	t.Helper()
-	var mu sync.Mutex
-	var actions []string
-	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-		actions = append(actions, r.URL.Path)
-		w.WriteHeader(http.StatusNoContent)
-	})
+	var actions snapshotActions
+	inst := snapshotTestInstance(t, actions.serve)
 	return inst, func(mustStop bool) {
 		t.Helper()
 		require.False(t, mustStop)
 		require.False(t, inst.isPaused())
-		mu.Lock()
-		defer mu.Unlock()
-		require.Equal(t, []string{"/api/v1/vm.pause", "/api/v1/vm.resume"}, actions)
+		actions.require(t, "/api/v1/vm.pause", "/api/v1/vm.resume")
 	}
 }
 
 func TestMicroVMSnapshotSealsDisksBeforeCapture(t *testing.T) {
-	var mu sync.Mutex
-	var actions []string
-	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-		actions = append(actions, r.URL.Path)
-		w.WriteHeader(http.StatusNoContent)
-	})
+	var actions snapshotActions
+	inst := snapshotTestInstance(t, actions.serve)
 	mustStop, err := snapshotMicroVM(context.Background(), inst, t.TempDir(), func(context.Context) error {
-		mu.Lock()
-		defer mu.Unlock()
-		actions = append(actions, "seal")
+		actions.record("seal")
 		return nil
 	})
 	require.NoError(t, err)
 	require.True(t, mustStop)
 	require.True(t, inst.isPaused())
-	mu.Lock()
-	defer mu.Unlock()
-	require.Equal(t, []string{"/api/v1/vm.pause", "seal", "/api/v1/vm.snapshot"}, actions)
+	actions.require(t, "/api/v1/vm.pause", "seal", "/api/v1/vm.snapshot")
 }
 
 func TestMicroVMSnapshotOtherErrorsAreNotSafeToRetry(t *testing.T) {
-	var mu sync.Mutex
-	var snapshots, resumes int
+	var actions snapshotActions
 	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-		switch r.URL.Path {
-		case "/api/v1/vm.snapshot":
-			snapshots++
+		actions.record(r.URL.Path)
+		if r.URL.Path == "/api/v1/vm.snapshot" {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
-		case "/api/v1/vm.resume":
-			resumes++
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	captured, err := snapshotMicroVM(context.Background(), inst, t.TempDir(), nil)
-	mu.Lock()
-	defer mu.Unlock()
 	require.Error(t, err)
 	require.True(t, captured)
 	require.True(t, inst.isPaused())
-	require.Equal(t, 1, snapshots)
-	require.Zero(t, resumes)
+	actions.require(t, "/api/v1/vm.pause", "/api/v1/vm.snapshot")
 }
 
 func TestMicroVMSnapshotCPUPreparationFailureResumesBeforeCapture(t *testing.T) {
@@ -319,12 +315,9 @@ func TestMicroVMSnapshotSealFailureResumesBeforeAnyCapture(t *testing.T) {
 func TestMicroVMSnapshotLostPauseResponseResolvesActualState(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var mu sync.Mutex
-	var actions []string
+	var actions snapshotActions
 	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		actions = append(actions, r.URL.Path)
-		mu.Unlock()
+		actions.record(r.URL.Path)
 		switch r.URL.Path {
 		case "/api/v1/vm.pause":
 			cancel() // CH paused, but the client never receives the response.
@@ -343,9 +336,7 @@ func TestMicroVMSnapshotLostPauseResponseResolvesActualState(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.False(t, mustStop)
 	require.False(t, inst.isPaused(), "resolve and resume the actual paused VM despite caller cancellation")
-	mu.Lock()
-	defer mu.Unlock()
-	require.Equal(t, []string{"/api/v1/vm.pause", "/api/v1/vm.info", "/api/v1/vm.resume"}, actions)
+	actions.require(t, "/api/v1/vm.pause", "/api/v1/vm.info", "/api/v1/vm.resume")
 }
 
 func TestMicroVMRestoreCannotUsePreviousConnectionAcknowledgement(t *testing.T) {

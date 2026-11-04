@@ -2826,7 +2826,7 @@ func (m *ContainerNetworkManager) deferNetworkSlotDiscard(containerId string, sl
 }
 
 func (m *ContainerNetworkManager) removePreallocatedNetworkSlotRules(slot *containerNetworkSlot) error {
-	if os.Getenv("BETA9_NETWORK_CLEANUP_BATCH") == "1" {
+	if os.Getenv(types.WorkerNetworkCleanupBatchEnv) == "1" {
 		return m.removeNetworkSlotRulesBatched(slot)
 	}
 	return m.removeNetworkSlotRuleBatch([]*containerNetworkSlot{slot})

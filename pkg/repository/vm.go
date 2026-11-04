@@ -397,12 +397,12 @@ func (s *vmLockSession) flushAcquires() {
 			s.batchMu.Unlock()
 			return
 		}
-		n := min(len(s.pending), 128)
+		n := min(len(s.pending), vmBurstBatchLimit)
 		requests := s.pending[:n:n]
 		s.pending = s.pending[n:]
 		s.batchMu.Unlock()
 
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(requests[0].ctx), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(requests[0].ctx), vmBatchOperationTimeout)
 		results, err := s.acquire(ctx, requests)
 		cancel()
 		for _, request := range requests {

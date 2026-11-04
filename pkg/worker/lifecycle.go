@@ -606,10 +606,8 @@ func (s *Worker) markContainerStopping(containerId string, expirySeconds int64) 
 }
 
 func (s *Worker) deleteContainer(containerId string) {
-	if instance, exists := s.containerInstances.Get(containerId); exists {
-		if instance.Request != nil {
-			s.imageClient.touchImageMount(instance.Request.ImageId)
-		}
+	instance, exists := s.containerInstances.Get(containerId)
+	if exists {
 		instance.tunnels.close()
 		if instance.LogBuffer != nil {
 			if s.containerServer != nil && instance.Request != nil && (instance.Request.Stub.Type.Kind() == types.StubTypeFunction || instance.Request.IsBuildRequest()) {
@@ -618,15 +616,18 @@ func (s *Worker) deleteContainer(containerId string) {
 				instance.LogBuffer.Dispose()
 			}
 		}
-	}
-	if instance, exists := s.containerInstances.Get(containerId); exists && instance.SandboxProcessManager != nil {
-		if err := instance.SandboxProcessManager.Cleanup(); err != nil {
-			log.Debug().Str("container_id", containerId).Err(err).Msg("failed to cleanup sandbox process manager client")
+		if instance.SandboxProcessManager != nil {
+			if err := instance.SandboxProcessManager.Cleanup(); err != nil {
+				log.Debug().Str("container_id", containerId).Err(err).Msg("failed to cleanup sandbox process manager client")
+			}
 		}
 	}
 
 	if err := s.deleteContainerState(containerId); err != nil {
 		log.Debug().Str("container_id", containerId).Err(err).Msg("failed to remove remote container state")
+	}
+	if exists && instance.Request != nil {
+		s.imageClient.touchImageMount(instance.Request.ImageId)
 	}
 	s.containerInstances.Delete(containerId)
 }

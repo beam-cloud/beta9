@@ -2271,10 +2271,6 @@ func TestCreateCheckpointAdmissionExpiresBeforeTouchingMicroVM(t *testing.T) {
 }
 
 func TestCheckpointUploadDoesNotHoldCaptureAdmissionOrPublishEarly(t *testing.T) {
-	testCheckpointUploadAdmission(t)
-}
-
-func testCheckpointUploadAdmission(t *testing.T) {
 	for i := 0; i < cap(checkpointArchiveSlots)-1; i++ {
 		release, err := acquireCheckpointSlot(context.Background(), checkpointArchiveSlots)
 		require.NoError(t, err)
@@ -3211,7 +3207,7 @@ func TestCheckpointCaptureIOCancellationAndFailureRelease(t *testing.T) {
 	entered, finish, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 	want := errors.New("capture failed")
 	go func() {
-		_, err := withCheckpointCaptureIO(context.Background(), types.ContainerRuntimeMicroVM.String(), slots, func(admit func(context.Context) error) (string, error) {
+		_, err := withCheckpointCaptureIO(types.ContainerRuntimeMicroVM.String(), slots, func(admit func(context.Context) error) (string, error) {
 			if err := admit(context.Background()); err != nil {
 				return "", err
 			}
@@ -3233,7 +3229,7 @@ func TestCheckpointCaptureIOCancellationAndFailureRelease(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	paused := false
-	_, err := withCheckpointCaptureIO(ctx, types.ContainerRuntimeMicroVM.String(), slots, func(admit func(context.Context) error) (string, error) {
+	_, err := withCheckpointCaptureIO(types.ContainerRuntimeMicroVM.String(), slots, func(admit func(context.Context) error) (string, error) {
 		paused = true
 		if err := admit(ctx); err != nil {
 			return "", err
@@ -3247,12 +3243,12 @@ func TestCheckpointCaptureIOCancellationAndFailureRelease(t *testing.T) {
 	require.ErrorIs(t, <-done, want)
 	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	path, err := withCheckpointCaptureIO(ctx, types.ContainerRuntimeMicroVM.String(), slots, func(admit func(context.Context) error) (string, error) {
+	path, err := withCheckpointCaptureIO(types.ContainerRuntimeMicroVM.String(), slots, func(admit func(context.Context) error) (string, error) {
 		return "captured", admit(ctx)
 	})
 	require.NoError(t, err)
 	require.Equal(t, "captured", path)
-	_, err = withCheckpointCaptureIO(ctx, types.ContainerRuntimeMicroVM.String(), slots, func(func(context.Context) error) (string, error) { return "", want })
+	_, err = withCheckpointCaptureIO(types.ContainerRuntimeMicroVM.String(), slots, func(func(context.Context) error) (string, error) { return "", want })
 	require.ErrorIs(t, err, want)
 	require.Empty(t, slots, "failure before pause must not retain a slot")
 	for _, value := range []string{"", "0", "129", "bad"} {
@@ -3345,15 +3341,15 @@ func TestCheckpointDiskPipelineRejectsMissingSealAndLateOriginFailure(t *testing
 }
 
 func TestCheckpointDiskPipelineEligibility(t *testing.T) {
-	t.Setenv("BETA9_CHECKPOINT_DISK_PIPELINE", "1")
+	t.Setenv(types.CheckpointDiskPipelineEnv, "1")
 	request := &types.ContainerRequest{Mounts: []types.Mount{{DurableDisk: &types.DurableDiskMountConfig{Driver: types.DurableDiskDriverQcow}}}}
 	native := types.ContainerRuntimeMicroVM.String()
 	require.True(t, checkpointDiskPipelineEnabled(request, native, true))
 	require.False(t, checkpointDiskPipelineEnabled(request, native, false))
-	require.False(t, checkpointDiskPipelineEnabled(request, "runc", true))
+	require.False(t, checkpointDiskPipelineEnabled(request, types.ContainerRuntimeRunc.String(), true))
 	request.Mounts = append(request.Mounts, request.Mounts[0])
 	require.False(t, checkpointDiskPipelineEnabled(request, native, true), "multiple disk fences require a separate implementation")
-	t.Setenv("BETA9_CHECKPOINT_DISK_PIPELINE", "0")
+	t.Setenv(types.CheckpointDiskPipelineEnv, "0")
 	request.Mounts = request.Mounts[:1]
 	require.False(t, checkpointDiskPipelineEnabled(request, native, true))
 }

@@ -227,7 +227,7 @@ func TestVMMutationBatchIntegration(t *testing.T) {
 }
 
 func stubBatchRequest(ctx context.Context, name string, app uint) *vmStubRequest {
-	return &vmStubRequest{ctx: ctx, input: stubUpsertInput{
+	return &vmStubRequest{ctx: ctx, input: types.StubUpsertInput{
 		Name: name, Type: string(types.StubTypeVM), Config: json.RawMessage(`{"runtime":{"image_id":"batch-test"}}`),
 		ObjectID: 1, WorkspaceID: 1, AppID: app,
 	}, done: make(chan vmStubResult, 1)}
@@ -363,7 +363,7 @@ func TestStubInputCanonicalizationPreservesLargeIntegers(t *testing.T) {
 }
 
 func diskBatchRequest(name string, ws uint) *vmDiskRequest {
-	return &vmDiskRequest{ctx: context.Background(), input: vmDiskInput{WorkspaceID: ws, Name: name,
+	return &vmDiskRequest{ctx: context.Background(), input: types.DiskCreateInput{WorkspaceID: ws, Name: name,
 		Size: "1Gi", Filesystem: "ext4", Driver: types.DurableDiskDriverQcow, MountPath: "/"}, done: make(chan vmDiskResult, 1)}
 }
 

@@ -1,5 +1,11 @@
 package types
 
+const (
+	DurableDiskDriverEnv          = "BETA9_DURABLE_DISK_DRIVER"
+	DiskSpareRefillQuietEnv       = "BETA9_DISK_SPARE_REFILL_QUIET"
+	DiskChunkUploadConcurrencyEnv = "BETA9_DISK_CHUNK_UPLOAD_CONCURRENCY"
+)
+
 // The machine-root durable disk contract, shared between the gateway (which
 // expands a persistent root request into a disk entry) and the worker (which
 // recognizes the mount and hosts the container's overlay upper layer on it).

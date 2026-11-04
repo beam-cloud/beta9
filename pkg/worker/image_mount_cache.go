@@ -55,6 +55,7 @@ func (c *ImageClient) pruneIdleMounts(cutoff time.Time, inUse func(string) bool,
 	if c == nil || c.imageMountPath == "" || c.mountedFuseServers == nil || cutoff.IsZero() || inUse == nil || unmount == nil {
 		return 0
 	}
+	// Release the map lock before taking mount locks or deleting entries.
 	ids := []string{}
 	c.mountedFuseServers.Range(func(id string, _ *fuse.Server) bool {
 		ids = append(ids, id)
@@ -62,54 +63,55 @@ func (c *ImageClient) pruneIdleMounts(cutoff time.Time, inUse func(string) bool,
 	})
 	retired := 0
 	for _, id := range ids {
-		if id == "" || id == "." || id == ".." || filepath.Base(id) != id {
-			continue
-		}
-		unlock := c.lockImageMount(id)
-		func() {
-			defer unlock()
-			server, exists := c.mountedFuseServers.Get(id)
-			if !exists {
-				return
-			}
-			value, recorded := c.mountLastUsed.Load(id)
-			if !recorded {
-				// Older/injected mount records get a full grace period.
-				c.mountLastUsed.Store(id, time.Now())
-				return
-			}
-			if !value.(time.Time).Before(cutoff) || inUse(id) {
-				return
-			}
-			// Do not force or lazily detach: a late reader must keep its mount.
-			if err := unmount(id, server); err != nil {
-				return
-			}
-			c.mountedFuseServers.Delete(id)
-			c.mountLastUsed.Delete(id)
-			// The directory itself protects its image in the shared pruner.
-			// Remove only an empty mountpoint, never recursively remove content.
-			if err := os.Remove(c.imageMountPoint(id)); err != nil && !os.IsNotExist(err) {
-				log.Warn().Err(err).Str("image_id", id).Msg("could not remove retired image mountpoint")
-			}
+		if c.retireIdleMount(id, cutoff, inUse, unmount) {
 			retired++
-		}()
+		}
 	}
 	return retired
+}
+
+func (c *ImageClient) retireIdleMount(id string, cutoff time.Time, inUse func(string) bool, unmount func(string, *fuse.Server) error) bool {
+	if id == "" || id == "." || id == ".." || filepath.Base(id) != id {
+		return false
+	}
+	unlock := c.lockImageMount(id)
+	defer unlock()
+	server, exists := c.mountedFuseServers.Get(id)
+	if !exists {
+		return false
+	}
+	value, recorded := c.mountLastUsed.Load(id)
+	if !recorded {
+		// Older/injected mount records get a full grace period.
+		c.mountLastUsed.Store(id, time.Now())
+		return false
+	}
+	if !value.(time.Time).Before(cutoff) || inUse(id) {
+		return false
+	}
+	// Do not force or lazily detach: a late reader must keep its mount.
+	if err := unmount(id, server); err != nil {
+		return false
+	}
+	c.mountedFuseServers.Delete(id)
+	c.mountLastUsed.Delete(id)
+	// The directory itself protects its image in the shared pruner.
+	// Remove only an empty mountpoint, never recursively remove content.
+	if err := os.Remove(c.imageMountPoint(id)); err != nil && !os.IsNotExist(err) {
+		log.Warn().Err(err).Str("image_id", id).Msg("could not remove retired image mountpoint")
+	}
+	return true
 }
 
 // Start the idle grace period when the final user can release its image,
 // including containers that ran longer than the cache TTL.
 func (c *ImageClient) touchImageMount(imageID string) {
-	if c == nil || c.mountedFuseServers == nil {
-		return
-	}
-	if _, mounted := c.mountedFuseServers.Get(imageID); !mounted {
+	if c == nil || !c.mountedImageReady(imageID) {
 		return
 	}
 	unlock := c.lockImageMount(imageID)
 	defer unlock()
-	if _, mounted := c.mountedFuseServers.Get(imageID); mounted {
+	if c.mountedImageReady(imageID) {
 		c.mountLastUsed.Store(imageID, time.Now())
 	}
 }

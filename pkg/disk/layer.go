@@ -54,7 +54,7 @@ var chunkFetches = newChunkGate(chunkFetchConcurrency)
 // A worker-wide limit bounds both buffers and competing origin requests during
 // a pause burst. Keep the existing budget unless explicitly tuned for a node.
 func configuredChunkUploadConcurrency(getenv func(string) string) int {
-	limit, err := strconv.Atoi(getenv("BETA9_DISK_CHUNK_UPLOAD_CONCURRENCY"))
+	limit, err := strconv.Atoi(getenv(types.DiskChunkUploadConcurrencyEnv))
 	if err != nil || limit < 1 || limit > chunkUploadConcurrency {
 		return chunkUploadConcurrency
 	}

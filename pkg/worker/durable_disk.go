@@ -24,7 +24,6 @@ import (
 )
 
 const (
-	durableDiskDriverEnv  = "BETA9_DURABLE_DISK_DRIVER"
 	durableDiskMarkerFile = ".beta9-durable-disk"
 	durableDiskLockDir    = ".beta9-durable-disk-locks"
 	durableDiskLockWait   = 10 * time.Minute
@@ -44,7 +43,7 @@ func (s *Worker) initializeDurableDisks(ctx context.Context) {
 		// Empty roots consume no guest CPU or RAM. Cover the start gate even
 		// when guests are smaller than the default VM resource allocation.
 		diskConfig.SpareCount = max(2, s.containerStartLimit)
-		if quiet, err := time.ParseDuration(os.Getenv("BETA9_DISK_SPARE_REFILL_QUIET")); err == nil && quiet > 0 && quiet <= 5*time.Second {
+		if quiet, err := time.ParseDuration(os.Getenv(types.DiskSpareRefillQuietEnv)); err == nil && quiet > 0 && quiet <= 5*time.Second {
 			diskConfig.SpareRefillQuietPeriod = quiet
 		}
 		diskConfig.DetachedStateMarker = true
@@ -276,7 +275,7 @@ func durableDiskDriver(configured string) string {
 	if driver := types.NormalizeDurableDiskDriver(configured); driver != "" {
 		return driver
 	}
-	if driver := types.NormalizeDurableDiskDriver(os.Getenv(durableDiskDriverEnv)); driver != "" {
+	if driver := types.NormalizeDurableDiskDriver(os.Getenv(types.DurableDiskDriverEnv)); driver != "" {
 		return driver
 	}
 	return types.DurableDiskDriverSnapshot
