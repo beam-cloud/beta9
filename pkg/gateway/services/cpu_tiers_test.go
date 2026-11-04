@@ -25,6 +25,7 @@ func TestResolveStubCPUTier(t *testing.T) {
 	pools.SetPool("private", types.WorkerPoolConfig{Mode: types.PoolModePrivate}, nil)
 	pools.SetPool("performance", types.WorkerPoolConfig{}, nil)
 	pools.SetPool("shared", types.WorkerPoolConfig{CPUShareMultiplier: 2.5}, nil)
+	pools.SetPool("managed", types.WorkerPoolConfig{Mode: types.PoolModeExternal, CPUShareMultiplier: 3}, nil)
 	gws := &GatewayService{scheduler: scheduler.NewSchedulerForCapacityChecks(nil, nil, pools)}
 	resolve := func(config types.StubConfigV1) (types.CPUTier, error) {
 		err := gws.resolveStubCPUTier(context.Background(), &types.Workspace{ExternalId: "workspace"}, types.StubType("function"), &config, true)
@@ -65,9 +66,11 @@ func TestResolveStubCPUTier(t *testing.T) {
 	// limits and on a pool that runs it.
 	gws.billing = billing(true)
 	shared := types.StubConfigV1{CPUTier: types.CPUTierShared, Runtime: types.Runtime{Cpu: 1000, Memory: 1024}}
-	tier, err = resolve(onPool("shared", shared))
-	require.NoError(t, err)
-	require.Equal(t, types.CPUTierShared, tier)
+	for _, pool := range []string{"shared", "managed"} {
+		tier, err = resolve(onPool(pool, shared))
+		require.NoError(t, err)
+		require.Equal(t, types.CPUTierShared, tier)
+	}
 	_, err = resolve(onPool("performance", shared))
 	require.ErrorContains(t, err, `pool "performance" does not run shared CPU work`)
 	_, err = resolve(types.StubConfigV1{CPUTier: types.CPUTierShared, Runtime: large.Runtime})

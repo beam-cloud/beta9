@@ -10,10 +10,15 @@ func TestCPUTierPlacement(t *testing.T) {
 	performance, shared := WorkerPoolConfig{}, WorkerPoolConfig{CPUShareMultiplier: 2.5}
 	gpu := WorkerPoolConfig{GPUType: "A100", CPUShareMultiplier: 2}
 	agent := WorkerPoolConfig{Mode: PoolModePrivate, CPUShareMultiplier: 2}
+	provider := WorkerPoolConfig{Mode: PoolModeProvider, CPUShareMultiplier: 2}
+	managed := WorkerPoolConfig{Mode: PoolModeExternal, CPUShareMultiplier: 2.5}
 	require.Equal(t, CPUTierPerformance, WorkerPoolConfig{CPUShareMultiplier: 1}.CPUClass())
 	require.Equal(t, CPUTierShared, WorkerPoolConfig{CPUShareMultiplier: 1.01}.CPUClass())
 	require.Equal(t, CPUTier(""), gpu.CPUClass())
 	require.Equal(t, CPUTier(""), agent.CPUClass())
+	require.Equal(t, CPUTier(""), provider.CPUClass())
+	require.Equal(t, CPUTierShared, managed.CPUClass())
+	require.Equal(t, CPUTierPerformance, WorkerPoolConfig{Mode: PoolModeExternal}.CPUClass())
 	for _, tc := range []struct {
 		tier CPUTier
 		pool WorkerPoolConfig
@@ -25,7 +30,8 @@ func TestCPUTierPlacement(t *testing.T) {
 		{CPUTierPerformance, gpu, false},
 		{CPUTierSpot, shared, true}, {CPUTierSpot, performance, true},
 		{CPUTierSpot, gpu, false}, {CPUTierShared, agent, false},
-		{CPUTierShared, WorkerPoolConfig{Mode: PoolModeExternal, CPUShareMultiplier: 2.5}, false},
+		{CPUTierShared, provider, false}, {CPUTierShared, managed, true},
+		{CPUTierPerformance, managed, true}, {CPUTierSpot, managed, true},
 	} {
 		require.Equal(t, tc.want, tc.tier.MatchesPool(tc.pool), "%s %+v", tc.tier, tc.pool)
 	}
@@ -41,6 +47,7 @@ func TestCPUTierPlacement(t *testing.T) {
 		{CPUTierShared, shared, 1000}, {CPUTierSpot, shared, 1000},
 		{"", performance, 1000}, {CPUTierPerformance, performance, 1000},
 		{"", gpu, 1000}, {"", agent, 1000},
+		{"", managed, 2500}, {CPUTierShared, managed, 1000},
 	} {
 		require.Equal(t, tc.want, tc.tier.CPUReservation(tc.pool, 1000), "%s %+v", tc.tier, tc.pool)
 		require.Equal(t, tc.want != 1000, tc.tier.Overflows(tc.pool), "%s %+v", tc.tier, tc.pool)

@@ -129,7 +129,7 @@ func (t CPUTier) CPUReservation(p WorkerPoolConfig, cpu int64) int64 {
 
 // CPUClass is the tier a pool sells. A hosted CPU pool that schedules more than
 // one vCPU per physical CPU sells Shared, and any other hosted CPU pool sells
-// Performance. GPU and agent pools sell none.
+// Performance. GPU pools and customer machines sell none.
 func (p WorkerPoolConfig) CPUClass() CPUTier {
 	switch {
 	case !p.HostedCPU():
@@ -141,9 +141,10 @@ func (p WorkerPoolConfig) CPUClass() CPUTier {
 }
 
 // HostedCPU reports whether the pool is Beam-hosted CPU capacity, the only
-// capacity CPU tiers use.
+// capacity CPU tiers use. Managed serverless (external) pools run on agents
+// but are Beam capacity; private and provider pools are customer machines.
 func (p WorkerPoolConfig) HostedCPU() bool {
-	return p.GPUType == "" && !p.AgentHosted()
+	return p.GPUType == "" && !p.Mode.AgentHosted()
 }
 
 // CPUTier is the tier the request's stub chose. It decodes only that field
