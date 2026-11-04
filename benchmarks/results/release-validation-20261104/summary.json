@@ -225,5 +225,23 @@
     "sdk_readiness_cases": 7,
     "verified_source_files": 1073
   },
-  "comparison_note": "The earlier profiling study and release study differ in gateway supervision, logging and workload (startup-only vs full lifecycle); their timing differences are not a controlled ablation. Release startup p95 was 504/1334ms at 10/50 versus 458/1116ms in the earlier profiling study. No speedup from the cleanup itself is claimed."
+  "comparison_note": "The earlier profiling study and release study differ in gateway supervision, logging and workload (startup-only vs full lifecycle); their timing differences are not a controlled ablation. Release startup p95 was 504/1334ms at 10/50 versus 458/1116ms in the earlier profiling study. No speedup from the cleanup itself is claimed.",
+  "node_settings": {
+    "BETA9_MICROVM_CHECKPOINT_CONCURRENCY": "100",
+    "BETA9_MICROVM_SNAPSHOT_IO_CONCURRENCY": "32",
+    "BETA9_CHECKPOINT_ARCHIVE_CONCURRENCY": "32",
+    "BETA9_CHECKPOINT_UPLOAD_CONCURRENCY": "32",
+    "BETA9_CHECKPOINT_DISK_PIPELINE": "1",
+    "BETA9_DISK_SPARE_REFILL_QUIET": "",
+    "BETA9_NETWORK_CLEANUP_BATCH": "1",
+    "CONTAINER_NETWORK_SLOT_POOL_SIZE": "256",
+    "GOMAXPROCS": "",
+    "WORKER_CONTAINER_START_CONCURRENCY": "128"
+  },
+  "final_inventory": {
+    "remaining_running_vms": 3,
+    "only_pre_existing_vms": true,
+    "boot_identities_preserved": true,
+    "worker_uncordoned": true
+  }
 }

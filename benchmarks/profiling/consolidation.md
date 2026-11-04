@@ -97,3 +97,32 @@ These staging observations do not establish production tail-latency guarantees
 for larger memory sizes or cold image downloads.
 
 [Raw cohorts, failed cohort and expiry evidence](../results/release-validation-20261104/summary.json).
+
+
+### Reproducing the configured test node
+
+The burst results use these settings on the 32-logical-CPU `microvm-cpu` node;
+they are per-node tuning, not universal production defaults. Deploy the release
+image with the documented settings when reproducing these measurements.
+
+```text
+WORKER_CONTAINER_START_CONCURRENCY=128
+CONTAINER_NETWORK_SLOT_POOL_SIZE=256
+BETA9_MICROVM_CHECKPOINT_CONCURRENCY=100
+BETA9_MICROVM_SNAPSHOT_IO_CONCURRENCY=32
+BETA9_CHECKPOINT_ARCHIVE_CONCURRENCY=32
+BETA9_CHECKPOINT_UPLOAD_CONCURRENCY=32
+BETA9_CHECKPOINT_DISK_PIPELINE=1
+BETA9_NETWORK_CLEANUP_BATCH=1
+```
+
+Gateway Postgres: maxOpenConns=32, warmConnections=32, vmBurstBatchSize=128.
+Cache reconciliation: filterRetiredVMStubs=true, recentStubTTLSeconds=604800.
+GOMAXPROCS and optional spare-refill quiet period use their defaults. Shared
+read-only init, four independent guest mounts, native single-thread zstd when
+installed, and authenticated-readiness CPU handback are in the release code.
+
+Final handoff: worker uncordoned, 253 prepared slots plus three pre-existing
+VMs; normal Okteto Air supervision active; each pre-existing boot identity
+preserved; the worker uses gateway.stage.beam.cloud:443, independent of the
+profiling reverse tunnel. NVMe remained about 55% used with 1.6TiB available.
