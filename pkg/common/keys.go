@@ -35,6 +35,7 @@ var (
 	schedulerWorkerAddress            string = "scheduler:container:worker_addr:%s"
 	schedulerContainerLock            string = "scheduler:container:lock:%s"
 	schedulerContainerExitCode        string = "scheduler:container:exit_code:%s"
+	schedulerContainerExitSnapshot    string = "scheduler:container:exit_snapshot:%s"
 	schedulerCheckpointState          string = "scheduler:checkpoint_state:%s:%s"
 	schedulerServeLock                string = "scheduler:serve:lock:%s:%s"
 	schedulerStubState                string = "scheduler:stub:state:%s"
@@ -291,6 +292,10 @@ func (rk *redisKeys) SchedulerWorkerAddress(containerId string) string {
 
 func (rk *redisKeys) SchedulerContainerExitCode(containerId string) string {
 	return fmt.Sprintf(schedulerContainerExitCode, containerId)
+}
+
+func (rk *redisKeys) SchedulerContainerExitSnapshot(containerId string) string {
+	return fmt.Sprintf(schedulerContainerExitSnapshot, containerId)
 }
 
 func (rk *redisKeys) SchedulerCheckpointState(workspaceName, checkpointId string) string {

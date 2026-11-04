@@ -2,6 +2,7 @@ package image
 
 import (
 	"context"
+	"database/sql"
 	_ "embed"
 	"fmt"
 	"regexp"
@@ -135,7 +136,15 @@ func (b *Builder) attachPlatformBuildStub(ctx context.Context, request *types.Co
 	// token. Reuse its identity; build context mounts remain request-specific.
 	object, err := b.backendRepo.GetObjectByHash(ctx, abstractions.EmptyStubObjectHash(), request.Workspace.Id)
 	if err != nil {
-		return fmt.Errorf("platform build object: %w", err)
+		if errors.Is(err, sql.ErrNoRows) || err.Error() == "sql: no rows in result set" {
+			obj, ensureErr := abstractions.EnsureEmptyStubObject(ctx, b.backendRepo, &request.Workspace)
+			if ensureErr != nil {
+				return fmt.Errorf("platform build object: %w", ensureErr)
+			}
+			object = &obj
+		} else {
+			return fmt.Errorf("platform build object: %w", err)
+		}
 	}
 	const name = "managed-endpoints-build"
 	app, err := b.backendRepo.GetOrCreateApp(ctx, request.Workspace.Id, name)

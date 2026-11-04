@@ -35,5 +35,6 @@ func ConfigureContainerRequestNetwork(request *types.ContainerRequest, stubConfi
 	request.AllowList = append([]string(nil), stubConfig.AllowList...)
 	request.DockerEnabled = stubConfig.DockerEnabled
 	request.UseVM = stubConfig.UseVM
+	request.EnableExitSnapshot = stubConfig.EnableExitSnapshot
 	return nil
 }

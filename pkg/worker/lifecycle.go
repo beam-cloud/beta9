@@ -407,9 +407,13 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		instance.statusHeartbeatMu.Lock()
 	}
 
-	if hasDurableDisk {
+	if hasDurableDisk || (request != nil && request.EnableExitSnapshot) {
+		expiry := int64(120)
+		if hasDurableDisk {
+			expiry = s.containerStoppingLease(containerId, request).expirySeconds
+		}
 		// Publish the finalization lease while the heartbeat fence prevents a stale overwrite.
-		s.markContainerStopping(containerId, s.containerStoppingLease(containerId, request).expirySeconds)
+		s.markContainerStopping(containerId, expiry)
 	}
 	s.setLocalContainerExitCode(containerId, exitCode)
 	if exists {
@@ -641,6 +645,77 @@ func (s *Worker) setContainerExitCode(containerId string, exitCode int) bool {
 		return false
 	}
 	return true
+}
+
+func (s *Worker) setContainerExitSnapshot(containerId, workspaceId string, state *types.ExitSnapshotState) bool {
+	if s.containerRepoClient == nil || state == nil {
+		return false
+	}
+
+	err := retryContainerRepositoryCall(func(ctx context.Context) error {
+		_, err := handleGRPCResponse(s.containerRepoClient.SetContainerExitSnapshot(ctx, &pb.SetContainerExitSnapshotRequest{
+			ContainerId: containerId,
+			Status:      string(state.Status),
+			ImageId:     state.ImageId,
+			ErrorMsg:    state.ErrorMsg,
+			WorkspaceId: workspaceId,
+		}))
+		return err
+	})
+	if err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit snapshot state")
+		return false
+	}
+	return true
+}
+
+func (s *Worker) captureExitSnapshot(ctx context.Context, containerId string, request *types.ContainerRequest) {
+	instance, exists := s.containerInstances.Get(containerId)
+	if !exists || instance == nil {
+		return
+	}
+
+	imageId := fmt.Sprintf("exit-snapshot-%s-%d", request.ContainerId, time.Now().Unix())
+	log.Info().Str("container_id", containerId).Str("image_id", imageId).Msg("capturing sandbox exit snapshot")
+
+	upperDir, cleanup, err := containerExitUpperDir(ctx, instance)
+	if err != nil {
+		log.Error().Err(err).Str("container_id", containerId).Msg("failed to resolve upper dir for exit snapshot")
+		s.setContainerExitSnapshot(containerId, request.WorkspaceId, &types.ExitSnapshotState{
+			Status:   types.ExitSnapshotStatusFailed,
+			ErrorMsg: err.Error(),
+		})
+		return
+	}
+	defer cleanup()
+
+	_, layered := s.imageClient.GetSourceImageRef(request.ImageId)
+	if layered {
+		err = s.imageClient.ArchiveLayer(ctx, request, upperDir, imageId, nil)
+	} else {
+		var rootDir string
+		var rootCleanup func()
+		rootDir, rootCleanup, err = containerRootDir(ctx, instance)
+		if err == nil {
+			defer rootCleanup()
+			err = s.imageClient.Archive(ctx, NewPathInfo(rootDir), imageId, nil, request)
+		}
+	}
+
+	if err != nil {
+		log.Error().Err(err).Str("container_id", containerId).Msg("failed to archive exit snapshot")
+		s.setContainerExitSnapshot(containerId, request.WorkspaceId, &types.ExitSnapshotState{
+			Status:   types.ExitSnapshotStatusFailed,
+			ErrorMsg: err.Error(),
+		})
+		return
+	}
+
+	log.Info().Str("container_id", containerId).Str("image_id", imageId).Msg("sandbox exit snapshot created successfully")
+	s.setContainerExitSnapshot(containerId, request.WorkspaceId, &types.ExitSnapshotState{
+		Status:  types.ExitSnapshotStatusReady,
+		ImageId: imageId,
+	})
 }
 
 func (s *Worker) markContainerStopping(containerId string, expirySeconds int64) bool {
@@ -1897,6 +1972,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		outputLogger.Info(s, "done", false, "success", false, "stream", "stdout")
 	})
 	s.containerInstances.Set(containerId, containerInstance)
+	if request.EnableExitSnapshot && request.Stub.Type.Kind() == types.StubTypeSandbox {
+		s.setContainerExitSnapshot(containerId, request.WorkspaceId, &types.ExitSnapshotState{
+			Status: types.ExitSnapshotStatusPending,
+		})
+	}
 
 	// Setup container overlay filesystem
 	var err error
@@ -2193,11 +2273,17 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// Runtime deletion can be slow under burst load. Report completion before
 	// cleanup so clients are never blocked on resource reclamation. Durable-disk
 	// containers are reported by finalizeContainer after their final sync.
-	if !request.HasDurableDiskMount() {
+	if !request.HasDurableDiskMount() && !request.EnableExitSnapshot {
 		exitReported = s.setContainerExitCode(containerId, exitCode)
+	}
+	if request.EnableExitSnapshot && request.Stub.Type.Kind() == types.StubTypeSandbox {
+		s.captureExitSnapshot(ctx, containerId, request)
 	}
 	if err := s.deleteRuntimeContainer(containerId); err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
+	}
+	if request.EnableExitSnapshot && !request.HasDurableDiskMount() {
+		exitReported = s.setContainerExitCode(containerId, exitCode)
 	}
 }
 

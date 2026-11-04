@@ -451,6 +451,8 @@ type ContainerRequest struct {
 	// CPUTier.CPUReservation). The scheduler sets it when it places the request
 	// and the worker when it accepts it; zero means Cpu.
 	ReservedCpu int64 `json:"reserved_cpu,omitempty" go2proto:"ignore"`
+	// EnableExitSnapshot triggers an automatic filesystem snapshot on sandbox exit.
+	EnableExitSnapshot bool `json:"enable_exit_snapshot,omitempty"`
 }
 
 // CapacityCpu is the CPU the request takes from its worker's capacity.
@@ -867,6 +869,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		EvictOrder:               c.EvictOrder,
 		UseVm:                    c.UseVM,
 		SecretBindings:           SecretBindingsToProto(c.SecretBindings),
+		EnableExitSnapshot:       c.EnableExitSnapshot,
 	}
 }
 
@@ -936,6 +939,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		EvictOrder:               in.EvictOrder,
 		UseVM:                    in.UseVm,
 		SecretBindings:           SecretBindingsFromProto(in.SecretBindings),
+		EnableExitSnapshot:       in.EnableExitSnapshot,
 	}
 }
 

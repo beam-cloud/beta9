@@ -57,6 +57,8 @@ type ContainerRepository interface {
 	GetContainerState(string) (*types.ContainerState, error)
 	SetContainerState(string, *types.ContainerState) error
 	SetContainerExitCode(string, int) error
+	SetContainerExitSnapshot(string, *types.ExitSnapshotState) error
+	GetContainerExitSnapshot(string) (*types.ExitSnapshotState, error)
 	SetContainerFailureCooldown([]string) error
 	GetContainerExitCode(string) (int, error)
 	AcknowledgeContainerExitCode(string, int) error

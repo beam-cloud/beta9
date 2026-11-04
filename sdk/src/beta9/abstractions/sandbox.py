@@ -44,6 +44,8 @@ from ..clients.pod import (
     PodSandboxExposePortRequest,
     PodSandboxExposePortResponse,
     PodSandboxFindInFilesRequest,
+    PodSandboxGetExitSnapshotRequest,
+    PodSandboxGetExitSnapshotResponse,
     PodSandboxKillRequest,
     PodSandboxListFilesRequest,
     PodSandboxListProcessesRequest,
@@ -211,6 +213,12 @@ class Sandbox(Pod):
             are supported; the sandbox is scheduled exclusively onto microvm pools and fails if none
             is available rather than falling back to a container. Docker, durable disks and memory
             snapshots work as usual. Default is False.
+        enable_exit_snapshot (bool):
+            Automatically take a filesystem snapshot when the sandbox exits (graceful or ungraceful,
+            including terminate(), entrypoint completion, idle timeout, lifetime expiry, or OOM).
+            Works for both container sandboxes and microVMs (use_vm=True). The captured snapshot can
+            be retrieved via `instance.get_exit_snapshot()` as an Image to resume or restore the sandbox.
+            Default is False.
         ports (Optional[List[int]]):
             List of ports to expose from the sandbox. When specified, these ports will be accessible
             via public URLs upon sandbox creation. Default is an empty list. You can also dynamically
@@ -263,6 +271,7 @@ class Sandbox(Pod):
         allow_list: Optional[List[str]] = None,
         docker_enabled: bool = False,
         use_vm: bool = False,
+        enable_exit_snapshot: bool = False,
         ports: Optional[List[int]] = [],
         pool: Optional[Union[str, Pool]] = None,
         context: Optional[ConfigContext] = None,
@@ -292,6 +301,7 @@ class Sandbox(Pod):
             docker_enabled=docker_enabled,
             use_vm=use_vm,
             cpu_tier=cpu_tier,
+            enable_exit_snapshot=enable_exit_snapshot,
             ports=ports,
             pool=pool,
             entrypoint=list(SANDBOX_IDLE_ENTRYPOINT),
@@ -342,6 +352,28 @@ class Sandbox(Pod):
             error_msg="",
             stub_id=response.stub_id,
         )
+
+    @classmethod
+    def from_id(cls, id: str, context: Optional[ConfigContext] = None) -> "SandboxInstance":
+        """
+        Connect to an existing sandbox instance by ID.
+
+        Parameters:
+            id (str): The container ID of the existing sandbox instance.
+            context (Optional[ConfigContext]): Optional configuration context.
+
+        Returns:
+            SandboxInstance: A connected sandbox instance handle.
+
+        Example:
+            ```python
+            # Reconnect to an existing or terminated sandbox
+            sb = Sandbox.from_id("c-12345678")
+            image = sb.get_exit_snapshot()
+            restored = Sandbox(image=image).create()
+            ```
+        """
+        return cls(context=context).connect(id)
 
     def create_from_memory_snapshot(self, snapshot_id: str) -> "SandboxInstance":
         """
@@ -610,6 +642,62 @@ class SandboxInstance(BaseAbstraction):
             raise SandboxProcessError(res.error_msg)
 
         return res.checkpoint_id
+
+    def get_exit_snapshot(self, timeout: Optional[float] = None) -> Image:
+        """
+        Wait for and retrieve the exit snapshot Image captured when the sandbox terminated.
+
+        Exit snapshots are captured automatically when the sandbox was created with
+        `enable_exit_snapshot=True`. They preserve the sandbox's modified filesystem
+        (both for container sandboxes and microVMs).
+
+        Parameters:
+            timeout (Optional[float]): Timeout in seconds to wait for the snapshot to
+                reach a terminal state (ready or failed). Defaults to 300 seconds.
+
+        Returns:
+            Image: An Image instance created from the exit snapshot, which can be
+                passed directly to `Sandbox(image=...)` to resume or restore the environment.
+
+        Raises:
+            SandboxProcessError: If exit snapshots were not enabled, or if snapshot
+                creation failed or timed out.
+
+        Example:
+            ```python
+            # Create a sandbox with exit snapshots enabled
+            sb = Sandbox(enable_exit_snapshot=True)
+            instance = sb.create()
+            # ... do work ...
+            instance.terminate()
+
+            # Retrieve the exit snapshot Image
+            image = instance.get_exit_snapshot()
+
+            # Restore into a new sandbox
+            restored = Sandbox(image=image).create()
+            ```
+        """
+        terminal.header(f"Fetching exit snapshot for sandbox: {self.container_id}")
+
+        timeout_seconds = int(timeout) if timeout is not None else 300
+        res: "PodSandboxGetExitSnapshotResponse" = (
+            self.stub.sandbox_get_exit_snapshot(
+                PodSandboxGetExitSnapshotRequest(
+                    container_id=self.container_id,
+                    timeout_seconds=timeout_seconds,
+                )
+            )
+        )
+
+        if not res.ok:
+            raise SandboxProcessError(res.error_msg)
+
+        return Image.from_id(res.image_id)
+
+    def _experimental_get_exit_snapshot(self, timeout: Optional[float] = None) -> Image:
+        """Alias for `get_exit_snapshot()` matching Modal's method name."""
+        return self.get_exit_snapshot(timeout=timeout)
 
     def sandbox_id(self) -> str:
         """
@@ -4303,6 +4391,23 @@ class AsyncSandboxInstance:
             str: The checkpoint ID.
         """
         return await asyncio.to_thread(self._sync.snapshot_memory)
+
+    async def get_exit_snapshot(self, timeout: Optional[float] = None) -> Image:
+        """
+        Wait for and retrieve the exit snapshot Image asynchronously.
+
+        Parameters:
+            timeout (Optional[float]): Timeout in seconds to wait for the snapshot to
+                become ready. If None, defaults to 300 seconds.
+
+        Returns:
+            Image: An Image instance created from the exit snapshot.
+        """
+        return await asyncio.to_thread(self._sync.get_exit_snapshot, timeout)
+
+    async def _experimental_get_exit_snapshot(self, timeout: Optional[float] = None) -> Image:
+        """Alias for `get_exit_snapshot()` matching Modal's method name."""
+        return await self.get_exit_snapshot(timeout=timeout)
 
     def sandbox_id(self) -> str:
         """

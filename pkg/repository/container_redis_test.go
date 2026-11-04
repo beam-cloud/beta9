@@ -2095,3 +2095,55 @@ func TestSandboxActivityCountersBucketByHour(t *testing.T) {
 		t.Fatalf("expected stale bucket to be trimmed, got fields %v", fields)
 	}
 }
+
+func TestContainerExitSnapshotStateLifecycle(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewContainerRedisRepositoryForTest(rdb)
+
+	containerId := "test-container-exit-snapshot-123"
+
+	// Initially nil
+	state, err := repo.GetContainerExitSnapshot(containerId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != nil {
+		t.Fatalf("expected nil state initially, got %+v", state)
+	}
+
+	// Set PENDING
+	pendingState := &types.ExitSnapshotState{
+		Status: types.ExitSnapshotStatusPending,
+	}
+	if err := repo.SetContainerExitSnapshot(containerId, pendingState); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err = repo.GetContainerExitSnapshot(containerId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == nil || state.Status != types.ExitSnapshotStatusPending {
+		t.Fatalf("expected pending status, got %+v", state)
+	}
+
+	// Set READY with ImageId
+	readyState := &types.ExitSnapshotState{
+		Status:  types.ExitSnapshotStatusReady,
+		ImageId: "img-exit-snapshot-789",
+	}
+	if err := repo.SetContainerExitSnapshot(containerId, readyState); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err = repo.GetContainerExitSnapshot(containerId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == nil || state.Status != types.ExitSnapshotStatusReady || state.ImageId != "img-exit-snapshot-789" {
+		t.Fatalf("expected ready status with image id, got %+v", state)
+	}
+}

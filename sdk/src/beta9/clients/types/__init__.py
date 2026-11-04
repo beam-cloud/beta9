@@ -132,6 +132,7 @@ class ContainerRequest(betterproto.Message):
     evict_order: int = betterproto.int32_field(45)
     use_vm: bool = betterproto.bool_field(46)
     secret_bindings: List["SecretBinding"] = betterproto.message_field(47)
+    enable_exit_snapshot: bool = betterproto.bool_field(49)
 
 
 @dataclass(eq=False, repr=False)

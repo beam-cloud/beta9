@@ -511,6 +511,8 @@ class GetOrCreateStubRequest(betterproto.Message):
     """Run the sandbox in its own virtual machine (microvm pools only)."""
 
     cpu_tier: str = betterproto.string_field(51)
+    enable_exit_snapshot: bool = betterproto.bool_field(52)
+    """Capture a filesystem snapshot automatically when the sandbox exits."""
 
 
 @dataclass(eq=False, repr=False)

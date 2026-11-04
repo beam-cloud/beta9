@@ -122,6 +122,7 @@ message ContainerRequest {
   int32 evict_order = 45;
   bool use_vm = 46;
   repeated SecretBinding secret_bindings = 47;
+  bool enable_exit_snapshot = 49;
 }
 
 message ContainerState {

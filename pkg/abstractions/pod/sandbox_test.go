@@ -897,3 +897,71 @@ func TestSandboxConnectRetriesInitialAddressLookupUnderTarget(t *testing.T) {
 		t.Fatalf("worker connections = %d, want one connection after address publication", got)
 	}
 }
+
+type fakeExitSnapshotContainerRepo struct {
+	repository.ContainerRepository
+	state *types.ExitSnapshotState
+	err   error
+}
+
+func (f *fakeExitSnapshotContainerRepo) GetContainerExitSnapshot(containerId string) (*types.ExitSnapshotState, error) {
+	return f.state, f.err
+}
+
+func TestSandboxGetExitSnapshot(t *testing.T) {
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Token:     &types.Token{Id: 1},
+		Workspace: &types.Workspace{Id: 1, ExternalId: "ws-1"},
+	})
+
+	repo := &fakeExitSnapshotContainerRepo{
+		state: &types.ExitSnapshotState{
+			Status:      types.ExitSnapshotStatusReady,
+			ImageId:     "image-ready-123",
+			WorkspaceId: "ws-1",
+		},
+	}
+
+	service := &GenericPodService{
+		containerRepo: repo,
+	}
+
+	res, err := service.SandboxGetExitSnapshot(ctx, &pb.PodSandboxGetExitSnapshotRequest{
+		ContainerId:    "c-123",
+		TimeoutSeconds: 1,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Ok || res.ImageId != "image-ready-123" {
+		t.Fatalf("expected ready image-ready-123, got: %+v", res)
+	}
+}
+
+func TestSandboxGetExitSnapshotRejectsOtherWorkspace(t *testing.T) {
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Token:     &types.Token{Id: 2},
+		Workspace: &types.Workspace{Id: 2, ExternalId: "ws-other"},
+	})
+
+	service := &GenericPodService{
+		containerRepo: &fakeExitSnapshotContainerRepo{
+			state: &types.ExitSnapshotState{
+				Status:      types.ExitSnapshotStatusReady,
+				ImageId:     "image-ready-123",
+				WorkspaceId: "ws-1",
+			},
+		},
+	}
+
+	res, err := service.SandboxGetExitSnapshot(ctx, &pb.PodSandboxGetExitSnapshotRequest{
+		ContainerId:    "c-123",
+		TimeoutSeconds: 1,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Ok || res.ImageId != "" {
+		t.Fatalf("snapshot leaked across workspaces: %+v", res)
+	}
+}

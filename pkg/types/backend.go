@@ -596,6 +596,8 @@ type StubConfigV1 struct {
 	DockerEnabled      bool               `json:"docker_enabled"`
 	// UseVM runs sandboxes in a microvm pool instead of a container runtime.
 	UseVM bool `json:"use_vm,omitempty"`
+	// EnableExitSnapshot triggers an automatic filesystem snapshot on sandbox exit.
+	EnableExitSnapshot bool `json:"enable_exit_snapshot,omitempty"`
 	// Hostname to set inside the container.
 	Hostname string `json:"hostname,omitempty"`
 	// MachineID pins the stub's containers to one agent machine (pod/shell

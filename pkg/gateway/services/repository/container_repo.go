@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -145,6 +146,44 @@ func (s *ContainerRepositoryService) SetContainerExitCode(ctx context.Context, r
 	}
 
 	return &pb.SetContainerExitCodeResponse{Ok: true}, nil
+}
+
+func (s *ContainerRepositoryService) SetContainerExitSnapshot(ctx context.Context, req *pb.SetContainerExitSnapshotRequest) (*pb.SetContainerExitSnapshotResponse, error) {
+	if req == nil {
+		return &pb.SetContainerExitSnapshotResponse{Ok: false, ErrorMsg: "request is nil"}, nil
+	}
+	err := s.containerRepo.SetContainerExitSnapshot(req.ContainerId, &types.ExitSnapshotState{
+		Status:      types.ExitSnapshotStatus(req.Status),
+		ImageId:     req.ImageId,
+		ErrorMsg:    req.ErrorMsg,
+		WorkspaceId: req.WorkspaceId,
+		CreatedAt:   time.Now().Unix(),
+	})
+	if err != nil {
+		return &pb.SetContainerExitSnapshotResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	return &pb.SetContainerExitSnapshotResponse{Ok: true}, nil
+}
+
+func (s *ContainerRepositoryService) GetContainerExitSnapshot(ctx context.Context, req *pb.GetContainerExitSnapshotRequest) (*pb.GetContainerExitSnapshotResponse, error) {
+	if req == nil {
+		return &pb.GetContainerExitSnapshotResponse{Ok: false, ErrorMsg: "request is nil"}, nil
+	}
+	state, err := s.containerRepo.GetContainerExitSnapshot(req.ContainerId)
+	if err != nil {
+		return &pb.GetContainerExitSnapshotResponse{Ok: false, ErrorMsg: err.Error(), Status: string(types.ExitSnapshotStatusDisabled)}, nil
+	}
+	if state == nil {
+		return &pb.GetContainerExitSnapshotResponse{Ok: true, Status: string(types.ExitSnapshotStatusDisabled)}, nil
+	}
+	return &pb.GetContainerExitSnapshotResponse{
+		Ok:          state.Status == types.ExitSnapshotStatusReady,
+		Status:      string(state.Status),
+		ImageId:     state.ImageId,
+		ErrorMsg:    state.ErrorMsg,
+		WorkspaceId: state.WorkspaceId,
+	}, nil
 }
 
 func (s *ContainerRepositoryService) SetContainerAddress(ctx context.Context, req *pb.SetContainerAddressRequest) (*pb.SetContainerAddressResponse, error) {

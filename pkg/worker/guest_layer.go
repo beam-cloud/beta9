@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/beam-cloud/beta9/pkg/runtime"
@@ -23,6 +24,26 @@ func containerUpperDir(ctx context.Context, instance *ContainerInstance) (string
 		return instance.Overlay.TopLayerUpperDir(), func() {}, nil
 	}
 	return exportGuestTree(ctx, gfs, instance.Id, runtime.GuestUpperDir, guestUpperExcludes)
+}
+
+type scratchUpperMounter interface {
+	MountScratchUpper(containerID string) (string, func(), error)
+}
+
+// containerExitUpperDir returns the container's writable layer after the container or VM
+// has finished running. For microVMs whose guest agent is no longer running, it mounts
+// the host scratch disk directly. For standard containers, it reads the host overlay upper dir.
+func containerExitUpperDir(ctx context.Context, instance *ContainerInstance) (string, func(), error) {
+	if instance == nil {
+		return "", func() {}, fmt.Errorf("container instance is nil")
+	}
+	if mvm, ok := instance.Runtime.(scratchUpperMounter); ok {
+		return mvm.MountScratchUpper(instance.Id)
+	}
+	if instance.Overlay != nil {
+		return instance.Overlay.TopLayerUpperDir(), func() {}, nil
+	}
+	return containerUpperDir(ctx, instance)
 }
 
 // containerRootDir is the merged-root counterpart of containerUpperDir, for

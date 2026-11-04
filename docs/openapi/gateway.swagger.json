@@ -3514,6 +3514,10 @@
         "useVm": {
           "type": "boolean",
           "description": "Run the sandbox in its own virtual machine (microvm pools only)."
+        },
+        "enableExitSnapshot": {
+          "type": "boolean",
+          "description": "Capture a filesystem snapshot automatically when the sandbox exits."
         }
       }
     },

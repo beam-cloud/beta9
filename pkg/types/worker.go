@@ -241,3 +241,22 @@ type ProcessInfo struct {
 	Env      []string `json:"env"`
 	ExitCode int32    `json:"exit_code"`
 }
+
+type ExitSnapshotStatus string
+
+const (
+	ExitSnapshotStatusDisabled ExitSnapshotStatus = "DISABLED"
+	ExitSnapshotStatusPending  ExitSnapshotStatus = "PENDING"
+	ExitSnapshotStatusReady    ExitSnapshotStatus = "READY"
+	ExitSnapshotStatusFailed   ExitSnapshotStatus = "FAILED"
+)
+
+type ExitSnapshotState struct {
+	Status    ExitSnapshotStatus `json:"status" redis:"status"`
+	ImageId   string             `json:"image_id" redis:"image_id"`
+	ErrorMsg  string             `json:"error_msg" redis:"error_msg"`
+	CreatedAt int64              `json:"created_at" redis:"created_at"`
+	// WorkspaceId is the external workspace ID that owns the sandbox; readers
+	// must match it before handing out the snapshot image.
+	WorkspaceId string `json:"workspace_id" redis:"workspace_id"`
+}
