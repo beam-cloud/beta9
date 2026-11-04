@@ -104,6 +104,9 @@ func (c *ImageClient) touchImageMount(imageID string) {
 	if c == nil || c.mountedFuseServers == nil {
 		return
 	}
+	if _, mounted := c.mountedFuseServers.Get(imageID); !mounted {
+		return
+	}
 	unlock := c.lockImageMount(imageID)
 	defer unlock()
 	if _, mounted := c.mountedFuseServers.Get(imageID); mounted {

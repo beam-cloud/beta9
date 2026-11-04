@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -64,6 +65,16 @@ func TestIdleImageMountGraceStartsWhenContainerReleasesImage(t *testing.T) {
 	require.Zero(t, c.pruneIdleMounts(time.Now().Add(-7*24*time.Hour), inUse, unmount), "a recently released image needs a full idle grace period")
 	require.True(t, c.mountedImageReady("long-running"))
 	require.Equal(t, 1, c.pruneIdleMounts(time.Now().Add(time.Minute), inUse, unmount), "an inactive image must remain eligible for eventual expiry")
+}
+
+func TestIdleImageMountReleaseDoesNotRetainUnknownImageLocks(t *testing.T) {
+	c := idleImageClient(t)
+	for i := range 1000 {
+		c.touchImageMount(fmt.Sprint(i))
+	}
+	c.mountLocksMu.Lock()
+	defer c.mountLocksMu.Unlock()
+	require.Empty(t, c.mountLocks, "unmounted and failed requests must not retain per-image mutexes")
 }
 
 func TestIdleImageMountExpiryFencesConcurrentHotImageLoad(t *testing.T) {

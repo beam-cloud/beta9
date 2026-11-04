@@ -15,6 +15,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func newVMBatchIntegrationRepo(t *testing.T) *PostgresBackendRepository {
+	t.Helper()
+	repo := newVMIntegrationRepo(t)
+	repo.client.SetMaxOpenConns(1)
+	repo.client.SetMaxIdleConns(1)
+	repo.config.VMBurstBatchSize = 128
+	return repo
+}
+
 func testVMBatchFailure(t *testing.T, query string, flush func(*PostgresBackendRepository) []error) {
 	t.Helper()
 	for _, test := range []struct {
@@ -152,14 +161,11 @@ func TestVMMutationBatchDoesNotReplayAmbiguousFailure(t *testing.T) {
 }
 
 func TestVMMutationBatchIntegration(t *testing.T) {
-	repo := newVMIntegrationRepo(t)
+	repo := newVMBatchIntegrationRepo(t)
 	db := repo.client
 	var err error
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
 	_, err = db.Exec(`CREATE TEMP TABLE persistent_vm (LIKE public.persistent_vm INCLUDING DEFAULTS INCLUDING INDEXES)`)
 	require.NoError(t, err)
-	repo.config.VMBurstBatchSize = 128
 	batcher := &vmMutationBatcher{repo: repo}
 	first, second := mutationBatchRequest("first", true, `{"state":1}`), mutationBatchRequest("second", true, `{}`)
 	first.input.Row.PublicIPv6 = nullableVMAddress("fd00::1")
@@ -272,11 +278,9 @@ func TestVMStubBatchDoesNotReplayAmbiguousFailure(t *testing.T) {
 }
 
 func TestVMStubBatchIntegration(t *testing.T) {
-	repo := newVMIntegrationRepo(t)
+	repo := newVMBatchIntegrationRepo(t)
 	db := repo.client
 	var err error
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
 	_, err = db.Exec(`CREATE TEMP TABLE app (LIKE public.app INCLUDING DEFAULTS);
 		CREATE TEMP TABLE stub (LIKE public.stub INCLUDING DEFAULTS);
 		CREATE TEMP SEQUENCE stub_batch_test_id;
@@ -285,7 +289,6 @@ func TestVMStubBatchIntegration(t *testing.T) {
 		INSERT INTO app (id, name, workspace_id, description, updated_at)
 		VALUES (1, 'batch-test', 1, '', NOW()-INTERVAL '1 hour'), (2, 'other', 1, '', NOW()-INTERVAL '1 hour');`)
 	require.NoError(t, err)
-	repo.config.VMBurstBatchSize = 128
 	batcher := &vmStubBatcher{repo: repo}
 	ctx := context.Background()
 	first := stubBatchRequest(ctx, "first", 1)
@@ -398,17 +401,14 @@ func TestDiskBurstBatchDoesNotReplayAmbiguousFailure(t *testing.T) {
 }
 
 func TestDiskBurstBatchIntegration(t *testing.T) {
-	repo := newVMIntegrationRepo(t)
+	repo := newVMBatchIntegrationRepo(t)
 	db := repo.client
 	var err error
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
 	_, err = db.Exec(`CREATE TEMP TABLE disk (LIKE public.disk INCLUDING DEFAULTS INCLUDING INDEXES);
 		CREATE TEMP SEQUENCE disk_burst_test_id;
 		ALTER TABLE disk ALTER COLUMN id SET DEFAULT nextval('disk_burst_test_id');
 		ALTER TABLE disk ADD CHECK (name <> 'reject')`)
 	require.NoError(t, err)
-	repo.config.VMBurstBatchSize = 128
 	batcher := &vmDiskBatcher{repo: repo}
 	first, same, other := diskBatchRequest("first", 1), diskBatchRequest("first", 1), diskBatchRequest("first", 2)
 	batcher.flush([]*vmDiskRequest{first, same, other})

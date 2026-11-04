@@ -328,6 +328,9 @@ func (r *PostgresBackendRepository) DeleteVMArtifact(ctx context.Context, ws uin
 // acquire/release queries separate from the lifecycle work: a hundred ongoing
 // snapshots must not consume a hundred connections or block unrelated starts.
 // The local set prevents PostgreSQL's same-session, reentrant lock acquisition.
+// A failed query quarantines the entire session until its owners finish; new
+// IDs on that shard wait too, potentially for a long lifecycle operation. Other
+// shards remain available. This failure path favors existing fences over admission.
 type vmLockSession struct {
 	gate     chan struct{}
 	client   *sqlx.DB

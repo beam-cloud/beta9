@@ -110,6 +110,26 @@ func snapshotTestInstance(t *testing.T, serve func(http.ResponseWriter, *http.Re
 	return inst
 }
 
+func resumableSnapshotTestInstance(t *testing.T) (*microVMInstance, func(bool)) {
+	t.Helper()
+	var mu sync.Mutex
+	var actions []string
+	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		actions = append(actions, r.URL.Path)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	return inst, func(mustStop bool) {
+		t.Helper()
+		require.False(t, mustStop)
+		require.False(t, inst.isPaused())
+		mu.Lock()
+		defer mu.Unlock()
+		require.Equal(t, []string{"/api/v1/vm.pause", "/api/v1/vm.resume"}, actions)
+	}
+}
+
 func TestMicroVMSnapshotSealsDisksBeforeCapture(t *testing.T) {
 	var mu sync.Mutex
 	var actions []string
@@ -160,22 +180,11 @@ func TestMicroVMSnapshotOtherErrorsAreNotSafeToRetry(t *testing.T) {
 }
 
 func TestMicroVMSnapshotCPUPreparationFailureResumesBeforeCapture(t *testing.T) {
-	var mu sync.Mutex
-	var actions []string
-	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-		actions = append(actions, r.URL.Path)
-		w.WriteHeader(http.StatusNoContent)
-	})
+	inst, assertResumed := resumableSnapshotTestInstance(t)
 	inst.cgroup = t.TempDir() // Missing cgroup controls make preparation fail before capture.
 	mustStop, err := snapshotMicroVM(context.Background(), inst, t.TempDir(), nil)
 	require.ErrorContains(t, err, "read snapshot cpu.max")
-	require.False(t, mustStop)
-	require.False(t, inst.isPaused())
-	mu.Lock()
-	defer mu.Unlock()
-	require.Equal(t, []string{"/api/v1/vm.pause", "/api/v1/vm.resume"}, actions)
+	assertResumed(mustStop)
 }
 
 func TestMicroVMSnapshotCPUPreparationFailureStopsIfResumeFails(t *testing.T) {
@@ -300,22 +309,11 @@ func TestMicroVMSnapshotCPUQuotaSerializesResourceUpdate(t *testing.T) {
 }
 
 func TestMicroVMSnapshotSealFailureResumesBeforeAnyCapture(t *testing.T) {
-	var mu sync.Mutex
-	var actions []string
-	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-		actions = append(actions, r.URL.Path)
-		w.WriteHeader(http.StatusNoContent)
-	})
+	inst, assertResumed := resumableSnapshotTestInstance(t)
 	sealErr := errors.New("disk publication failed")
 	captured, err := snapshotMicroVM(context.Background(), inst, t.TempDir(), func(context.Context) error { return sealErr })
-	mu.Lock()
-	defer mu.Unlock()
 	require.ErrorIs(t, err, sealErr)
-	require.False(t, captured)
-	require.False(t, inst.isPaused())
-	require.Equal(t, []string{"/api/v1/vm.pause", "/api/v1/vm.resume"}, actions)
+	assertResumed(captured)
 }
 
 func TestMicroVMSnapshotLostPauseResponseResolvesActualState(t *testing.T) {
