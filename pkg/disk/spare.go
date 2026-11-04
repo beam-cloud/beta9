@@ -214,9 +214,10 @@ func (m *Manager) rememberSpareSize(size int64) {
 	for i, s := range sizes {
 		lines[i] = strconv.FormatInt(s, 10)
 	}
-	if err := writeFileAtomic(filepath.Join(m.root, spareSizesFile), []byte(strings.Join(lines, "\n")+"\n")); err == nil {
-		m.retainSpareSizes(sizes)
+	if err := writeFileAtomic(filepath.Join(m.root, spareSizesFile), []byte(strings.Join(lines, "\n")+"\n")); err != nil {
+		log.Warn().Err(err).Msg("could not persist spare disk sizes")
 	}
+	m.retainSpareSizes(sizes)
 }
 
 // The on-disk MRU bound must also bound live daemons and formatted heads.

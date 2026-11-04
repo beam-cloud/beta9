@@ -100,7 +100,7 @@ func (s *Worker) pruneDetachedQcowVolumes(ctx context.Context) {
 		if pruned > 0 {
 			log.Info().Int("pruned", pruned).Int64("freed_bytes", freed).Int64("target_free_bytes", bytesToFree).Msg("pruned detached qcow volume copies")
 		}
-		if err != nil && ctx.Err() == nil {
+		if err != nil && ctx.Err() == nil && !errors.Is(err, context.DeadlineExceeded) {
 			log.Warn().Err(err).Msg("detached qcow volume cache cleanup incomplete")
 		}
 	}

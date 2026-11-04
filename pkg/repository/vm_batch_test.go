@@ -2,18 +2,115 @@ package repository
 
 import (
 	"context"
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
-	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 )
+
+func testVMBatchFailure(t *testing.T, query string, flush func(*PostgresBackendRepository) []error) {
+	t.Helper()
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{"transport timeout", context.DeadlineExceeded},
+		{"completion unknown", &pq.Error{Code: "40003"}},
+		{"unrecognized rollback", &pq.Error{Code: "40XYZ"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo, mock := NewBackendPostgresRepositoryForTest()
+			mock.ExpectQuery(query).WillReturnError(test.err)
+			for _, err := range flush(repo.(*PostgresBackendRepository)) {
+				require.ErrorIs(t, err, test.err)
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestVMBatchRetriesOnlyKnownRollbackErrors(t *testing.T) {
+	for _, code := range []pq.ErrorCode{"22003", "23505", "40000", "40001", "40002", "40P01"} {
+		require.True(t, retryVMBatchIndividually(&pq.Error{Code: code}), string(code))
+	}
+	for _, err := range []error{nil, context.Canceled, &pq.Error{Code: "40003"}, &pq.Error{Code: "40XYZ"}, &pq.Error{Code: "08006"}} {
+		require.False(t, retryVMBatchIndividually(err), "%v", err)
+	}
+}
+
+func testVMBatchCancellation[T any](t *testing.T, mock sqlmock.Sqlmock, query string, rows *sqlmock.Rows, queue chan T, submit func(context.Context, string) error, flush func([]T)) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{})
+	var once sync.Once
+	mock.ExpectQuery(query).WithArgs(sqlArgumentMatcher(func(driver.Value) bool {
+		once.Do(func() { close(started) })
+		return true
+	})).WillDelayFor(80 * time.Millisecond).WillReturnRows(rows)
+	results := make(chan error, 2)
+	for _, id := range []string{"first", "second"} {
+		go func() { results <- submit(ctx, id) }()
+	}
+	batch := []T{<-queue, <-queue}
+	go flush(batch)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("batch did not dispatch its database write")
+	}
+	cancel()
+	select {
+	case err := <-results:
+		t.Fatalf("caller returned before its database outcome was known: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+	for range 2 {
+		require.NoError(t, <-results, "a committed write must not become a cancellation failure")
+	}
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestVMBatchCancellationAfterDispatch(t *testing.T) {
+	t.Run("mutation", func(t *testing.T) {
+		repo, mock := NewBackendPostgresRepositoryForTest()
+		r := repo.(*PostgresBackendRepository)
+		b := &vmMutationBatcher{repo: r, queue: make(chan *vmMutationRequest, 2)}
+		r.vmMutationBatchOnce.Do(func() { r.vmMutationBatch = b })
+		testVMBatchCancellation(t, mock, `WITH input AS MATERIALIZED`, sqlmock.NewRows([]string{"id"}).AddRow("first").AddRow("second"), b.queue, func(ctx context.Context, id string) error {
+			return r.mutateVMBatched(ctx, mutationBatchRequest(id, true, `{}`).input)
+		}, b.flush)
+	})
+	t.Run("stub", func(t *testing.T) {
+		repo, mock := NewBackendPostgresRepositoryForTest()
+		r := repo.(*PostgresBackendRepository)
+		b := &vmStubBatcher{repo: r, queue: make(chan *vmStubRequest, 2)}
+		r.vmStubBatchOnce.Do(func() { r.vmStubBatch = b })
+		rows := sqlmock.NewRows([]string{"batch_index", "id"}).AddRow(1, 7).AddRow(2, 8)
+		testVMBatchCancellation(t, mock, `WITH input AS MATERIALIZED`, rows, b.queue, func(ctx context.Context, id string) error {
+			_, err := r.getOrCreateVMStubBatched(ctx, stubBatchRequest(ctx, id, 1).input)
+			return err
+		}, b.flush)
+	})
+	t.Run("disk", func(t *testing.T) {
+		repo, mock := NewBackendPostgresRepositoryForTest()
+		r := repo.(*PostgresBackendRepository)
+		b := &vmDiskBatcher{repo: r, queue: make(chan *vmDiskRequest, 2)}
+		r.vmDiskBatchOnce.Do(func() { r.vmDiskBatch = b })
+		rows := sqlmock.NewRows([]string{"id", "workspace_id", "name"}).AddRow(1, 1, "first").AddRow(2, 1, "second")
+		testVMBatchCancellation(t, mock, `INSERT INTO disk`, rows, b.queue, func(ctx context.Context, id string) error {
+			_, err := r.createVMDiskBatched(ctx, diskBatchRequest(id, 1).input)
+			return err
+		}, b.flush)
+	})
+}
 
 func mutationBatchRequest(id string, create bool, data string) *vmMutationRequest {
 	return &vmMutationRequest{ctx: context.Background(), input: vmMutationInput{Create: create, Row: vmMutationRow{
@@ -42,28 +139,22 @@ func TestVMMutationBatchWaitsForDatabaseAndReportsMissingRows(t *testing.T) {
 }
 
 func TestVMMutationBatchDoesNotReplayAmbiguousFailure(t *testing.T) {
-	repo, mock := NewBackendPostgresRepositoryForTest()
-	first, second := mutationBatchRequest("first", true, `{}`), mutationBatchRequest("second", true, `{}`)
-	mock.ExpectQuery(`WITH input AS MATERIALIZED`).WillReturnError(context.DeadlineExceeded)
-	(&vmMutationBatcher{repo: repo.(*PostgresBackendRepository)}).flush([]*vmMutationRequest{first, second})
-	require.ErrorIs(t, <-first.done, context.DeadlineExceeded)
-	require.ErrorIs(t, <-second.done, context.DeadlineExceeded)
-	require.NoError(t, mock.ExpectationsWereMet())
+	testVMBatchFailure(t, `WITH input AS MATERIALIZED`, func(repo *PostgresBackendRepository) []error {
+		first, second := mutationBatchRequest("first", true, `{}`), mutationBatchRequest("second", true, `{}`)
+		(&vmMutationBatcher{repo: repo}).flush([]*vmMutationRequest{first, second})
+		return []error{<-first.done, <-second.done}
+	})
 }
 
 func TestVMMutationBatchIntegration(t *testing.T) {
-	dsn := os.Getenv("BETA9_VM_TEST_DSN")
-	if dsn == "" {
-		t.Skip("set BETA9_VM_TEST_DSN for a development database")
-	}
-	db, err := sqlx.Connect("postgres", dsn)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	repo := newVMIntegrationRepo(t)
+	db := repo.client
+	var err error
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	_, err = db.Exec(`CREATE TEMP TABLE persistent_vm (LIKE public.persistent_vm INCLUDING DEFAULTS INCLUDING INDEXES)`)
 	require.NoError(t, err)
-	repo := &PostgresBackendRepository{client: db, config: types.PostgresConfig{VMBurstBatchSize: 128}}
+	repo.config.VMBurstBatchSize = 128
 	batcher := &vmMutationBatcher{repo: repo}
 	first, second := mutationBatchRequest("first", true, `{"state":1}`), mutationBatchRequest("second", true, `{}`)
 	first.input.Row.PublicIPv6 = nullableVMAddress("fd00::1")
@@ -168,24 +259,17 @@ func TestVMStubBatchSkipsCanceledRequests(t *testing.T) {
 }
 
 func TestVMStubBatchDoesNotReplayAmbiguousFailure(t *testing.T) {
-	repo, mock := NewBackendPostgresRepositoryForTest()
-	first := stubBatchRequest(context.Background(), "first", 1)
-	second := stubBatchRequest(context.Background(), "second", 1)
-	mock.ExpectQuery(`WITH input AS MATERIALIZED`).WillReturnError(context.DeadlineExceeded)
-	(&vmStubBatcher{repo: repo.(*PostgresBackendRepository)}).flush([]*vmStubRequest{first, second})
-	require.ErrorIs(t, (<-first.done).err, context.DeadlineExceeded)
-	require.ErrorIs(t, (<-second.done).err, context.DeadlineExceeded)
-	require.NoError(t, mock.ExpectationsWereMet())
+	testVMBatchFailure(t, `WITH input AS MATERIALIZED`, func(repo *PostgresBackendRepository) []error {
+		first, second := stubBatchRequest(context.Background(), "first", 1), stubBatchRequest(context.Background(), "second", 1)
+		(&vmStubBatcher{repo: repo}).flush([]*vmStubRequest{first, second})
+		return []error{(<-first.done).err, (<-second.done).err}
+	})
 }
 
 func TestVMStubBatchIntegration(t *testing.T) {
-	dsn := os.Getenv("BETA9_VM_TEST_DSN")
-	if dsn == "" {
-		t.Skip("set BETA9_VM_TEST_DSN for a development database")
-	}
-	db, err := sqlx.Connect("postgres", dsn)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	repo := newVMIntegrationRepo(t)
+	db := repo.client
+	var err error
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	_, err = db.Exec(`CREATE TEMP TABLE app (LIKE public.app INCLUDING DEFAULTS);
@@ -196,7 +280,7 @@ func TestVMStubBatchIntegration(t *testing.T) {
 		INSERT INTO app (id, name, workspace_id, description, updated_at)
 		VALUES (1, 'batch-test', 1, '', NOW()-INTERVAL '1 hour'), (2, 'other', 1, '', NOW()-INTERVAL '1 hour');`)
 	require.NoError(t, err)
-	repo := &PostgresBackendRepository{client: db, config: types.PostgresConfig{VMBurstBatchSize: 128}}
+	repo.config.VMBurstBatchSize = 128
 	batcher := &vmStubBatcher{repo: repo}
 	ctx := context.Background()
 	first := stubBatchRequest(ctx, "first", 1)
@@ -301,23 +385,17 @@ func TestDiskBurstBatchWaitsForDatabaseAndDeduplicates(t *testing.T) {
 }
 
 func TestDiskBurstBatchDoesNotReplayAmbiguousFailure(t *testing.T) {
-	repo, mock := NewBackendPostgresRepositoryForTest()
-	first, second := diskBatchRequest("first", 1), diskBatchRequest("second", 1)
-	mock.ExpectQuery(`INSERT INTO disk`).WillReturnError(context.DeadlineExceeded)
-	(&vmDiskBatcher{repo: repo.(*PostgresBackendRepository)}).flush([]*vmDiskRequest{first, second})
-	require.ErrorIs(t, (<-first.done).err, context.DeadlineExceeded)
-	require.ErrorIs(t, (<-second.done).err, context.DeadlineExceeded)
-	require.NoError(t, mock.ExpectationsWereMet())
+	testVMBatchFailure(t, `INSERT INTO disk`, func(repo *PostgresBackendRepository) []error {
+		first, second := diskBatchRequest("first", 1), diskBatchRequest("second", 1)
+		(&vmDiskBatcher{repo: repo}).flush([]*vmDiskRequest{first, second})
+		return []error{(<-first.done).err, (<-second.done).err}
+	})
 }
 
 func TestDiskBurstBatchIntegration(t *testing.T) {
-	dsn := os.Getenv("BETA9_VM_TEST_DSN")
-	if dsn == "" {
-		t.Skip("set BETA9_VM_TEST_DSN for a development database")
-	}
-	db, err := sqlx.Connect("postgres", dsn)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	repo := newVMIntegrationRepo(t)
+	db := repo.client
+	var err error
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	_, err = db.Exec(`CREATE TEMP TABLE disk (LIKE public.disk INCLUDING DEFAULTS INCLUDING INDEXES);
@@ -325,7 +403,7 @@ func TestDiskBurstBatchIntegration(t *testing.T) {
 		ALTER TABLE disk ALTER COLUMN id SET DEFAULT nextval('disk_burst_test_id');
 		ALTER TABLE disk ADD CHECK (name <> 'reject')`)
 	require.NoError(t, err)
-	repo := &PostgresBackendRepository{client: db, config: types.PostgresConfig{VMBurstBatchSize: 128}}
+	repo.config.VMBurstBatchSize = 128
 	batcher := &vmDiskBatcher{repo: repo}
 	first, same, other := diskBatchRequest("first", 1), diskBatchRequest("first", 1), diskBatchRequest("first", 2)
 	batcher.flush([]*vmDiskRequest{first, same, other})

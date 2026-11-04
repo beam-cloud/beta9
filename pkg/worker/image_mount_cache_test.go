@@ -54,6 +54,18 @@ func TestIdleImageMountExpiryNeverForcesBusyUnmount(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestIdleImageMountGraceStartsWhenContainerReleasesImage(t *testing.T) {
+	c := idleImageClient(t, "long-running")
+	w := &Worker{imageClient: c, containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	w.containerInstances.Set("container", &ContainerInstance{Request: &types.ContainerRequest{ImageId: "long-running"}})
+	w.deleteContainer("container")
+	inUse := func(string) bool { return false }
+	unmount := func(string, *fuse.Server) error { return nil }
+	require.Zero(t, c.pruneIdleMounts(time.Now().Add(-7*24*time.Hour), inUse, unmount), "a recently released image needs a full idle grace period")
+	require.True(t, c.mountedImageReady("long-running"))
+	require.Equal(t, 1, c.pruneIdleMounts(time.Now().Add(time.Minute), inUse, unmount), "an inactive image must remain eligible for eventual expiry")
+}
+
 func TestIdleImageMountExpiryFencesConcurrentHotImageLoad(t *testing.T) {
 	c := idleImageClient(t, "image")
 	entered, release, pruned := make(chan struct{}), make(chan struct{}), make(chan struct{})

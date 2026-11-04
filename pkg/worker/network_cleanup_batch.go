@@ -14,7 +14,7 @@ type networkRuleCleanupRequest struct {
 
 // Collect only a millisecond of concurrent teardown. The existing firewall
 // mutex still fences rule reads and deletes against all rule installation.
-// Callers keep their slot and IP quarantined until the entire batch succeeds.
+// Each caller keeps its slot and IP quarantined until its own rules are removed.
 func (m *ContainerNetworkManager) removeNetworkSlotRulesBatched(slot *containerNetworkSlot) error {
 	return m.queueNetworkSlotRuleCleanup(slot, m.removeNetworkSlotRuleBatch)
 }
@@ -26,16 +26,7 @@ func (m *ContainerNetworkManager) queueNetworkSlotRuleCleanup(slot *containerNet
 	defer cancel()
 	m.ruleCleanupOnce.Do(func() {
 		m.ruleCleanupQueue = make(chan networkRuleCleanupRequest, 256)
-		go common.RunBatchQueue(m.ruleCleanupQueue, 128, func(requests []networkRuleCleanupRequest) {
-			slots := make([]*containerNetworkSlot, len(requests))
-			for i, request := range requests {
-				slots[i] = request.slot
-			}
-			err := requests[0].remove(slots)
-			for _, request := range requests {
-				request.done <- err
-			}
-		})
+		go common.RunBatchQueue(m.ruleCleanupQueue, 128, flushNetworkRuleCleanup)
 	})
 	request := networkRuleCleanupRequest{slot: slot, done: make(chan error, 1), remove: remove}
 	select {
@@ -44,6 +35,23 @@ func (m *ContainerNetworkManager) queueNetworkSlotRuleCleanup(slot *containerNet
 		return ctx.Err()
 	}
 	return <-request.done
+}
+
+func flushNetworkRuleCleanup(requests []networkRuleCleanupRequest) {
+	slots := make([]*containerNetworkSlot, len(requests))
+	for i, request := range requests {
+		slots[i] = request.slot
+	}
+	err := requests[0].remove(slots)
+	for _, request := range requests {
+		resultErr := err
+		if err != nil && len(requests) > 1 {
+			// Deletes are idempotent. Isolate a failed batch so one bad
+			// slot cannot quarantine addresses whose cleanup succeeded.
+			resultErr = request.remove([]*containerNetworkSlot{request.slot})
+		}
+		request.done <- resultErr
+	}
 }
 
 func iptablesRuleMatchesAnyIP(rule string, ips []string) bool {

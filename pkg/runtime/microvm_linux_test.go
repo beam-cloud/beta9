@@ -159,6 +159,43 @@ func TestMicroVMSnapshotOtherErrorsAreNotSafeToRetry(t *testing.T) {
 	require.Zero(t, resumes)
 }
 
+func TestMicroVMSnapshotCPUPreparationFailureResumesBeforeCapture(t *testing.T) {
+	var mu sync.Mutex
+	var actions []string
+	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		actions = append(actions, r.URL.Path)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	inst.cgroup = t.TempDir() // Missing cgroup controls make preparation fail before capture.
+	mustStop, err := snapshotMicroVM(context.Background(), inst, t.TempDir(), nil)
+	require.ErrorContains(t, err, "read snapshot cpu.max")
+	require.False(t, mustStop)
+	require.False(t, inst.isPaused())
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []string{"/api/v1/vm.pause", "/api/v1/vm.resume"}, actions)
+}
+
+func TestMicroVMSnapshotCPUPreparationFailureStopsIfResumeFails(t *testing.T) {
+	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/vm.resume" {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if r.URL.Path == "/api/v1/vm.snapshot" {
+			t.Error("snapshot attempted after CPU preparation failed")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	inst.cgroup = t.TempDir()
+	mustStop, err := snapshotMicroVM(context.Background(), inst, t.TempDir(), nil)
+	require.ErrorContains(t, err, "resume uncaptured vm")
+	require.True(t, mustStop)
+	require.True(t, inst.isPaused())
+}
+
 func TestMicroVMSnapshotCPUQuotaOnlyLiftedDuringPausedCapture(t *testing.T) {
 	for _, failCapture := range []bool{false, true} {
 		t.Run(fmt.Sprint(failCapture), func(t *testing.T) {

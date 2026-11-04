@@ -1406,6 +1406,11 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		if err != nil {
 			checkpointErr := err
 			if filesystemFallback {
+				if diskPublication != nil {
+					diskPublication.cancelAndWait()
+					diskPublication = nil
+					disksSealed = false
+				}
 				runtimeName = types.CheckpointRuntimeFilesystem
 				opts.CheckpointRuntime = runtimeName
 				if checkpointCtx.Err() != nil {
@@ -1631,7 +1636,12 @@ func startCheckpointDiskPublication(ctx context.Context, publish func(context.Co
 	return p
 }
 
-func (p *checkpointDiskPublication) waitSealed(ctx context.Context) error {
+func (p *checkpointDiskPublication) waitSealed(ctx context.Context) (err error) {
+	defer func() {
+		if err != nil {
+			p.cancelAndWait()
+		}
+	}()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()

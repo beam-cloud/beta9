@@ -329,10 +329,11 @@ func (r *PostgresBackendRepository) DeleteVMArtifact(ctx context.Context, ws uin
 // snapshots must not consume a hundred connections or block unrelated starts.
 // The local set prevents PostgreSQL's same-session, reentrant lock acquisition.
 type vmLockSession struct {
-	gate   chan struct{}
-	client *sqlx.DB
-	conn   *sqlx.Conn
-	held   map[string]chan struct{}
+	gate     chan struct{}
+	client   *sqlx.DB
+	conn     *sqlx.Conn
+	held     map[string]chan struct{}
+	draining chan struct{} // Quarantine failed sessions until existing owners release.
 
 	batchMu      sync.Mutex
 	batchRunning bool
@@ -419,6 +420,13 @@ func (s *vmLockSession) acquire(ctx context.Context, requests []*vmLockAcquire) 
 		return nil, ctx.Err()
 	}
 	defer func() { <-s.gate }()
+	if s.draining != nil {
+		results := make(map[*vmLockAcquire]vmLockResult, len(requests))
+		for _, request := range requests {
+			results[request] = vmLockResult{busy: &vmOperationBusy{released: s.draining}}
+		}
+		return results, nil
+	}
 	ids := make([]string, 0, len(requests))
 	acquired := make(map[string]bool, len(requests))
 	for _, request := range requests {
@@ -449,7 +457,7 @@ func (s *vmLockSession) acquire(ctx context.Context, requests []*vmLockAcquire) 
 		}
 
 		if err != nil {
-			s.discard()
+			s.retire()
 			return nil, err
 		}
 	}
@@ -479,6 +487,21 @@ func (s *vmLockSession) discard() {
 	}
 }
 
+// Failed lock queries may have acquired or retained unknown locks. Quarantine
+// the session, but do not drop another operation's advisory lock to clean it up.
+// Once all known owners finish, discard the connection and any unknown locks.
+func (s *vmLockSession) retire() {
+	if s.draining == nil {
+		s.draining = make(chan struct{})
+	}
+	if len(s.held) != 0 {
+		return
+	}
+	s.discard()
+	close(s.draining)
+	s.draining = nil
+}
+
 // release runs with the session gate held. A callback from a lost session
 // cannot unlock a lock belonging to its replacement connection.
 func (s *vmLockSession) release(id string, conn *sqlx.Conn) {
@@ -487,15 +510,18 @@ func (s *vmLockSession) release(id string, conn *sqlx.Conn) {
 		_, err := conn.ExecContext(cleanup, `SELECT pg_advisory_unlock(hashtextextended($1, 947))`, id)
 		cancel()
 		if err != nil {
-			// Never return a possibly locked connection to the pool.
-			s.discard()
+			s.retire()
 		}
 	}
 	close(s.held[id])
 	delete(s.held, id)
-	if len(s.held) == 0 && s.conn != nil {
-		s.conn.Close()
-		s.conn = nil
+	if len(s.held) == 0 {
+		if s.draining != nil {
+			s.retire()
+		} else if s.conn != nil {
+			s.conn.Close()
+			s.conn = nil
+		}
 	}
 }
 

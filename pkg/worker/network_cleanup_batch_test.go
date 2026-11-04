@@ -13,12 +13,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNetworkRuleCleanupBatchBurstAndFailure(t *testing.T) {
+func TestNetworkRuleCleanupBatchBurst(t *testing.T) {
 	m := &ContainerNetworkManager{ctx: context.Background()}
 	var mu sync.Mutex
 	seen := make(map[string]int)
 	var sizes []int
-	failure := errors.New("delete failed; keep reservations quarantined")
 	remove := func(slots []*containerNetworkSlot) error {
 		mu.Lock()
 		defer mu.Unlock()
@@ -26,7 +25,7 @@ func TestNetworkRuleCleanupBatchBurstAndFailure(t *testing.T) {
 		for _, slot := range slots {
 			seen[slot.id]++
 		}
-		return failure
+		return nil
 	}
 	start := make(chan struct{})
 	results := make(chan error, 300)
@@ -38,7 +37,7 @@ func TestNetworkRuleCleanupBatchBurstAndFailure(t *testing.T) {
 	}
 	close(start)
 	for range 300 {
-		require.ErrorIs(t, <-results, failure)
+		require.NoError(t, <-results)
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -51,6 +50,29 @@ func TestNetworkRuleCleanupBatchBurstAndFailure(t *testing.T) {
 		require.Positive(t, size)
 		require.LessOrEqual(t, size, 128)
 	}
+}
+
+func TestNetworkRuleCleanupBatchIsolatesFailingSlots(t *testing.T) {
+	failure := errors.New("delete failed; keep only this reservation quarantined")
+	var removed []string
+	remove := func(slots []*containerNetworkSlot) error {
+		for _, slot := range slots {
+			if slot.id == "bad" {
+				return failure
+			}
+			removed = append(removed, slot.id)
+		}
+		return nil
+	}
+	requests := []networkRuleCleanupRequest{}
+	for _, id := range []string{"bad", "first", "second"} {
+		requests = append(requests, networkRuleCleanupRequest{slot: &containerNetworkSlot{id: id}, done: make(chan error, 1), remove: remove})
+	}
+	flushNetworkRuleCleanup(requests)
+	require.ErrorIs(t, <-requests[0].done, failure)
+	require.NoError(t, <-requests[1].done)
+	require.NoError(t, <-requests[2].done)
+	require.Equal(t, []string{"first", "second"}, removed)
 }
 
 func TestNetworkRuleCleanupBatchJoinsDeletionAfterWorkerCancellation(t *testing.T) {

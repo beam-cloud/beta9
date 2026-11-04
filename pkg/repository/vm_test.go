@@ -22,6 +22,25 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+func newVMIntegrationRepo(t *testing.T) *PostgresBackendRepository {
+	t.Helper()
+	dsn := os.Getenv("BETA9_VM_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set BETA9_VM_TEST_DSN for a development database")
+	}
+	db, err := sqlx.Connect("postgres", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	return &PostgresBackendRepository{client: db}
+}
+
+func vmIntegrationWorkspace(t *testing.T) uint64 {
+	t.Helper()
+	id, err := strconv.ParseUint(os.Getenv("BETA9_VM_TEST_WORKSPACE_ID"), 10, 32)
+	require.NoError(t, err)
+	return id
+}
+
 func TestVMLockQueueBatchesAndBoundsIndependentRequests(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
 	r := repo.(*PostgresBackendRepository)
@@ -273,7 +292,7 @@ func TestVMLockBatchPreservesIndependentOwners(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestVMLockBatchDiscardsAmbiguousAcquisitions(t *testing.T) {
+func TestVMLockBatchQuarantinesAmbiguousAcquisitionsUntilOwnersFinish(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
 	r := repo.(*PostgresBackendRepository)
 	r.client.SetMaxOpenConns(2)
@@ -283,28 +302,87 @@ func TestVMLockBatchDiscardsAmbiguousAcquisitions(t *testing.T) {
 	require.NoError(t, err)
 	defer owner()
 	s := &r.vmLocks[0]
+	connection := s.conn
 	mock.ExpectQuery(`SELECT id, pg_try_advisory_lock`).WithArgs(pq.Array([]string{"b", "c"})).
 		WillReturnError(errors.New("connection lost while acquiring locks"))
 	_, err = s.acquire(context.Background(), []*vmLockAcquire{{id: "b"}, {id: "c"}})
 	require.ErrorContains(t, err, "connection lost")
-	require.Nil(t, s.conn, "possibly acquired locks must never return to the connection pool")
-	require.Len(t, s.held, 1, "the existing caller keeps its local fence until it finishes")
+	require.Same(t, connection, s.conn, "a failed acquire must not drop the existing owner's PostgreSQL lock")
+	require.NotNil(t, s.draining)
+	require.Len(t, s.held, 1)
+	request := &vmLockAcquire{id: "new"}
+	results, err := s.acquire(context.Background(), []*vmLockAcquire{request})
+	require.NoError(t, err)
+	require.NotNil(t, results[request].busy, "the uncertain session cannot acquire more locks")
+	drained := results[request].busy.released
+	mock.ExpectExec(`SELECT pg_advisory_unlock`).WithArgs("a").WillReturnResult(sqlmock.NewResult(0, 1))
 	owner()
+	select {
+	case <-drained:
+	default:
+		t.Fatal("waiting acquisitions were not notified that the retired session drained")
+	}
+	require.Nil(t, s.conn, "the uncertain connection must be discarded after its last owner finishes")
 	require.Empty(t, s.held)
 	require.Zero(t, r.client.Stats().InUse)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestVMLockPoolIntegration(t *testing.T) {
-	dsn := os.Getenv("BETA9_VM_TEST_DSN")
-	if dsn == "" {
-		t.Skip("set BETA9_VM_TEST_DSN for a development database")
+func TestVMLockUnlockFailurePreservesOtherOwners(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	r := repo.(*PostgresBackendRepository)
+	r.client.SetMaxOpenConns(2)
+	owners := make([]func(), 0, 2)
+	for _, id := range []string{"a", "b"} {
+		mock.ExpectQuery(`SELECT id, pg_try_advisory_lock`).WithArgs(pq.Array([]string{id})).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "acquired"}).AddRow(id, true))
+		unlock, err := r.LockVM(context.Background(), id)
+		require.NoError(t, err)
+		owners = append(owners, unlock)
 	}
-	db, err := sqlx.Connect("postgres", dsn)
+	s := &r.vmLocks[0]
+	connection := s.conn
+	mock.ExpectExec(`SELECT pg_advisory_unlock`).WithArgs("a").WillReturnError(&pq.Error{Code: "57014"})
+	owners[0]()
+	require.Same(t, connection, s.conn)
+	require.NotNil(t, s.held["b"])
+	require.NotNil(t, s.draining)
+	mock.ExpectExec(`SELECT pg_advisory_unlock`).WithArgs("b").WillReturnResult(sqlmock.NewResult(0, 1))
+	owners[1]()
+	require.Nil(t, s.conn)
+	require.Empty(t, s.held)
+	require.Zero(t, r.client.Stats().InUse)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestVMLockSessionFailureIntegration(t *testing.T) {
+	repo := newVMIntegrationRepo(t)
+	repo.client.SetMaxOpenConns(2)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	id := uuid.NewString()
+	owner, err := repo.LockVM(ctx, id)
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	defer owner()
+	_, err = repo.TryLockVM(ctx, id+"\x00") // A server-rejected text argument, not a lost connection.
+	var pgErr *pq.Error
+	require.ErrorAs(t, err, &pgErr)
+	require.NotNil(t, repo.vmLocks[0].draining)
+	peer := &PostgresBackendRepository{client: repo.client}
+	_, err = peer.TryLockVM(ctx, id)
+	require.ErrorContains(t, err, "operation already in progress", "a different gateway must still see the original PostgreSQL lock")
+	owner()
+	unlock, err := peer.LockVM(ctx, id)
+	require.NoError(t, err)
+	unlock()
+	require.Zero(t, repo.client.Stats().InUse)
+}
+
+func TestVMLockPoolIntegration(t *testing.T) {
+	repo := newVMIntegrationRepo(t)
+	db := repo.client
+	var err error
 	db.SetMaxOpenConns(4)
-	repo := &PostgresBackendRepository{client: db}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	group, ctx := errgroup.WithContext(ctx)
@@ -354,16 +432,10 @@ func TestVMLockPoolIntegration(t *testing.T) {
 // Run against a migrated development database only. Rows use random names and
 // are removed on completion; no existing workspace data is changed.
 func TestVMRepositoryIntegration(t *testing.T) {
-	dsn := os.Getenv("BETA9_VM_TEST_DSN")
-	if dsn == "" {
-		t.Skip("set BETA9_VM_TEST_DSN for a development database")
-	}
-	ws, err := strconv.ParseUint(os.Getenv("BETA9_VM_TEST_WORKSPACE_ID"), 10, 32)
-	require.NoError(t, err)
-	db, err := sqlx.Connect("postgres", dsn)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	repo := &PostgresBackendRepository{client: db}
+	repo := newVMIntegrationRepo(t)
+	db := repo.client
+	var err error
+	ws := vmIntegrationWorkspace(t)
 	ctx := context.Background()
 	id := strings.ReplaceAll(uuid.NewString(), "-", "")[:16]
 	now := time.Now().UTC().Add(-time.Hour)
@@ -433,16 +505,10 @@ func TestVMRepositoryIntegration(t *testing.T) {
 }
 
 func TestVMPagesIntegration(t *testing.T) {
-	dsn := os.Getenv("BETA9_VM_TEST_DSN")
-	if dsn == "" {
-		t.Skip("set BETA9_VM_TEST_DSN for a development database")
-	}
-	ws, err := strconv.ParseUint(os.Getenv("BETA9_VM_TEST_WORKSPACE_ID"), 10, 32)
-	require.NoError(t, err)
-	db, err := sqlx.Connect("postgres", dsn)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	repo := &PostgresBackendRepository{client: db}
+	repo := newVMIntegrationRepo(t)
+	db := repo.client
+	var err error
+	ws := vmIntegrationWorkspace(t)
 	ctx := context.Background()
 	prefix := "page-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
 	now := time.Now().UTC().Add(-time.Hour)
@@ -529,16 +595,10 @@ func TestVMPagesIntegration(t *testing.T) {
 }
 
 func TestVMReconciliationCandidatesIntegration(t *testing.T) {
-	dsn := os.Getenv("BETA9_VM_TEST_DSN")
-	if dsn == "" {
-		t.Skip("set BETA9_VM_TEST_DSN for a development database")
-	}
-	ws, err := strconv.ParseUint(os.Getenv("BETA9_VM_TEST_WORKSPACE_ID"), 10, 32)
-	require.NoError(t, err)
-	db, err := sqlx.Connect("postgres", dsn)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	repo := &PostgresBackendRepository{client: db}
+	repo := newVMIntegrationRepo(t)
+	db := repo.client
+	var err error
+	ws := vmIntegrationWorkspace(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	id := uuid.NewString()

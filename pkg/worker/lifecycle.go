@@ -607,6 +607,9 @@ func (s *Worker) markContainerStopping(containerId string, expirySeconds int64) 
 
 func (s *Worker) deleteContainer(containerId string) {
 	if instance, exists := s.containerInstances.Get(containerId); exists {
+		if instance.Request != nil {
+			s.imageClient.touchImageMount(instance.Request.ImageId)
+		}
 		instance.tunnels.close()
 		if instance.LogBuffer != nil {
 			if s.containerServer != nil && instance.Request != nil && (instance.Request.Stub.Type.Kind() == types.StubTypeFunction || instance.Request.IsBuildRequest()) {

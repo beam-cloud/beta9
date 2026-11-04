@@ -530,6 +530,24 @@ func TestRememberSpareSizePersistsOnlyChanges(t *testing.T) {
 	}
 }
 
+func TestRememberSpareSizeRetainsInMemoryWhenPersistenceFails(t *testing.T) {
+	manager, _ := newSpareTestManager(t)
+	defer manager.Close(context.Background())
+	if err := os.MkdirAll(manager.root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(manager.root, spareSizesFile), 0700); err != nil {
+		t.Fatal(err)
+	}
+	manager.rememberSpareSize(testSpareSize)
+	manager.mu.Lock()
+	retained := slices.Contains(manager.spareSizes, testSpareSize)
+	manager.mu.Unlock()
+	if !retained {
+		t.Fatal("failed persistence prevented replenishment from retaining the requested size")
+	}
+}
+
 func TestSpareSizeRecencyReleasesRetiredPools(t *testing.T) {
 	manager, _ := newSpareTestManager(t)
 	defer manager.Close(context.Background())

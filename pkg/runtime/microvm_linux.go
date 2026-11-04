@@ -398,12 +398,23 @@ func snapshotMicroVM(ctx context.Context, inst *microVMInstance, snapshotDir str
 		}
 	}
 
+	captureStarted := false
 	err = inst.withSnapshotCPU(func() error {
+		captureStarted = true
 		return api.put(ctx, "vm.snapshot", map[string]string{"destination_url": "file://" + snapshotDir})
 	})
-
+	var restoreErr *snapshotCPURestoreError
+	if !captureStarted && !errors.As(err, &restoreErr) {
+		resumeErr := inst.resumeUncapturedSnapshot(ctx)
+		return resumeErr != nil, errors.Join(err, resumeErr)
+	}
 	return true, err
 }
+
+type snapshotCPURestoreError struct{ err error }
+
+func (e *snapshotCPURestoreError) Error() string { return e.err.Error() }
+func (e *snapshotCPURestoreError) Unwrap() error { return e.err }
 
 // The vCPUs are paused before this is called. Copying guest RAM is host work,
 // but the hypervisor shares the tenant's cgroup. A fractional tenant quota can
@@ -438,15 +449,19 @@ func (inst *microVMInstance) withSnapshotCPU(capture func() error) (err error) {
 	}
 	quotaChanged, weightChanged := false, false
 	defer func() {
+		var restoreFailure error
 		if weightChanged {
 			if restoreErr := os.WriteFile(weightPath, weight, 0o644); restoreErr != nil {
-				err = errors.Join(err, fmt.Errorf("restore snapshot cpu.weight: %w", restoreErr))
+				restoreFailure = errors.Join(restoreFailure, fmt.Errorf("restore snapshot cpu.weight: %w", restoreErr))
 			}
 		}
 		if quotaChanged {
 			if restoreErr := os.WriteFile(path, original, 0o644); restoreErr != nil {
-				err = errors.Join(err, fmt.Errorf("restore snapshot cpu.max: %w", restoreErr))
+				restoreFailure = errors.Join(restoreFailure, fmt.Errorf("restore snapshot cpu.max: %w", restoreErr))
 			}
+		}
+		if restoreFailure != nil {
+			err = errors.Join(err, &snapshotCPURestoreError{err: restoreFailure})
 		}
 	}()
 	if fields[0] != "max" {

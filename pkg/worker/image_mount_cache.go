@@ -97,3 +97,16 @@ func (c *ImageClient) pruneIdleMounts(cutoff time.Time, inUse func(string) bool,
 	}
 	return retired
 }
+
+// Start the idle grace period when the final user can release its image,
+// including containers that ran longer than the cache TTL.
+func (c *ImageClient) touchImageMount(imageID string) {
+	if c == nil || c.mountedFuseServers == nil {
+		return
+	}
+	unlock := c.lockImageMount(imageID)
+	defer unlock()
+	if _, mounted := c.mountedFuseServers.Get(imageID); mounted {
+		c.mountLastUsed.Store(imageID, time.Now())
+	}
+}

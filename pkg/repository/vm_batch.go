@@ -14,11 +14,21 @@ import (
 	"github.com/lib/pq"
 )
 
-// Server-reported data/constraint errors and transaction rollbacks have no
-// committed effects. Never replay an ambiguous transport or commit failure.
+// Data/constraint errors and explicit rollback codes have no committed effects.
+// Class 40 also includes statement_completion_unknown, which must not be replayed.
 func retryVMBatchIndividually(err error) bool {
 	var pgErr *pq.Error
-	return errors.As(err, &pgErr) && (pgErr.Code.Class() == "22" || pgErr.Code.Class() == "23" || pgErr.Code.Class() == "40")
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	if pgErr.Code.Class() == "22" || pgErr.Code.Class() == "23" {
+		return true
+	}
+	switch pgErr.Code {
+	case "40000", "40001", "40002", "40P01": // Rollback, serialization, integrity, deadlock.
+		return true
+	}
+	return false
 }
 
 type stubUpsertInput struct {
@@ -131,12 +141,9 @@ func (r *PostgresBackendRepository) mutateVMBatched(ctx context.Context, input v
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	select {
-	case err := <-request.done:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	// Once enqueued, report the database outcome even if the caller cancels.
+	// The batcher still rejects requests canceled before dispatch.
+	return <-request.done
 }
 
 func (b *vmMutationBatcher) flush(batch []*vmMutationRequest) {
@@ -260,12 +267,8 @@ func (r *PostgresBackendRepository) getOrCreateVMStubBatched(ctx context.Context
 	case <-ctx.Done():
 		return types.Stub{}, ctx.Err()
 	}
-	select {
-	case result := <-request.done:
-		return result.stub, result.err
-	case <-ctx.Done():
-		return types.Stub{}, ctx.Err()
-	}
+	result := <-request.done
+	return result.stub, result.err
 }
 
 func (b *vmStubBatcher) flush(batch []*vmStubRequest) {
@@ -416,12 +419,8 @@ func (r *PostgresBackendRepository) createVMDiskBatched(ctx context.Context, inp
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	select {
-	case result := <-request.done:
-		return result.disk, result.err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+	result := <-request.done
+	return result.disk, result.err
 }
 
 func (b *vmDiskBatcher) flush(batch []*vmDiskRequest) {

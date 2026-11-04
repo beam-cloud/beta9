@@ -3357,3 +3357,32 @@ func TestCheckpointDiskPipelineEligibility(t *testing.T) {
 	request.Mounts = request.Mounts[:1]
 	require.False(t, checkpointDiskPipelineEnabled(request, native, true))
 }
+
+func TestCheckpointDiskPipelineCancellationJoinsBeforeFallback(t *testing.T) {
+	cancelled, finish := make(chan struct{}), make(chan struct{})
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(finish) }) })
+	p := startCheckpointDiskPublication(context.Background(), func(ctx context.Context, _ func()) ([]*types.DiskSnapshot, error) {
+		<-ctx.Done()
+		close(cancelled)
+		<-finish
+		return nil, ctx.Err()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { result <- p.waitSealed(ctx) }()
+	cancel()
+	<-cancelled
+	select {
+	case err := <-result:
+		t.Fatalf("fallback could acquire the disk before publication finished: %v", err)
+	default:
+	}
+	release.Do(func() { close(finish) })
+	require.ErrorIs(t, <-result, context.Canceled)
+	select {
+	case <-p.done:
+	default:
+		t.Fatal("publication was not joined")
+	}
+}
