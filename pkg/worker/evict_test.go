@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"sync"
 	"syscall"
 	"testing"
@@ -378,7 +380,10 @@ func TestStatusHeartbeatReleasesSpotVictimsLikeTheirDisplacingRequest(t *testing
 	worker, rt := evictionWorkerForTest(false)
 	worker.containerRepoClient = &fakeContainerRepoClient{state: &pb.ContainerState{Status: string(types.ContainerStatusStopping), Evicting: true, DrainSeconds: 30}}
 	preemptions := 0
-	worker.backendRepoClient = &spotStopClient{preempt: func(context.Context, *pb.PreemptVMRequest) (*pb.PreemptVMResponse, error) {
+	worker.backendRepoClient = &spotStopClient{preempt: func(_ context.Context, r *pb.PreemptVMRequest) (*pb.PreemptVMResponse, error) {
+		if r.ContainerId == "stale-vm" {
+			return nil, status.Error(codes.FailedPrecondition, "runtime is not a reclaimable Spot VM")
+		}
 		preemptions++
 		return &pb.PreemptVMResponse{}, nil
 	}}
@@ -400,6 +405,11 @@ func TestStatusHeartbeatReleasesSpotVictimsLikeTheirDisplacingRequest(t *testing
 	vm.setStopReason(types.StopContainerReasonUser)
 	heartbeat(vm)
 	require.Equal(t, []syscall.Signal{syscall.SIGTERM}, rt.observed("spot-vm"))
+
+	// PreemptVM rejects a VM being deleted or no longer running here, which
+	// drains like Spot at once.
+	heartbeat(addSpotVMInstance(worker, rt, "stale-vm"))
+	require.Equal(t, []syscall.Signal{syscall.SIGTERM}, rt.observed("stale-vm"))
 
 	container := addRunningInstance(worker, rt, "spot-container")
 	container.Request.Stub.Config, container.Request.Evictable, container.Request.DrainSeconds = `{"cpu_tier":"spot"}`, true, 30

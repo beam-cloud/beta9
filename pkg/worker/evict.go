@@ -10,6 +10,8 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // evictionKillTimeout bounds how long a killed victim may take to release its resources.
@@ -94,20 +96,25 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 // present and must be waited for. Spot gets its full drain, and a running
 // durable Spot VM is stopped by the VM reconciler, which snapshots it first
 // (see PreemptVM). The reconciler's stop sets a stop reason, after which the
-// VM is evicted like any other victim.
+// VM is evicted like any other victim. So is a VM being deleted or no longer
+// running here, which PreemptVM rejects: it has nothing to preserve.
 func (s *Worker) releaseVictim(ctx context.Context, victimID string, drain time.Duration, forContainerID string) (bool, error) {
 	instance, _ := s.containerInstances.Get(victimID)
 	if instance != nil && instance.Request.Borrowed() {
 		drain = time.Duration(instance.Request.DrainSeconds) * time.Second
 		if exitCode, reason := instance.lifecycleState(); exitCode < 0 && reason == "" && instance.Request.IsPersistentVM() {
-			if !instance.preemptionRequested.Load() {
-				request := instance.Request
-				if _, err := s.backendRepoClient.PreemptVM(ctx, &pb.PreemptVMRequest{WorkspaceId: request.WorkspaceId, VmId: request.VMID(), ContainerId: victimID}); err != nil {
-					return false, fmt.Errorf("request durable VM stop: %w", err)
-				}
-				instance.preemptionRequested.Store(true)
+			if instance.preemptionRequested.Load() {
+				return true, nil
 			}
-			return true, nil
+			request := instance.Request
+			_, err := s.backendRepoClient.PreemptVM(ctx, &pb.PreemptVMRequest{WorkspaceId: request.WorkspaceId, VmId: request.VMID(), ContainerId: victimID})
+			if err == nil {
+				instance.preemptionRequested.Store(true)
+				return true, nil
+			}
+			if status.Code(err) != codes.FailedPrecondition {
+				return false, fmt.Errorf("request durable VM stop: %w", err)
+			}
 		}
 	}
 	return s.evictContainer(victimID, drain, forContainerID), nil
