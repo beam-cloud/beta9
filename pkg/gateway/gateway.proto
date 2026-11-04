@@ -793,7 +793,6 @@ message GetOrCreateStubResponse {
   // the GPU request. Set instead of capacity_status "none" so clients can
   // re-issue stub creation targeting this pool.
   string matched_private_pool = 7;
-  string cpu_pricing = 8;
 }
 
 message DeployStubRequest {

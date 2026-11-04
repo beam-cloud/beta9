@@ -28,7 +28,7 @@ type Runtime interface {
 type Gateway interface {
 	GetOrCreateStub(context.Context, *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error)
 	StopContainer(context.Context, *pb.StopContainerRequest) (*pb.StopContainerResponse, error)
-	GetCPUTierCatalog(context.Context, *pb.GetCPUTierCatalogRequest) (*pb.GetCPUTierCatalogResponse, error)
+	ResolveCPUTier(ctx context.Context, workspace *types.Workspace, requested types.CPUTier, eligible bool) (types.CPUTier, error)
 	IsHostedCPUPool(string) bool
 }
 

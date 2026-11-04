@@ -2,13 +2,11 @@ package vm
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
-	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,17 +16,11 @@ type tierVMGateway struct {
 }
 
 func (g *tierVMGateway) IsHostedCPUPool(name string) bool { return name == "old-public-pool" }
-func (g *tierVMGateway) GetCPUTierCatalog(context.Context, *pb.GetCPUTierCatalogRequest) (*pb.GetCPUTierCatalogResponse, error) {
-	return &pb.GetCPUTierCatalogResponse{Catalog: `{"default_cpu_tier":"` + string(g.defaultTier) + `"}`}, nil
-}
-func (g *tierVMGateway) GetOrCreateStub(ctx context.Context, req *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error) {
-	response, err := g.vmGateway.GetOrCreateStub(ctx, req)
-	if err != nil {
-		return nil, err
+func (g *tierVMGateway) ResolveCPUTier(ctx context.Context, workspace *types.Workspace, requested types.CPUTier, eligible bool) (types.CPUTier, error) {
+	if eligible && requested == "" {
+		return g.defaultTier, nil
 	}
-	binding, _ := json.Marshal(types.CPUPriceBinding{Tier: types.CPUTier(req.CpuTier), Version: "current", CPUPriceID: "price_cpu", MemoryPriceID: "price_ram", CPUCentsPerHour: "5", MemoryCentsPerGiBHour: "1"})
-	response.CpuPricing = string(binding)
-	return response, nil
+	return g.vmGateway.ResolveCPUTier(ctx, workspace, requested, eligible)
 }
 
 func TestTierChangeRequiresStoppedVMAndNewStub(t *testing.T) {
@@ -46,7 +38,6 @@ func TestTierChangeRequiresStoppedVMAndNewStub(t *testing.T) {
 	require.NotEqual(t, oldStub, saved.StubID)
 	require.Equal(t, types.CPUTierPerformance, saved.Spec.CPUTier)
 	require.Empty(t, saved.Spec.Pool)
-	require.Equal(t, "current", saved.CPUPricing.Version)
 	require.Equal(t, handle, saved.Handle)
 	require.Equal(t, disk, rootDisk(saved))
 }

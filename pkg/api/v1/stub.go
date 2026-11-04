@@ -35,7 +35,6 @@ type StubGroup struct {
 	containerRepo         repository.ContainerRepository
 	eventRepo             repository.EventRepository
 	redisClient           *common.RedisClient
-	cpuPricing            *clients.ContainerCostClient
 	sandboxHistoryQueries singleflight.Group
 }
 
@@ -50,7 +49,6 @@ func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, conta
 		config:        config,
 		eventRepo:     eventRepo,
 		redisClient:   redisClient,
-		cpuPricing:    clients.NewContainerCostClient(config.Monitoring.ContainerCostHookConfig),
 	}
 
 	g.GET("/:workspaceId/sandboxes", auth.WithWorkspaceAuth(group.ListSandboxes))                       // Lists sandboxes (enriched with live container state) for a workspace
@@ -304,6 +302,10 @@ func (g *StubGroup) processStubOverrides(overrideConfig OverrideStubConfig, stub
 		stubConfig.Runtime.GpuCount = uint32(*overrideConfig.GpuCount)
 	}
 
+	if err := stubConfig.ValidateCPUTier(); err != nil {
+		return HTTPBadRequest(err.Error())
+	}
+
 	stubConfigBytes, err := json.Marshal(stubConfig)
 	if err != nil {
 		return HTTPBadRequest("Failed to process overrides")
@@ -453,9 +455,6 @@ func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, s
 		return nil, HTTPInternalServerError("Failed to create app")
 	}
 
-	if err := g.cpuPricing.BindCPUPricing(ctx, workspace.ExternalId, stub.Type, stubConfig, g.config.Worker.Pools, true); err != nil {
-		return nil, HTTPBadRequest(err.Error())
-	}
 	newStub, err := g.backendRepo.GetOrCreateStub(ctx, stub.Name, string(stub.Type), *stubConfig, objectId, workspace.Id, true, app.Id)
 	if err != nil {
 		return nil, HTTPInternalServerError("Failed to clone stub")
@@ -535,7 +534,7 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to decode stub config")
 	}
 
-	previousConfig := stubConfig
+	tier := stubConfig.CPUTier
 	updatedFields := make([]string, 0, len(updateReq.Fields))
 	for fieldPath, value := range updateReq.Fields {
 		if fieldPath == "" {
@@ -548,7 +547,10 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 		updatedFields = append(updatedFields, fieldPath)
 	}
 
-	if err := stubConfig.ValidateCPURevision(previousConfig); err != nil {
+	if stubConfig.CPUTier != tier {
+		return HTTPBadRequest("Redeploy to change CPU tier")
+	}
+	if err := stubConfig.ValidateCPUTier(); err != nil {
 		return HTTPBadRequest(err.Error())
 	}
 	valid, errorMsg := types.ValidateCpuAndMemory(stubConfig.Runtime.Cpu, stubConfig.Runtime.Memory, g.config.GatewayService.StubLimits)
@@ -623,9 +625,6 @@ func (g *StubGroup) ScaleStub(ctx echo.Context) error {
 
 // SetConfigField sets a dotted path such as runtime.cpu or autoscaler.max_containers.
 func SetConfigField(config *types.StubConfigV1, fieldPath string, value interface{}) error {
-	if fieldPath == "cpu_pricing" || strings.HasPrefix(fieldPath, "cpu_pricing.") {
-		return fmt.Errorf("CPU prices are resolved by the server")
-	}
 	fields := strings.Split(fieldPath, ".")
 	if len(fields) == 0 {
 		return fmt.Errorf("empty field path")

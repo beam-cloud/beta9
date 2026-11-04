@@ -425,29 +425,7 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 		}
 	}
 
-	eligible := s.cpuTierEligible(spec)
-	if eligible && spec.CPUTier == "" {
-		result, err := s.gateway.GetCPUTierCatalog(ctx, &pb.GetCPUTierCatalogRequest{})
-		if err != nil {
-			return nil, err
-		}
-		var catalog struct {
-			DefaultCPUTier types.CPUTier `json:"default_cpu_tier"`
-		}
-		if err := json.Unmarshal([]byte(result.Catalog), &catalog); err != nil {
-			return nil, err
-		}
-		spec.CPUTier = catalog.DefaultCPUTier
-	}
-	switch {
-	case spec.CPUTier != "" && !eligible:
-		return nil, types.ErrCPUTierIneligible
-	case spec.CPUTier != "":
-		spec.Pool = ""
-	case spec.Pool == "" && spec.GPU == "":
-		spec.Pool = s.config.DefaultPool
-	}
-	if err := spec.CPUTier.Validate(spec.CPU, spec.Memory, true, spec.GPU != ""); err != nil {
+	if err := s.resolveCPUTier(ctx, info.Workspace, &spec); err != nil {
 		return nil, err
 	}
 

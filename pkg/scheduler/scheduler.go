@@ -368,9 +368,6 @@ func firstNonEmpty(values ...string) string {
 }
 
 func (s *Scheduler) Run(request *types.ContainerRequest) error {
-	if _, err := request.CPUPricing(); err != nil {
-		return err
-	}
 	if request.CPUTier() == types.CPUTierSpot {
 		request.Evictable, request.OpportunisticOnly, request.DrainSeconds = true, true, types.SpotDrainSeconds
 	}

@@ -288,10 +288,12 @@ func (s *Service) update(c echo.Context) error {
 		if v.Status != types.VMStateStopped || v.DesiredState != types.VMStateStopped {
 			return echo.NewHTTPError(http.StatusConflict, "stop the VM before changing CPU tier")
 		}
-		if !s.cpuTierEligible(v.Spec) {
-			return apiError(types.ErrCPUTierIneligible)
+		spec := v.Spec
+		spec.CPUTier = *req.CPUTier
+		if err := s.resolveCPUTier(ctx, info.Workspace, &spec); err != nil {
+			return apiError(err)
 		}
-		v.Spec.CPUTier, v.Spec.Pool, v.StubID = *req.CPUTier, "", ""
+		v.Spec, v.StubID = spec, ""
 		if err := s.prepare(ctx, v); err != nil {
 			return apiError(err)
 		}
@@ -556,4 +558,22 @@ func (s *Service) configurePort(ctx context.Context, v *types.VM, action string,
 // or a hosted one, which the tier replaces. Private and BYOC pools are kept.
 func (s *Service) cpuTierEligible(spec types.VMSpec) bool {
 	return spec.GPU == "" && (spec.Pool == "" || s.gateway.IsHostedCPUPool(spec.Pool))
+}
+
+// resolveCPUTier sets a VM's CPU tier, the requested one or the workspace
+// default, and its pool: a tier replaces a hosted pool, and untiered CPU VMs
+// use the default pool.
+func (s *Service) resolveCPUTier(ctx context.Context, workspace *types.Workspace, spec *types.VMSpec) error {
+	tier, err := s.gateway.ResolveCPUTier(ctx, workspace, spec.CPUTier, s.cpuTierEligible(*spec))
+	if err != nil {
+		return err
+	}
+	spec.CPUTier = tier
+	switch {
+	case tier != "":
+		spec.Pool = ""
+	case spec.Pool == "" && spec.GPU == "":
+		spec.Pool = s.config.DefaultPool
+	}
+	return tier.Validate(spec.CPU, spec.Memory, true, spec.GPU != "")
 }

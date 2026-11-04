@@ -17,22 +17,15 @@ type cpuTierPool struct {
 	ReadyRuntimes map[string]bool `json:"ready_runtimes"`
 }
 
-// GetCPUTierCatalog returns the workspace's billing catalog with the gateway's
+// GetCPUTierCatalog returns the workspace's CPU tier policy with the gateway's
 // tiered pools, their readiness and its CPU tier capabilities.
 func (gws *GatewayService) GetCPUTierCatalog(ctx context.Context, _ *pb.GetCPUTierCatalogRequest) (*pb.GetCPUTierCatalogResponse, error) {
 	info, _ := auth.AuthInfoFromContext(ctx)
 	if info == nil || info.Workspace == nil {
 		return nil, fmt.Errorf("workspace authentication required")
 	}
-	if gws.cpuPricing == nil {
-		return &pb.GetCPUTierCatalogResponse{Catalog: `{"enabled":false,"default_cpu_tier":"","cpu_tiers":{}}`}, nil
-	}
-	raw, err := gws.cpuPricing.CPUTierCatalog(ctx, info.Workspace.ExternalId)
+	policy, err := gws.billing.CPUTierPolicy(ctx, info.Workspace.ExternalId)
 	if err != nil {
-		return nil, err
-	}
-	var catalog map[string]any
-	if err := json.Unmarshal(raw, &catalog); err != nil {
 		return nil, err
 	}
 	workers, err := gws.workerRepo.GetAllWorkers()
@@ -50,9 +43,45 @@ func (gws *GatewayService) GetCPUTierCatalog(ctx context.Context, _ *pb.GetCPUTi
 			p.Ready, p.ReadyRuntimes[w.Runtime] = true, true
 		}
 	}
-	catalog["pools"], catalog["capabilities"] = pools, []string{"cpu_tiers", "immutable_cpu_prices", "durable_spot_stop"}
-	data, err := json.Marshal(catalog)
+	data, err := json.Marshal(struct {
+		types.CPUTierPolicy
+		Pools        map[string]*cpuTierPool `json:"pools"`
+		Capabilities []string                `json:"capabilities"`
+	}{policy, pools, []string{"cpu_tiers", "durable_spot_stop"}})
 	return &pb.GetCPUTierCatalogResponse{Catalog: string(data)}, err
+}
+
+// ResolveCPUTier returns the tier a new workload runs on: the requested one, or
+// the workspace's default when the workload may use a tier.
+func (gws *GatewayService) ResolveCPUTier(ctx context.Context, workspace *types.Workspace, requested types.CPUTier, eligible bool) (types.CPUTier, error) {
+	if !eligible {
+		if requested != "" {
+			return "", types.ErrCPUTierIneligible
+		}
+		return "", nil
+	}
+	policy, err := gws.billing.CPUTierPolicy(ctx, workspace.ExternalId)
+	if err != nil {
+		return "", err
+	}
+	return policy.Resolve(requested)
+}
+
+// resolveStubCPUTier sets a new stub's CPU tier. Only hosted CPU stubs may use
+// one; eligible is false for stubs placed on private capacity.
+func (gws *GatewayService) resolveStubCPUTier(ctx context.Context, workspace *types.Workspace, kind types.StubType, config *types.StubConfigV1, eligible bool) error {
+	selector := config.PoolSelector()
+	pool, known := gws.scheduler.PoolConfig(selector)
+	eligible = eligible && !kind.IsPlatformWorkload() && !config.RequiresGPU() && (selector == "" || known && pool.HostedCPU())
+	tier, err := gws.ResolveCPUTier(ctx, workspace, config.CPUTier, eligible)
+	if err != nil {
+		return err
+	}
+	if tier != "" && selector != "" && !tier.MatchesPool(pool) {
+		return fmt.Errorf("pool does not support the selected CPU tier")
+	}
+	config.CPUTier = tier
+	return config.ValidateCPUTier()
 }
 
 func (gws *GatewayService) IsHostedCPUPool(name string) bool {

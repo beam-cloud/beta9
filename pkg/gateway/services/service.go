@@ -36,7 +36,7 @@ type GatewayService struct {
 	keyEventManager  *common.KeyEventManager
 	endpointRepo     repository.ManagedEndpointRepository // nil when managed endpoints are disabled
 	imageService     pb.ImageServiceServer                // optional; needed to create database services
-	cpuPricing       *clients.ContainerCostClient         // nil when the billing hook is not configured
+	billing          *clients.ContainerCostClient         // nil when the billing hook is not configured
 	pb.UnimplementedGatewayServiceServer
 }
 
@@ -121,6 +121,6 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		keyEventManager:  keyEventManager,
 		endpointRepo:     endpointRepo,
 		imageService:     opts.ImageService,
-		cpuPricing:       clients.NewContainerCostClient(opts.Config.Monitoring.ContainerCostHookConfig),
+		billing:          clients.NewContainerCostClient(opts.Config.Monitoring.ContainerCostHookConfig),
 	}, nil
 }

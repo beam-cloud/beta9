@@ -125,13 +125,6 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 		return fmt.Errorf("%s", resp.ErrMsg)
 	}
 
-	v.CPUPricing = nil
-	if resp.CpuPricing != "" {
-		if err := json.Unmarshal([]byte(resp.CpuPricing), &v.CPUPricing); err != nil {
-			return err
-		}
-		v.Spec.CPUTier = v.CPUPricing.Tier
-	}
 	v.StubID = resp.StubId
 	// start persists the stub and runtime identities together before enqueue.
 	return nil

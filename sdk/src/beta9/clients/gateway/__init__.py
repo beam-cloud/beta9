@@ -536,8 +536,6 @@ class GetOrCreateStubResponse(betterproto.Message):
      re-issue stub creation targeting this pool.
     """
 
-    cpu_pricing: str = betterproto.string_field(8)
-
 
 @dataclass(eq=False, repr=False)
 class DeployStubRequest(betterproto.Message):

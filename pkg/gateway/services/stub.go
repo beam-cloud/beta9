@@ -202,7 +202,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Disks:              in.Disks,
 		ManagedEndpoint:    managedEndpoint,
 	}
-	if err := gws.cpuPricing.BindCPUPricing(ctx, authInfo.Workspace.ExternalId, types.StubType(in.StubType), &stubConfig, gws.scheduler.PoolConfigs(), !resourcePolicy.privatePoolTargeted); err != nil {
+	if err := gws.resolveStubCPUTier(ctx, authInfo.Workspace, types.StubType(in.StubType), &stubConfig, !resourcePolicy.privatePoolTargeted); err != nil {
 		return &pb.GetOrCreateStubResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	stubConfig.PreparationCacheKey = preparedStubCacheKey(ctx)
@@ -366,11 +366,6 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	}
 
 	gws.cachePreparedStub(ctx, authInfo.Workspace.ExternalId, stub.ExternalId)
-	cpuPricing := ""
-	if stubConfig.CPUPricing != nil {
-		data, _ := json.Marshal(stubConfig.CPUPricing)
-		cpuPricing = string(data)
-	}
 
 	return &pb.GetOrCreateStubResponse{
 		Ok:                 err == nil,
@@ -379,7 +374,6 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		CapacityStatus:     capacity.status,
 		UnsupportedGpus:    capacity.unsupportedGpus,
 		MatchedPrivatePool: capacity.matchedPrivatePool,
-		CpuPricing:         cpuPricing,
 	}, nil
 }
 

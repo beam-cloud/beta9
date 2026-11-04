@@ -14,7 +14,6 @@ import (
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/common"
 	computemodel "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -77,7 +76,6 @@ type GenericPodService struct {
 	rdb             *common.RedisClient
 	tailscale       *network.Tailscale
 	eventRepo       repository.EventRepository
-	cpuPricing      *clients.ContainerCostClient
 	controller      *abstractions.InstanceController
 	podInstances    *common.SafeMap[*podInstance]
 	instanceLoads   singleflight.Group
@@ -109,7 +107,6 @@ func NewPodService(
 		tailscale:       opts.Tailscale,
 		config:          opts.Config,
 		eventRepo:       opts.EventRepo,
-		cpuPricing:      clients.NewContainerCostClient(opts.Config.Monitoring.ContainerCostHookConfig),
 		podInstances:    common.NewSafeMap[*podInstance](),
 		drainCtx:        opts.DrainContext,
 	}
@@ -889,9 +886,6 @@ func (s *GenericPodService) cloneStub(ctx context.Context, workspace *types.Work
 		return nil, err
 	}
 
-	if err := s.cpuPricing.BindCPUPricing(ctx, workspace.ExternalId, stub.Type, stubConfig, s.scheduler.PoolConfigs(), true); err != nil {
-		return nil, err
-	}
 	newStub, err := s.backendRepo.GetOrCreateStub(ctx, stub.Name, string(stub.Type), *stubConfig, stub.ObjectId, workspace.Id, true, app.Id)
 	if err != nil {
 		return nil, err

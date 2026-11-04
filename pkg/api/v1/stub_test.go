@@ -1443,10 +1443,21 @@ func TestSetConfigField(t *testing.T) {
 	}
 }
 
-func TestCPUPricesCannotBePatched(t *testing.T) {
-	for _, field := range []string{"cpu_pricing", "cpu_pricing.cpu_price_id", "cpu_pricing.cpu_cents_per_hour", "cpu_pricing.version"} {
-		if err := SetConfigField(&types.StubConfigV1{}, field, "forged"); err == nil {
-			t.Fatalf("accepted client pricing field %s", field)
+func TestUpdateConfigKeepsCPUTier(t *testing.T) {
+	for fields, want := range map[string]string{
+		`{"cpu_tier":"performance"}`: "Redeploy to change CPU tier",
+		`{"runtime.cpu":16000}`:      "Shared supports at most 8 vCPU",
+	} {
+		stubGroup, mock, e := NewStubGroupWithMockForTest()
+		mock.ExpectQuery("SELECT").WithArgs("stub").WillReturnRows(generateMockStubRows(1, "stub", "Test Stub", `{"runtime":{"cpu":1000,"memory":1000},"cpu_tier":"shared"}`, 1))
+		req := httptest.NewRequest(http.MethodPatch, "/", strings.NewReader(`{"fields":`+fields+`}`))
+		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		c := e.NewContext(req, httptest.NewRecorder())
+		c.SetParamNames("stubId")
+		c.SetParamValues("stub")
+		err := stubGroup.UpdateConfig(&auth.HttpAuthContext{Context: c, AuthInfo: &auth.AuthInfo{Workspace: &types.Workspace{Id: 1}}})
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("update %s: err = %v, want %q", fields, err, want)
 		}
 	}
 }

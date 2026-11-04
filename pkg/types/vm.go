@@ -232,7 +232,6 @@ type VM struct {
 	PublicIPv6          string            `json:"public_ipv6,omitempty"`
 	Spec                VMSpec            `json:"spec"`
 	StubID              string            `json:"stub_id,omitempty"`
-	CPUPricing          *CPUPriceBinding  `json:"cpu_pricing,omitempty"`
 	ContainerID         string            `json:"container_id,omitempty"`
 	DesiredState        string            `json:"desired_state"`
 	Status              string            `json:"status"`

@@ -457,8 +457,11 @@ func (g *vmGateway) StopContainer(_ context.Context, in *pb.StopContainerRequest
 	g.backend.latest = "root-after-shutdown"
 	return &pb.StopContainerResponse{Ok: true}, nil
 }
-func (g *vmGateway) GetCPUTierCatalog(context.Context, *pb.GetCPUTierCatalogRequest) (*pb.GetCPUTierCatalogResponse, error) {
-	return &pb.GetCPUTierCatalogResponse{Catalog: `{"default_cpu_tier":""}`}, nil
+func (g *vmGateway) ResolveCPUTier(_ context.Context, _ *types.Workspace, requested types.CPUTier, eligible bool) (types.CPUTier, error) {
+	if !eligible && requested != "" {
+		return "", types.ErrCPUTierIneligible
+	}
+	return requested, nil
 }
 func (g *vmGateway) IsHostedCPUPool(string) bool { return false }
 

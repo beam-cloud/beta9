@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCPUTierPolicy(t *testing.T) {
+func TestCPUTierPlacement(t *testing.T) {
 	shared := WorkerPoolConfig{CPUClass: CPUTierShared, CPUShareMultiplier: 2.5}
 	performance := WorkerPoolConfig{CPUClass: CPUTierPerformance, CPUShareMultiplier: 1}
 	legacy := WorkerPoolConfig{}
@@ -33,26 +33,24 @@ func TestCPUTierPolicy(t *testing.T) {
 	require.Error(t, CPUTierSpot.Validate(1000, 1024, true, true))
 }
 
-func TestCPUPriceBindingHourlyCost(t *testing.T) {
+func TestCPUTierPolicyResolve(t *testing.T) {
+	enrolled := CPUTierPolicy{DefaultCPUTier: CPUTierShared}
 	for _, tc := range []struct {
-		cpu, ram string
-		want     float64
-	}{{"0.63", "0.135", 3.6}, {"1.1", "0.55", 8.8}, {"5", "1", 28}} {
-		b := &CPUPriceBinding{Version: "immutable", CPUPriceID: "price_cpu", MemoryPriceID: "price_ram", CPUCentsPerHour: tc.cpu, MemoryCentsPerGiBHour: tc.ram}
-		cost, err := b.CostPerMs(4000, 8192)
+		policy    CPUTierPolicy
+		requested CPUTier
+		want      CPUTier
+	}{
+		{CPUTierPolicy{}, "", ""},
+		{enrolled, "", CPUTierShared},
+		{enrolled, CPUTierShared, CPUTierShared},
+		{CPUTierPolicy{Enabled: true}, CPUTierSpot, CPUTierSpot},
+	} {
+		tier, err := tc.policy.Resolve(tc.requested)
 		require.NoError(t, err)
-		require.InDelta(t, tc.want, cost*3600000, 1e-12)
+		require.Equal(t, tc.want, tier)
 	}
-}
-
-func TestBoundCPUResourcesNeedANewRevision(t *testing.T) {
-	before := StubConfigV1{CPUTier: CPUTierShared, Runtime: Runtime{Cpu: 4000, Memory: 8192}, CPUPricing: &CPUPriceBinding{Version: "stored"}}
-	edited := before
-	edited.Env = []string{"KEY=value"}
-	require.NoError(t, edited.ValidateCPURevision(before))
-	edited.Runtime.Cpu = 8000
-	require.ErrorContains(t, edited.ValidateCPURevision(before), "redeploy")
-	edited = before
-	edited.CPUTier = CPUTierPerformance
-	require.ErrorContains(t, edited.ValidateCPURevision(before), "redeploy")
+	_, err := enrolled.Resolve(CPUTierSpot)
+	require.ErrorContains(t, err, "not enabled")
+	_, err = CPUTierPolicy{}.Resolve(CPUTierPerformance)
+	require.ErrorContains(t, err, "not enabled")
 }

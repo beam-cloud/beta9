@@ -512,50 +512,47 @@ func TestContainerCostClientCanceledLookupUsesCacheWithoutRefreshing(t *testing.
 	}
 }
 
-func TestCPUPriceResolutionOnCreationAndClone(t *testing.T) {
-	calls := 0
-	binding := &types.CPUPriceBinding{Tier: types.CPUTierShared, Version: "current", CPUPriceID: "price_cpu", MemoryPriceID: "price_memory", CPUCentsPerHour: "1.1", MemoryCentsPerGiBHour: "0.55"}
+func TestTieredQuotesArePerStubAndPolicyIsCached(t *testing.T) {
+	var mu sync.Mutex
+	var requests []ContainerCostRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
 		var request ContainerCostRequest
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
-		require.Equal(t, "owner-workspace", request.WorkspaceId)
-		require.True(t, request.ResolveCPUTier)
-		require.True(t, request.VM)
-		require.False(t, request.Sandbox, "VM and sandbox flags must be mutually exclusive")
-		require.NoError(t, json.NewEncoder(w).Encode(ContainerCostResponse{CostPerMs: "0.0000024444444444444444", PricingVersion: binding.Version, CPUPricing: binding}))
+		mu.Lock()
+		requests = append(requests, request)
+		mu.Unlock()
+		require.NoError(t, json.NewEncoder(w).Encode(ContainerCostResponse{CostPerMs: "0.1", CPUTierPolicy: types.CPUTierPolicy{Enabled: true, DefaultCPUTier: types.CPUTierShared}}))
 	}))
 	defer server.Close()
 	client := NewContainerCostClient(types.ContainerCostHookConfig{Endpoint: server.URL, Token: "test"})
-	config := types.StubConfigV1{Runtime: types.Runtime{Cpu: 4000, Memory: 8192}, UseVM: true}
-	require.NoError(t, client.BindCPUPricing(context.Background(), "owner-workspace", types.StubType(types.StubTypeVM), &config, nil, true))
-	require.Equal(t, types.CPUTierShared, config.CPUTier)
-	require.Equal(t, "current", config.CPUPricing.Version)
-	// Clones never inherit authoritative prices, even when their selected tier stays the same.
-	config.CPUPricing = &types.CPUPriceBinding{Tier: types.CPUTierShared, Version: "old"}
-	binding.Version = "next"
-	require.NoError(t, client.BindCPUPricing(context.Background(), "owner-workspace", types.StubType(types.StubTypeVM), &config, nil, true))
-	require.Equal(t, "next", config.CPUPricing.Version)
-	require.Equal(t, 2, calls)
-	// Workers reuse the stored amount without a live billing connection.
-	var offline *ContainerCostClient
-	raw, _ := json.Marshal(config)
-	quote, err := offline.GetContainerCostQuote(context.Background(), &types.ContainerRequest{Cpu: 4000, Memory: 8192, UseVM: true, Stub: types.StubWithRelated{Stub: types.Stub{Config: string(raw)}}})
-	require.NoError(t, err)
-	require.InDelta(t, 8.8, quote.CostPerMs*3600000, 1e-12)
-	require.Equal(t, "next", quote.PricingVersion)
-}
 
-func TestPrivateAndGPUKeepLegacyPricingWithoutBillingLookup(t *testing.T) {
-	var offline *ContainerCostClient
-	pools := map[string]types.WorkerPoolConfig{"private": {Mode: types.PoolModePrivate}}
-	for _, config := range []types.StubConfigV1{
-		{Pool: &types.PoolConfig{Name: "private"}},
-		{Runtime: types.Runtime{Gpus: []types.GpuType{types.GPU_T4}, GpuCount: 1}},
-	} {
-		require.NoError(t, offline.BindCPUPricing(context.Background(), "workspace", types.StubType("function"), &config, pools, true))
-		require.Nil(t, config.CPUPricing)
-		config.CPUTier = types.CPUTierShared
-		require.ErrorIs(t, offline.BindCPUPricing(context.Background(), "workspace", types.StubType("function"), &config, pools, true), types.ErrCPUTierIneligible)
+	request := func(stubID, config string) *types.ContainerRequest {
+		return &types.ContainerRequest{WorkspaceId: "workspace", StubId: stubID, Cpu: 1000, Memory: 1024, Stub: types.StubWithRelated{Stub: types.Stub{Config: config}}}
 	}
+	for _, r := range []*types.ContainerRequest{
+		request("a", `{"cpu_tier":"shared"}`), request("b", `{"cpu_tier":"shared"}`), request("a", `{"cpu_tier":"shared"}`),
+		request("c", `{}`), request("d", `{}`),
+	} {
+		_, err := client.GetContainerCostQuote(context.Background(), r)
+		require.NoError(t, err)
+	}
+	// Billing prices each tiered stub separately; untiered quotes stay shared by shape.
+	require.Equal(t, []ContainerCostRequest{
+		{WorkspaceId: "workspace", Cpu: 1000, Memory: 1024, CPUTier: types.CPUTierShared, StubId: "a"},
+		{WorkspaceId: "workspace", Cpu: 1000, Memory: 1024, CPUTier: types.CPUTierShared, StubId: "b"},
+		{WorkspaceId: "workspace", Cpu: 1000, Memory: 1024},
+	}, requests)
+
+	for range 2 {
+		policy, err := client.CPUTierPolicy(context.Background(), "workspace")
+		require.NoError(t, err)
+		require.Equal(t, types.CPUTierPolicy{Enabled: true, DefaultCPUTier: types.CPUTierShared}, policy)
+	}
+	require.Len(t, requests, 4)
+	require.Equal(t, ContainerCostRequest{WorkspaceId: "workspace", PolicyOnly: true}, requests[3])
+
+	var offline *ContainerCostClient
+	policy, err := offline.CPUTierPolicy(context.Background(), "workspace")
+	require.NoError(t, err)
+	require.Equal(t, types.CPUTierPolicy{}, policy)
 }
