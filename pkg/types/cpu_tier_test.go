@@ -36,7 +36,7 @@ func TestCPUTierWorkloadLimits(t *testing.T) {
 	require.NoError(t, CPUTierPerformance.Validate(64000, 1<<18, false, false))
 	require.Error(t, CPUTierShared.Validate(999, 1024, true, false))
 	require.Error(t, CPUTierShared.Validate(1000, 1023, true, false))
-	require.ErrorContains(t, CPUTierShared.Validate(8001, 1024, false, false), "The shared tier supports at most 8 vCPU and 16 GiB RAM")
+	require.ErrorContains(t, CPUTierShared.Validate(8001, 1024, false, false), "the shared tier supports at most 8 vCPU and 16 GiB RAM")
 	require.Error(t, CPUTierShared.Validate(1000, 16385, false, false))
 	require.ErrorIs(t, CPUTierShared.Validate(1000, 1024, false, true), ErrCPUTierIneligible)
 	require.ErrorIs(t, CPUTierSpot.Validate(1000, 1024, true, true), ErrCPUTierIneligible)

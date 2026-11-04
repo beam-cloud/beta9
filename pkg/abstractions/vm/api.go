@@ -525,15 +525,15 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 }
 
 type actionRequest struct {
-	Name         string `json:"name,omitempty"`
-	NoSnapshot   bool   `json:"no_snapshot,omitempty"`
-	Port         uint32 `json:"port,omitempty"`
-	SSHPublicKey string `json:"ssh_public_key,omitempty"`
-	CPUTier      string `json:"cpu_tier,omitempty"`
-	Description  string `json:"description,omitempty"`
-	Protected    *bool  `json:"protected,omitempty"`
-	TTL          int64  `json:"ttl,omitempty"`
-	Cold         bool   `json:"cold,omitempty"`
+	Name         string        `json:"name,omitempty"`
+	NoSnapshot   bool          `json:"no_snapshot,omitempty"`
+	Port         uint32        `json:"port,omitempty"`
+	SSHPublicKey string        `json:"ssh_public_key,omitempty"`
+	CPUTier      types.CPUTier `json:"cpu_tier,omitempty"`
+	Description  string        `json:"description,omitempty"`
+	Protected    *bool         `json:"protected,omitempty"`
+	TTL          int64         `json:"ttl,omitempty"`
+	Cold         bool          `json:"cold,omitempty"`
 }
 
 func (s *Service) action(c echo.Context) error {
@@ -680,7 +680,7 @@ func (s *Service) action(c echo.Context) error {
 
 		spec := v.Spec
 		if req.CPUTier != "" {
-			spec.CPUTier = types.CPUTier(req.CPUTier)
+			spec.CPUTier = req.CPUTier
 		}
 		spec.SourceSnapshotID = v.RootSnapshotID
 		spec.SSHPublicKey = req.SSHPublicKey

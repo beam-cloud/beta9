@@ -80,7 +80,7 @@ func (t CPUTier) Validate(cpu, memory int64, nativeVM, gpu bool) error {
 	case nativeVM && (cpu < 1000 || memory < 1024):
 		return fmt.Errorf("CPU tier VMs require at least 1 vCPU and 1 GiB RAM")
 	case tier.maxCpu > 0 && (cpu > tier.maxCpu || memory > tier.maxMemory):
-		return fmt.Errorf("The %s tier supports at most %g vCPU and %g GiB RAM", t, float64(tier.maxCpu)/1000, float64(tier.maxMemory)/1024)
+		return fmt.Errorf("the %s tier supports at most %g vCPU and %g GiB RAM", t, float64(tier.maxCpu)/1000, float64(tier.maxMemory)/1024)
 	}
 	return nil
 }
@@ -120,6 +120,9 @@ func (p WorkerPoolConfig) HostedCPU() bool {
 	return p.GPUType == "" && !p.AgentHosted()
 }
 
+// CPUTier is the tier the request's stub chose. It decodes only that field
+// rather than the whole config, as the scheduler reads it several times per
+// request.
 func (r *ContainerRequest) CPUTier() CPUTier {
 	var c struct {
 		Tier CPUTier `json:"cpu_tier"`

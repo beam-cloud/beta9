@@ -44,21 +44,19 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 	}
 
 	drain := min(time.Duration(request.EvictDrainSeconds)*time.Second, maxPreemptionDrain)
-	wait := drain + evictionKillTimeout
+	wait := drain
 	victims := make([]string, 0, len(request.EvictContainerIds))
 	for _, victimID := range request.EvictContainerIds {
 		if victimID == "" || victimID == request.ContainerId {
 			continue
 		}
-		if instance, _ := s.containerInstances.Get(victimID); instance != nil && instance.Request.Borrowed() {
-			wait = max(wait, time.Duration(instance.Request.DrainSeconds)*time.Second+evictionKillTimeout)
-		}
-		release, err := s.releaseVictim(ctx, victimID, drain, request.ContainerId)
+		victimDrain, present, err := s.releaseVictim(ctx, victimID, drain, request.ContainerId)
 		if err != nil {
 			return err
 		}
-		if release {
+		if present {
 			victims = append(victims, victimID)
+			wait = max(wait, victimDrain)
 		}
 	}
 	if len(victims) == 0 {
@@ -71,7 +69,7 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 		Dur("drain", drain).
 		Msg("waiting for evicted containers before starting request")
 	waitStart := time.Now()
-	remaining := s.waitForContainersReleased(ctx, victims, wait)
+	remaining := s.waitForContainersReleased(ctx, victims, wait+evictionKillTimeout)
 	metrics.RecordWorkerStartupPhase("evict_wait", time.Since(waitStart), request, map[string]string{
 		"victims":  fmt.Sprintf("%d", len(victims)),
 		"released": fmt.Sprintf("%t", len(remaining) == 0),
@@ -91,24 +89,25 @@ func (s *Worker) evictForRequest(ctx context.Context, request *types.ContainerRe
 	return fmt.Errorf("%w: %v", ErrEvictionIncomplete, remaining)
 }
 
-// releaseVictim starts stopping an eviction victim and reports whether it is
-// present and must be waited for. Spot gets its full drain. A running durable
-// Spot VM is first recorded as preempted, so its reconciler records the stop
-// rather than restarting it; PreemptVM rejects a VM being deleted or no longer
-// running here, which has nothing to record.
-func (s *Worker) releaseVictim(ctx context.Context, victimID string, drain time.Duration, forContainerID string) (bool, error) {
+// releaseVictim starts stopping an eviction victim on the given drain, or on
+// Spot's own, and returns that drain and whether the victim is present and
+// must be waited for. A running durable Spot VM is first recorded as
+// preempted, so its reconciler records the stop rather than restarting it;
+// PreemptVM rejects a VM being deleted or no longer running here, which has
+// nothing to record.
+func (s *Worker) releaseVictim(ctx context.Context, victimID string, drain time.Duration, forContainerID string) (time.Duration, bool, error) {
 	instance, _ := s.containerInstances.Get(victimID)
 	if instance != nil && instance.Request.Borrowed() {
-		drain = time.Duration(instance.Request.DrainSeconds) * time.Second
-		if exitCode, reason := instance.lifecycleState(); exitCode < 0 && reason == "" && instance.Request.IsPersistentVM() {
-			request := instance.Request
+		request := instance.Request
+		drain = s.containerTerminationGrace(request)
+		if exitCode, reason := instance.lifecycleState(); exitCode < 0 && reason == "" && request.IsPersistentVM() {
 			_, err := s.backendRepoClient.PreemptVM(ctx, &pb.PreemptVMRequest{WorkspaceId: request.WorkspaceId, VmId: request.VMID(), ContainerId: victimID})
 			if err != nil && status.Code(err) != codes.FailedPrecondition {
-				return false, fmt.Errorf("record durable VM preemption: %w", err)
+				return 0, false, fmt.Errorf("record durable VM preemption: %w", err)
 			}
 		}
 	}
-	return s.evictContainer(victimID, drain, forContainerID), nil
+	return drain, s.evictContainer(victimID, drain, forContainerID), nil
 }
 
 // evictContainer sends SIGTERM and escalates to SIGKILL after the drain

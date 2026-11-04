@@ -1816,6 +1816,9 @@ func calculateBackoffDelay(retryCount int) time.Duration {
 	return delay
 }
 
+// filterWorkersByCPUTier keeps the workers whose pool may run the request's CPU
+// tier. Tiered work also needs a known pool, as an unknown pool's zero config
+// would pass for Performance, and a worker that runs the tier protocol.
 func (s *Scheduler) filterWorkersByCPUTier(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
 	tier := request.CPUTier()
 	return slices.DeleteFunc(workers, func(w *types.Worker) bool {

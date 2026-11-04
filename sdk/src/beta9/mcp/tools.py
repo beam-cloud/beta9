@@ -232,8 +232,8 @@ def deploy_definition(cli: str, cwd: str) -> Dict[str, Any]:
                     "enum": list(CPU_TIERS),
                     "description": "CPU capacity tier for CPU workloads: spot uses spare "
                     "capacity and may be interrupted; shared has shared vCPUs (up to 8 vCPU "
-                    "and 16 GiB); performance has no CPU overbooking. Omit for the pool's "
-                    "tier or, without a pool, the account default.",
+                    "and 16 GiB); performance has no CPU overbooking. Omit for the account "
+                    "default; a named pool must run the tier.",
                 },
                 "gpu": {
                     **STRING,

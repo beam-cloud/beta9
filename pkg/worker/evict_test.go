@@ -3,9 +3,6 @@ package worker
 import (
 	"context"
 	"fmt"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"sync"
 	"syscall"
 	"testing"
@@ -16,6 +13,9 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // evictionRuntime records signals; SIGTERM exits the container only when
@@ -86,12 +86,18 @@ func addRunningInstance(worker *Worker, rt runtime.Runtime, containerID string) 
 	return instance
 }
 
-func addSpotVMInstance(worker *Worker, rt runtime.Runtime, containerID string) *ContainerInstance {
+// addSpotInstance adds a running Spot container as the scheduler marks one.
+func addSpotInstance(worker *Worker, rt runtime.Runtime, containerID string) *ContainerInstance {
 	instance := addRunningInstance(worker, rt, containerID)
-	instance.Request.UseVM, instance.Request.WorkspaceId = true, "workspace"
-	instance.Request.Env = []string{"BEAM_VM_SYSTEMD=1", "BEAM_VM_ID=vm-id"}
 	instance.Request.Stub.Config = `{"cpu_tier":"spot"}`
 	instance.Request.Evictable, instance.Request.DrainSeconds = true, 30
+	return instance
+}
+
+func addSpotVMInstance(worker *Worker, rt runtime.Runtime, containerID string) *ContainerInstance {
+	instance := addSpotInstance(worker, rt, containerID)
+	instance.Request.UseVM, instance.Request.WorkspaceId = true, "workspace"
+	instance.Request.Env = []string{"BEAM_VM_SYSTEMD=1", "BEAM_VM_ID=vm-id"}
 	return instance
 }
 
@@ -225,8 +231,15 @@ func TestEvictForRequestFailsWhenVictimsOutliveKillWindow(t *testing.T) {
 }
 
 func TestOnlySpotVictimsExtendTheEvictionWait(t *testing.T) {
-	shortenEvictionKillTimeout(t, 300*time.Millisecond)
+	shortenEvictionKillTimeout(t, 500*time.Millisecond)
+	// Spot is killed after its own drain, which outlasts the request's drain
+	// and kill window.
 	worker, rt := evictionWorkerForTest(false)
+	addSpotInstance(worker, rt, "spot").Request.DrainSeconds = 1
+	require.NoError(t, worker.evictForRequest(context.Background(), &types.ContainerRequest{EvictContainerIds: []string{"spot"}}))
+	require.Equal(t, []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}, rt.observed("spot"))
+
+	worker, rt = evictionWorkerForTest(false)
 	rt.ignoreKill = true
 	victim := addRunningInstance(worker, rt, "victim-1")
 	victim.Request.Stub.Config = `{"cpu_tier":"shared"}`
@@ -414,9 +427,7 @@ func TestStatusHeartbeatReleasesSpotVictimsLikeTheirDisplacingRequest(t *testing
 	heartbeat(addSpotVMInstance(worker, rt, "stale-vm"))
 	require.Equal(t, []syscall.Signal{syscall.SIGTERM}, rt.observed("stale-vm"))
 
-	container := addRunningInstance(worker, rt, "spot-container")
-	container.Request.Stub.Config, container.Request.Evictable, container.Request.DrainSeconds = `{"cpu_tier":"spot"}`, true, 30
-	heartbeat(container)
+	heartbeat(addSpotInstance(worker, rt, "spot-container"))
 	require.Equal(t, []syscall.Signal{syscall.SIGTERM}, rt.observed("spot-container"))
 	require.Equal(t, 1, preemptions)
 }
@@ -437,8 +448,8 @@ func TestExitingSpotVMIsWaitedForWithoutPreemption(t *testing.T) {
 }
 
 func TestSpotUsesThirtySecondGraceWithoutChangingOtherVMs(t *testing.T) {
-	w, _ := evictionWorkerForTest(false)
-	request := &types.ContainerRequest{UseVM: true, Env: []string{"BEAM_VM_SYSTEMD=1"}, Evictable: true, DrainSeconds: 30, Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"cpu_tier":"spot"}`}}}
+	w, rt := evictionWorkerForTest(false)
+	request := addSpotVMInstance(w, rt, "spot-vm").Request
 	require.Equal(t, 30*time.Second, w.containerTerminationGrace(request))
 	request.Stub.Config = `{}`
 	require.Equal(t, 300*time.Second, w.containerTerminationGrace(request))

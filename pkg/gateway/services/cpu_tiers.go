@@ -52,10 +52,10 @@ func (gws *GatewayService) GetCPUTierCatalog(ctx context.Context, _ *pb.GetCPUTi
 }
 
 // ResolveCPUTier returns the tier a new CPU workload runs on: the requested one,
-// else the workspace default. The pool it targets never sets the tier, and
-// untiered work can't target a shared pool, which it never opted into. eligible
-// is false for GPU, platform and private workloads, and so is work that targets
-// a pool other than a hosted CPU pool.
+// else the workspace default. Ineligible work (GPU, platform and private
+// workloads) and work that targets a pool other than a hosted CPU pool runs
+// untiered. The pool never sets the tier, and untiered work can't target a
+// shared pool, which it never opted into.
 func (gws *GatewayService) ResolveCPUTier(ctx context.Context, workspace *types.Workspace, requested types.CPUTier, poolName string, eligible bool) (types.CPUTier, error) {
 	pool, known := gws.scheduler.PoolConfig(poolName)
 	if !eligible || poolName != "" && !(known && pool.HostedCPU()) {
@@ -90,6 +90,8 @@ func (gws *GatewayService) resolveStubCPUTier(ctx context.Context, workspace *ty
 	return config.ValidateCPUTier()
 }
 
+// IsHostedCPUPool reports whether the named pool is Beam-hosted CPU capacity,
+// the only kind a CPU tier can run on.
 func (gws *GatewayService) IsHostedCPUPool(name string) bool {
 	p, ok := gws.scheduler.PoolConfig(name)
 	return ok && p.HostedCPU()

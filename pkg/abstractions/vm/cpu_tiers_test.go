@@ -19,7 +19,7 @@ type tierVMGateway struct {
 	err         error
 }
 
-func (g *tierVMGateway) IsHostedCPUPool(name string) bool { return name == "old-public-pool" }
+func (g *tierVMGateway) IsHostedCPUPool(name string) bool { return name == "hosted-pool" }
 func (g *tierVMGateway) ResolveCPUTier(ctx context.Context, workspace *types.Workspace, requested types.CPUTier, pool string, eligible bool) (types.CPUTier, error) {
 	if g.err != nil {
 		return "", g.err
@@ -33,7 +33,7 @@ func (g *tierVMGateway) ResolveCPUTier(ctx context.Context, workspace *types.Wor
 func TestTierChangeRequiresStoppedVMAndNewStub(t *testing.T) {
 	s, v, info, _, gateway := fixture()
 	s.gateway = &tierVMGateway{vmGateway: gateway}
-	v.Spec.Pool = "old-public-pool"
+	v.Spec.Pool = "hosted-pool"
 	handle, disk := v.Handle, rootDisk(v)
 	api := managementAPI(s, info)
 	route := "/" + info.Workspace.ExternalId + "/" + v.Name
@@ -87,22 +87,22 @@ func TestTierReplacesOnlyHostedPools(t *testing.T) {
 	tiers := &tierVMGateway{vmGateway: gateway, defaultTier: types.CPUTierPerformance}
 	s.gateway = tiers
 	ctx := auth.ContextWithAuthInfo(context.Background(), info)
-	child, err := s.createVM(ctx, info, types.VMCreateOptions{Name: "from-template", Spec: types.VMSpec{ImageID: "image", Pool: "old-public-pool", CPUTier: types.CPUTierShared}})
+	child, err := s.createVM(ctx, info, types.VMCreateOptions{Name: "from-template", Spec: types.VMSpec{ImageID: "image", Pool: "hosted-pool", CPUTier: types.CPUTierShared}})
 	require.NoError(t, err)
 	require.Empty(t, child.Error)
 	require.Empty(t, child.Spec.Pool)
 	require.Nil(t, gateway.stub.Pool)
 	require.Equal(t, types.CPUTierShared, child.Spec.CPUTier)
 	// The default tier replaces a hosted pool too; only untiered VMs keep it.
-	defaulted, err := s.createVM(ctx, info, types.VMCreateOptions{Name: "defaulted", Spec: types.VMSpec{ImageID: "image", Pool: "old-public-pool"}})
+	defaulted, err := s.createVM(ctx, info, types.VMCreateOptions{Name: "defaulted", Spec: types.VMSpec{ImageID: "image", Pool: "hosted-pool"}})
 	require.NoError(t, err)
 	require.Equal(t, types.CPUTierPerformance, defaulted.Spec.CPUTier)
 	require.Empty(t, defaulted.Spec.Pool)
 	tiers.defaultTier = ""
-	untiered, err := s.createVM(ctx, info, types.VMCreateOptions{Name: "untiered", Spec: types.VMSpec{ImageID: "image", Pool: "old-public-pool"}})
+	untiered, err := s.createVM(ctx, info, types.VMCreateOptions{Name: "untiered", Spec: types.VMSpec{ImageID: "image", Pool: "hosted-pool"}})
 	require.NoError(t, err)
 	require.Empty(t, untiered.Spec.CPUTier)
-	require.Equal(t, "old-public-pool", untiered.Spec.Pool)
+	require.Equal(t, "hosted-pool", untiered.Spec.Pool)
 	_, err = s.createVM(ctx, info, types.VMCreateOptions{Name: "private", Spec: types.VMSpec{ImageID: "image", Pool: "private-pool", CPUTier: types.CPUTierShared}})
 	require.ErrorContains(t, err, "hosted CPU")
 
@@ -126,7 +126,7 @@ func TestDefaultTierMustFitTheVMBeforeItIsSaved(t *testing.T) {
 	require.Equal(t, types.CPUTierShared, child.Spec.CPUTier)
 	saved := len(s.repo.(*vmStore).rows)
 	_, err = s.createVM(ctx, info, types.VMCreateOptions{Name: "large", Spec: types.VMSpec{ImageID: "image", CPU: 16000, Memory: 32768}})
-	require.ErrorContains(t, err, "The shared tier supports at most 8 vCPU")
+	require.ErrorContains(t, err, "the shared tier supports at most 8 vCPU")
 	require.Len(t, s.repo.(*vmStore).rows, saved)
 }
 
