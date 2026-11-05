@@ -4296,8 +4296,11 @@ def test_graphical_stream_failure_returns_to_systemd_for_recovery(
     server.shutdown.assert_called_once()
 
 
-def test_invalid_kiosk_command_keeps_the_session_available_for_restart(monkeypatch):
+def test_invalid_kiosk_command_keeps_the_session_available_for_restart(tmp_path, monkeypatch):
     guest = guest_module("kiosk")
+    monkeypatch.setattr(
+        guest, "POLICY", guest.replace(guest.POLICY, mcp_config=str(tmp_path / "mcp.json"))
+    )
     session = guest.Session({"command": ["missing-application", "private-argument"]})
     monkeypatch.setattr(
         session, "spawn", MagicMock(side_effect=FileNotFoundError("private"))
