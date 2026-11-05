@@ -179,7 +179,7 @@ if [ "$desktop" = true ] && [ "$kiosk" != true ]; then
   fi
   apt-get update
   apt_install "$browser" ubuntu-session ubuntu-settings gnome-shell gnome-terminal \
-    gnome-control-center gnome-software nautilus gvfs fonts-ubuntu \
+    gnome-control-center gnome-software nautilus gvfs fonts-ubuntu yaru-theme-gtk yaru-theme-icon \
     gnome-shell-extension-ubuntu-dock gnome-shell-extension-appindicator \
     gnome-shell-extension-desktop-icons-ng librsvg2-common xdg-user-dirs \
     xdg-utils shared-mime-info at-spi2-core file-roller unzip
