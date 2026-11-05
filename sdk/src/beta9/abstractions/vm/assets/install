@@ -191,7 +191,10 @@ if [ "$desktop" = true ] && [ "$kiosk" != true ]; then
 import sys
 import xml.etree.ElementTree as ET
 
-tree = ET.parse(sys.argv[1])
+try:
+    tree = ET.parse(sys.argv[1])
+except (OSError, ET.ParseError):
+    sys.exit(0)
 for child in tree.iter("child"):
     widget = child.find("object")
     if widget is not None and widget.get("id") in ("label_name", "hbox2"):
