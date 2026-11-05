@@ -3745,7 +3745,10 @@ def test_guest_resize_keeps_physical_dpi_and_rejects_invalid_geometry(monkeypatc
     assert commands == []
 
 
-def test_browser_shrink_fits_apps_above_the_panel_and_preserves_fullscreen(monkeypatch):
+@pytest.mark.parametrize("panel_y,window_y", [(1326, 0), (0, 74)])
+def test_browser_shrink_fits_apps_around_the_panel_and_preserves_fullscreen(
+    monkeypatch, panel_y, window_y
+):
     module = guest_module("kiosk")
     commands = []
 
@@ -3753,11 +3756,12 @@ def test_browser_shrink_fits_apps_above_the_panel_and_preserves_fullscreen(monke
         commands.append(argv)
         if argv == ["wmctrl", "-lG"]:
             return SimpleNamespace(stdout=(
-                "0x1 -1 0 1326 2200 74 host panel\n"
+                f"0x1 -1 0 {panel_y} 2200 74 host panel\n"
                 "0x2 -1 0 0 2200 1400 host desktop\n"
                 "0x3 0 638 86 2180 1520 host app\n"
                 "0x4 0 300 200 800 600 host editor\n"
                 "0x5 0 0 0 2200 1400 host fullscreen\n"
+                "0x6 0 malformed 0 800 600 host closing\n"
             ))
         if argv[0] == "xprop":
             state = "_NET_WM_STATE_FULLSCREEN" if argv[2] == "0x5" else ""
@@ -3767,7 +3771,7 @@ def test_browser_shrink_fits_apps_above_the_panel_and_preserves_fullscreen(monke
     monkeypatch.setattr(module, "run_command", run)
     module.fit_desktop_windows((2200, 1400), {})
     assert [c for c in commands if "-e" in c] == [
-        ["wmctrl", "-ir", "0x3", "-e", "0,20,0,2180,1326"]
+        ["wmctrl", "-ir", "0x3", "-e", f"0,20,{window_y},2180,1326"]
     ]
 
 
