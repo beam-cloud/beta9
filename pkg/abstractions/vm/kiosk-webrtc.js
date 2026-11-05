@@ -143,6 +143,7 @@
       this.displayError = '';
       this.deadline = Date.now() + policy.startupMs;
       this.failures = 0;
+      this.recoveryGeneration = 0;
       this.entry = typeof document !== 'undefined' &&
         document.documentElement?.hasAttribute('data-beam-kiosk-entry');
       // The isolated client document uses the guest's stable render density.
@@ -190,7 +191,14 @@
       }
     }
 
+    resetRecovery() {
+      clearTimeout(this.recoveryTimer);
+      this.recoveryTimer = null;
+      return ++this.recoveryGeneration;
+    }
+
     reconnect() {
+      this.resetRecovery();
       // The gateway owns this page, so it remains available during guest restarts.
       location.replace(new URL(this.entry ? './' : '../', location.href).href);
     }
@@ -395,15 +403,14 @@
       const state = this.webSocketLive ? 'connected' : this.activePeer?.connectionState;
       if (state === this.peerState) return;
       this.peerState = state;
-      clearTimeout(this.recoveryTimer);
-      this.recoveryTimer = null;
+      const generation = this.resetRecovery();
       if (state === 'connected') {
         this.viewport = null;
         this.refreshDisplay();
       } else if (['disconnected', 'failed', 'closed'].includes(state)) {
         this.notify('disconnected');
         this.refreshDisplay();
-        this.recoveryTimer = setTimeout(() => this.recover(),
+        this.recoveryTimer = setTimeout(() => this.recover(generation),
           state === 'closed' ? policy.pollMs : policy.recoveryMs);
       }
     }
@@ -416,18 +423,19 @@
           ['closing', 'closed'].includes(this.inputChannel.readyState)) peer.close();
     }
 
-    async recover() {
+    async recover(generation) {
       const peer = this.activePeer;
-      const recovered = () => peer !== this.activePeer || this.webSocketLive ||
+      const cancelled = () => generation !== this.recoveryGeneration ||
+        peer !== this.activePeer || this.webSocketLive ||
         this.activePeer?.connectionState === 'connected';
-      if (recovered()) return;
+      if (cancelled()) return;
       try {
         // Keep the reconnect UI alive through gateway/service outages. A blind
         // navigation while the gateway restarts strands the tab on a net error.
         const response = await fetch(this.endpoint('status'), {
           cache: 'no-store', signal: AbortSignal.timeout(policy.requestMs),
         });
-        if (recovered()) return;
+        if (cancelled()) return;
         if (this.accessDenied(response)) return;
         if (response.ok) {
           // Re-enter the gateway-owned loading page. The guest's status server
@@ -436,7 +444,7 @@
           return;
         }
       } catch (_) { /* Keep retrying while the authenticated route recovers. */ }
-      if (!recovered()) this.recoveryTimer = setTimeout(() => this.recover(), policy.pollMs);
+      if (!cancelled()) this.recoveryTimer = setTimeout(() => this.recover(generation), policy.pollMs);
     }
 
     trackInput(peer, channel) {

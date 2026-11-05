@@ -158,7 +158,7 @@ async function webrtc(sourcePath) {
       close() { this.connectionState = 'closed'; }
     }
     const origin = 'https://application.example';
-    let status = 200, probeStatus = 200, reloads = 0;
+    let status = 200, probeStatus = 200, reloads = 0, probeResponse = null;
     const timers=new Map();
     const window = {RTCPeerConnection: Peer, devicePixelRatio: 1.5,
       sessionStorage: {setItem: (key, value) => storage.set(key, value)},
@@ -171,7 +171,7 @@ async function webrtc(sourcePath) {
       setTimeout:callback=>{timers.set(1,callback);return 1;},clearTimeout:id=>timers.delete(id),
       fetch: async (url, options) => {
         if (url.pathname === path + '_beam/kiosk/status') {
-          return {ok: probeStatus === 200, status: probeStatus};
+          return probeResponse || {ok: probeStatus === 200, status: probeStatus};
         }
         assert.equal(url.pathname, path + '_beam/kiosk/webrtc/session');
         assert.equal(options.credentials, 'same-origin');
@@ -251,6 +251,22 @@ async function webrtc(sourcePath) {
     assert.equal(localPeer.connectionState,'closed','local input channel failure closes a live video peer');
     await timers.get(1)();
     assert.equal(reloads,3,'local input channel failure must reconnect the session');
+    for (const staleStatus of [503,200]) {
+      const changingPeer = new Peer();
+      await changingPeer.setRemoteDescription({type:'offer',sdp:'guest-description'});
+      changingPeer.connectionState='disconnected';viewer.syncConnection();
+      let release;
+      probeResponse=new Promise(resolve=>{release=resolve;});
+      const pending=timers.get(1)();
+      changingPeer.connectionState=staleStatus===503?'failed':'closed';viewer.syncConnection();
+      const current=timers.get(1), before=reloads;
+      probeResponse=null;release({ok:staleStatus===200,status:staleStatus});
+      await pending;
+      assert.equal(reloads,before,'stale probes cannot navigate after a peer state transition');
+      assert.equal(timers.get(1),current,'stale probes cannot create another retry loop');
+      await current();
+      assert.equal(reloads,before+1,'only the current recovery generation reconnects');
+    }
   }
   async function checkDisplay() {
     const messages=[],events={},videoEvents={},windowEvents={},timers=new Map();
