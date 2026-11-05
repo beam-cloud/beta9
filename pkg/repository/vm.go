@@ -267,7 +267,12 @@ func (r *PostgresBackendRepository) CreateVMArtifact(ctx context.Context, ws uin
 const selectVMArtifact = `SELECT a.data || jsonb_build_object('vm_name',COALESCE(v.data->>'name',a.data->>'vm_name'),'vm_deleted',COALESCE(v.data->>'desired_state'='deleted',false)) FROM vm_artifact a LEFT JOIN persistent_vm v ON v.id=a.vm_id AND v.workspace_id=a.workspace_id `
 
 func (r *PostgresBackendRepository) GetVMArtifact(ctx context.Context, ws uint, kind, name string) (*types.VMArtifact, error) {
-	items, err := r.listVMArtifacts(ctx, `WHERE a.workspace_id=$1 AND a.kind=$2 AND (a.id::text=$3 OR a.name=$3) ORDER BY a.id::text=$3 DESC LIMIT 1`, ws, kind, name)
+	// Public templates are addressed by immutable ID across workspaces. Names
+	// remain workspace-local and snapshots never inherit template visibility.
+	items, err := r.listVMArtifacts(ctx, `WHERE a.kind=$2 AND
+	 ((a.workspace_id=$1 AND (a.id::text=$3 OR a.name=$3)) OR
+	  (a.kind=$4 AND a.id::text=$3 AND a.data->'public'='true'::jsonb))
+	 ORDER BY a.workspace_id=$1 DESC,a.id::text=$3 DESC LIMIT 1`, ws, kind, name, types.VMArtifactTemplate)
 	if err != nil {
 		return nil, err
 	}

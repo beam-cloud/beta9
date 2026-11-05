@@ -137,6 +137,22 @@ func validate(spec *types.VMSpec) error {
 	if err := validateKiosk(spec); err != nil {
 		return err
 	}
+	if spec.DesktopTransport != "" && (!spec.Desktop || spec.Kiosk != nil) {
+		return fmt.Errorf("desktop_transport requires a full desktop")
+	}
+	if !spec.DisplayTransport().Valid() {
+		return fmt.Errorf("desktop transport must be webrtc or websockets")
+	}
+	for _, port := range slices.Concat(spec.Ports, spec.PublicPorts) {
+		if err := validateDesktopPort(*spec, port, slices.Contains(spec.PublicPorts, port)); err != nil {
+			return err
+		}
+	}
+	for _, port := range spec.DesktopPrivatePorts() {
+		if !slices.Contains(spec.PrivatePorts, port) {
+			spec.PrivatePorts = append(spec.PrivatePorts, port)
+		}
+	}
 
 	if spec.Desktop && spec.Memory < 1024 {
 		return fmt.Errorf("desktop requires at least 1024 MiB")
@@ -510,7 +526,7 @@ func (s *Service) wakeForAccess(parent context.Context, record *types.VM, port u
 
 func (s *Service) configurePort(ctx context.Context, v *types.VM, action string, port uint32, protected *bool) error {
 	public := action == "expose" && (protected == nil || !*protected)
-	if err := validateKioskPort(v.Spec.Kiosk, port, public); err != nil {
+	if err := validateDesktopPort(v.Spec, port, public); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	systemPort := port == types.VMTerminalPort || (port == types.VMDesktopPort && v.Spec.Desktop)

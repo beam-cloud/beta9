@@ -38,18 +38,25 @@ func TestVMWebRTCPolicyDefaultsAndRejectsUnsafeTiming(t *testing.T) {
 	}
 }
 
-func TestVMKioskPrivatePorts(t *testing.T) {
+func TestVMDesktopPrivatePorts(t *testing.T) {
 	for _, test := range []struct {
 		name  string
-		kiosk *VMKioskSpec
+		spec  VMSpec
 		ports []uint32
 	}{
-		{"desktop", nil, nil},
-		{"websockets", &VMKioskSpec{Transport: VMKioskTransportWebSockets}, []uint32{VMKioskStatusPort, VMKioskMCPPort}},
-		{"webrtc", &VMKioskSpec{Transport: VMKioskTransportWebRTC}, []uint32{VMKioskMediaPort, VMKioskStatusPort, VMKioskMCPPort}},
+		{"headless", VMSpec{}, nil},
+		{"legacy desktop", VMSpec{Desktop: true}, nil},
+		{"desktop websockets", VMSpec{Desktop: true, DesktopTransport: VMDesktopTransportWebSockets}, []uint32{VMKioskStatusPort}},
+		{"desktop webrtc", VMSpec{Desktop: true, DesktopTransport: VMDesktopTransportWebRTC}, []uint32{VMKioskMediaPort, VMKioskStatusPort}},
+		{"kiosk websockets", VMSpec{Kiosk: &VMKioskSpec{Transport: VMKioskTransportWebSockets}}, []uint32{VMKioskStatusPort, VMKioskMCPPort}},
+		{"kiosk webrtc", VMSpec{Kiosk: &VMKioskSpec{Transport: VMKioskTransportWebRTC}}, []uint32{VMKioskMediaPort, VMKioskStatusPort, VMKioskMCPPort}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			require.Equal(t, test.ports, test.kiosk.PrivatePorts())
+			require.Equal(t, test.ports, test.spec.DesktopPrivatePorts())
+			if test.spec.Kiosk != nil {
+				require.Equal(t, test.ports, test.spec.Kiosk.PrivatePorts())
+			}
 		})
 	}
+	require.Nil(t, (*VMKioskSpec)(nil).PrivatePorts())
 }

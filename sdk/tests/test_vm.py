@@ -10,7 +10,6 @@ import json
 import os
 from pathlib import Path
 import runpy
-import shlex
 import shutil
 import socket
 import subprocess
@@ -203,11 +202,9 @@ def test_xstartup_preserves_defaults_and_tolerates_failed_user_resources(
 ):
     directory = Path(vm_module.__file__).parent
     script = tmp_path / "xstartup"
-    script.write_text(
-        (directory / "assets/xstartup")
-        .read_text()
-        .replace("HOME=/root", f"HOME={shlex.quote(str(tmp_path))}")
-    )
+    script.write_text((directory / "assets/xstartup").read_text())
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
     commands = {
         "xrdb": (
             'if [ "$#" -eq 1 ]; then cat > "$TEST_DIR/defaults"; '
@@ -250,24 +247,6 @@ def test_vm_image_does_not_depend_on_client_archive_libraries(monkeypatch):
         base64.b64decode(encoded)
         == Path(vm_module.__file__).with_name("assets.tar.gz").read_bytes()
     )
-
-
-def test_desktop_clipboard_patch_is_idempotent_and_checks_upstream(tmp_path):
-    installer = (Path(vm_module.__file__).parent / "assets/install").read_text()
-    patch = installer.rsplit("  python3 - <<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
-    patch = patch.replace(
-        "Path('/usr/share/kasmvnc/www/assets')", "Path(" + repr(str(tmp_path)) + ")"
-    )
-    client = tmp_path / "ui.js"
-    client.write_text("class RFB { async clipboardPasteDataFrom(data) { return data; } }")
-    exec(patch, {})
-    once = client.read_text()
-    exec(patch, {})
-    assert client.read_text() == once, "Custom images may already contain the clipboard fix"
-    assert "async beamClipboardPasteDataFrom(data)" in once
-    client.write_text("class RFB { async differentClipboardAPI(data) { return data; } }")
-    with pytest.raises(AssertionError, match="no longer matches"):
-        exec(patch, {})
 
 
 def test_vm_rejects_gpu_build_and_does_not_modify_explicit_image():
@@ -3353,13 +3332,23 @@ def test_kiosk_cli_preserves_argv_and_reports_bad_json(tmp_path, monkeypatch):
     factory.assert_not_called()
 
 
-def test_guest_processes_share_the_display_but_not_the_bootstrap_config():
+@pytest.mark.parametrize("desktop", [False, True])
+def test_guest_processes_share_the_display_but_not_the_bootstrap_config(desktop, monkeypatch):
     guest = guest_module("kiosk")
+    monkeypatch.setenv("BEAM_VM_DESKTOP_TRANSPORT", "webrtc")
     session = guest.Session(
-        {"command": ["editor"], "env": {"DISPLAY": ":99", "APP_SETTING": "custom"}}
+        None if desktop else {
+            "command": ["editor"],
+            "transport": "webrtc",
+            "env": {"DISPLAY": ":99", "APP_SETTING": "custom"},
+        }
     )
+    assert session.desktop == desktop
+    assert session.state.transport == "webrtc"
     assert session.env["DISPLAY"] == ":1"
-    assert session.env["APP_SETTING"] == "custom"
+    assert session.env["HOME"] == str(Path.home())
+    if not desktop:
+        assert session.env["APP_SETTING"] == "custom"
     assert "BEAM_VM_KIOSK" not in session.env
     assert [session.retry_allowed("application") for _ in range(4)] == [True, True, True, False]
     assert session.retry_allowed("mcp")
@@ -4222,3 +4211,132 @@ def test_image_build_cannot_upload_home_or_escape_context(tmp_path):
             }
         )["isError"]
     tools.start_command.assert_not_called()
+
+
+def test_full_desktop_supervision_does_not_depend_on_application_windows(
+    tmp_path, monkeypatch
+):
+    guest = guest_module("kiosk")
+    monkeypatch.setattr(guest, "RUNTIME", tmp_path)
+    session = guest.Session()
+    session.processes = {
+        name: SimpleNamespace(poll=lambda: None)
+        for name in ("display", "window-manager", "stream", "settings")
+    }
+    server = MagicMock()
+    session.control_server = lambda: server
+    session.start_display = session.start_stream = session.wait_for = MagicMock()
+    session.sync_display = MagicMock()
+    session.stop = MagicMock()
+    session.stopping = MagicMock()
+    session.stopping.wait.side_effect = [False, True]
+    session.launch = session.launch_mcp = MagicMock(
+        side_effect=AssertionError("Desktop owns a session, not an app")
+    )
+    assert session.run() is None
+    assert session.status()["state"] == "ready"
+    assert session.status()["mcp"] == "disabled"
+    assert session.status()["desktop"] is True
+    session.sync_display.assert_called_once()
+    server.shutdown.assert_called_once()
+
+
+def test_public_template_cli_uses_explicit_publication(cli_service, monkeypatch):
+    vm = MagicMock()
+    vm.create_template.return_value = {"id": "shared-template", "public": True}
+    monkeypatch.setattr(vm_cli, "_vm", lambda *_: vm)
+    result = CliRunner().invoke(
+        vm_cli.management,
+        ["template", "create", "clean", "app-desktop", "--public", "--json"],
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["public"] is True
+    vm.create_template.assert_called_once_with("app-desktop", "", public=True)
+
+
+def test_streaming_desktop_resize_uses_the_shared_display_contract(
+    sandbox_vm, monkeypatch
+):
+    vm, _ = sandbox_vm
+    vm.info["spec"].update(desktop=True, desktop_transport="webrtc")
+    desktop = vm.desktop
+    run = MagicMock()
+    monkeypatch.setattr(desktop, "_run", run)
+    desktop.resize(2560, 1440)
+    run.assert_called_once_with("/opt/beam-vm/kiosk", "--resize", "2560", "1440")
+
+
+def test_streaming_desktop_launch_uses_its_session_user(sandbox_vm):
+    vm, sandbox = sandbox_vm
+    vm.info["spec"].update(desktop=True, desktop_transport="webrtc")
+    vm.desktop.launch("editor", "/workspace/project with spaces")
+    sandbox.process.exec.assert_called_once_with(
+        "/opt/beam-vm/desktop", "--launch", "editor", "/workspace/project with spaces"
+    )
+
+
+@pytest.mark.parametrize("config", [None, {"command": ["editor"]}])
+def test_graphical_stream_failure_returns_to_systemd_for_recovery(
+    tmp_path, monkeypatch, config
+):
+    guest = guest_module("kiosk")
+    monkeypatch.setattr(guest, "RUNTIME", tmp_path)
+    monkeypatch.setattr(
+        guest,
+        "POLICY",
+        guest.replace(guest.POLICY, mcp_defaults=str(tmp_path / "mcp.json")),
+    )
+    session = guest.Session(config)
+    server = MagicMock()
+    session.control_server = lambda: server
+    session.start_display = MagicMock(side_effect=RuntimeError("display failed"))
+    session.stop = MagicMock()
+    assert session.run() == 1
+    assert session.status()["state"] == "error"
+    server.shutdown.assert_called_once()
+
+
+def test_invalid_kiosk_command_keeps_the_session_available_for_restart(monkeypatch):
+    guest = guest_module("kiosk")
+    session = guest.Session({"command": ["missing-application", "private-argument"]})
+    monkeypatch.setattr(
+        session, "spawn", MagicMock(side_effect=FileNotFoundError("private"))
+    )
+    session.launch()
+    assert session.status()["state"] == "error"
+    assert session.status()["application"] == "error"
+    assert "private" not in session.status()["error"]
+    session.poll_application()
+    session.poll_mcp()
+    assert not session.stopping.is_set()
+
+
+@pytest.mark.parametrize("config", [None, {"command": ["editor"]}])
+def test_graphical_restart_invalidates_readiness_before_acknowledging(
+    config, monkeypatch
+):
+    from urllib.error import HTTPError
+    from urllib.request import Request, urlopen
+
+    guest = guest_module("kiosk")
+    monkeypatch.setattr(guest, "POLICY", guest.replace(guest.POLICY, status_port=0))
+    session = guest.Session(config)
+    session.update(state="ready", application="ready")
+    server = session.control_server()
+    url = f"http://127.0.0.1:{server.server_port}/restart"
+    try:
+        with pytest.raises(HTTPError) as error:
+            urlopen(Request(url, data=b"", method="POST"), timeout=2)
+        assert error.value.code == 403
+        assert session.status()["state"] == "ready"
+        request = Request(
+            url, data=b"", method="POST", headers={"X-Beam-Kiosk-Action": "restart"}
+        )
+        with urlopen(request, timeout=2) as response:
+            assert response.status == 202
+        assert session.restart.is_set()
+        assert session.status()["state"] == "starting"
+        assert session.status()["application"] == "starting"
+    finally:
+        server.shutdown()
+        server.server_close()

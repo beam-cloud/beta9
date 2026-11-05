@@ -650,3 +650,14 @@ func TestVMReconciliationCandidatesIntegration(t *testing.T) {
 		require.NotEqual(t, id, row.ID, "settled VM with an address needs no backfill")
 	}
 }
+
+func TestPublicTemplateLookupRequiresImmutableIDAndTemplateKind(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	mock.ExpectQuery(`a.kind=\$4 AND a.id::text=\$3 AND a.data->'public'='true'::jsonb`).
+		WithArgs(uint(8), types.VMArtifactTemplate, "template-id", types.VMArtifactTemplate).
+		WillReturnRows(sqlmock.NewRows([]string{"data"}).AddRow([]byte(`{"id":"template-id","kind":"template","public":true}`)))
+	a, err := repo.(*PostgresBackendRepository).GetVMArtifact(context.Background(), 8, types.VMArtifactTemplate, "template-id")
+	require.NoError(t, err)
+	require.True(t, a.Public)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

@@ -572,10 +572,10 @@ func TestAutomaticSnapshotsUseTheirIDAndRetainSourceName(t *testing.T) {
 	require.Equal(t, artifacts[0].ID, artifacts[0].Name)
 	require.Equal(t, v.ID, artifacts[0].VMID)
 	require.Equal(t, v.Name, artifacts[0].VMName)
-	manual, err := s.capture(context.Background(), v, "snapshot", "", "")
+	manual, err := s.capture(context.Background(), v, "snapshot", "", "", false)
 	require.NoError(t, err)
 	require.Equal(t, manual.ID, manual.Name)
-	custom, err := s.capture(context.Background(), v, "snapshot", "before-upgrade", "")
+	custom, err := s.capture(context.Background(), v, "snapshot", "before-upgrade", "", false)
 	require.NoError(t, err)
 	require.Equal(t, "before-upgrade", custom.Name)
 }
@@ -901,6 +901,7 @@ func TestTemplateOverridesRetainImageAndRoot(t *testing.T) {
 	require.Equal(t, "template-image", child.Spec.ImageID)
 	require.Equal(t, "template-image", gateway.stub.ImageId)
 	require.True(t, child.Spec.Desktop)
+	require.Empty(t, child.Spec.DesktopTransport, "legacy templates retain the transport supported by their immutable image")
 	require.Equal(t, "template-root", gateway.stub.Disks[0].SourceSnapshotId)
 	require.NotEqual(t, rootDisk(v), gateway.stub.Disks[0].Name)
 	require.NotContains(t, child.Handle, strings.ReplaceAll(child.ID, "-", ""), "routing capability must be independent of the resource UUID")
@@ -1180,4 +1181,41 @@ func TestListProjectsLaunchCompletionBeforeStatusFiltering(t *testing.T) {
 	require.Len(t, result, 1)
 	require.Equal(t, "running", result[0].Status)
 	require.Equal(t, "starting", v.Status)
+}
+
+type templateSnapshotBackend struct {
+	*vmBackend
+	published []string
+}
+
+func (b *templateSnapshotBackend) GetDiskSnapshot(_ context.Context, ws uint, id string) (*types.DiskSnapshot, error) {
+	return &types.DiskSnapshot{ExternalId: id, WorkspaceId: ws, Status: types.DiskSnapshotStatusAvailable}, nil
+}
+func (b *templateSnapshotBackend) UpdateDiskSnapshot(_ context.Context, s *types.DiskSnapshot) (*types.DiskSnapshot, error) {
+	b.published = append(b.published, s.ExternalId)
+	return s, nil
+}
+func TestPublishedTemplateDropsWorkspaceBindingsAndKeepsImmutableRoot(t *testing.T) {
+	s, v, _, _, _ := fixture()
+	b := &templateSnapshotBackend{vmBackend: s.backend.(*vmBackend)}
+	s.backend = b
+	v.Spec.Env = []string{"TOKEN=private"}
+	v.Spec.Secrets = []string{"api-key"}
+	v.Spec.Pool = "private-pool"
+	v.Spec.SSHPublicKey = "source-key"
+	v.Spec.Disks = []*pb.DurableDisk{{Name: "private-data"}}
+	v.Spec.Volumes = []*pb.Volume{{}}
+	a, err := s.capture(context.Background(), v, types.VMArtifactTemplate, "app-desktop", "", true)
+	require.NoError(t, err)
+	require.True(t, a.Public)
+	require.NotEmpty(t, a.RootSnapshotID)
+	require.Equal(t, []string{a.RootSnapshotID}, b.published)
+	require.Empty(t, a.Spec.Env)
+	require.Empty(t, a.Spec.Secrets)
+	require.Empty(t, a.Spec.Disks)
+	require.Empty(t, a.Spec.Volumes)
+	require.Empty(t, a.Spec.Pool)
+	require.Empty(t, a.Spec.SSHPublicKey)
+	require.Equal(t, []string{"TOKEN=private"}, v.Spec.Env)
+	require.Equal(t, "private-pool", v.Spec.Pool)
 }

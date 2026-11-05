@@ -384,6 +384,43 @@ func (r *PostgresBackendRepository) GetDiskSnapshot(ctx context.Context, workspa
 	return &snapshot, nil
 }
 
+// PublishDiskSnapshot publishes a complete immutable restore chain. Resolve and
+// validate every ancestor before changing visibility, then publish base-first.
+// A public ancestor may belong to another workspace; only owners change rows.
+func PublishDiskSnapshot(ctx context.Context, repo BackendRepository, workspaceID uint, snapshotID string) error {
+	var chain []*types.DiskSnapshot
+	seen := map[string]bool{}
+	for snapshotID != "" {
+		if seen[snapshotID] || len(chain) >= types.DiskSnapshotMaxPublishDepth {
+			return fmt.Errorf("disk snapshot chain is cyclic or too deep to publish")
+		}
+		seen[snapshotID] = true
+		snapshot, err := repo.GetDiskSnapshot(ctx, workspaceID, snapshotID)
+		if err != nil {
+			return err
+		}
+		if snapshot.WorkspaceId != workspaceID && (len(chain) == 0 || !snapshot.Public) {
+			return &types.ErrDiskSnapshotNotFound{SnapshotId: snapshotID}
+		}
+		if snapshot.Status != types.DiskSnapshotStatusAvailable {
+			return &types.ErrDiskSnapshotNotAvailable{SnapshotId: snapshotID}
+		}
+		chain = append(chain, snapshot)
+		snapshotID = snapshot.ParentSnapshotId
+	}
+	for i := len(chain) - 1; i >= 0; i-- {
+		snapshot := chain[i]
+		if snapshot.Public {
+			continue
+		}
+		snapshot.Public = true
+		if _, err := repo.UpdateDiskSnapshot(ctx, snapshot); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *PostgresBackendRepository) GetLatestDiskSnapshot(ctx context.Context, workspaceId uint, diskName string) (*types.DiskSnapshot, error) {
 	query := fmt.Sprintf(`
 		SELECT %s

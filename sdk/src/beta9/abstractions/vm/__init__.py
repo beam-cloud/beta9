@@ -39,7 +39,7 @@ from ...utils import local_process_kwargs
 from ..image import Image
 from ..sandbox import SandboxInstance
 from ..volume import Volume
-from .kiosk_config import Kiosk, MCPServer as MCPServer
+from .kiosk_config import DesktopRuntime, Kiosk, MCPServer as MCPServer
 
 
 # Keep the stock guest reproducible and avoid a registry tag lookup on launch.
@@ -134,7 +134,7 @@ def prepare_image(
         raise ValueError("VM images cannot be built with a GPU")
     prepared = _VMImage.__new__(_VMImage)
     prepared.__dict__ = copy.copy(image.__dict__)
-    if kiosk:
+    if desktop or kiosk:
         # GUI packages and the native streaming backend depend on the distro's
         # Python ABI. Serverless Python injection replaces /usr/bin/python3.
         prepared.ignore_python = True
@@ -531,9 +531,15 @@ class VM:
             self.refresh()
         raise TimeoutError("VM did not become ready; inspect vm get/logs")
 
+    @property
+    def _streaming_desktop(self):
+        spec = self.info["spec"]
+        return spec.get("kiosk") is not None or bool(spec.get("desktop_transport"))
+
     def _services_ready(self, sandbox, deadline):
         spec = self.info["spec"]
         kiosk = spec.get("kiosk") is not None
+        streaming = self._streaming_desktop
         services = [("beam-terminal.service", 7681)]
         for feature, unit, port in (
             ("ssh", "ssh.service", 2222),
@@ -557,15 +563,15 @@ class VM:
                     # is-active with several units succeeds if any is active.
                     if run('systemctl', 'is-active', '--quiet', unit).returncode:
                         raise SystemExit(1)
-                if {kiosk!r}:
-                    check = run('/opt/beam-vm/kiosk', '--check')
+                if {streaming!r}:
+                    check = run({DesktopRuntime().session_path!r}, '--check')
                     if check.returncode:
                         print(check.stdout.decode())
                         raise SystemExit(check.returncode)
                 for _, port in {services!r}:
                     with socket.create_connection(('127.0.0.1', port), min(1, remaining())):
                         pass
-                if {bool(spec.get("desktop"))!r} and not {kiosk!r}:
+                if {bool(spec.get("desktop"))!r} and not {streaming!r}:
                     # Xvnc listens before xstartup has started the window manager.
                     window = run('xprop', '-root', '_NET_SUPPORTING_WM_CHECK')
                     if window.returncode or not re.search(
@@ -704,8 +710,15 @@ class VM:
     def remove_snapshot(self, name: str):
         self._api("DELETE", "/artifacts/snapshot/" + quote(name, safe=""))
 
-    def create_template(self, name=None, description=""):
-        return self._action("template", name=name or self.name, description=description)
+    def create_template(self, name=None, description="", *, public=False):
+        """Save an immutable root; public=True lets other workspaces fork by ID.
+
+        Public templates include the complete root and its snapshot history.
+        Use a fresh VM that has never held personal data or signed-in accounts.
+        """
+        return self._action(
+            "template", name=name or self.name, description=description, public=public
+        )
 
     def fork(self, name=None, wait=True, *, cpu_tier=None) -> "VM":
         tier = {"cpu_tier": cpu_tier} if cpu_tier else {}

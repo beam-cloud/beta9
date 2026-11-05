@@ -413,3 +413,44 @@ func diskSnapshotRows() *sqlmock.Rows {
 		"public",
 	})
 }
+
+type publishSnapshotRepo struct {
+	BackendRepository
+	rows    map[string]*types.DiskSnapshot
+	updated []string
+}
+
+func (r *publishSnapshotRepo) GetDiskSnapshot(_ context.Context, ws uint, id string) (*types.DiskSnapshot, error) {
+	s := r.rows[id]
+	if s == nil || s.WorkspaceId != ws && !s.Public {
+		return nil, &types.ErrDiskSnapshotNotFound{SnapshotId: id}
+	}
+	copy := *s
+	return &copy, nil
+}
+func (r *publishSnapshotRepo) UpdateDiskSnapshot(_ context.Context, s *types.DiskSnapshot) (*types.DiskSnapshot, error) {
+	r.updated = append(r.updated, s.ExternalId)
+	r.rows[s.ExternalId] = s
+	return s, nil
+}
+func TestPublishSnapshotValidatesWholeChainBeforePublishingBaseFirst(t *testing.T) {
+	for _, broken := range []bool{false, true} {
+		r := &publishSnapshotRepo{rows: map[string]*types.DiskSnapshot{
+			"head": {ExternalId: "head", WorkspaceId: 7, Status: types.DiskSnapshotStatusAvailable, ParentSnapshotId: "base"},
+			"base": {ExternalId: "base", WorkspaceId: 7, Status: types.DiskSnapshotStatusAvailable},
+		}}
+		if broken {
+			r.rows["base"].Status = types.DiskSnapshotStatusPending
+		}
+		err := PublishDiskSnapshot(context.Background(), r, 7, "head")
+		if broken {
+			var unavailable *types.ErrDiskSnapshotNotAvailable
+			require.ErrorAs(t, err, &unavailable)
+			require.Empty(t, r.updated)
+		} else {
+			require.NoError(t, err)
+			require.Equal(t, []string{"base", "head"}, r.updated)
+			require.Error(t, PublishDiskSnapshot(context.Background(), r, 8, "head"), "public visibility does not grant publication authority")
+		}
+	}
+}

@@ -104,8 +104,8 @@ def patch_client(root, pixel_ratio):
 
 
 if __name__ == "__main__":
-    from kiosk_config import KioskRuntime
+    from kiosk_config import DesktopRuntime
 
     root = Path("/opt/selkies")
     patch(root)
-    patch_client(root, KioskRuntime().pixel_ratio)
+    patch_client(root, DesktopRuntime().pixel_ratio)

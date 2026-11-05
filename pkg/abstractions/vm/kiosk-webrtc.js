@@ -181,12 +181,17 @@
           signal: AbortSignal.timeout(policy.requestMs),
         });
         if (!response.ok) throw new Error('Unable to reopen application. Check your access or VM logs.');
-        location.reload();
+        this.reconnect();
       } catch (error) {
         this.notify('error', error.message);
       } finally {
         this.restart.disabled = false;
       }
+    }
+
+    reconnect() {
+      // The gateway owns this page, so it remains available during guest restarts.
+      location.replace(new URL(this.entry ? './' : '../', location.href).href);
     }
 
     mount() {
@@ -203,7 +208,7 @@
       <button>Reconnect</button><button>Reopen application</button>`;
       [this.message, this.retry, this.restart] = this.overlay.querySelectorAll('p,button');
       document.body.append(this.overlay);
-      this.retry.onclick = () => location.reload();
+      this.retry.onclick = () => this.reconnect();
       this.restart.onclick = () => this.reopen();
       this.render();
       this.poll();
@@ -226,6 +231,7 @@
     }
 
     async poll() {
+      this.checkInput();
       // Native close() changes peer state without emitting a connection event.
       this.syncConnection();
       try {
@@ -239,7 +245,7 @@
         if (!response.ok) throw new Error('Unavailable');
         this.status = await response.json();
         this.failures = 0;
-        if (this.entry && this.status.application === 'ready') {
+        if (this.entry && this.status.state === 'ready' && this.status.application === 'ready') {
           const client = new URL('stream/', location.href);
           const health = await fetch(new URL('api/health', client), {
             cache: 'no-store', signal: AbortSignal.timeout(policy.requestMs),
@@ -393,14 +399,60 @@
       } else if (['disconnected', 'failed', 'closed'].includes(state)) {
         this.notify('disconnected');
         this.refreshDisplay();
-        this.recoveryTimer = setTimeout(() => location.reload(), policy.recoveryMs);
+        this.recoveryTimer = setTimeout(() => this.recover(),
+          state === 'closed' ? policy.pollMs : policy.recoveryMs);
       }
+    }
+
+    checkInput() {
+      const peer = this.activePeer;
+      // SCTP can fail while ICE and video remain connected. Closed channels
+      // disappear from getStats(), so retain the actual input channel instead.
+      if (peer?.connectionState === 'connected' && this.inputChannel &&
+          ['closing', 'closed'].includes(this.inputChannel.readyState)) peer.close();
+    }
+
+    async recover() {
+      const peer = this.activePeer;
+      const recovered = () => peer !== this.activePeer || this.webSocketLive ||
+        this.activePeer?.connectionState === 'connected';
+      if (recovered()) return;
+      try {
+        // Keep the reconnect UI alive through gateway/service outages. A blind
+        // navigation while the gateway restarts strands the tab on a net error.
+        const response = await fetch(this.endpoint('status'), {
+          cache: 'no-store', signal: AbortSignal.timeout(policy.requestMs),
+        });
+        if (recovered()) return;
+        if ([401, 403, 404].includes(response.status)) {
+          this.notify('error', 'Application access is unavailable. Reopen its link to check your access.');
+          return;
+        }
+        if (response.ok) {
+          // Re-enter the gateway-owned loading page. The guest's status server
+          // starts before its stream; the shared startup flow waits for both.
+          this.reconnect();
+          return;
+        }
+      } catch (_) { /* Keep retrying while the authenticated route recovers. */ }
+      if (!recovered()) this.recoveryTimer = setTimeout(() => this.recover(), policy.pollMs);
     }
 
     trackPeer(peer) {
       this.activePeer = peer;
+      this.inputChannel = null;
       this.peerState = undefined;
       this.syncConnection();
+      peer.addEventListener('datachannel', ({channel}) => {
+        if (peer !== this.activePeer || channel.label !== 'input') return;
+        this.inputChannel = channel;
+        const changed = () => {
+          if (peer !== this.activePeer) return;
+          this.checkInput();
+          this.syncConnection();
+        };
+        for (const event of ['closing', 'close']) channel.addEventListener(event, changed);
+      });
       peer.addEventListener('track', ({receiver}) => {
         // Receive-side hints favor fresh desktop frames over playback buffering.
         try { if ('jitterBufferTarget' in receiver) receiver.jitterBufferTarget = 0; } catch (_) {}

@@ -86,7 +86,7 @@ async function kiosk(sourcePath) {
   assert.match(html, /src="_beam\/kiosk\/webrtc.js"/);
   const source = fs.readFileSync(path.join(path.dirname(sourcePath), 'kiosk-webrtc.js'), 'utf8');
   async function check(prefix, entry) {
-    let application = 'starting', responseStatus = 200, health = true, reloads = 0;
+    let application = 'starting', state = null, responseStatus = 200, health = true, reloads = 0;
     const requests = [], navigations = [], timers = new Map();
     const elements = {'#status': {}, '#retry': {}, '#restart': {}};
     const overlay = {setAttribute() {}, querySelectorAll: () => Object.values(elements)};
@@ -94,7 +94,7 @@ async function kiosk(sourcePath) {
     const window = {addEventListener() {}};
     vm.runInNewContext(source, {
       window, URL, AbortSignal, Date, parent: {postMessage() {}},
-      location: {href: origin + prefix + (entry ? '' : 'stream/'), origin, replace: url => navigations.push(url), reload: () => reloads++},
+      location: {href: origin + prefix + (entry ? '' : 'stream/'), origin, replace: url => { if(new URL(url).pathname===prefix) reloads++; else navigations.push(url); }, reload: () => reloads++},
       document: {
         documentElement: {hasAttribute: () => entry}, body: {append() {}}, readyState: 'complete',
         createElement: () => overlay,
@@ -107,7 +107,7 @@ async function kiosk(sourcePath) {
         if (pathname.endsWith('/restart')) return {ok: true};
         if (pathname.endsWith('/health')) return {ok: health};
         return {ok: responseStatus === 200, status: responseStatus,
-          json: async () => ({state: application, application, error: 'Application closed'})};
+          json: async () => ({state: state || application, application, error: 'Application closed'})};
       },
     });
     const advance = async () => {const fn = timers.get(1); timers.delete(1); fn(); await flush();};
@@ -127,7 +127,9 @@ async function kiosk(sourcePath) {
     responseStatus = 200; application = 'ready'; health = false;
     await window.beamKiosk.poll();
     assert.equal(navigations.length, 0, 'wait for native stream health');
-    health = true; await advance();
+    health = true; state = 'starting'; await window.beamKiosk.poll();
+    assert.equal(navigations.length, 0, 'restart readiness cannot use the old application state');
+    state = 'ready'; await advance();
     if (entry) {
       assert.equal(navigations.at(-1), origin + prefix + 'stream/');
       assert.equal(requests.at(-1).path, prefix + 'stream/api/health');
@@ -155,7 +157,7 @@ async function webrtc(sourcePath) {
       close() { this.connectionState = 'closed'; }
     }
     const origin = 'https://application.example';
-    let status = 200;
+    let status = 200, probeStatus = 200, reloads = 0;
     const timers=new Map();
     const window = {RTCPeerConnection: Peer, devicePixelRatio: 1.5,
       sessionStorage: {setItem: (key, value) => storage.set(key, value)},
@@ -163,10 +165,13 @@ async function webrtc(sourcePath) {
     vm.runInNewContext(source, {
       window, RTCPeerConnection: Peer,
       URL, AbortSignal, WeakSet,
-      location: { href: origin + path + 'stream/', origin },
+      location: { href: origin + path + 'stream/', origin, replace: url => { assert.equal(new URL(url).pathname, path); reloads++; } },
       parent: { postMessage(value, target) { messages.push([value, target]); } },
       setTimeout:callback=>{timers.set(1,callback);return 1;},clearTimeout:id=>timers.delete(id),
       fetch: async (url, options) => {
+        if (url.pathname === path + '_beam/kiosk/status') {
+          return {ok: probeStatus === 200, status: probeStatus};
+        }
         assert.equal(url.pathname, path + '_beam/kiosk/webrtc/session');
         assert.equal(options.credentials, 'same-origin');
         assert.equal(options.headers['X-Beam-Kiosk-Action'], 'webrtc');
@@ -216,6 +221,22 @@ async function webrtc(sourcePath) {
     status=200;
     await new Peer().setRemoteDescription({type:'offer',sdp:'guest-description'});
     assert.equal(timers.size,0,'a replacement peer cancels the previous recovery timer');
+    viewer.activePeer.close();viewer.syncConnection();probeStatus=503;
+    await timers.get(1)();
+    assert.equal(reloads,0,'gateway outages must retain the reconnect document');
+    assert.equal(timers.size,1,'unavailable gateways are probed again');
+    probeStatus=200;await timers.get(1)();
+    assert.equal(reloads,1,'recover through the gateway loading page after the authenticated route responds');
+    const controlPeer = new Peer();
+    await controlPeer.setRemoteDescription({type:'offer',sdp:'guest-description'});
+    controlPeer.connectionState='connected';
+    const channel={label:'input',readyState:'open',events:{},addEventListener(name,callback){this.events[name]=callback;}};
+    controlPeer.events.datachannel({channel});
+    channel.readyState='closed';channel.events.close();
+    assert.equal(controlPeer.connectionState,'closed','live video cannot conceal a failed input channel');
+    viewer.syncConnection();
+    await timers.get(1)();
+    assert.equal(reloads,2,'a failed input channel must reconnect the session');
   }
   async function checkDisplay() {
     const messages=[],events={},videoEvents={},windowEvents={},timers=new Map();

@@ -1,7 +1,8 @@
 [Desktop Entry]
 Type=Application
 Name=Chrome
-Exec=google-chrome-stable --no-sandbox --disable-dev-shm-usage --no-first-run --no-default-browser-check --test-type --force-device-scale-factor=2 --start-maximized %U
+Exec=google-chrome-stable --start-maximized %U
 Icon=google-chrome
 Path=/workspace
 Terminal=false
+MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;

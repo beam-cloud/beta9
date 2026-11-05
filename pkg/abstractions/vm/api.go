@@ -333,6 +333,7 @@ func (s *Service) create(c echo.Context) error {
 		seed, kind = req.Snapshot, "snapshot"
 	}
 
+	preserveDesktopTransport := false
 	if seed != "" {
 		a, err := s.repo.GetVMArtifact(ctx, info.Workspace.Id, kind, seed)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -357,6 +358,8 @@ func (s *Service) create(c echo.Context) error {
 		for key, value := range overrides {
 			fields[key] = value
 		}
+		_, transportOverride := overrides["desktop_transport"]
+		preserveDesktopTransport = a.Spec.Desktop && a.Spec.Kiosk == nil && !transportOverride
 
 		fields["source_snapshot_id"], _ = json.Marshal(a.RootSnapshotID)
 		req.Spec, _ = json.Marshal(fields)
@@ -391,11 +394,12 @@ func (s *Service) create(c echo.Context) error {
 	}
 
 	v, err := s.createVM(ctx, info, types.VMCreateOptions{
-		Name:      req.Name,
-		Spec:      spec,
-		Metadata:  req.Metadata,
-		RequestID: req.RequestID,
-		Image:     image,
+		Name:                     req.Name,
+		Spec:                     spec,
+		Metadata:                 req.Metadata,
+		RequestID:                req.RequestID,
+		Image:                    image,
+		PreserveDesktopTransport: preserveDesktopTransport,
 	})
 	if err != nil {
 		return apiError(err)
@@ -406,8 +410,10 @@ func (s *Service) create(c echo.Context) error {
 
 func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.VMCreateOptions) (*types.VM, error) {
 	name, spec := opts.Name, opts.Spec
-	if err := s.configureKioskTransport(&spec); err != nil {
-		return nil, err
+	if !opts.PreserveDesktopTransport || spec.Kiosk != nil || spec.DesktopTransport != "" {
+		if err := s.configureDesktopTransport(&spec); err != nil {
+			return nil, err
+		}
 	}
 	if err := validate(&spec); err != nil {
 		return nil, err
@@ -534,6 +540,7 @@ type actionRequest struct {
 	Protected    *bool         `json:"protected,omitempty"`
 	TTL          int64         `json:"ttl,omitempty"`
 	Cold         bool          `json:"cold,omitempty"`
+	Public       bool          `json:"public,omitempty"`
 }
 
 func (s *Service) action(c echo.Context) error {
@@ -541,6 +548,9 @@ func (s *Service) action(c echo.Context) error {
 	var req actionRequest
 	if err := decode(c, &req); err != nil {
 		return err
+	}
+	if req.Public && c.Param("action") != types.VMArtifactTemplate {
+		return echo.NewHTTPError(http.StatusBadRequest, "only templates can be published")
 	}
 
 	// Browser credentials and activity updates do not change lifecycle state.
@@ -663,7 +673,7 @@ func (s *Service) action(c echo.Context) error {
 		err = s.stop(ctx, v, !req.NoSnapshot)
 	case "snapshot", "template":
 		kind := c.Param("action")
-		a, err := s.capture(ctx, v, kind, req.Name, req.Description)
+		a, err := s.capture(ctx, v, kind, req.Name, req.Description, req.Public)
 		if err != nil {
 			return apiError(err)
 		}
@@ -684,7 +694,7 @@ func (s *Service) action(c echo.Context) error {
 		}
 		spec.SourceSnapshotID = v.RootSnapshotID
 		spec.SSHPublicKey = req.SSHPublicKey
-		child, err := s.createVM(ctx, info, types.VMCreateOptions{Name: req.Name, Spec: spec})
+		child, err := s.createVM(ctx, info, types.VMCreateOptions{Name: req.Name, Spec: spec, PreserveDesktopTransport: true})
 		if err != nil {
 			return apiError(err)
 		}
@@ -810,4 +820,17 @@ func (s *Service) removeArtifact(c echo.Context) error {
 	}
 
 	return c.NoContent(http.StatusNoContent)
+}
+
+func (s *Service) showArtifact(c echo.Context) error {
+	ctx, info := requestContext(c)
+	kind := c.Param("kind")
+	if kind != types.VMArtifactTemplate && kind != types.VMArtifactSnapshot {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid artifact kind")
+	}
+	a, err := s.repo.GetVMArtifact(ctx, info.Workspace.Id, kind, c.Param("artifact"))
+	if err != nil {
+		return apiError(err)
+	}
+	return c.JSON(http.StatusOK, artifactResponse(*a))
 }
