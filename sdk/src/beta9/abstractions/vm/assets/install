@@ -186,6 +186,20 @@ if [ "$desktop" = true ] && [ "$kiosk" != true ]; then
     xfce4-appfinder xfce4-settings xfdesktop4 xfwm4 thunar xfce4-terminal \
     librsvg2-common xdg-user-dirs \
     xdg-utils shared-mime-info python3-xdg at-spi2-core gdebi file-roller unzip
+  # Let package names and status text use the available header width.
+  python3 - /usr/share/gdebi/gdebi.ui <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+tree = ET.parse(sys.argv[1])
+for child in tree.iter("child"):
+    widget = child.find("object")
+    if widget is not None and widget.get("id") in ("label_name", "hbox2"):
+        flags = child.find("packing/property[@name='x_options']")
+        if flags is not None:
+            flags.text = "GTK_EXPAND | GTK_FILL"
+tree.write(sys.argv[1], encoding="utf-8", xml_declaration=True)
+PY
   # Browser downloads and the file manager share the system package opener.
   install -d /usr/local/share/applications
   install -m 0644 "$assets/package-installer.desktop" /usr/local/share/applications/
