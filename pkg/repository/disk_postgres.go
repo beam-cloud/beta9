@@ -10,6 +10,7 @@ import (
 
 	"github.com/Masterminds/squirrel"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/jmoiron/sqlx"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
@@ -367,21 +368,90 @@ func (r *PostgresBackendRepository) UpdateDiskSnapshot(ctx context.Context, snap
 }
 
 func (r *PostgresBackendRepository) GetDiskSnapshot(ctx context.Context, workspaceId uint, snapshotId string) (*types.DiskSnapshot, error) {
+	return getDiskSnapshot(ctx, r.client, workspaceId, snapshotId, false)
+}
+
+func getDiskSnapshot(ctx context.Context, db sqlx.QueryerContext, workspaceId uint, snapshotId string, lock bool) (*types.DiskSnapshot, error) {
 	query := fmt.Sprintf(`
 		SELECT %s
 		FROM disk_snapshot
 		WHERE (workspace_id = $1 OR (public = TRUE AND status = $3))
 			AND external_id = $2 AND deleted_at IS NULL
-		LIMIT 1;`, diskSnapshotColumns(""))
+		LIMIT 1`, diskSnapshotColumns(""))
+	if lock {
+		query += " FOR UPDATE"
+	}
 
 	var snapshot types.DiskSnapshot
-	if err := r.client.GetContext(ctx, &snapshot, query, workspaceId, snapshotId, types.DiskSnapshotStatusAvailable); err != nil {
+	if err := sqlx.GetContext(ctx, db, &snapshot, query, workspaceId, snapshotId, types.DiskSnapshotStatusAvailable); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, &types.ErrDiskSnapshotNotFound{SnapshotId: snapshotId}
 		}
 		return nil, err
 	}
 	return &snapshot, nil
+}
+
+// PublishDiskSnapshot atomically publishes a complete immutable restore chain.
+func (r *PostgresBackendRepository) PublishDiskSnapshot(ctx context.Context, workspaceID uint, snapshotID string) error {
+	tx, err := r.client.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := publishDiskSnapshot(ctx, tx, workspaceID, snapshotID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// Lock and validate every ancestor before publishing. Template creation shares
+// this transaction, so an insert failure cannot expose an unregistered root.
+// A public ancestor may belong to another workspace; only owners change rows.
+func publishDiskSnapshot(ctx context.Context, tx *sqlx.Tx, workspaceID uint, snapshotID string) error {
+	if snapshotID == "" {
+		return &types.ErrDiskSnapshotNotFound{SnapshotId: snapshotID}
+	}
+	var chain []*types.DiskSnapshot
+	seen := map[string]bool{}
+	for snapshotID != "" {
+		if seen[snapshotID] || len(chain) >= types.DiskSnapshotMaxPublishDepth {
+			return fmt.Errorf("disk snapshot chain is cyclic or too deep to publish")
+		}
+		seen[snapshotID] = true
+		snapshot, err := getDiskSnapshot(ctx, tx, workspaceID, snapshotID, true)
+		if err != nil {
+			return err
+		}
+		if snapshot.WorkspaceId != workspaceID && (len(chain) == 0 || !snapshot.Public) {
+			return &types.ErrDiskSnapshotNotFound{SnapshotId: snapshotID}
+		}
+		if snapshot.Status != types.DiskSnapshotStatusAvailable {
+			return &types.ErrDiskSnapshotNotAvailable{SnapshotId: snapshotID}
+		}
+		chain = append(chain, snapshot)
+		snapshotID = snapshot.ParentSnapshotId
+	}
+	for i := len(chain) - 1; i >= 0; i-- {
+		snapshot := chain[i]
+		if snapshot.Public {
+			continue
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE disk_snapshot SET public=TRUE,updated_at=CURRENT_TIMESTAMP
+		 WHERE workspace_id=$1 AND external_id=$2 AND status=$3 AND deleted_at IS NULL`,
+			workspaceID, snapshot.ExternalId, types.DiskSnapshotStatusAvailable)
+		if err != nil {
+			return err
+		}
+		count, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if count != 1 {
+			return &types.ErrDiskSnapshotNotAvailable{SnapshotId: snapshot.ExternalId}
+		}
+	}
+	return nil
 }
 
 func (r *PostgresBackendRepository) GetLatestDiskSnapshot(ctx context.Context, workspaceId uint, diskName string) (*types.DiskSnapshot, error) {

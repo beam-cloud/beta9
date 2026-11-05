@@ -32,6 +32,7 @@ func managementAPI(s *Service, info *auth.AuthInfo) *echo.Echo {
 
 func proxyAPI(s *Service) *echo.Echo {
 	e := echo.New()
+	e.Any("/vm/:handle/:port", s.proxy)
 	e.Any("/vm/:handle/:port/*", s.proxy)
 	return e
 }

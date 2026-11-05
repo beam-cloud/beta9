@@ -14,7 +14,11 @@ with tarfile.open(fileobj=buffer, mode="w", format=tarfile.USTAR_FORMAT) as arch
         contents = path.read_bytes()
         entry = tarfile.TarInfo(path.name)
         entry.size = len(contents)
-        entry.mode = 0o644 if path.suffix in (".service", ".desktop", ".svg", ".xml") else 0o755
+        entry.mode = (
+            0o644
+            if path.suffix in (".service", ".desktop", ".svg", ".xml", ".rc", ".override", ".rules")
+            else 0o755
+        )
         archive.addfile(entry, io.BytesIO(contents))
 with (directory / "assets.tar.gz").open("wb") as output:
     with gzip.GzipFile(

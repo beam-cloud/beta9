@@ -60,21 +60,24 @@ func (s *Service) startWebRTC(tcpConfig types.PodTCPConfig, config types.VMWebRT
 	return nil
 }
 
-func (s *Service) configureKioskTransport(spec *types.VMSpec) error {
-	if spec.Kiosk == nil {
+func (s *Service) configureDesktopTransport(spec *types.VMSpec) error {
+	if !spec.Desktop && spec.Kiosk == nil {
 		return nil
 	}
-	// Clone before normalizing a template/fork's shared pointer.
-	kiosk := spec.Kiosk.Clone()
-	spec.Kiosk = kiosk
-	if kiosk.Transport == "" {
-		kiosk.Transport = types.VMKioskTransportWebSockets
+	transport := &spec.DesktopTransport
+	if spec.Kiosk != nil {
+		// Clone before normalizing a template/fork's shared pointer.
+		spec.Kiosk = spec.Kiosk.Clone()
+		transport = &spec.Kiosk.Transport
+	}
+	if *transport == "" {
+		*transport = types.VMDesktopTransportWebSockets
 		if s.webrtc != nil {
-			kiosk.Transport = types.VMKioskTransportWebRTC
+			*transport = types.VMDesktopTransportWebRTC
 		}
 	}
-	if kiosk.Transport == types.VMKioskTransportWebRTC && s.webrtc == nil {
-		return fmt.Errorf("kiosk WebRTC requires the shared TCP gateway; use transport=websockets on this installation")
+	if *transport == types.VMDesktopTransportWebRTC && s.webrtc == nil {
+		return fmt.Errorf("desktop WebRTC requires the shared TCP gateway; use transport=websockets on this installation")
 	}
 	return nil
 }
@@ -155,7 +158,7 @@ func (w *vmWebRTC) register(c echo.Context, v *types.VM) error {
 	if c.Request().Method != http.MethodPost || c.Request().Header.Get(types.VMKioskActionHeader) != "webrtc" {
 		return echo.NewHTTPError(http.StatusForbidden, "explicit WebRTC registration required")
 	}
-	if w == nil || v.Spec.Kiosk == nil || v.Spec.Kiosk.Transport != types.VMKioskTransportWebRTC {
+	if w == nil || v.Spec.DisplayTransport() != types.VMDesktopTransportWebRTC {
 		return echo.NewHTTPError(http.StatusServiceUnavailable, "WebRTC is unavailable for this session")
 	}
 	controller := http.NewResponseController(c.Response().Writer)
@@ -251,8 +254,8 @@ func (w *vmWebRTC) activeVM(ctx context.Context, route *ICESession) (*types.VM, 
 	}
 	if v.ContainerID != route.ContainerID || v.Generation != route.Generation ||
 		v.DesiredState != types.VMStateRunning || v.TrafficAccessToken == "" ||
-		trafficHash(v) != route.TokenHash || v.Spec.Kiosk == nil ||
-		v.Spec.Kiosk.Transport != types.VMKioskTransportWebRTC {
+		trafficHash(v) != route.TokenHash ||
+		v.Spec.DisplayTransport() != types.VMDesktopTransportWebRTC {
 		return nil, fmt.Errorf("WebRTC session is no longer active")
 	}
 	if _, err := w.service.accessOwner(ctx, v); err != nil {

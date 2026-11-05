@@ -1,4 +1,4 @@
-"""Application-independent configuration for a browser application session."""
+"""Launch configuration and shared policy for graphical VM sessions."""
 
 from dataclasses import asdict, dataclass, field, replace
 from typing import Dict, List, Optional, Tuple
@@ -55,11 +55,11 @@ class Kiosk:
 
 
 @dataclass(frozen=True)
-class KioskRuntime:
+class DesktopRuntime:
     """Guest policy shared by image preparation, supervision and desktop controls.
 
     Launch configuration stays independent of the streaming backend. Policy
-    changes require rebuilding and qualifying the kiosk image.
+    changes require rebuilding and qualifying the graphical image.
     """
 
     display_port: int = 8080
@@ -73,9 +73,10 @@ class KioskRuntime:
     max_dimension: int = 8192
     min_size: Tuple[int, int] = (320, 200)
     framerate: int = 60
+    full_color: bool = False
     crf: int = 18
-    min_bitrate: int = 3000
-    max_bitrate: int = 24000
+    min_bitrate: int = 1000
+    max_bitrate: int = 8000
     frame_queue: int = 2
     mcp_port: int = 8082
     mcp_path: str = "/mcp"
@@ -88,13 +89,17 @@ class KioskRuntime:
     command_timeout: float = 2
     process_timeout: float = 3
     display_timeout: float = 30
-    manager_timeout: float = 10
+    manager_timeout: float = 30
     resize_timeout: float = 10
     application_timeout: float = 120
     retry_window: float = 60
     max_retries: int = 3
     poll_interval: float = 0.25
     geometry_interval: float = 1
+    desktop_user: str = "beam"
+    desktop_launcher: str = "/opt/beam-vm/desktop"
+    session_path: str = "/opt/beam-vm/kiosk"
+    rate_control: str = "cbr"
 
     @property
     def dpi(self):
@@ -108,3 +113,7 @@ class KioskRuntime:
         return len(size) == len(self.min_size) and all(
             type(v) is int and low <= v <= self.max_dimension for v, low in zip(size, self.min_size)
         )
+
+
+# Existing callers and prepared images may still import the kiosk-specific name.
+KioskRuntime = DesktopRuntime

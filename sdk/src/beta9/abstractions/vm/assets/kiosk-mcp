@@ -22,9 +22,9 @@ from fastmcp.server.middleware import Middleware
 from fastmcp.server.providers.proxy import ProxyClient, ProxyProvider
 from starlette.responses import JSONResponse
 
-from kiosk_config import KioskRuntime, MCPServer
+from kiosk_config import DesktopRuntime, MCPServer
 
-POLICY = KioskRuntime()
+POLICY = DesktopRuntime()
 
 
 class Registry:

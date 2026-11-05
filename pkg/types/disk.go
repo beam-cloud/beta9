@@ -22,6 +22,8 @@ const (
 // the value recorded in snapshot rows and manifests.
 const DiskFilesystemExt4 = "ext4"
 
+const DiskSnapshotMaxPublishDepth = 128
+
 // QMP command names the qcow disk engine drives against qemu-storage-daemon.
 const (
 	QMPCommandCapabilities         = "qmp_capabilities"

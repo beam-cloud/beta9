@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Terminal
-Exec=xterm
-Icon=/opt/beam-vm/terminal.svg
+Exec=gnome-terminal
+Icon=org.gnome.Terminal
 Path=/workspace
 Terminal=false

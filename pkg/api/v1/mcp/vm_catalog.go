@@ -54,20 +54,21 @@ func vmCPUTierSchema() map[string]any {
 func vmSpecSchema() map[string]any {
 	command := map[string]any{"type": "array", "items": str("Argument"), "minItems": 1, "maxItems": types.VMKioskMaxCommandArgs}
 	spec := schema(props{
-		"image_id":        str("VM image built with beam vm image build or the local vm_build_image tool"),
-		"cpu":             map[string]any{"type": "integer", "minimum": 100, "maximum": 64000, "default": 4000, "description": "CPU millicores (1000 = 1 CPU); fresh VM default is 4000."},
-		"memory":          map[string]any{"type": "integer", "minimum": 256, "maximum": 262144, "default": 8192, "description": "RAM in MiB; desktop requires at least 1024. Fresh VM default is 8192."},
-		"gpu":             str("One GPU type, for example RTX4090; omitted for CPU-only VMs"),
-		"disk_size":       str("Writable root capacity; fresh VM default 50Gi, maximum 100Gi"),
-		"pool":            str("VM-capable worker pool"),
-		"cpu_tier":        vmCPUTierSchema(),
-		"env":             strList("KEY=value entries"),
-		"secrets":         strList("Workspace secret names with approved hosts; guest env receives placeholders for HTTPS request headers. BETA9_TOKEN/BEAM_TOKEN are explicit plaintext opt-ins."),
-		"ports":           map[string]any{"type": "array", "items": boundedInt(1, 65535, 8000)},
-		"private_ports":   map[string]any{"type": "array", "items": boundedInt(1, 65535, 8000), "description": "Tunnel-only ports; no public URL."},
-		"protected_ports": map[string]any{"type": "array", "items": boundedInt(1, 65535, 8000), "description": "Published HTTP ports requiring a VM traffic token or vm_access_url browser session."},
-		"public_ports":    map[string]any{"type": "array", "items": boundedInt(1, 65535, 7681), "description": "Publish without a traffic token; terminal and desktop ports are protected by default."},
-		"desktop":         map[string]any{"type": "boolean", "description": "Enable a desktop already installed in image_id (Ubuntu 24.04 or 22.04); opt-in for fresh MCP specs, at least 1024 MiB RAM."},
+		"image_id":          str("VM image built with beam vm image build or the local vm_build_image tool"),
+		"cpu":               map[string]any{"type": "integer", "minimum": 100, "maximum": 64000, "default": 4000, "description": "CPU millicores (1000 = 1 CPU); fresh VM default is 4000."},
+		"memory":            map[string]any{"type": "integer", "minimum": 256, "maximum": 262144, "default": 8192, "description": "RAM in MiB; desktop requires at least 1024. Fresh VM default is 8192."},
+		"gpu":               str("One GPU type, for example RTX4090; omitted for CPU-only VMs"),
+		"disk_size":         str("Writable root capacity; fresh VM default 50Gi, maximum 100Gi"),
+		"pool":              str("VM-capable worker pool"),
+		"cpu_tier":          vmCPUTierSchema(),
+		"env":               strList("KEY=value entries"),
+		"secrets":           strList("Workspace secret names with approved hosts; guest env receives placeholders for HTTPS request headers. BETA9_TOKEN/BEAM_TOKEN are explicit plaintext opt-ins."),
+		"ports":             map[string]any{"type": "array", "items": boundedInt(1, 65535, 8000)},
+		"private_ports":     map[string]any{"type": "array", "items": boundedInt(1, 65535, 8000), "description": "Tunnel-only ports; no public URL."},
+		"protected_ports":   map[string]any{"type": "array", "items": boundedInt(1, 65535, 8000), "description": "Published HTTP ports requiring a VM traffic token or vm_access_url browser session."},
+		"public_ports":      map[string]any{"type": "array", "items": boundedInt(1, 65535, 7681), "description": "Publish without a traffic token; terminal and desktop ports are protected by default."},
+		"desktop":           map[string]any{"type": "boolean", "description": "Enable a desktop already installed in image_id (Ubuntu 24.04 or 22.04); opt-in for fresh MCP specs, at least 1024 MiB RAM."},
+		"desktop_transport": enum(string(types.VMDesktopTransportWebRTC), string(types.VMDesktopTransportWebSockets)),
 		"kiosk": schema(props{
 			"transport": enum(string(types.VMKioskTransportWebRTC), string(types.VMKioskTransportWebSockets)),
 			"command":   command,
@@ -100,6 +101,13 @@ func vmSpecSchema() map[string]any {
 			"properties": props{"desktop": map[string]any{"const": true}},
 		},
 		"then": map[string]any{"properties": props{"memory": map[string]any{"minimum": 1024}}},
+	}, {
+		"if": map[string]any{"required": []string{"desktop_transport"}},
+		"then": map[string]any{
+			"required":   []string{"desktop"},
+			"properties": props{"desktop": map[string]any{"const": true}},
+			"not":        map[string]any{"required": []string{"kiosk"}},
+		},
 	}}
 	return spec
 }
@@ -150,7 +158,7 @@ func (g *Group) vmLifecycleCatalog() []mcpTool {
 			schema(props{
 				"name":       str("Optional VM name"),
 				"spec":       vmSpecSchema(),
-				"template":   str("Template name or ID"),
+				"template":   str("Owned template name/ID or public template ID from another workspace"),
 				"snapshot":   str("VM snapshot name or ID"),
 				"metadata":   stringMapSchema(),
 				"request_id": str("Idempotency UUID"),
@@ -201,7 +209,7 @@ func (g *Group) vmLifecycleCatalog() []mcpTool {
 		{"stop_vm", "stop", "Stop a VM and snapshot its writable root unless no_snapshot=true. Requires confirmation.", "beam:write", "Stopping the VM interrupts its applications.", props{"no_snapshot": boolean()}, nil, false, true},
 		{"fork_vm", "fork", "Fork the writable root into a new independent VM. An SSH-enabled source requires ssh_public_key matching your local identity.", "beam:write", "", props{"new_name": str("New VM name"), "ssh_public_key": str("New SSH public key")}, nil, false, false},
 		{"create_vm_snapshot", "snapshot", "Create a durable VM root snapshot.", "beam:write", "", props{"snapshot_name": str("Snapshot name")}, nil, false, false},
-		{"create_vm_template", "template", "Create a reusable VM template from its writable root.", "beam:write", "", props{"template_name": str("Template name"), "description": str("Template description")}, nil, false, false},
+		{"create_vm_template", "template", "Create a reusable VM template. public=true requires confirm=true and permanently publishes the complete root and snapshot history for other workspaces to fork by ID; use a fresh VM that has never held personal data or signed-in accounts.", "beam:write", "", props{"template_name": str("Template name"), "description": str("Template description"), "public": boolean()}, nil, false, false},
 		{"vm_expose_port", "expose", "Publish a VM port; protected=true requires a VM traffic token or vm_access_url browser link. Other application ports default public. For terminal 7681 or desktop 8080, pass protected explicitly to toggle access.", "beam:write", "", props{"port": boundedInt(1, 65535, 8000), "protected": boolean()}, []string{"port"}, false, true},
 		{"vm_unexpose_port", "unexpose", "Remove the public URL for a VM port. Requires confirmation.", "beam:write", "Removing the port URL interrupts users of that URL.", props{"port": boundedInt(1, 65535, 8000)}, []string{"port"}, false, true},
 		{"vm_bind_port", "bind", "Bind a port privately for authenticated SSH/tunnel access without a public URL.", "beam:write", "", props{"port": boundedInt(1, 65535, 8000)}, []string{"port"}, false, true},
@@ -215,7 +223,7 @@ func (g *Group) vmLifecycleCatalog() []mcpTool {
 		for k, v := range op.extra {
 			extra[k] = v
 		}
-		if op.confirm != "" {
+		if op.confirm != "" || op.action == types.VMArtifactTemplate {
 			extra["confirm"] = boolean()
 		}
 		t := vmTool(
@@ -224,6 +232,9 @@ func (g *Group) vmLifecycleCatalog() []mcpTool {
 			vmSchema(extra, op.required...),
 			op.read, op.idempotent, op.scope,
 			func(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+				if op.action == types.VMArtifactTemplate && args.boolean("public") && !args.boolean("confirm") {
+					return nil, fail("NEEDS_CONFIRMATION", "Publishing shares the complete root and snapshot history permanently. Call again with confirm=true.")
+				}
 				body := map[string]any{}
 				for k, v := range args {
 					if k != "name" && k != "confirm" {
@@ -245,7 +256,7 @@ func (g *Group) vmLifecycleCatalog() []mcpTool {
 			},
 		)
 		t.Confirm = op.confirm
-		t.Destructive = op.confirm != ""
+		t.Destructive = op.confirm != "" || op.action == types.VMArtifactTemplate
 		tools = append(tools, t)
 	}
 	remove := vmTool(

@@ -67,32 +67,33 @@ func WorkerShutdownGraceSeconds(stopGrace int64) int64 {
 
 // VMSpec describes a persistent microVM. GPU requests assign one device.
 type VMSpec struct {
-	ImageID          string            `json:"image_id"`
-	CPU              int64             `json:"cpu"`    // millicores
-	Memory           int64             `json:"memory"` // MiB
-	GPU              string            `json:"gpu,omitempty"`
-	DiskSize         string            `json:"disk_size"`
-	Pool             string            `json:"pool,omitempty"`
-	CPUTier          CPUTier           `json:"cpu_tier,omitempty"`
-	Env              []string          `json:"env,omitempty"`
-	Secrets          []string          `json:"secrets,omitempty"`
-	Ports            []uint32          `json:"ports,omitempty"`
-	PrivatePorts     []uint32          `json:"private_ports,omitempty"`
-	Desktop          bool              `json:"desktop"`
-	Kiosk            *VMKioskSpec      `json:"kiosk,omitempty"`
-	DockerEnabled    bool              `json:"docker_enabled"`
-	SSH              bool              `json:"ssh"`
-	SSHPublicKey     string            `json:"ssh_public_key,omitempty"`
-	IdleTimeout      int64             `json:"idle_timeout"`
-	IdleAction       string            `json:"idle_action,omitempty"`
-	AutoResume       bool              `json:"auto_resume"`
-	BlockNetwork     bool              `json:"block_network"`
-	AllowList        []string          `json:"allow_list,omitempty"`
-	ProtectedPorts   []uint32          `json:"protected_ports,omitempty"`
-	PublicPorts      []uint32          `json:"public_ports,omitempty"`
-	Disks            []*pb.DurableDisk `json:"disks,omitempty"`
-	Volumes          []*pb.Volume      `json:"volumes,omitempty"`
-	SourceSnapshotID string            `json:"source_snapshot_id,omitempty"`
+	ImageID          string             `json:"image_id"`
+	CPU              int64              `json:"cpu"`    // millicores
+	Memory           int64              `json:"memory"` // MiB
+	GPU              string             `json:"gpu,omitempty"`
+	DiskSize         string             `json:"disk_size"`
+	Pool             string             `json:"pool,omitempty"`
+	CPUTier          CPUTier            `json:"cpu_tier,omitempty"`
+	Env              []string           `json:"env,omitempty"`
+	Secrets          []string           `json:"secrets,omitempty"`
+	Ports            []uint32           `json:"ports,omitempty"`
+	PrivatePorts     []uint32           `json:"private_ports,omitempty"`
+	Desktop          bool               `json:"desktop"`
+	DesktopTransport VMDesktopTransport `json:"desktop_transport,omitempty"`
+	Kiosk            *VMKioskSpec       `json:"kiosk,omitempty"`
+	DockerEnabled    bool               `json:"docker_enabled"`
+	SSH              bool               `json:"ssh"`
+	SSHPublicKey     string             `json:"ssh_public_key,omitempty"`
+	IdleTimeout      int64              `json:"idle_timeout"`
+	IdleAction       string             `json:"idle_action,omitempty"`
+	AutoResume       bool               `json:"auto_resume"`
+	BlockNetwork     bool               `json:"block_network"`
+	AllowList        []string           `json:"allow_list,omitempty"`
+	ProtectedPorts   []uint32           `json:"protected_ports,omitempty"`
+	PublicPorts      []uint32           `json:"public_ports,omitempty"`
+	Disks            []*pb.DurableDisk  `json:"disks,omitempty"`
+	Volumes          []*pb.Volume       `json:"volumes,omitempty"`
+	SourceSnapshotID string             `json:"source_snapshot_id,omitempty"`
 }
 
 // VMCreateOptions carries parsed inputs for creation and forks.
@@ -102,6 +103,9 @@ type VMCreateOptions struct {
 	Metadata  map[string]string
 	RequestID string
 	Image     *pb.VerifyImageBuildRequest
+	// Older immutable desktop images use the empty (VNC) transport. Forks
+	// retain their image contract unless the caller explicitly changes it.
+	PreserveDesktopTransport bool
 }
 
 // VMKioskSpec launches an ordinary application on an isolated graphical session.
@@ -151,12 +155,72 @@ const (
 	VMKioskActionHeader = "X-Beam-Kiosk-Action"
 )
 
-type VMKioskTransport string
+type VMDesktopTransport string
+
+// Kiosk and full desktops use the same authenticated streaming protocol.
+type VMKioskTransport = VMDesktopTransport
 
 const (
-	VMKioskTransportWebRTC     VMKioskTransport = "webrtc"
-	VMKioskTransportWebSockets VMKioskTransport = "websockets"
+	VMDesktopTransportEnv = "BEAM_VM_DESKTOP_TRANSPORT"
+	VMDesktopLauncherPath = "/opt/beam-vm/desktop"
+	VMDesktopSessionPath  = "/opt/beam-vm/kiosk"
 )
+
+const (
+	VMDesktopTransportWebRTC     VMDesktopTransport = "webrtc"
+	VMDesktopTransportWebSockets VMDesktopTransport = "websockets"
+	VMKioskTransportWebRTC                          = VMDesktopTransportWebRTC
+	VMKioskTransportWebSockets                      = VMDesktopTransportWebSockets
+)
+
+func (t VMDesktopTransport) Valid() bool {
+	return t == "" || t == VMDesktopTransportWebRTC || t == VMDesktopTransportWebSockets
+}
+
+func (s VMSpec) DisplayTransport() VMDesktopTransport {
+	if s.Kiosk != nil {
+		return s.Kiosk.Transport
+	}
+	if s.Desktop {
+		return s.DesktopTransport
+	}
+	return ""
+}
+
+// An empty transport identifies desktops built before the Selkies contract.
+func (s VMSpec) StreamingDesktop() bool {
+	return s.Kiosk != nil || s.DisplayTransport() != ""
+}
+
+func (s VMSpec) DesktopPrivatePorts() []uint32 {
+	if !s.StreamingDesktop() {
+		return nil
+	}
+	var ports []uint32
+	if s.DisplayTransport() == VMDesktopTransportWebRTC {
+		ports = append(ports, VMKioskMediaPort)
+	}
+	ports = append(ports, VMKioskStatusPort)
+	if s.Kiosk != nil {
+		ports = append(ports, VMKioskMCPPort)
+	}
+	return ports
+}
+
+// PublicTemplate shares installed software without inheriting the publisher's
+// workspace credentials, placement or attached storage. Root files are included;
+// publishers must prepare a clean machine before sharing its complete root.
+func (s VMSpec) PublicTemplate() VMSpec {
+	s.Env, s.Secrets, s.Disks, s.Volumes = nil, nil, nil, nil
+	s.Pool, s.SSH, s.SSHPublicKey, s.SourceSnapshotID = "", false, "", ""
+	s.Ports = slices.DeleteFunc(slices.Clone(s.Ports), func(port uint32) bool { return port == VMSSHPort })
+	s.Kiosk = s.Kiosk.Clone()
+	if s.Kiosk != nil {
+		// MCP adapters are workspace bindings, not reusable launch configuration.
+		s.Kiosk.Env, s.Kiosk.MCP = nil, nil
+	}
+	return s
+}
 
 type VMWebRTCSessionDescription struct {
 	SDP string `json:"sdp"`
@@ -199,14 +263,7 @@ func (k *VMKioskSpec) WithoutCredentials() *VMKioskSpec {
 }
 
 func (k *VMKioskSpec) PrivatePorts() []uint32 {
-	if k == nil {
-		return nil
-	}
-	var ports []uint32
-	if k.Transport == VMKioskTransportWebRTC {
-		ports = append(ports, VMKioskMediaPort)
-	}
-	return append(ports, VMKioskStatusPort, VMKioskMCPPort)
+	return (VMSpec{Kiosk: k}).DesktopPrivatePorts()
 }
 
 func (s VMSpec) RuntimePorts() []uint32 {
@@ -269,7 +326,13 @@ type VMArtifact struct {
 	Spec           VMSpec    `json:"spec"`
 	CreatedAt      time.Time `json:"created_at"`
 	Description    string    `json:"description,omitempty"`
+	Public         bool      `json:"public,omitempty"`
 }
+
+const (
+	VMArtifactTemplate = "template"
+	VMArtifactSnapshot = "snapshot"
+)
 
 // VMFilter selects one page of a workspace's VMs, newest first. A zero Limit
 // returns only the counts.

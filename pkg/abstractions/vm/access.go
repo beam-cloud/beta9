@@ -281,8 +281,8 @@ func (s *Service) proxy(c echo.Context) error {
 
 	// Hold activity while a desktop/terminal websocket is open, even when the
 	// user is watching without sending input.
-	if v.Spec.Kiosk != nil && port == types.VMDesktopPort {
-		return s.proxyKiosk(c, v)
+	if v.Spec.StreamingDesktop() && port == types.VMDesktopPort {
+		return s.proxyDesktop(c, v)
 	}
 	return s.forwardVM(c, v, uint32(port), c.Param("*"))
 }

@@ -187,3 +187,11 @@ type ErrDiskSnapshotNotFound struct {
 func (e *ErrDiskSnapshotNotFound) Error() string {
 	return fmt.Sprintf("disk snapshot not found: %s", e.SnapshotId)
 }
+
+type ErrDiskSnapshotNotAvailable struct {
+	SnapshotId string
+}
+
+func (e *ErrDiskSnapshotNotAvailable) Error() string {
+	return fmt.Sprintf("disk snapshot is not available: %s", e.SnapshotId)
+}

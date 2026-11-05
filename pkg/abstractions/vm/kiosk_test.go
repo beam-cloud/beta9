@@ -78,6 +78,7 @@ func TestInvalidKioskNeverStartsCompute(t *testing.T) {
 		"reserved env":            `{"command":["editor"],"env":{"BEAM_VM_ID":"other"}}`,
 		"ambiguous MCP transport": `{"command":["editor"],"mcp":{"app":{"command":"node","url":"http://localhost/mcp"}}}`,
 		"bad MCP URL":             `{"command":["editor"],"mcp":{"app":{"url":"file:///mcp"}}}`,
+		"unsupported transport":   `{"command":["editor"],"transport":"vnc"}`,
 		"unknown field":           `{"command":["editor"],"shell":true}`,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -100,7 +101,7 @@ func TestKioskArtifactsReopenWithIndependentIdentity(t *testing.T) {
 				MCP:     map[string]types.VMKioskMCPServer{"app": {Command: "application-mcp"}},
 			}
 			require.NoError(t, validate(&v.Spec))
-			a, err := s.capture(context.Background(), v, kind, "saved-project", "")
+			a, err := s.capture(context.Background(), v, kind, "saved-project", "", false)
 			require.NoError(t, err)
 			body := `{"name":"reopened","` + kind + `":"saved-project","spec":{"cpu":2000}}`
 			rec := vmRequest(managementAPI(s, info), http.MethodPost, "/"+info.Workspace.ExternalId, body)
@@ -204,4 +205,19 @@ func TestKioskGatewayRoutingAndAuthorization(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `_beam/kiosk/webrtc.js`)
 	require.NotContains(t, rec.Body.String(), "vnc.html")
 	require.NotContains(t, rec.Body.String(), "scale(0.5)")
+	for _, kiosk := range []bool{false, true} {
+		v.Spec.Kiosk = nil
+		v.Spec.DesktopTransport = types.VMDesktopTransportWebRTC
+		if kiosk {
+			v.Spec.Kiosk = &types.VMKioskSpec{Command: []string{"application"}}
+			v.Spec.DesktopTransport = ""
+		}
+		req = httptest.NewRequest(http.MethodGet, "/vm/"+v.Handle+"/8080?setting=saved", nil)
+		req.Header.Set("X-Beam-VM-Token", "private")
+		req.Header.Set("Accept", "text/html")
+		rec = httptest.NewRecorder()
+		proxyAPI(s).ServeHTTP(rec, req)
+		require.Equal(t, http.StatusTemporaryRedirect, rec.Code)
+		require.Equal(t, "/vm/"+v.Handle+"/8080/?setting=saved", rec.Header().Get("Location"))
+	}
 }

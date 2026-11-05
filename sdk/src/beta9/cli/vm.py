@@ -473,7 +473,7 @@ def image_group():
 @click.option("--secret", "--build-secret", "build_secret", multiple=True)
 @click.option("--desktop", is_flag=True)
 @click.option(
-    "--kiosk", is_flag=True, help="Install the application streaming backend instead of KasmVNC."
+    "--kiosk", is_flag=True, help="Install an application session instead of the full desktop."
 )
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
@@ -1353,22 +1353,25 @@ def screenshot_vm(service, name, path):
 
 @management.group("template")
 def template_group():
-    """Manage reusable private VM roots."""
+    """Manage reusable VM roots."""
 
 
 @template_group.command("create")
 @click.argument("vm_name")
 @click.argument("name", required=False)
 @click.option("-d", "--description", default="")
-@click.option("--public", "public", is_flag=True, help="Reserved; complete VM roots are private.")
+@click.option(
+    "--public",
+    "public",
+    is_flag=True,
+    help="Publish the complete root and snapshot history for other workspaces to fork by ID. Use a fresh VM that has never held personal data or signed-in accounts.",
+)
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def template_create(service, vm_name, name, description, public, as_json):
-    """Save the VM root as a reusable private template."""
-    if public:
-        raise click.UsageError("Public templates are unsupported; complete VM roots remain private")
+    """Save the VM root as an immutable, forkable template."""
     with _progress("Creating template", "Template created", as_json):
-        template = _vm(service, vm_name).create_template(name, description)
+        template = _vm(service, vm_name).create_template(name, description, public=public)
     _show(template, as_json)
 
 
@@ -1376,7 +1379,7 @@ def template_create(service, vm_name, name, description, public, as_json):
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def template_list(service, as_json):
-    """List private VM templates."""
+    """List your VM templates."""
     _show(VM(_service=service)._api("GET", "/artifacts/template"), as_json)
 
 
@@ -1385,12 +1388,8 @@ def template_list(service, as_json):
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def template_show(service, name, as_json):
-    """Show a private VM template."""
-    for item in VM(_service=service)._api("GET", "/artifacts/template"):
-        if item["name"] == name or item["id"] == name:
-            _show(item, as_json)
-            return
-    raise click.ClickException("Template not found")
+    """Show an owned template or a public template by ID."""
+    _show(VM(_service=service)._api("GET", "/artifacts/template/" + quote(name, safe="")), as_json)
 
 
 @template_group.command("rm")

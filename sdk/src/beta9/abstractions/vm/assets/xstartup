@@ -1,13 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-export HOME=/root XDG_CONFIG_HOME=/root/.config
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 export DISPLAY=:1 XAUTHORITY=/run/beam-desktop/.Xauthority
 
-# Keep application sizing consistent with the viewer's 2x framebuffer.
-export GDK_SCALE=2 GDK_DPI_SCALE=0.5
+# Font DPI and GTK density are set by the shared display supervisor.
 xrdb -merge <<'EOF'
-Xft.dpi: 192
 Xft.antialias: 1
 Xft.hintstyle: hintslight
 Xft.rgba: none
@@ -22,4 +20,12 @@ if [ -f "$HOME/.Xresources" ]; then
 fi
 
 xsetroot -solid '#17171c'
-exec dbus-run-session -- openbox-session
+if [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+  for launcher in "$HOME/Desktop/browser.desktop" "$HOME/Desktop/terminal.desktop"; do
+    if [ -f "$launcher" ]; then
+      gio set -t string "$launcher" metadata::trusted true || echo 'Unable to trust desktop launcher' >&2
+    fi
+  done
+  exec gnome-session --session=ubuntu
+fi
+exec dbus-run-session -- gnome-session --session=ubuntu

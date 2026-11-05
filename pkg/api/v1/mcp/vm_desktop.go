@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -10,19 +11,34 @@ import (
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 )
 
 type mcpPayload map[string]any
 
-func (g *Group) vmDesktop(ctx context.Context, a *auth.AuthInfo, args toolArgs, command []string, wait bool) (any, error) {
+func (g *Group) vmDesktopSpec(ctx context.Context, a *auth.AuthInfo, args toolArgs) (*types.VMSpec, error) {
 	info, err := g.vmGet(ctx, a, args)
 	if err != nil {
 		return nil, err
 	}
-	spec, _ := info["spec"].(map[string]any)
-	if spec["desktop"] != true {
+	data, err := json.Marshal(info["spec"])
+	if err != nil {
+		return nil, err
+	}
+	var spec types.VMSpec
+	if err := json.Unmarshal(data, &spec); err != nil {
+		return nil, err
+	}
+	if !spec.Desktop {
 		return nil, fail("DESKTOP_DISABLED", "VM was not created with desktop enabled")
+	}
+	return &spec, nil
+}
+
+func (g *Group) vmDesktop(ctx context.Context, a *auth.AuthInfo, args toolArgs, command []string, wait bool) (any, error) {
+	if _, err := g.vmDesktopSpec(ctx, a, args); err != nil {
+		return nil, err
 	}
 	return g.vmExecCommand(ctx, a, args, command, wait)
 }
@@ -228,22 +244,29 @@ func (g *Group) vmDesktopDrag(ctx context.Context, a *auth.AuthInfo, args toolAr
 }
 
 func (g *Group) vmDesktopLaunch(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
-	return g.vmDesktop(ctx, a, args, args.strings("command"), false)
+	spec, err := g.vmDesktopSpec(ctx, a, args)
+	if err != nil {
+		return nil, err
+	}
+	command := args.strings("command")
+	if spec.Kiosk == nil && spec.StreamingDesktop() {
+		command = append([]string{types.VMDesktopLauncherPath, "--launch"}, command...)
+	}
+	return g.vmExecCommand(ctx, a, args, command, false)
 }
 
 func (g *Group) vmDesktopResize(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
 	w, h := int(args.num("width", 1280)), int(args.num("height", 720))
 	mode := fmt.Sprintf("%dx%d", w, h)
-	info, err := g.vmGet(ctx, a, args)
+	spec, err := g.vmDesktopSpec(ctx, a, args)
 	if err != nil {
 		return nil, err
 	}
-	spec, _ := info["spec"].(map[string]any)
-	if spec["kiosk"] != nil {
-		return g.vmDesktop(ctx, a, args, []string{"/opt/beam-vm/kiosk", "--resize", strconv.Itoa(w), strconv.Itoa(h)}, true)
+	if spec.StreamingDesktop() {
+		return g.vmExecCommand(ctx, a, args, []string{types.VMDesktopSessionPath, "--resize", strconv.Itoa(w), strconv.Itoa(h)}, true)
 	}
 	script := fmt.Sprintf("if ! xrandr --query | awk '$1 == %s {found=1} END {exit !found}'; then xrandr --newmode %s %g %d 0 0 %d %d 0 0 %d && xrandr --addmode VNC-0 %s; fi; xrandr --output VNC-0 --mode %s", strconv.Quote(mode), shellWord(mode), float64(w*h*60)/1000000, w, w, h, h, shellWord(mode), shellWord(mode))
-	return g.vmDesktop(ctx, a, args, []string{"bash", "-lc", script}, true)
+	return g.vmExecCommand(ctx, a, args, []string{"bash", "-lc", script}, true)
 }
 
 func (g *Group) vmDesktopRecord(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {

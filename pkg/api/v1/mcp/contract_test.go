@@ -56,6 +56,7 @@ func TestMCPVMResourceContract(t *testing.T) {
 	require.Equal(t, 0, properties["idle_timeout"].(map[string]any)["default"])
 	for _, spec := range []map[string]any{
 		{"image_id": "base", "desktop": true, "cpu": 1000, "memory": 1024},
+		{"image_id": "base", "desktop": true, "desktop_transport": "webrtc"},
 		{"image_id": "base", "gpu": "RTX4090"},
 		{"image_id": "base", "cpu": 100, "memory": 256, "idle_timeout": 365 * 24 * 60 * 60},
 	} {
@@ -68,9 +69,20 @@ func TestMCPVMResourceContract(t *testing.T) {
 		{"image_id": "base", "cpu": 99},
 		{"image_id": "base", "memory": 255},
 		{"image_id": "base", "idle_timeout": -1},
+		{"image_id": "base", "desktop_transport": "webrtc"},
+		{"image_id": "base", "desktop": false, "desktop_transport": "webrtc"},
+		{"image_id": "base", "desktop": true, "desktop_transport": "webrtc", "kiosk": map[string]any{"command": []string{"editor"}}},
 	} {
 		require.Error(t, g.byName["create_vm"].validate(map[string]any{"spec": spec}))
 	}
+}
+
+func TestPublicTemplateRequiresExplicitConfirmation(t *testing.T) {
+	g := newTestGroup()
+	g.prepareTools()
+	tool := g.byName["create_vm_template"]
+	result := g.call(context.Background(), mcpIdentity(), tool, map[string]any{"name": "clean", "public": true})
+	require.Equal(t, "NEEDS_CONFIRMATION", result["structuredContent"].(map[string]any)["code"])
 }
 
 type mcpSecretRecorder struct {

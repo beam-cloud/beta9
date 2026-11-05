@@ -7,11 +7,13 @@
     statusFailures: 3,
     alignment: 8,
     maxDimension: 4080, // Pinned Selkies client's encoder limit.
+    maxPixels: 3840 * 2160, // Bound software capture to a 4K frame at 60 Hz.
     pollMs: 1000,
     requestMs: 5000,
     registrationMs: 10000,
     startupMs: 180000,
     recoveryMs: 8000,
+    inputChannel: 'input',
     settleMs: 150,
     wheelPixels: 100,
     wheelLines: 3,
@@ -142,13 +144,22 @@
       this.displayError = '';
       this.deadline = Date.now() + policy.startupMs;
       this.failures = 0;
+      this.recoveryGeneration = 0;
       this.entry = typeof document !== 'undefined' &&
         document.documentElement?.hasAttribute('data-beam-kiosk-entry');
-      // The isolated client document uses the guest's stable render density.
-      // CSS retains the browser viewport, including when embedded by a parent.
+      // Native resize and input use the same bounded density as the shared
+      // viewport request. The browser retains its own CSS viewport.
       Object.defineProperty(window, 'devicePixelRatio', {
-        configurable: true, get: () => this.pixelRatio,
+        configurable: true, get: () => this.displayGeometry().scale,
       });
+    }
+
+    displayGeometry() {
+      const size = [window.innerWidth, window.innerHeight];
+      const scale = Math.min(this.pixelRatio, policy.maxDimension / Math.max(...size),
+        Math.sqrt(policy.maxPixels / (size[0] * size[1]))) || this.pixelRatio;
+      const [width, height] = size.map(value => Math.round(value * scale / 2) * 2);
+      return {width, height, scale};
     }
 
     endpoint(path) {
@@ -181,12 +192,24 @@
           signal: AbortSignal.timeout(policy.requestMs),
         });
         if (!response.ok) throw new Error('Unable to reopen application. Check your access or VM logs.');
-        location.reload();
+        this.reconnect();
       } catch (error) {
         this.notify('error', error.message);
       } finally {
         this.restart.disabled = false;
       }
+    }
+
+    resetRecovery() {
+      clearTimeout(this.recoveryTimer);
+      this.recoveryTimer = null;
+      return ++this.recoveryGeneration;
+    }
+
+    reconnect() {
+      this.resetRecovery();
+      // The gateway owns this page, so it remains available during guest restarts.
+      location.replace(new URL(this.entry ? './' : '../', location.href).href);
     }
 
     mount() {
@@ -198,12 +221,13 @@
         [data-beam-kiosk] p { max-width:38em;padding:0 24px;text-align:center; }
         [data-beam-kiosk] button { font:inherit;padding:8px 16px;color:inherit;background:#242428;border:1px solid #3a3a40;border-radius:6px;cursor:pointer; }
         [data-beam-kiosk-playing] #playButton { display:none !important; }
+        video#stream, video#videoStream { image-rendering:auto !important; object-fit:contain !important; }
       </style>
       <p role="status" aria-live="polite"></p>
       <button>Reconnect</button><button>Reopen application</button>`;
       [this.message, this.retry, this.restart] = this.overlay.querySelectorAll('p,button');
       document.body.append(this.overlay);
-      this.retry.onclick = () => location.reload();
+      this.retry.onclick = () => this.reconnect();
       this.restart.onclick = () => this.reopen();
       this.render();
       this.poll();
@@ -212,9 +236,10 @@
     viewportMatches(surface) {
       const width = surface.videoWidth || surface.width;
       const height = surface.videoHeight || surface.height;
+      const target = this.displayGeometry();
       return window.innerWidth > 0 && window.innerHeight > 0 &&
-        (window.streamResolutionDiverged || Math.abs(width - window.innerWidth * this.pixelRatio) < policy.alignment &&
-          Math.abs(height - window.innerHeight * this.pixelRatio) < policy.alignment);
+        (window.streamResolutionDiverged || Math.abs(width - target.width) < policy.alignment &&
+          Math.abs(height - target.height) < policy.alignment);
     }
 
     playing(video = this.video) {
@@ -225,21 +250,25 @@
       return this.video?.id === 'videoStream' && this.playing();
     }
 
+    accessDenied(response) {
+      if (![401, 403, 404].includes(response.status)) return false;
+      this.notify('error', 'Application access is unavailable. Reopen its link to check your access.');
+      return true;
+    }
+
     async poll() {
+      this.checkInput();
       // Native close() changes peer state without emitting a connection event.
       this.syncConnection();
       try {
         const response = await fetch(this.endpoint('status'), {
           cache: 'no-store', signal: AbortSignal.timeout(policy.requestMs),
         });
-        if ([401, 403, 404].includes(response.status)) {
-          this.notify('error', 'Application access is unavailable. Reopen its link to check your access.');
-          return;
-        }
+        if (this.accessDenied(response)) return;
         if (!response.ok) throw new Error('Unavailable');
         this.status = await response.json();
         this.failures = 0;
-        if (this.entry && this.status.application === 'ready') {
+        if (this.entry && this.status.state === 'ready' && this.status.application === 'ready') {
           const client = new URL('stream/', location.href);
           const health = await fetch(new URL('api/health', client), {
             cache: 'no-store', signal: AbortSignal.timeout(policy.requestMs),
@@ -288,9 +317,6 @@
       }
       if (this.video) document.documentElement.toggleAttribute('data-beam-kiosk-playing',
         this.playing());
-      // Another tab can own the shared framebuffer size. Selkies maps input
-      // against the realized stream; preserve its aspect ratio in this tab.
-      if (this.video && window.streamResolutionDiverged) this.video.style.objectFit = 'contain';
       if (!this.fitted()) {
         this.ready = false;
         return; // Resizing keeps the last live image visible.
@@ -373,8 +399,8 @@
       if (!input?.inputAttached || !document.hasFocus() || document.hidden ||
           !(window.innerWidth > 0 && window.innerHeight > 0) ||
           this.activePeer?.connectionState !== 'connected') return;
-      const size = [window.innerWidth, window.innerHeight].map(value =>
-        Math.min(policy.maxDimension, Math.floor(value * this.pixelRatio / 2) * 2)).join('x');
+      const {width, height} = this.displayGeometry();
+      const size = `${width}x${height}`;
       const realized = `${this.video?.videoWidth}x${this.video?.videoHeight}`;
       if (size === this.viewport && (!activate || size === realized)) return;
       input.send(`KIOSK_VIEWPORT,${size}`);
@@ -385,22 +411,67 @@
       const state = this.webSocketLive ? 'connected' : this.activePeer?.connectionState;
       if (state === this.peerState) return;
       this.peerState = state;
-      clearTimeout(this.recoveryTimer);
-      this.recoveryTimer = null;
+      const generation = this.resetRecovery();
       if (state === 'connected') {
         this.viewport = null;
         this.refreshDisplay();
       } else if (['disconnected', 'failed', 'closed'].includes(state)) {
         this.notify('disconnected');
         this.refreshDisplay();
-        this.recoveryTimer = setTimeout(() => location.reload(), policy.recoveryMs);
+        this.recoveryTimer = setTimeout(() => this.recover(generation),
+          state === 'closed' ? policy.pollMs : policy.recoveryMs);
       }
+    }
+
+    checkInput() {
+      const peer = this.activePeer;
+      // SCTP can fail while ICE and video remain connected. Closed channels
+      // disappear from getStats(), so retain the actual input channel instead.
+      if (peer?.connectionState === 'connected' && this.inputChannel &&
+          ['closing', 'closed'].includes(this.inputChannel.readyState)) peer.close();
+    }
+
+    async recover(generation) {
+      const peer = this.activePeer;
+      const cancelled = () => generation !== this.recoveryGeneration ||
+        peer !== this.activePeer || this.webSocketLive ||
+        this.activePeer?.connectionState === 'connected';
+      if (cancelled()) return;
+      try {
+        // Keep the reconnect UI alive through gateway/service outages. A blind
+        // navigation while the gateway restarts strands the tab on a net error.
+        const response = await fetch(this.endpoint('status'), {
+          cache: 'no-store', signal: AbortSignal.timeout(policy.requestMs),
+        });
+        if (cancelled()) return;
+        if (this.accessDenied(response)) return;
+        if (response.ok) {
+          // Re-enter the gateway-owned loading page. The guest's status server
+          // starts before its stream; the shared startup flow waits for both.
+          this.reconnect();
+          return;
+        }
+      } catch (_) { /* Keep retrying while the authenticated route recovers. */ }
+      if (!cancelled()) this.recoveryTimer = setTimeout(() => this.recover(generation), policy.pollMs);
+    }
+
+    trackInput(peer, channel) {
+      if (peer !== this.activePeer || channel.label !== policy.inputChannel) return;
+      this.inputChannel = channel;
+      const changed = () => {
+        if (peer !== this.activePeer || channel !== this.inputChannel) return;
+        this.checkInput();
+        this.syncConnection();
+      };
+      for (const event of ['closing', 'close']) channel.addEventListener(event, changed);
     }
 
     trackPeer(peer) {
       this.activePeer = peer;
+      this.inputChannel = null;
       this.peerState = undefined;
       this.syncConnection();
+      peer.addEventListener('datachannel', ({channel}) => this.trackInput(peer, channel));
       peer.addEventListener('track', ({receiver}) => {
         // Receive-side hints favor fresh desktop frames over playback buffering.
         try { if ('jitterBufferTarget' in receiver) receiver.jitterBufferTarget = 0; } catch (_) {}
@@ -417,11 +488,25 @@
       try { window.sessionStorage.setItem('selkies_tab_id', window.crypto.randomUUID()); } catch (_) {}
       const proto = window.RTCPeerConnection && RTCPeerConnection.prototype;
       if (!proto) return;
-      const viewer = this, routed = new WeakSet();
+      const viewer = this, routed = new WeakSet(), tracked = new WeakSet();
+      const track = peer => {
+        if (tracked.has(peer)) return;
+        tracked.add(peer);
+        viewer.trackPeer(peer);
+      };
+      const createChannel = proto.createDataChannel;
+      proto.createDataChannel = function(...args) {
+        const channel = createChannel.apply(this, args);
+        if (channel.label === policy.inputChannel) {
+          track(this);
+          viewer.trackInput(this, channel);
+        }
+        return channel;
+      };
       const remote = proto.setRemoteDescription, candidate = proto.addIceCandidate;
       proto.setRemoteDescription = async function(description) {
         if (!description?.sdp) return remote.call(this, description);
-        if (!routed.has(this)) viewer.trackPeer(this);
+        track(this);
         routed.add(this);
         try {
           const response = await fetch(viewer.endpoint('webrtc/session'), {

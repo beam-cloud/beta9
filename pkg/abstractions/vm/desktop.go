@@ -2,7 +2,9 @@ package vm
 
 import (
 	_ "embed"
+	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -12,6 +14,12 @@ import (
 //go:embed desktop.html
 var desktopPage string
 
+//go:embed kiosk.html
+var streamingDesktopPage string
+
+//go:embed kiosk-webrtc.js
+var desktopWebRTC []byte
+
 func desktopEntry(c echo.Context, v *types.VM, port int) bool {
 	r := c.Request()
 	return v.Spec.Desktop && port == types.VMDesktopPort && c.Param("*") == "" &&
@@ -19,6 +27,14 @@ func desktopEntry(c echo.Context, v *types.VM, port int) bool {
 }
 
 func (s *Service) serveDesktop(c echo.Context, v *types.VM, status string) error {
+	if v.Spec.StreamingDesktop() && !strings.HasSuffix(c.Request().URL.Path, "/") {
+		canonical := *c.Request().URL
+		canonical.Path += "/"
+		if canonical.RawPath != "" {
+			canonical.RawPath += "/"
+		}
+		return c.Redirect(http.StatusTemporaryRedirect, canonical.String())
+	}
 	if v.DesiredState != types.VMStateRunning || (status != types.VMStateRunning && status != types.VMStateStarting) {
 		if !v.Spec.AutoResume {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "VM is not running; start it to use this URL")
@@ -29,8 +45,76 @@ func (s *Service) serveDesktop(c echo.Context, v *types.VM, status string) error
 	}
 
 	c.Response().Header().Set("Cache-Control", "no-store")
-	if v.Spec.Kiosk != nil {
-		return c.HTML(http.StatusOK, kioskPage)
+	if v.Spec.StreamingDesktop() {
+		return c.HTML(http.StatusOK, streamingDesktopPage)
 	}
 	return c.HTML(http.StatusOK, desktopPage)
+}
+
+// Creation and port updates enforce the same private and protected endpoints.
+func validateDesktopPort(spec types.VMSpec, port uint32, public bool) error {
+	if slices.Contains(spec.DesktopPrivatePorts(), port) {
+		return fmt.Errorf("port %d is reserved for desktop services", port)
+	}
+	if spec.StreamingDesktop() && public && port == types.VMDesktopPort {
+		return fmt.Errorf("desktop browser sessions must be protected")
+	}
+	return nil
+}
+
+type desktopContext struct {
+	echo.Context
+	*Service
+	vm *types.VM
+}
+
+func (c *desktopContext) forward(port uint32, path string) error {
+	return c.forwardVM(c, c.vm, port, path)
+}
+
+var desktopRoutes = newDesktopRouter()
+
+func newDesktopRouter() *echo.Router {
+	e := echo.New()
+	e.Any(types.VMKioskControlPath+"/webrtc.js", func(c echo.Context) error {
+		c.Response().Header().Set("Cache-Control", "no-store")
+		return c.Blob(http.StatusOK, "text/javascript; charset=utf-8", desktopWebRTC)
+	})
+	e.Any(types.VMKioskControlPath+"/webrtc/session", func(c echo.Context) error {
+		session := c.(*desktopContext)
+		return session.webrtc.register(c, session.vm)
+	})
+	e.Any(types.VMKioskControlPath+"/status", func(c echo.Context) error {
+		if c.Request().Method != http.MethodGet {
+			return echo.NewHTTPError(http.StatusMethodNotAllowed)
+		}
+		return c.(*desktopContext).forward(types.VMKioskStatusPort, "status")
+	})
+	e.Any(types.VMKioskControlPath+"/restart", func(c echo.Context) error {
+		if c.Request().Method != http.MethodPost || c.Request().Header.Get(types.VMKioskActionHeader) != "restart" {
+			return echo.NewHTTPError(http.StatusForbidden, "explicit desktop restart required")
+		}
+		return c.(*desktopContext).forward(types.VMKioskStatusPort, "restart")
+	})
+	e.Any(types.VMKioskMCPPath, func(c echo.Context) error {
+		if c.(*desktopContext).vm.Spec.Kiosk == nil {
+			return echo.NewHTTPError(http.StatusNotFound)
+		}
+		return c.(*desktopContext).forward(types.VMKioskMCPPort, strings.TrimPrefix(types.VMKioskMCPPath, "/"))
+	})
+	for _, path := range []string{types.VMKioskStreamPath + "/*", "/*"} {
+		e.Any(path, func(c echo.Context) error {
+			return c.(*desktopContext).forward(types.VMDesktopPort, c.Param("*"))
+		})
+	}
+	return e.Router()
+}
+
+// proxyDesktop runs after the published desktop port's authentication and VM
+// lifecycle checks. Its private control routes inherit that same authority.
+func (s *Service) proxyDesktop(c echo.Context, v *types.VM) error {
+	path := "/" + c.Param("*")
+	// Echo matches against its native context; attach the VM after selection.
+	desktopRoutes.Find(c.Request().Method, path, c)
+	return c.Handler()(&desktopContext{Context: c, Service: s, vm: v})
 }

@@ -18,6 +18,14 @@ apt_repository() {
     > "/etc/apt/sources.list.d/$name.list"
 }
 
+desktop_mime() {
+  local desktop_id=$1 mime
+  shift
+  for mime in "$@"; do
+    runuser -u "$desktop_user" -- xdg-mime default "$desktop_id" "$mime"
+  done
+}
+
 if ! command -v apt-get >/dev/null; then
   echo 'Beam VM images require Debian/Ubuntu and systemd' >&2
   exit 1
@@ -97,13 +105,6 @@ if [ "$desktop" = true ] || [ "$kiosk" = true ]; then
     openbox libnss3-tools dbus-x11 xterm x11-utils x11-xserver-utils
     xdotool scrot xclip ffmpeg fonts-ubuntu xfonts-base adwaita-icon-theme
   )
-fi
-
-if [ "$kiosk" = true ]; then
-  apt_install python3-venv
-  python3 -m venv /opt/beam-vm/mcp
-  mcp_version=$(PYTHONPATH=/opt/beam-vm python3 -c 'from kiosk_config import KioskRuntime; print(KioskRuntime().mcp_version)')
-  /opt/beam-vm/mcp/bin/pip install --no-cache-dir "fastmcp==$mcp_version"
   # Native packages bundle the web client and encoding extensions. Keep both
   # the version and digest pinned: image identity must not depend on "latest".
   version=2.1.0
@@ -145,13 +146,26 @@ if [ "$kiosk" = true ]; then
   fi
   apt_install "${display_packages[@]}" xvfb xauth wmctrl xsettingsd pulseaudio \
     libegl1 libgbm1 libgl1-mesa-dri
-  /opt/beam-vm/kiosk-openbox-build
+  if [ "$kiosk" = true ]; then
+    apt_install python3-venv
+    python3 -m venv /opt/beam-vm/mcp
+    mcp_version=$(PYTHONPATH=/opt/beam-vm python3 -c 'from kiosk_config import DesktopRuntime; print(DesktopRuntime().mcp_version)')
+    /opt/beam-vm/mcp/bin/pip install --no-cache-dir "fastmcp==$mcp_version"
+    /opt/beam-vm/kiosk-openbox-build
+  fi
   /opt/beam-vm/kiosk-selkies-patch
   printf 'selkies-%s\n' "$version" > /opt/beam-vm/kiosk-backend
-elif [ "$desktop" = true ]; then
-  version=1.5.0
-  curl -fsSL "https://github.com/kasmtech/KasmVNC/releases/download/v$version/kasmvncserver_${VERSION_CODENAME}_${version}_${arch}.deb" \
-    -o /tmp/kasmvnc.deb
+fi
+
+if [ "$desktop" = true ] && [ "$kiosk" != true ]; then
+  desktop_user=$(PYTHONPATH=/opt/beam-vm python3 -c 'from kiosk_config import DesktopRuntime; print(DesktopRuntime().desktop_user)')
+  if ! id "$desktop_user" >/dev/null 2>&1; then
+    useradd --create-home --user-group --shell /bin/bash "$desktop_user"
+  fi
+  desktop_home=$(getent passwd "$desktop_user" | cut -d: -f6)
+  printf '%s\n' "$desktop_user" > /opt/beam-vm/desktop-user
+  test -u /usr/bin/sudo
+  chown -R "$desktop_user:$desktop_user" /workspace
   if [ "$arch" = amd64 ]; then
     apt_repository google-chrome https://dl.google.com/linux/linux_signing_key.pub \
       https://dl.google.com/linux/chrome/deb/ stable main
@@ -164,79 +178,36 @@ elif [ "$desktop" = true ]; then
     browser=firefox
   fi
   apt-get update
-  apt_install "${display_packages[@]}" /tmp/kasmvnc.deb "$browser" pcmanfm \
-    libfm-modules librsvg2-common xdg-user-dirs
-  # Kasm 1.5 leaves getType() rejections unhandled when the host clipboard
-  # changes mid-read. Discard that partial transfer and retry on the next input.
-  python3 - <<'PY'
-import re
-from pathlib import Path
-
-replacement = '''async clipboardPasteDataFrom(...args) {
-    try {
-        return await this.beamClipboardPasteDataFrom(...args);
-    } catch (error) {
-        if (error.name !== "InvalidStateError") throw error;
-        this._clipHash = 0;
-        this._resendClipboardNextUserDrivenEvent = true;
-    }
-}
-async beamClipboardPasteDataFrom('''
-
-count = 0
-for path in Path('/usr/share/kasmvnc/www/assets').glob('*.js'):
-    source = path.read_text()
-    if 'async beamClipboardPasteDataFrom(' in source:
-        count += 1
-        continue
-    source, matches = re.subn(
-        r'async clipboardPasteDataFrom\(',
-        replacement,
-        source,
-    )
-    if matches:
-        path.write_text(source)
-        count += matches
-assert count == 1, 'KasmVNC clipboard patch no longer matches the installed client'
-PY
+  apt_install "$browser" ubuntu-session ubuntu-settings gnome-shell gnome-terminal \
+    gnome-control-center gnome-software nautilus gvfs fonts-ubuntu yaru-theme-gtk yaru-theme-icon \
+    gnome-shell-extension-ubuntu-dock gnome-shell-extension-appindicator \
+    gnome-shell-extension-desktop-icons-ng librsvg2-common xdg-user-dirs \
+    xdg-utils shared-mime-info at-spi2-core file-roller unzip
+  # Native defaults remain overridable in each user's desktop settings.
+  pixel_ratio=$(PYTHONPATH=/opt/beam-vm python3 -c 'from kiosk_config import DesktopRuntime; print(DesktopRuntime().pixel_ratio)')
+  sed "s/@PIXEL_RATIO@/$pixel_ratio/g" "$assets/desktop.gschema.override" \
+    > /usr/share/glib-2.0/schemas/99_beam.gschema.override
+  glib-compile-schemas --strict /usr/share/glib-2.0/schemas
+  install -d /etc/polkit-1/rules.d
+  sed "s/@DESKTOP_USER@/$desktop_user/g" "$assets/packagekit.rules" \
+    > /etc/polkit-1/rules.d/49-beam-packagekit.rules
+  chmod 0644 /etc/polkit-1/rules.d/49-beam-packagekit.rules
+  desktop_mime org.gnome.Software.desktop application/vnd.debian.binary-package application/x-deb
   if [ "$arch" = amd64 ]; then
     install -m 0755 "$assets/browser" /usr/local/bin/google-chrome-stable
     ln -sf google-chrome-stable /usr/local/bin/google-chrome
   fi
-  install -m 0644 "$assets/terminal.svg" /opt/beam-vm/
-  install -d -m 0755 /root/Desktop
-  install -m 0755 "$assets/browser.desktop" "$assets/terminal.desktop" /root/Desktop/
-  # Open desktop launchers directly instead of prompting to execute a script.
-  sed -i '/^\[config\]/a quick_exec=1' /etc/xdg/libfm/libfm.conf
-  sed -i 's/^big_icon_size=.*/big_icon_size=96/' /etc/xdg/libfm/libfm.conf
-  # Use the installed flat window theme and readable title bars at 192 DPI.
-  sed -i 's/<name>Clearlooks<\//<name>Breeze-ob<\//; /<font /,/<\/font>/s/<size>.*<\/size>/<size>11<\/size>/' \
-    /etc/xdg/openbox/rc.xml
-  desktop_config=/root/.config/pcmanfm/default/desktop-items-0.conf
-  if [ ! -f "$desktop_config" ]; then
-    install -d "$(dirname "$desktop_config")"
-    cat > "$desktop_config" <<'EOF'
-[*]
-wallpaper_mode=color
-desktop_bg=#17171c
-desktop_fg=#ededee
-desktop_shadow=#17171c
-desktop_font=Ubuntu 9
-show_trash=0
-EOF
-  fi
-  xdg-user-dirs-update
-  # Noble's PCManFM uses GTK3, which otherwise doubles our already-2x icons.
-  # Keep its fonts at 192 DPI and its icons at their configured pixel size.
-  if ! grep -q '^env GDK_SCALE=1 GDK_DPI_SCALE=1 pcmanfm --desktop' /etc/xdg/openbox/autostart; then
-    sed -i '/^pcmanfm --desktop/d' /etc/xdg/openbox/autostart
-    printf '\nenv GDK_SCALE=1 GDK_DPI_SCALE=1 pcmanfm --desktop &\n' >> /etc/xdg/openbox/autostart
-  fi
+  install -d -m 0755 "$desktop_home/Desktop" /usr/local/share/applications
+  install -m 0755 "$assets/browser.desktop" "$assets/terminal.desktop" "$desktop_home/Desktop"/
+  runuser -u "$desktop_user" -- xdg-user-dirs-update
+  desktop_mime org.gnome.Nautilus.desktop inode/directory
   if [ "$browser" = firefox ]; then
     sed -i 's/Name=Chrome/Name=Firefox/; s/Icon=google-chrome/Icon=firefox/; s/^Exec=.*/Exec=firefox %U/' \
-      /root/Desktop/browser.desktop
+      "$desktop_home/Desktop"/browser.desktop
   fi
-  rm -f /tmp/kasmvnc.deb
+  install -m 0644 "$desktop_home/Desktop/browser.desktop" /usr/local/share/applications/beam-browser.desktop
+  desktop_mime beam-browser.desktop text/html application/xhtml+xml x-scheme-handler/http x-scheme-handler/https
+  chown -R "$desktop_user:$desktop_user" "$desktop_home/Desktop" "$desktop_home/.config"
 fi
 
 if [ "$desktop" = true ] || [ "$kiosk" = true ]; then
@@ -246,4 +217,8 @@ if [ "$desktop" = true ] || [ "$kiosk" = true ]; then
   /opt/beam-vm/browser-trust --initialize
 fi
 
-rm -rf /var/lib/apt/lists/* "$assets"
+# A desktop's package opener needs these indexes to resolve downloaded packages.
+if [ "$desktop" != true ] || [ "$kiosk" = true ]; then
+  rm -rf /var/lib/apt/lists/*
+fi
+rm -rf "$assets"

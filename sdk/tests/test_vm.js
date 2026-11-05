@@ -86,7 +86,7 @@ async function kiosk(sourcePath) {
   assert.match(html, /src="_beam\/kiosk\/webrtc.js"/);
   const source = fs.readFileSync(path.join(path.dirname(sourcePath), 'kiosk-webrtc.js'), 'utf8');
   async function check(prefix, entry) {
-    let application = 'starting', responseStatus = 200, health = true, reloads = 0;
+    let application = 'starting', state = null, responseStatus = 200, health = true, reloads = 0;
     const requests = [], navigations = [], timers = new Map();
     const elements = {'#status': {}, '#retry': {}, '#restart': {}};
     const overlay = {setAttribute() {}, querySelectorAll: () => Object.values(elements)};
@@ -94,7 +94,7 @@ async function kiosk(sourcePath) {
     const window = {addEventListener() {}};
     vm.runInNewContext(source, {
       window, URL, AbortSignal, Date, parent: {postMessage() {}},
-      location: {href: origin + prefix + (entry ? '' : 'stream/'), origin, replace: url => navigations.push(url), reload: () => reloads++},
+      location: {href: origin + prefix + (entry ? '' : 'stream/'), origin, replace: url => { if(new URL(url).pathname===prefix) reloads++; else navigations.push(url); }, reload: () => reloads++},
       document: {
         documentElement: {hasAttribute: () => entry}, body: {append() {}}, readyState: 'complete',
         createElement: () => overlay,
@@ -107,7 +107,7 @@ async function kiosk(sourcePath) {
         if (pathname.endsWith('/restart')) return {ok: true};
         if (pathname.endsWith('/health')) return {ok: health};
         return {ok: responseStatus === 200, status: responseStatus,
-          json: async () => ({state: application, application, error: 'Application closed'})};
+          json: async () => ({state: state || application, application, error: 'Application closed'})};
       },
     });
     const advance = async () => {const fn = timers.get(1); timers.delete(1); fn(); await flush();};
@@ -127,7 +127,9 @@ async function kiosk(sourcePath) {
     responseStatus = 200; application = 'ready'; health = false;
     await window.beamKiosk.poll();
     assert.equal(navigations.length, 0, 'wait for native stream health');
-    health = true; await advance();
+    health = true; state = 'starting'; await window.beamKiosk.poll();
+    assert.equal(navigations.length, 0, 'restart readiness cannot use the old application state');
+    state = 'ready'; await advance();
     if (entry) {
       assert.equal(navigations.at(-1), origin + prefix + 'stream/');
       assert.equal(requests.at(-1).path, prefix + 'stream/api/health');
@@ -147,15 +149,17 @@ async function webrtc(sourcePath) {
   async function check(path) {
     const calls = [], messages = [];
     const storage = new Map([['selkies_tab_id', 'copied-from-another-tab']]);
+    const createChannel = label => ({label,readyState:'open',events:{},addEventListener(name,callback){this.events[name]=callback;}});
     class Peer {
       constructor() { this.events = {}; this.connectionState = 'new'; }
       addEventListener(name, callback) { this.events[name] = callback; }
       async setRemoteDescription(value) { calls.push(['remote', value]); }
       async addIceCandidate(value) { calls.push(['candidate', value]); }
+      createDataChannel(label) { return createChannel(label); }
       close() { this.connectionState = 'closed'; }
     }
     const origin = 'https://application.example';
-    let status = 200;
+    let status = 200, probeStatus = 200, reloads = 0, probeResponse = null;
     const timers=new Map();
     const window = {RTCPeerConnection: Peer, devicePixelRatio: 1.5,
       sessionStorage: {setItem: (key, value) => storage.set(key, value)},
@@ -163,10 +167,13 @@ async function webrtc(sourcePath) {
     vm.runInNewContext(source, {
       window, RTCPeerConnection: Peer,
       URL, AbortSignal, WeakSet,
-      location: { href: origin + path + 'stream/', origin },
+      location: { href: origin + path + 'stream/', origin, replace: url => { assert.equal(new URL(url).pathname, path); reloads++; } },
       parent: { postMessage(value, target) { messages.push([value, target]); } },
       setTimeout:callback=>{timers.set(1,callback);return 1;},clearTimeout:id=>timers.delete(id),
       fetch: async (url, options) => {
+        if (url.pathname === path + '_beam/kiosk/status') {
+          return probeResponse || {ok: probeStatus === 200, status: probeStatus};
+        }
         assert.equal(url.pathname, path + '_beam/kiosk/webrtc/session');
         assert.equal(options.credentials, 'same-origin');
         assert.equal(options.headers['X-Beam-Kiosk-Action'], 'webrtc');
@@ -216,6 +223,51 @@ async function webrtc(sourcePath) {
     status=200;
     await new Peer().setRemoteDescription({type:'offer',sdp:'guest-description'});
     assert.equal(timers.size,0,'a replacement peer cancels the previous recovery timer');
+    viewer.activePeer.close();viewer.syncConnection();probeStatus=503;
+    await timers.get(1)();
+    assert.equal(reloads,0,'gateway outages must retain the reconnect document');
+    assert.equal(timers.size,1,'unavailable gateways are probed again');
+    probeStatus=200;await timers.get(1)();
+    assert.equal(reloads,1,'recover through the gateway loading page after the authenticated route responds');
+    const controlPeer = new Peer();
+    await controlPeer.setRemoteDescription({type:'offer',sdp:'guest-description'});
+    controlPeer.connectionState='connected';
+    const channel=createChannel('input');
+    controlPeer.events.datachannel({channel});
+    channel.readyState='closed';channel.events.close();
+    assert.equal(controlPeer.connectionState,'closed','live video cannot conceal a failed input channel');
+    viewer.syncConnection();
+    await timers.get(1)();
+    assert.equal(reloads,2,'a failed input channel must reconnect the session');
+    const localPeer = new Peer();
+    localPeer.createDataChannel('clipboard');
+    assert.equal(viewer.activePeer,controlPeer,'unrelated data channels cannot replace the viewer peer');
+    const localChannel = localPeer.createDataChannel('input');
+    await localPeer.setRemoteDescription({type:'offer',sdp:'guest-description'});
+    assert.equal(viewer.inputChannel,localChannel,'SDP routing preserves channels created locally before signaling');
+    controlPeer.events.datachannel({channel});
+    assert.equal(viewer.inputChannel,localChannel,'a superseded peer cannot replace the current input channel');
+    localPeer.connectionState='connected';
+    localChannel.readyState='closed';localChannel.events.close();
+    assert.equal(localPeer.connectionState,'closed','local input channel failure closes a live video peer');
+    await timers.get(1)();
+    assert.equal(reloads,3,'local input channel failure must reconnect the session');
+    for (const staleStatus of [503,200]) {
+      const changingPeer = new Peer();
+      await changingPeer.setRemoteDescription({type:'offer',sdp:'guest-description'});
+      changingPeer.connectionState='disconnected';viewer.syncConnection();
+      let release;
+      probeResponse=new Promise(resolve=>{release=resolve;});
+      const pending=timers.get(1)();
+      changingPeer.connectionState=staleStatus===503?'failed':'closed';viewer.syncConnection();
+      const current=timers.get(1), before=reloads;
+      probeResponse=null;release({ok:staleStatus===200,status:staleStatus});
+      await pending;
+      assert.equal(reloads,before,'stale probes cannot navigate after a peer state transition');
+      assert.equal(timers.get(1),current,'stale probes cannot create another retry loop');
+      await current();
+      assert.equal(reloads,before+1,'only the current recovery generation reconnects');
+    }
   }
   async function checkDisplay() {
     const messages=[],events={},videoEvents={},windowEvents={},timers=new Map();
@@ -256,7 +308,6 @@ async function webrtc(sourcePath) {
     delete displayWindow.streamResolutionDiverged;videoEvents.resize();timers.get(1)();
     assert.equal(displayWindow.streamResolutionDiverged,true,'frame dimensions reconcile a viewer even before upstream bookkeeping arrives');
     assert.equal(displayWindow.beamKiosk.fitted(),true,'a second tab can display the owner\'s framebuffer');
-    assert.equal(video.style.objectFit,'contain','shared frames keep their aspect ratio and native input mapping');
     displayWindow.innerWidth=0;assert.equal(displayWindow.beamKiosk.fitted(),false,'hidden shared viewers still wait');
     displayWindow.innerWidth=960;displayWindow.streamResolutionDiverged=false;
     video.id='videoStream';video.width=1920;
@@ -286,13 +337,23 @@ async function webrtc(sourcePath) {
     document.hidden=false;events.visibilitychange();timers.get(1)();
     assert.equal(sent.length,3,'returning tabs reclaim their viewport even when its dimensions are unchanged');
     displayWindow.innerWidth=0;viewer.syncViewport();assert.equal(sent.length,3);
-    displayWindow.innerWidth=5000;displayWindow.innerHeight=10000;viewer.syncViewport();
-    assert.equal(sent.at(-1),'KIOSK_VIEWPORT,4080x4080','viewport requests retain the pinned encoder limit');
+    displayWindow.innerWidth=3840;displayWindow.innerHeight=2160;viewer.syncViewport();
+    assert.equal(sent.at(-1),'KIOSK_VIEWPORT,3840x2160','large displays retain their aspect ratio within the frame budget');
+    assert.equal(displayWindow.devicePixelRatio,1,'native resize and input use the same bounded density');
+    displayWindow.streamResolutionDiverged=false;
+    video.videoWidth=3840;video.videoHeight=2160;
+    assert.equal(viewer.viewportMatches(video),true,'a capped wide frame is ready without a divergence workaround');
+    displayWindow.innerWidth=1920;displayWindow.innerHeight=1080;
+    assert.equal(displayWindow.devicePixelRatio,2,'returning to a smaller display restores the session density');
+    displayWindow.innerWidth=3840;displayWindow.innerHeight=3840;viewer.syncViewport();
+    assert.equal(sent.at(-1),'KIOSK_VIEWPORT,2880x2880','square displays obey the total frame budget as well as the dimension limit');
+    displayWindow.innerWidth=2160;displayWindow.innerHeight=3840;viewer.syncViewport();
+    assert.equal(sent.at(-1),'KIOSK_VIEWPORT,2160x3840','portrait displays preserve their aspect ratio at the same frame budget');
     const requests=sent.length;
     events.pointerdown({isTrusted:false});assert.equal(sent.length,requests);
     events.pointerdown({isTrusted:true});
     assert.equal(sent.length,requests+1,'real input can reclaim a viewport when embedded-browser focus is retained');
-    video.videoWidth=video.videoHeight=4080;
+    video.videoWidth=2160;video.videoHeight=3840;
     events.pointerdown({isTrusted:true});
     assert.equal(sent.length,requests+1,'input on a fitted viewer does not send redundant resizes');
   }

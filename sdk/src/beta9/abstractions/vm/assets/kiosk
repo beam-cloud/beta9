@@ -1,8 +1,7 @@
 #!/usr/bin/python3
-"""Supervise an application-only X11 session and its browser stream.
+"""Supervise a graphical VM session and its browser stream.
 
-The display is private to this application, including all of its dialogs and
-secondary windows. The HTTP control listener is tunnel-only; Beam's gateway
+Kiosk applications and full desktops share the display and stream lifecycle. The HTTP control listener is tunnel-only; Beam's gateway
 authenticates browser requests before forwarding them here.
 """
 
@@ -23,11 +22,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from kiosk_config import Kiosk, KioskRuntime
+from kiosk_config import Kiosk, DesktopRuntime
 
 
-POLICY = KioskRuntime()
-ASSETS = Path("/opt/beam-vm")
+POLICY = DesktopRuntime()
+ASSETS = Path(POLICY.session_path).parent
 RUNTIME = Path("/run/beam-desktop")
 
 
@@ -58,6 +57,27 @@ def visible_wm(env):
             r"0x[1-9a-fA-F][0-9a-fA-F]*", root_property("_NET_SUPPORTING_WM_CHECK", env) or ""
         )
     )
+
+
+def visible_desktop(env):
+    result = run_command(
+        [
+            "gdbus",
+            "call",
+            "--session",
+            "--dest",
+            "org.gnome.SessionManager",
+            "--object-path",
+            "/org/gnome/SessionManager",
+            "--method",
+            "org.gnome.SessionManager.IsSessionRunning",
+        ],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0 and result.stdout.strip() == "(true,)"
 
 
 def toolkit_settings(source, dpi=None):
@@ -163,32 +183,45 @@ class SessionStatus:
     backend: str = "selkies"
     experimental: bool = True
     transport: str = "websockets"
+    desktop: bool = False
 
 
 class Session:
-    def __init__(self, config):
-        self.config = Kiosk.from_dict(config)
+    def __init__(self, config=None):
+        self.config = Kiosk.from_dict(config) if config is not None else None
         self.lock = threading.Lock()
         self.restart = threading.Event()
         self.stopping = threading.Event()
         self.processes = {}
         self.failures = collections.defaultdict(collections.deque)
         self.state = SessionStatus(
-            mcp="starting",
-            transport=self.config.transport or "websockets",
+            mcp="disabled" if self.desktop else "starting",
+            transport=(
+                self.config.transport
+                if self.config
+                else os.environ.get("BEAM_VM_DESKTOP_TRANSPORT")
+            )
+            or "websockets",
+            desktop=self.desktop,
         )
+        home = os.path.expanduser("~")
         self.env = dict(
             os.environ,
-            HOME="/root",
-            XDG_CONFIG_HOME="/root/.config",
+            HOME=home,
+            XDG_CONFIG_HOME=str(Path(home) / ".config"),
             QT_ENABLE_HIGHDPI_SCALING="1",
             QT_SCALE_FACTOR_ROUNDING_POLICY="PassThrough",
         )
         self.env.pop("BEAM_VM_KIOSK", None)
-        self.env.update(self.config.env)
+        if self.config is not None:
+            self.env.update(self.config.env)
         # These identify this exact display and cannot be redirected by app env.
         self.env.update(DISPLAY=":1", XAUTHORITY=str(RUNTIME / ".Xauthority"))
         self.window_manager = str(ASSETS / "openbox/bin/openbox")
+
+    @property
+    def desktop(self):
+        return self.config is None
 
     def update(self, **fields):
         with self.lock:
@@ -233,7 +266,11 @@ class Session:
             error="",
             mcp="starting",
         )
-        self.spawn(self.config.command, role="application", cwd=self.config.cwd)
+        try:
+            self.spawn(self.config.command, role="application", cwd=self.config.cwd)
+        except OSError:
+            self.finish_application("error", "Application failed to start; inspect its logs")
+            return
         self.started = time.monotonic()
         self.was_visible = False
         self.failures["mcp"].clear()
@@ -281,6 +318,7 @@ class Session:
                 if self.path != "/restart" or self.headers.get("X-Beam-Kiosk-Action") != "restart":
                     self.reply(403, {"error": "explicit restart required"})
                     return
+                session.update(state="starting", application="starting")
                 session.restart.set()
                 self.reply(202, {"state": "restarting"})
 
@@ -299,7 +337,7 @@ class Session:
                 raise InterruptedError
 
     def start_display(self):
-        if not Path(self.window_manager).is_file():
+        if not self.desktop and not Path(self.window_manager).is_file():
             raise RuntimeError("Kiosk image requires its window manager; rebuild with --kiosk")
         RUNTIME.mkdir(parents=True, exist_ok=True)
         self.settings_file = Path(self.env["HOME"]) / ".xsettingsd"
@@ -316,7 +354,11 @@ class Session:
         self.settings_source = toolkit_settings(source, dpi=POLICY.dpi)
         self.settings_file.write_text(self.settings_source)
         self.toolkit_file = RUNTIME / "xsettingsd.conf"
-        self.display_file = Path(self.env["HOME"]) / ".config/beam-vm/kiosk-display.json"
+        self.display_file = (
+            Path(self.env["HOME"])
+            / ".config/beam-vm"
+            / ("desktop-display.json" if self.desktop else "kiosk-display.json")
+        )
         self.saved_size = saved_display(self.display_file, legacy_scale=legacy_scale)
         save_display(self.display_file, self.saved_size)
         self.geometry_check = 0
@@ -365,15 +407,17 @@ class Session:
             role="display",
         )
         self.wait_for(
-            lambda: run_command(
-                ["xdpyinfo"],
-                env=self.env,
-                timeout=POLICY.display_timeout,
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            ).returncode
-            == 0,
+            lambda: (
+                run_command(
+                    ["xdpyinfo"],
+                    env=self.env,
+                    timeout=POLICY.display_timeout,
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                ).returncode
+                == 0
+            ),
             "display",
             POLICY.display_timeout,
         )
@@ -386,11 +430,18 @@ class Session:
             env=self.env,
         )
         self.toolkit_file.write_text(self.settings_source)
-        self.spawn(["xsettingsd", "--config", str(self.toolkit_file)], role="settings")
-        self.spawn(
-            [self.window_manager, "--config-file", str(ASSETS / "kiosk-openbox.xml")],
-            role="window-manager",
+        if self.desktop:
+            self.env["XDG_RUNTIME_DIR"] = str(RUNTIME)
+            if display[0] == "Xvfb":
+                self.env["LIBGL_ALWAYS_SOFTWARE"] = "1"
+        else:
+            self.spawn(["xsettingsd", "--config", str(self.toolkit_file)], role="settings")
+        manager = (
+            [str(ASSETS / "xstartup")]
+            if self.desktop
+            else [self.window_manager, "--config-file", str(ASSETS / "kiosk-openbox.xml")]
         )
+        self.spawn(manager, role="window-manager")
         self.spawn(
             ["pulseaudio", "--daemonize=no", "--exit-idle-time=-1", "--disallow-exit"],
             role="audio",
@@ -418,11 +469,12 @@ class Session:
                 f"--mode={transport}",
                 "--encoder=h264enc",
                 f"--framerate={POLICY.framerate}-{POLICY.framerate}",
-                # Full-color CRF preserves text; continuous cadence limits buffering.
+                # Bound video bursts so TCP queues cannot starve input.
                 f"--video-bitrate={POLICY.max_bitrate},{POLICY.min_bitrate}-{POLICY.max_bitrate}",
-                "--rate-control-mode=crf",
+                f"--rate-control-mode={POLICY.rate_control}|locked",
                 f"--video-crf={POLICY.crf}-{POLICY.crf}",
-                "--video-fullcolor=true",
+                # Keep software encoding within the frame budget at HiDPI sizes.
+                f"--video-fullcolor={str(POLICY.full_color).lower()}|locked",
                 "--video-streaming-mode=true|locked",
                 "--use-paint-over-quality=false|locked",
                 f"--backpressure-queue-size={POLICY.frame_queue}",
@@ -430,7 +482,7 @@ class Session:
                 "--use-css-scaling=false|locked",
                 f"--scaling-dpi={POLICY.dpi}",
                 "--use-browser-cursors=true",
-                "--ui-title=Application",
+                "--ui-title=" + ("Desktop" if self.desktop else "Application"),
                 "--ui-show-sidebar=false",
                 "--ui-show-logo=false",
                 "--ui-show-core-buttons=false",
@@ -451,7 +503,7 @@ class Session:
             source = self.settings_file.read_text()
         except FileNotFoundError:
             source = self.settings_source
-        if source != self.settings_source:
+        if not self.desktop and source != self.settings_source:
             temporary = self.toolkit_file.with_suffix(".tmp")
             temporary.write_text(toolkit_settings(source))
             temporary.replace(self.toolkit_file)
@@ -535,33 +587,52 @@ class Session:
 
     def run(self):
         RUNTIME.mkdir(parents=True, exist_ok=True)
-        defaults = Path(POLICY.mcp_defaults)
-        defaults.touch(mode=0o600)
-        defaults.write_text(
-            json.dumps({name: server.to_dict() for name, server in self.config.mcp.items()})
-        )
+        bus = RUNTIME / "session-bus"
+        bus.touch(mode=0o600)
+        bus.chmod(0o600)
+        bus.write_text(self.env["DBUS_SESSION_BUS_ADDRESS"] + "\n")
+        if not self.desktop:
+            defaults = Path(POLICY.mcp_defaults)
+            defaults.touch(mode=0o600)
+            defaults.write_text(
+                json.dumps({name: server.to_dict() for name, server in self.config.mcp.items()})
+            )
         server = self.control_server()
         try:
             self.start_display()
             self.start_stream()
-            self.wait_for(lambda: visible_wm(self.env), "window-manager", POLICY.manager_timeout)
-            self.launch()
+            self.wait_for(
+                lambda: visible_wm(self.env) and (not self.desktop or visible_desktop(self.env)),
+                "window-manager",
+                POLICY.manager_timeout,
+            )
+            if self.desktop:
+                self.update(state="ready", application="ready")
+            else:
+                self.launch()
             while not self.stopping.wait(POLICY.poll_interval):
                 if any(
                     self.processes[role].poll() is not None
-                    for role in ("display", "window-manager", "stream", "settings")
+                    for role in (
+                        ("display", "window-manager", "stream")
+                        + (() if self.desktop else ("settings",))
+                    )
                 ):
                     raise RuntimeError(
                         "Application streaming service exited; inspect beam-desktop.service logs"
                     )
                 self.sync_display()
+                if self.desktop:
+                    if self.restart.is_set():
+                        return 1  # systemd restarts the entire desktop cgroup.
+                    continue
                 if self.restart.is_set():
                     self.restart.clear()
                     self.failures.clear()
                     self.launch()
                 self.poll_application()
                 self.poll_mcp()
-                if self.state.application == "ready":
+                if self.state.application == "ready" and not self.restart.is_set():
                     self.update(state="ready", error="")
         except InterruptedError:
             return 0
@@ -573,9 +644,7 @@ class Session:
                 )
             self.update(state="error", application="error", error=str(error))
             print(f"Kiosk startup failed: {error}", file=sys.stderr, flush=True)
-            while not self.stopping.wait(POLICY.poll_interval):
-                if self.restart.is_set():
-                    return 1
+            return 1  # systemd recovers the shared display and stream together.
         finally:
             self.stop(*reversed(self.processes))
             server.shutdown()
@@ -609,7 +678,8 @@ def main():
             "dbus-run-session",
             ["dbus-run-session", "--", str(Path(__file__).resolve()), "--session"],
         )
-    config = json.loads(base64.b64decode(os.environ["BEAM_VM_KIOSK"], validate=True))
+    encoded = os.environ.get("BEAM_VM_KIOSK")
+    config = json.loads(base64.b64decode(encoded, validate=True)) if encoded else None
     session = Session(config)
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, lambda *_: session.stopping.set())

@@ -55,6 +55,9 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 	)
 	if v.Spec.Desktop {
 		env = append(env, "DISPLAY=:1", "XAUTHORITY=/run/beam-desktop/.Xauthority")
+		if v.Spec.DesktopTransport != "" {
+			env = append(env, types.VMDesktopTransportEnv+"="+string(v.Spec.DesktopTransport))
+		}
 	}
 	if v.Spec.Kiosk != nil {
 		data, err := json.Marshal(v.Spec.Kiosk)
@@ -131,8 +134,8 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 }
 
 func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) error {
-	if v.Spec.Kiosk != nil && v.Spec.Kiosk.Transport == types.VMKioskTransportWebRTC && s.webrtc == nil {
-		return fmt.Errorf("kiosk WebRTC requires the shared TCP gateway")
+	if v.Spec.DisplayTransport() == types.VMDesktopTransportWebRTC && s.webrtc == nil {
+		return fmt.Errorf("desktop WebRTC requires the shared TCP gateway")
 	}
 	if err := s.ensurePublicIPv6(ctx, v); err != nil {
 		return err
@@ -282,7 +285,16 @@ func (s *Service) snapshotRoot(ctx context.Context, v *types.VM) error {
 	return fmt.Errorf("snapshot response did not contain this VM's durable root")
 }
 
-func (s *Service) capture(ctx context.Context, v *types.VM, kind, name, description string) (*types.VMArtifact, error) {
+func (s *Service) capture(ctx context.Context, v *types.VM, kind, name, description string, public bool) (*types.VMArtifact, error) {
+	if public {
+		if _, snapshotImage := types.SnapshotImageStub(v.Spec.ImageID); snapshotImage {
+			return nil, fmt.Errorf("public templates require a built base image")
+		}
+		if kind != types.VMArtifactTemplate {
+			return nil, fmt.Errorf("only templates can be published")
+		}
+	}
+
 	id := uuid.NewString()
 	if name == "" {
 		name = id
@@ -298,6 +310,10 @@ func (s *Service) capture(ctx context.Context, v *types.VM, kind, name, descript
 	}
 
 	a := artifact(v, id, kind, name, description)
+	if public {
+		a.Public = true
+		a.Spec = a.Spec.PublicTemplate()
+	}
 	return a, s.repo.CreateVMArtifact(ctx, v.WorkspaceID, a)
 }
 

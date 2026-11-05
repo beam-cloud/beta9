@@ -126,6 +126,7 @@ func registerVMRoutes(api *echo.Group, s *Service) {
 	api.POST("/:workspaceId", auth.WithStrictWorkspaceAuth(s.create))
 	api.GET("/:workspaceId/artifacts/:kind", auth.WithStrictWorkspaceAuth(s.artifacts))
 	api.DELETE("/:workspaceId/artifacts/:kind/:artifact", auth.WithStrictWorkspaceAuth(s.removeArtifact))
+	api.GET("/:workspaceId/artifacts/:kind/:artifact", auth.WithStrictWorkspaceAuth(s.showArtifact))
 	api.GET("/:workspaceId/:name", auth.WithStrictWorkspaceAuth(s.get))
 	api.PATCH("/:workspaceId/:name", auth.WithStrictWorkspaceAuth(s.update))
 	api.GET("/:workspaceId/:name/tunnel/:port", auth.WithStrictWorkspaceAuth(s.tunnel))
