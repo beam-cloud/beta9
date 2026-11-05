@@ -2,11 +2,10 @@ import hashlib
 import io
 import select
 import socket
-import time
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socketserver import BaseRequestHandler, TCPServer
-from threading import Thread
+from threading import Event, Thread
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import Mock
@@ -64,8 +63,12 @@ def test_channel_infers_tls_only_for_port_443(monkeypatch, address, secure):
         channel.close()
 
 
-@pytest.mark.parametrize("deadline", [5, 0.1])
-def test_machine_list_allows_slow_connection_setup_within_caller_deadline(deadline):
+@pytest.mark.parametrize(
+    "setup_delay, deadline, succeeds",
+    [(0, 1, True), (0.5, 5, True), (0.5, 0.1, False), (None, 0.1, False)],
+    ids=["fast", "slow", "slow-deadline", "stalled-deadline"],
+)
+def test_machine_list_connection_setup_respects_caller_deadline(setup_delay, deadline, succeeds):
     server = grpc.server(ThreadPoolExecutor(max_workers=1))
     server.add_generic_rpc_handlers(
         (
@@ -83,11 +86,17 @@ def test_machine_list_allows_slow_connection_setup_within_caller_deadline(deadli
     )
     port = server.add_insecure_port("127.0.0.1:0")
     server.start()
+    closing = Event()
+    connections = []
 
     class DelayedConnection(BaseRequestHandler):
         def handle(self):
-            # Hold back the HTTP/2 handshake longer than the initial reconnect delay.
-            time.sleep(0.5)
+            connections.append(self.request)
+            # Model a fast, slow, or permanently stalled HTTP/2 handshake.
+            if closing.wait(setup_delay if setup_delay is not None else 5):
+                return
+            if setup_delay is None:
+                return
             try:
                 with socket.create_connection(("127.0.0.1", port), timeout=5) as upstream:
                     while True:
@@ -109,18 +118,82 @@ def test_machine_list_allows_slow_connection_setup_within_caller_deadline(deadli
     channel = Channel(f"127.0.0.1:{proxy.server_address[1]}", retry=(lambda _: None, False))
     try:
         with rpc_timeout(deadline):
-            if deadline < 0.5:
+            if not succeeds:
                 with pytest.raises(grpc.RpcError) as error:
                     GatewayServiceStub(channel).list_machines(ListMachinesRequest())
                 assert error.value.code() == grpc.StatusCode.DEADLINE_EXCEEDED
             else:
                 assert GatewayServiceStub(channel).list_machines(ListMachinesRequest()).ok
+        if succeeds:
+            # Warm RPCs reuse the ready connection without another setup delay.
+            with rpc_timeout(1):
+                for _ in range(5):
+                    assert GatewayServiceStub(channel).list_machines(ListMachinesRequest()).ok
+            assert len(connections) == 1
     finally:
+        closing.set()
         channel.close()
         proxy.shutdown()
         proxy.server_close()
         thread.join()
         server.stop(0).wait()
+
+
+def test_channel_reconnects_promptly_after_connection_refused():
+    # Find an unused port, then release it so the first connection is refused.
+    with socket.socket() as reserved:
+        reserved.bind(("127.0.0.1", 0))
+        address = f"127.0.0.1:{reserved.getsockname()[1]}"
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        server = grpc.server(executor)
+        server.add_generic_rpc_handlers(
+            (
+                grpc.method_handlers_generic_handler(
+                    "test.Gateway",
+                    {"Ping": grpc.unary_unary_rpc_method_handler(lambda request, context: b"ok")},
+                ),
+            )
+        )
+        channel = Channel(address, retry=(lambda _: None, False))
+        try:
+            with rpc_timeout(1), pytest.raises(grpc.RpcError) as error:
+                channel.unary_unary("/test.Gateway/Ping")(b"")
+            assert error.value.code() == grpc.StatusCode.UNAVAILABLE
+            assert server.add_insecure_port(address)
+            server.start()
+            # The 20s handshake budget must not become a delay before reconnecting.
+            grpc.channel_ready_future(channel).result(timeout=3)
+            with rpc_timeout(1):
+                assert channel.unary_unary("/test.Gateway/Ping")(b"") == b"ok"
+        finally:
+            channel.close()
+            server.stop(0).wait()
+
+
+def test_stalled_connection_setup_can_be_cancelled():
+    accepted, closing = Event(), Event()
+
+    class StalledConnection(BaseRequestHandler):
+        def handle(self):
+            accepted.set()
+            closing.wait(5)
+
+    with TCPServer(("127.0.0.1", 0), StalledConnection) as server:
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        channel = Channel(f"127.0.0.1:{server.server_address[1]}", retry=(lambda _: None, False))
+        try:
+            call = channel.unary_unary("/test.Gateway/Ping").future(b"", timeout=5)
+            assert accepted.wait(1)
+            assert call.cancel()
+            with pytest.raises(grpc.FutureCancelledError):
+                call.result(timeout=1)
+        finally:
+            closing.set()
+            channel.close()
+            server.shutdown()
+            thread.join()
 
 
 class TestGatewayHTTP(TestCase):
