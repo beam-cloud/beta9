@@ -1,6 +1,11 @@
 import hashlib
 import io
+import select
+import socket
+import time
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from socketserver import BaseRequestHandler, TCPServer
 from threading import Thread
 from types import SimpleNamespace
 from unittest import TestCase
@@ -20,6 +25,7 @@ from beta9.channel import (
     rpc_timeout,
 )
 from beta9.clients.function import FunctionInvokeRequest, FunctionInvokeResponse
+from beta9.clients.gateway import GatewayServiceStub, ListMachinesRequest, ListMachinesResponse
 
 
 class TestChannelIdentity(TestCase):
@@ -56,6 +62,65 @@ def test_channel_infers_tls_only_for_port_443(monkeypatch, address, secure):
         assert plaintext.called is not secure
     finally:
         channel.close()
+
+
+@pytest.mark.parametrize("deadline", [5, 0.1])
+def test_machine_list_allows_slow_connection_setup_within_caller_deadline(deadline):
+    server = grpc.server(ThreadPoolExecutor(max_workers=1))
+    server.add_generic_rpc_handlers(
+        (
+            grpc.method_handlers_generic_handler(
+                "gateway.GatewayService",
+                {
+                    "ListMachines": grpc.unary_unary_rpc_method_handler(
+                        lambda request, context: ListMachinesResponse(ok=True),
+                        request_deserializer=ListMachinesRequest().parse,
+                        response_serializer=bytes,
+                    )
+                },
+            ),
+        )
+    )
+    port = server.add_insecure_port("127.0.0.1:0")
+    server.start()
+
+    class DelayedConnection(BaseRequestHandler):
+        def handle(self):
+            # Hold back the HTTP/2 handshake longer than the initial reconnect delay.
+            time.sleep(0.5)
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=5) as upstream:
+                    while True:
+                        readable, _, _ = select.select([self.request, upstream], [], [], 5)
+                        if not readable:
+                            return
+                        for source in readable:
+                            data = source.recv(65536)
+                            if not data:
+                                return
+                            target = upstream if source is self.request else self.request
+                            target.sendall(data)
+            except OSError:
+                pass  # The caller may close its connection when its deadline expires.
+
+    proxy = TCPServer(("127.0.0.1", 0), DelayedConnection)
+    thread = Thread(target=proxy.serve_forever, daemon=True)
+    thread.start()
+    channel = Channel(f"127.0.0.1:{proxy.server_address[1]}", retry=(lambda _: None, False))
+    try:
+        with rpc_timeout(deadline):
+            if deadline < 0.5:
+                with pytest.raises(grpc.RpcError) as error:
+                    GatewayServiceStub(channel).list_machines(ListMachinesRequest())
+                assert error.value.code() == grpc.StatusCode.DEADLINE_EXCEEDED
+            else:
+                assert GatewayServiceStub(channel).list_machines(ListMachinesRequest()).ok
+    finally:
+        channel.close()
+        proxy.shutdown()
+        proxy.server_close()
+        thread.join()
+        server.stop(0).wait()
 
 
 class TestGatewayHTTP(TestCase):
