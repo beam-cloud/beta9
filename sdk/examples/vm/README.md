@@ -22,7 +22,7 @@ Build shared templates in a fresh VM that has never held personal data. Leave
 application and browser accounts signed out: publishing shares the **complete root
 disk and its snapshot history**, including home directories. Deleting files
 does not sanitize earlier snapshots. Secrets, environment values,
-attached disks/volumes, SSH keys and the publisher's pool binding are excluded
+attached disks/volumes, SSH access, kiosk MCP bindings and the publisher's pool binding are excluded
 from the template configuration; this does not scrub files inside the root.
 
 ```sh
@@ -43,6 +43,10 @@ root, VM identity, traffic credentials and SSH host keys. Installed software is
 retained. Template names are local to their owner's workspace; cross-workspace
 forks require the public template's ID. Templates are private unless `--public`
 is supplied.
+
+Publication makes the root snapshot chain public permanently. Deleting the
+template removes its lookup entry; it does not revoke snapshot access or remove
+copies that other workspaces have already forked.
 
 The SDK exposes the same operation with
 `vm.create_template("app-desktop", public=True)` and

@@ -27,6 +27,14 @@ func desktopEntry(c echo.Context, v *types.VM, port int) bool {
 }
 
 func (s *Service) serveDesktop(c echo.Context, v *types.VM, status string) error {
+	if v.Spec.StreamingDesktop() && !strings.HasSuffix(c.Request().URL.Path, "/") {
+		canonical := *c.Request().URL
+		canonical.Path += "/"
+		if canonical.RawPath != "" {
+			canonical.RawPath += "/"
+		}
+		return c.Redirect(http.StatusTemporaryRedirect, canonical.String())
+	}
 	if v.DesiredState != types.VMStateRunning || (status != types.VMStateRunning && status != types.VMStateStarting) {
 		if !v.Spec.AutoResume {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "VM is not running; start it to use this URL")

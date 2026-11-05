@@ -205,4 +205,19 @@ func TestKioskGatewayRoutingAndAuthorization(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `_beam/kiosk/webrtc.js`)
 	require.NotContains(t, rec.Body.String(), "vnc.html")
 	require.NotContains(t, rec.Body.String(), "scale(0.5)")
+	for _, kiosk := range []bool{false, true} {
+		v.Spec.Kiosk = nil
+		v.Spec.DesktopTransport = types.VMDesktopTransportWebRTC
+		if kiosk {
+			v.Spec.Kiosk = &types.VMKioskSpec{Command: []string{"application"}}
+			v.Spec.DesktopTransport = ""
+		}
+		req = httptest.NewRequest(http.MethodGet, "/vm/"+v.Handle+"/8080?setting=saved", nil)
+		req.Header.Set("X-Beam-VM-Token", "private")
+		req.Header.Set("Accept", "text/html")
+		rec = httptest.NewRecorder()
+		proxyAPI(s).ServeHTTP(rec, req)
+		require.Equal(t, http.StatusTemporaryRedirect, rec.Code)
+		require.Equal(t, "/vm/"+v.Handle+"/8080/?setting=saved", rec.Header().Get("Location"))
+	}
 }

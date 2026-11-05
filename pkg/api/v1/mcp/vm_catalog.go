@@ -101,6 +101,13 @@ func vmSpecSchema() map[string]any {
 			"properties": props{"desktop": map[string]any{"const": true}},
 		},
 		"then": map[string]any{"properties": props{"memory": map[string]any{"minimum": 1024}}},
+	}, {
+		"if": map[string]any{"required": []string{"desktop_transport"}},
+		"then": map[string]any{
+			"required":   []string{"desktop"},
+			"properties": props{"desktop": map[string]any{"const": true}},
+			"not":        map[string]any{"required": []string{"kiosk"}},
+		},
 	}}
 	return spec
 }
@@ -202,7 +209,7 @@ func (g *Group) vmLifecycleCatalog() []mcpTool {
 		{"stop_vm", "stop", "Stop a VM and snapshot its writable root unless no_snapshot=true. Requires confirmation.", "beam:write", "Stopping the VM interrupts its applications.", props{"no_snapshot": boolean()}, nil, false, true},
 		{"fork_vm", "fork", "Fork the writable root into a new independent VM. An SSH-enabled source requires ssh_public_key matching your local identity.", "beam:write", "", props{"new_name": str("New VM name"), "ssh_public_key": str("New SSH public key")}, nil, false, false},
 		{"create_vm_snapshot", "snapshot", "Create a durable VM root snapshot.", "beam:write", "", props{"snapshot_name": str("Snapshot name")}, nil, false, false},
-		{"create_vm_template", "template", "Create a reusable VM template. public=true publishes the complete root and snapshot history for other workspaces to fork by ID; use a fresh VM that has never held personal data or signed-in accounts.", "beam:write", "", props{"template_name": str("Template name"), "description": str("Template description"), "public": boolean()}, nil, false, false},
+		{"create_vm_template", "template", "Create a reusable VM template. public=true requires confirm=true and permanently publishes the complete root and snapshot history for other workspaces to fork by ID; use a fresh VM that has never held personal data or signed-in accounts.", "beam:write", "", props{"template_name": str("Template name"), "description": str("Template description"), "public": boolean()}, nil, false, false},
 		{"vm_expose_port", "expose", "Publish a VM port; protected=true requires a VM traffic token or vm_access_url browser link. Other application ports default public. For terminal 7681 or desktop 8080, pass protected explicitly to toggle access.", "beam:write", "", props{"port": boundedInt(1, 65535, 8000), "protected": boolean()}, []string{"port"}, false, true},
 		{"vm_unexpose_port", "unexpose", "Remove the public URL for a VM port. Requires confirmation.", "beam:write", "Removing the port URL interrupts users of that URL.", props{"port": boundedInt(1, 65535, 8000)}, []string{"port"}, false, true},
 		{"vm_bind_port", "bind", "Bind a port privately for authenticated SSH/tunnel access without a public URL.", "beam:write", "", props{"port": boundedInt(1, 65535, 8000)}, []string{"port"}, false, true},
@@ -216,7 +223,7 @@ func (g *Group) vmLifecycleCatalog() []mcpTool {
 		for k, v := range op.extra {
 			extra[k] = v
 		}
-		if op.confirm != "" {
+		if op.confirm != "" || op.action == types.VMArtifactTemplate {
 			extra["confirm"] = boolean()
 		}
 		t := vmTool(
@@ -225,6 +232,9 @@ func (g *Group) vmLifecycleCatalog() []mcpTool {
 			vmSchema(extra, op.required...),
 			op.read, op.idempotent, op.scope,
 			func(ctx context.Context, a *auth.AuthInfo, args toolArgs) (any, error) {
+				if op.action == types.VMArtifactTemplate && args.boolean("public") && !args.boolean("confirm") {
+					return nil, fail("NEEDS_CONFIRMATION", "Publishing shares the complete root and snapshot history permanently. Call again with confirm=true.")
+				}
 				body := map[string]any{}
 				for k, v := range args {
 					if k != "name" && k != "confirm" {
@@ -246,7 +256,7 @@ func (g *Group) vmLifecycleCatalog() []mcpTool {
 			},
 		)
 		t.Confirm = op.confirm
-		t.Destructive = op.confirm != ""
+		t.Destructive = op.confirm != "" || op.action == types.VMArtifactTemplate
 		tools = append(tools, t)
 	}
 	remove := vmTool(

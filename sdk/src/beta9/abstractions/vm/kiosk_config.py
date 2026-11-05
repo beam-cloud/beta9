@@ -63,9 +63,6 @@ class DesktopRuntime:
     """
 
     display_port: int = 8080
-    desktop_user: str = "beam"
-    desktop_launcher: str = "/opt/beam-vm/desktop"
-    session_path: str = "/opt/beam-vm/kiosk"
     status_port: int = 8081
     media_port: int = 8443
     pixel_ratio: int = 2
@@ -77,7 +74,6 @@ class DesktopRuntime:
     min_size: Tuple[int, int] = (320, 200)
     framerate: int = 60
     crf: int = 18
-    rate_control: str = "cbr"
     min_bitrate: int = 1000
     max_bitrate: int = 8000
     frame_queue: int = 2
@@ -99,6 +95,10 @@ class DesktopRuntime:
     max_retries: int = 3
     poll_interval: float = 0.25
     geometry_interval: float = 1
+    desktop_user: str = "beam"
+    desktop_launcher: str = "/opt/beam-vm/desktop"
+    session_path: str = "/opt/beam-vm/kiosk"
+    rate_control: str = "cbr"
 
     @property
     def dpi(self):

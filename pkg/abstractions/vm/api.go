@@ -829,6 +829,9 @@ func (s *Service) showArtifact(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid artifact kind")
 	}
 	a, err := s.repo.GetVMArtifact(ctx, info.Workspace.Id, kind, c.Param("artifact"))
+	if errors.Is(err, sql.ErrNoRows) {
+		return echo.NewHTTPError(http.StatusNotFound, kind+" not found")
+	}
 	if err != nil {
 		return apiError(err)
 	}

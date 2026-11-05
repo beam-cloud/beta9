@@ -1183,25 +1183,12 @@ func TestListProjectsLaunchCompletionBeforeStatusFiltering(t *testing.T) {
 	require.Equal(t, "starting", v.Status)
 }
 
-type templateSnapshotBackend struct {
-	*vmBackend
-	published []string
-}
-
-func (b *templateSnapshotBackend) GetDiskSnapshot(_ context.Context, ws uint, id string) (*types.DiskSnapshot, error) {
-	return &types.DiskSnapshot{ExternalId: id, WorkspaceId: ws, Status: types.DiskSnapshotStatusAvailable}, nil
-}
-func (b *templateSnapshotBackend) UpdateDiskSnapshot(_ context.Context, s *types.DiskSnapshot) (*types.DiskSnapshot, error) {
-	b.published = append(b.published, s.ExternalId)
-	return s, nil
-}
 func TestPublishedTemplateDropsWorkspaceBindingsAndKeepsImmutableRoot(t *testing.T) {
 	s, v, _, _, _ := fixture()
-	b := &templateSnapshotBackend{vmBackend: s.backend.(*vmBackend)}
-	s.backend = b
 	v.Spec.Env = []string{"TOKEN=private"}
 	v.Spec.Secrets = []string{"api-key"}
 	v.Spec.Pool = "private-pool"
+	v.Spec.SSH = true
 	v.Spec.SSHPublicKey = "source-key"
 	v.Spec.Disks = []*pb.DurableDisk{{Name: "private-data"}}
 	v.Spec.Volumes = []*pb.Volume{{}}
@@ -1209,13 +1196,13 @@ func TestPublishedTemplateDropsWorkspaceBindingsAndKeepsImmutableRoot(t *testing
 	require.NoError(t, err)
 	require.True(t, a.Public)
 	require.NotEmpty(t, a.RootSnapshotID)
-	require.Equal(t, []string{a.RootSnapshotID}, b.published)
 	require.Empty(t, a.Spec.Env)
 	require.Empty(t, a.Spec.Secrets)
 	require.Empty(t, a.Spec.Disks)
 	require.Empty(t, a.Spec.Volumes)
 	require.Empty(t, a.Spec.Pool)
 	require.Empty(t, a.Spec.SSHPublicKey)
+	require.False(t, a.Spec.SSH)
 	require.Equal(t, []string{"TOKEN=private"}, v.Spec.Env)
 	require.Equal(t, "private-pool", v.Spec.Pool)
 }

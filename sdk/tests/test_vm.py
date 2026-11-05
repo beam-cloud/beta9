@@ -3280,6 +3280,10 @@ def test_openbox_policy_rejects_changed_source_without_partial_writes(tmp_path, 
 
 def test_kiosk_configuration_is_frozen_and_builds_a_distinct_image():
     from beta9.abstractions.image import Image
+    from beta9.abstractions.vm.kiosk_config import KioskRuntime
+
+    assert KioskRuntime(8080, 8081, 8443).status_port == 8081
+    assert KioskRuntime(8080, 8081, 8443).media_port == 8443
 
     service = SimpleNamespace(channel=MagicMock(), gateway=MagicMock())
     config = Kiosk(

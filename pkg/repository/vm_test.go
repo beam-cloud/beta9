@@ -502,6 +502,34 @@ func TestVMRepositoryIntegration(t *testing.T) {
 		}
 	}
 	require.True(t, found, "template must survive source deletion")
+
+	// Public lookup retains source identity for the owner, but hides it from
+	// recipients. Names and private artifacts remain scoped to the owner.
+	_, err = repo.GetVMArtifact(ctx, uint(ws+1), a.Kind, a.ID)
+	require.ErrorIs(t, err, sql.ErrNoRows)
+	a.ID, a.Name = uuid.NewString(), "public-"+id[:8]
+	require.NoError(t, repo.CreateVMArtifact(ctx, uint(ws), a))
+	_, err = db.Exec(`UPDATE vm_artifact SET data=data || '{"public":true}'::jsonb WHERE id=$1`, a.ID)
+	require.NoError(t, err)
+	owned, err := repo.GetVMArtifact(ctx, uint(ws), a.Kind, a.ID)
+	require.NoError(t, err)
+	require.Equal(t, id, owned.VMID)
+	require.Equal(t, v.Name, owned.VMName)
+	require.True(t, owned.VMDeleted)
+	shared, err := repo.GetVMArtifact(ctx, uint(ws+1), a.Kind, a.ID)
+	require.NoError(t, err)
+	require.Empty(t, shared.VMID)
+	require.Empty(t, shared.VMName)
+	require.False(t, shared.VMDeleted)
+	require.Equal(t, a.RootSnapshotID, shared.RootSnapshotID)
+	_, err = repo.GetVMArtifact(ctx, uint(ws+1), a.Kind, a.Name)
+	require.ErrorIs(t, err, sql.ErrNoRows)
+	_, err = repo.GetVMArtifact(ctx, uint(ws+1), types.VMArtifactSnapshot, a.ID)
+	require.ErrorIs(t, err, sql.ErrNoRows)
+	_, err = db.Exec(`UPDATE vm_artifact SET kind=$2,data=data || jsonb_build_object('kind',$2::text) WHERE id=$1`, a.ID, types.VMArtifactSnapshot)
+	require.NoError(t, err)
+	_, err = repo.GetVMArtifact(ctx, uint(ws+1), types.VMArtifactSnapshot, a.ID)
+	require.ErrorIs(t, err, sql.ErrNoRows, "public non-template rows remain workspace-local")
 }
 
 func TestVMPagesIntegration(t *testing.T) {

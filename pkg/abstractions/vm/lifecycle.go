@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
@@ -312,9 +311,6 @@ func (s *Service) capture(ctx context.Context, v *types.VM, kind, name, descript
 
 	a := artifact(v, id, kind, name, description)
 	if public {
-		if err := repository.PublishDiskSnapshot(ctx, s.backend, v.WorkspaceID, a.RootSnapshotID); err != nil {
-			return nil, err
-		}
 		a.Public = true
 		a.Spec = a.Spec.PublicTemplate()
 	}

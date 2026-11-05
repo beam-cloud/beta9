@@ -212,8 +212,13 @@ func (s VMSpec) DesktopPrivatePorts() []uint32 {
 // publishers must prepare a clean machine before sharing its complete root.
 func (s VMSpec) PublicTemplate() VMSpec {
 	s.Env, s.Secrets, s.Disks, s.Volumes = nil, nil, nil, nil
-	s.Pool, s.SSHPublicKey, s.SourceSnapshotID = "", "", ""
-	s.Kiosk = s.Kiosk.WithoutCredentials()
+	s.Pool, s.SSH, s.SSHPublicKey, s.SourceSnapshotID = "", false, "", ""
+	s.Ports = slices.DeleteFunc(slices.Clone(s.Ports), func(port uint32) bool { return port == VMSSHPort })
+	s.Kiosk = s.Kiosk.Clone()
+	if s.Kiosk != nil {
+		// MCP adapters are workspace bindings, not reusable launch configuration.
+		s.Kiosk.Env, s.Kiosk.MCP = nil, nil
+	}
 	return s
 }
 
