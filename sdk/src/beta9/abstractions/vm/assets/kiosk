@@ -18,7 +18,6 @@ import subprocess
 import sys
 import threading
 import time
-import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import URLError
 from urllib.request import urlopen
@@ -61,42 +60,24 @@ def visible_wm(env):
 
 
 def visible_desktop(env):
-    result = run_command(["wmctrl", "-lx"], env=env, check=False, capture_output=True, text=True)
-    classes = {
-        line.split()[2].lower().split(".")[-1]
-        for line in result.stdout.splitlines()
-        if len(line.split()) >= 3
-    }
-    return result.returncode == 0 and set(POLICY.desktop_window_classes) <= classes
-
-
-def configure_xfce(directory, channel, properties):
-    """Update managed session policy while preserving unrelated user preferences."""
-    path = directory / f"{channel}.xml"
-    root = (
-        ET.parse(path).getroot()
-        if path.exists()
-        else ET.Element("channel", name=channel, version="1.0")
+    result = run_command(
+        [
+            "gdbus",
+            "call",
+            "--session",
+            "--dest",
+            "org.gnome.SessionManager",
+            "--object-path",
+            "/org/gnome/SessionManager",
+            "--method",
+            "org.gnome.SessionManager.IsSessionRunning",
+        ],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
     )
-    for key, (kind, value) in properties.items():
-        parent = root
-        parts = key.strip("/").split("/")
-        for index, part in enumerate(parts):
-            node = parent.find(f"property[@name='{part}']")
-            if node is None:
-                node = ET.SubElement(parent, "property", name=part, type="empty")
-            if index == len(parts) - 1:
-                node.set("type", kind)
-                if kind == "array":
-                    node.attrib.pop("value", None)
-                    node[:] = []
-                    for item in value:
-                        ET.SubElement(node, "value", type="double", value=str(item))
-                else:
-                    node.set("value", str(value).lower() if isinstance(value, bool) else str(value))
-            parent = node
-    directory.mkdir(parents=True, exist_ok=True)
-    ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
+    return result.returncode == 0 and result.stdout.strip() == "(true,)"
 
 
 def toolkit_settings(source, dpi=None):
@@ -164,53 +145,6 @@ def resize_display(size, env):
 def display_size(env):
     match = re.search(r"=\s*(\d+),\s*(\d+)", root_property("_NET_DESKTOP_GEOMETRY", env) or "")
     return (int(match[1]), int(match[2])) if match else None
-
-
-def fit_desktop_windows(size, env):
-    """Keep window controls reachable after the browser shrinks the display."""
-    result = run_command(["wmctrl", "-lG"], env=env, check=False, capture_output=True, text=True)
-    windows = []
-    for line in result.stdout.splitlines():
-        fields = line.split(maxsplit=6)
-        if len(fields) >= 6:
-            try:
-                windows.append((fields[0], *map(int, fields[1:6])))
-            except ValueError:
-                continue
-    width, height = size
-    work_top = 0
-    # Panels reserve space asynchronously after RandR updates the root work area.
-    for _, desktop, x, y, w, h in windows:
-        if desktop < 0 and x == 0 and w >= width and 0 < h < size[1] / 2:
-            if y == 0:
-                work_top = max(work_top, h)
-            else:
-                height = min(height, size[1] - h)
-    for window, desktop, x, y, w, h in windows:
-        if desktop < 0:
-            continue
-        properties = run_command(
-            ["xprop", "-id", window, "_NET_FRAME_EXTENTS", "_NET_WM_STATE"],
-            env=env,
-            check=False,
-            capture_output=True,
-            text=True,
-        ).stdout
-        if "_NET_WM_STATE_FULLSCREEN" in properties:
-            continue
-        match = re.search(r"_NET_FRAME_EXTENTS\([^)]*\) = (\d+), (\d+), (\d+), (\d+)", properties)
-        left, right, top, bottom = map(int, match.groups()) if match else (0, 0, 0, 0)
-        new_w, new_h = min(w, width - left - right), min(h, height - work_top - top - bottom)
-        new_x, new_y = (
-            max(0, min(x - left, width - new_w - left - right)),
-            max(work_top, min(y - top, height - new_h - top - bottom)),
-        )
-        if (new_x, new_y, new_w, new_h) != (x - left, y - top, w, h):
-            run_command(
-                ["wmctrl", "-ir", window, "-e", f"0,{new_x},{new_y},{new_w},{new_h}"],
-                env=env,
-                check=False,
-            )
 
 
 def save_display(path, size):
@@ -497,7 +431,9 @@ class Session:
         )
         self.toolkit_file.write_text(self.settings_source)
         if self.desktop:
-            self.configure_desktop(headless=display[0] == "Xvfb")
+            self.env["XDG_RUNTIME_DIR"] = str(RUNTIME)
+            if display[0] == "Xvfb":
+                self.env["LIBGL_ALWAYS_SOFTWARE"] = "1"
         else:
             self.spawn(["xsettingsd", "--config", str(self.toolkit_file)], role="settings")
         manager = (
@@ -510,68 +446,6 @@ class Session:
             ["pulseaudio", "--daemonize=no", "--exit-idle-time=-1", "--disallow-exit"],
             role="audio",
         )
-
-    def configure_desktop(self, *, headless):
-        config = Path(self.env["XDG_CONFIG_HOME"]) / "xfce4"
-        directory = config / "xfconf/xfce-perchannel-xml"
-        settings = {
-            "/Xft/DPI": ("int", POLICY.dpi),
-            "/Gdk/WindowScalingFactor": ("int", POLICY.pixel_ratio),
-            "/Gdk/UnscaledDPI": (
-                "int",
-                round(POLICY.dpi * POLICY.xsettings_unit / POLICY.pixel_ratio),
-            ),
-            "/Xft/RGBA": ("string", "none"),
-        }
-        if not (directory / "xsettings.xml").exists():
-            settings.update(
-                {
-                    "/Net/ThemeName": ("string", "Adwaita"),
-                    "/Net/IconThemeName": ("string", "Adwaita"),
-                }
-            )
-        configure_xfce(directory, "xsettings", settings)
-        manager = {
-            "/general/use_compositing": ("bool", True),
-            "/general/vblank_mode": ("string", "xpresent" if headless else "auto"),
-            "/general/unredirect_overlays": ("bool", False),
-        }
-        if not (directory / "xfwm4.xml").exists():
-            manager.update(
-                {
-                    "/general/theme": ("string", "Default-xhdpi"),
-                    "/general/workspace_count": ("int", 1),
-                }
-            )
-        configure_xfce(directory, "xfwm4", manager)
-        if not (directory / "xfce4-desktop.xml").exists():
-            backdrop = {
-                "/desktop-icons/file-icons/show-filesystem": ("bool", False),
-                "/desktop-icons/file-icons/show-home": ("bool", False),
-                "/desktop-icons/file-icons/show-trash": ("bool", False),
-            }
-            outputs = run_command(
-                ["xrandr", "--query"], env=self.env, capture_output=True, text=True
-            )
-            for line in outputs.stdout.splitlines():
-                fields = line.split()
-                if len(fields) >= 2 and fields[1] == "connected":
-                    prefix = f"/backdrop/screen0/monitor{fields[0]}/workspace0"
-                    backdrop.update(
-                        {
-                            prefix + "/image-style": ("int", 0),
-                            prefix + "/color-style": ("int", 0),
-                            prefix + "/rgba1": ("array", (0.09, 0.09, 0.11, 1.0)),
-                        }
-                    )
-            configure_xfce(directory, "xfce4-desktop", backdrop)
-        for name, target in (
-            ("desktop-panel.xml", directory / "xfce4-panel.xml"),
-            ("whiskermenu-1.rc", config / "panel/whiskermenu-1.rc"),
-        ):
-            if not target.exists():
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes((ASSETS / name).read_bytes())
 
     def start_stream(self):
         transport = self.state.transport
@@ -639,8 +513,6 @@ class Session:
             self.geometry_check = time.monotonic()
             size = display_size(self.env)
             if size and size != self.saved_size and POLICY.valid_size(size):
-                if self.desktop:
-                    fit_desktop_windows(size, self.env)
                 save_display(self.display_file, size)
                 self.saved_size = size
 
@@ -714,6 +586,9 @@ class Session:
 
     def run(self):
         RUNTIME.mkdir(parents=True, exist_ok=True)
+        bus = RUNTIME / "session-bus"
+        bus.touch(mode=0o600)
+        bus.write_text(self.env["DBUS_SESSION_BUS_ADDRESS"] + "\n")
         if not self.desktop:
             defaults = Path(POLICY.mcp_defaults)
             defaults.touch(mode=0o600)

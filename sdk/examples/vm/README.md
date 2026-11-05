@@ -13,14 +13,16 @@ beam vm desktop app-base
 ```
 
 In the VM browser, download the application's Ubuntu `.deb` for its architecture.
-Open the completed download to launch Install Package, install it, and open the
-application from the desktop menu. Desktop applications run as the
-ordinary desktop user. The package installer has a dedicated elevation rule;
+Open the completed download in GNOME Software, install it, and open the
+application from the native launcher. Desktop applications run as the
+ordinary desktop user. PackageKit permits package operations for that account;
 other commands do not receive passwordless sudo.
 Enabling SSH grants its account the usual administrator access; this example
 keeps SSH disabled.
 
-Build shared templates in a fresh VM that has never held personal data. Leave
+Build shared templates in a fresh VM that has never held personal data. Fully exit
+applications before publishing, including browsers that run in the background,
+so their profiles can open cleanly in forks. Leave
 application and browser accounts signed out: publishing shares the **complete root
 disk and its snapshot history**, including home directories. Deleting files
 does not sanitize earlier snapshots. Secrets, environment values,

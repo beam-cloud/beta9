@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Install Package
-Exec=sudo -n /usr/bin/gdebi-gtk %f
-Icon=gnome-mime-application-x-deb
-Terminal=false
-MimeType=application/vnd.debian.binary-package;application/x-deb;
-Categories=System;PackageManager;

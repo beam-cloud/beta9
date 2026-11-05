@@ -178,7 +178,7 @@ def test_vm_image_is_deterministic_and_uses_selected_profile():
         assert assets.getmember("browser-trust").mode == 0o755
         installer = assets.extractfile("install").read().decode()
         assert "libnss3-tools" in installer
-        assert "xfce4-whiskermenu-plugin" in installer
+        assert "gnome-shell-extension-desktop-icons-ng" in installer
         assert "/etc/ca-certificates/update.d/beam-browser" in installer
 
 
@@ -192,7 +192,7 @@ def test_vm_image_bundle_matches_guest_files():
             assert archive.extractfile(name).read() == path.read_bytes(), (
                 f"Stale VM bundle: run python bin/generate_vm_assets.py after updating {name}"
             )
-            mode = 0o644 if path.suffix in (".service", ".desktop", ".svg", ".xml", ".rc") else 0o755
+            mode = 0o644 if path.suffix in (".service", ".desktop", ".svg", ".xml", ".rc", ".override", ".rules") else 0o755
             assert archive.getmember(name).mode == mode
 
 
@@ -227,7 +227,7 @@ def test_xstartup_preserves_defaults_and_tolerates_failed_user_resources(
     result = subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=5)
     assert result.returncode == 0, result.stderr
     assert "XTerm*faceSize: 12\n" in (tmp_path / "defaults").read_text()
-    assert (tmp_path / "launched").read_text() == "--\nxfce4-session\n"
+    assert (tmp_path / "launched").read_text() == "--\ngnome-session\n--session=ubuntu\n"
     if resource_exit is not None:
         assert (tmp_path / "overrides").read_text() == "XTerm*faceSize: 20\n"
     else:
@@ -3358,65 +3358,15 @@ def test_guest_processes_share_the_display_but_not_the_bootstrap_config(desktop,
     assert session.retry_allowed("mcp")
 
 
-@pytest.mark.parametrize(
-    "windows,ready",
-    [
-        ("", False),
-        ("0x1 -1 xfce4-panel.Xfce4-panel vm Panel", False),
-        ("0x2 -1 xfdesktop.Xfdesktop vm Desktop", False),
-        ("0x1 -1 xfce4-panel.Xfce4-panel vm Panel\n0x2 -1 xfdesktop.Xfdesktop vm Desktop", True),
-    ],
-)
-def test_full_desktop_readiness_requires_the_menu_and_icon_manager(monkeypatch, windows, ready):
+@pytest.mark.parametrize("code,response,ready", [
+    (0, "(true,)\n", True), (0, "(false,)\n", False), (1, "", False),
+])
+def test_full_desktop_readiness_uses_the_native_session_manager(monkeypatch, code, response, ready):
     guest = guest_module("kiosk")
     monkeypatch.setattr(
-        guest, "run_command", lambda *a, **k: SimpleNamespace(returncode=0, stdout=windows)
+        guest, "run_command", lambda *a, **k: SimpleNamespace(returncode=code, stdout=response)
     )
     assert guest.visible_desktop({}) is ready
-
-
-def test_native_desktop_defaults_preserve_customization_and_correct_retina_density(
-    tmp_path, monkeypatch
-):
-    import xml.etree.ElementTree as ET
-
-    guest = guest_module("kiosk")
-    monkeypatch.setattr(guest, "ASSETS", Path(vm_module.__file__).parent / "assets")
-    monkeypatch.setattr(
-        guest,
-        "run_command",
-        lambda *a, **k: SimpleNamespace(stdout="screen connected 2560x1600+0+0\n"),
-    )
-    session = guest.Session()
-    session.env["XDG_CONFIG_HOME"] = str(tmp_path)
-    session.configure_desktop(headless=True)
-    directory = tmp_path / "xfce4/xfconf/xfce-perchannel-xml"
-
-    def property(channel, path):
-        root = ET.parse(directory / (channel + ".xml")).getroot()
-        return root.find("/".join(f"property[@name='{name}']" for name in path.split("/")))
-
-    assert property("xsettings", "Xft/DPI").get("value") == "192"
-    assert property("xsettings", "Gdk/WindowScalingFactor").get("value") == "2"
-    assert property("xsettings", "Gdk/UnscaledDPI").get("value") == "98304"
-    assert property("xfwm4", "general/use_compositing").get("value") == "true"
-    assert property("xfwm4", "general/vblank_mode").get("value") == "xpresent"
-    assert property("xfwm4", "general/unredirect_overlays").get("value") == "false"
-    assert (
-        property("xfce4-desktop", "backdrop/screen0/monitorscreen/workspace0/image-style").get(
-            "value"
-        )
-        == "0"
-    )
-    assert len(property("xfce4-desktop", "backdrop/screen0/monitorscreen/workspace0/rgba1")) == 4
-
-    guest.configure_xfce(directory, "xsettings", {"/Net/ThemeName": ("string", "user-theme")})
-    panel = directory / "xfce4-panel.xml"
-    panel.write_text("custom user panel")
-    session.configure_desktop(headless=False)
-    assert property("xsettings", "Net/ThemeName").get("value") == "user-theme"
-    assert property("xfwm4", "general/vblank_mode").get("value") == "auto"
-    assert panel.read_text() == "custom user panel"
 
 
 @pytest.mark.parametrize(
@@ -3743,36 +3693,6 @@ def test_guest_resize_keeps_physical_dpi_and_rejects_invalid_geometry(monkeypatc
         monkeypatch.setattr(module.sys, "argv", args)
         assert module.main() == 1
     assert commands == []
-
-
-@pytest.mark.parametrize("panel_y,window_y", [(1326, 0), (0, 74)])
-def test_browser_shrink_fits_apps_around_the_panel_and_preserves_fullscreen(
-    monkeypatch, panel_y, window_y
-):
-    module = guest_module("kiosk")
-    commands = []
-
-    def run(argv, **kwargs):
-        commands.append(argv)
-        if argv == ["wmctrl", "-lG"]:
-            return SimpleNamespace(stdout=(
-                f"0x1 -1 0 {panel_y} 2200 74 host panel\n"
-                "0x2 -1 0 0 2200 1400 host desktop\n"
-                "0x3 0 638 86 2180 1520 host app\n"
-                "0x4 0 300 200 800 600 host editor\n"
-                "0x5 0 0 0 2200 1400 host fullscreen\n"
-                "0x6 0 malformed 0 800 600 host closing\n"
-            ))
-        if argv[0] == "xprop":
-            state = "_NET_WM_STATE_FULLSCREEN" if argv[2] == "0x5" else ""
-            return SimpleNamespace(stdout="_NET_FRAME_EXTENTS(CARDINAL) = 0, 0, 0, 0\n" + state)
-        return SimpleNamespace(returncode=0)
-
-    monkeypatch.setattr(module, "run_command", run)
-    module.fit_desktop_windows((2200, 1400), {})
-    assert [c for c in commands if "-e" in c] == [
-        ["wmctrl", "-ir", "0x3", "-e", f"0,20,{window_y},2180,1326"]
-    ]
 
 
 def test_transient_settings_removal_keeps_display_live_and_accepts_replacement(
@@ -4314,6 +4234,7 @@ def test_full_desktop_supervision_does_not_depend_on_application_windows(
     guest = guest_module("kiosk")
     monkeypatch.setattr(guest, "RUNTIME", tmp_path)
     session = guest.Session()
+    session.env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/run/test-bus"
     session.processes = {
         name: SimpleNamespace(poll=lambda: None)
         for name in ("display", "window-manager", "stream", "settings")
@@ -4332,6 +4253,8 @@ def test_full_desktop_supervision_does_not_depend_on_application_windows(
     assert session.status()["state"] == "ready"
     assert session.status()["mcp"] == "disabled"
     assert session.status()["desktop"] is True
+    assert (tmp_path / "session-bus").read_text() == "unix:path=/run/test-bus\n"
+    assert (tmp_path / "session-bus").stat().st_mode & 0o777 == 0o600
     session.sync_display.assert_called_once()
     server.shutdown.assert_called_once()
 
@@ -4382,6 +4305,7 @@ def test_graphical_stream_failure_returns_to_systemd_for_recovery(
         guest.replace(guest.POLICY, mcp_defaults=str(tmp_path / "mcp.json")),
     )
     session = guest.Session(config)
+    session.env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/run/test-bus"
     server = MagicMock()
     session.control_server = lambda: server
     session.start_display = MagicMock(side_effect=RuntimeError("display failed"))

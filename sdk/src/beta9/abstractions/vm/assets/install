@@ -164,10 +164,6 @@ if [ "$desktop" = true ] && [ "$kiosk" != true ]; then
   fi
   desktop_home=$(getent passwd "$desktop_user" | cut -d: -f6)
   printf '%s\n' "$desktop_user" > /opt/beam-vm/desktop-user
-  printf '%s ALL=(root) NOPASSWD: /usr/bin/gdebi-gtk\nDefaults:%s env_keep += "DISPLAY XAUTHORITY"\n' \
-    "$desktop_user" "$desktop_user" > /etc/sudoers.d/beam-desktop
-  chmod 0440 /etc/sudoers.d/beam-desktop
-  visudo --check --file=/etc/sudoers.d/beam-desktop
   test -u /usr/bin/sudo
   chown -R "$desktop_user:$desktop_user" /workspace
   if [ "$arch" = amd64 ]; then
@@ -182,42 +178,29 @@ if [ "$desktop" = true ] && [ "$kiosk" != true ]; then
     browser=firefox
   fi
   apt-get update
-  apt_install "$browser" xfce4-session xfce4-panel xfce4-whiskermenu-plugin \
-    xfce4-appfinder xfce4-settings xfdesktop4 xfwm4 thunar xfce4-terminal \
-    librsvg2-common xdg-user-dirs \
-    xdg-utils shared-mime-info python3-xdg at-spi2-core gdebi file-roller unzip
-  # Let package names and status text use the available header width.
-  python3 - /usr/share/gdebi/gdebi.ui <<'PY'
-import sys
-import xml.etree.ElementTree as ET
-
-try:
-    tree = ET.parse(sys.argv[1])
-except (OSError, ET.ParseError):
-    sys.exit(0)
-for child in tree.iter("child"):
-    widget = child.find("object")
-    if widget is not None and widget.get("id") in ("label_name", "hbox2"):
-        flags = child.find("packing/property[@name='x_options']")
-        if flags is not None:
-            flags.text = "GTK_EXPAND | GTK_FILL"
-tree.write(sys.argv[1], encoding="utf-8", xml_declaration=True)
-PY
-  # Browser downloads and the file manager share the system package opener.
-  install -d /usr/local/share/applications
-  install -m 0644 "$assets/package-installer.desktop" /usr/local/share/applications/
-  desktop_mime package-installer.desktop application/vnd.debian.binary-package application/x-deb
+  apt_install "$browser" ubuntu-session ubuntu-settings gnome-shell gnome-terminal \
+    gnome-control-center gnome-software nautilus gvfs fonts-ubuntu \
+    gnome-shell-extension-ubuntu-dock gnome-shell-extension-appindicator \
+    gnome-shell-extension-desktop-icons-ng librsvg2-common xdg-user-dirs \
+    xdg-utils shared-mime-info at-spi2-core file-roller unzip
+  # Native defaults remain overridable in each user's desktop settings.
+  pixel_ratio=$(PYTHONPATH=/opt/beam-vm python3 -c 'from kiosk_config import DesktopRuntime; print(DesktopRuntime().pixel_ratio)')
+  sed "s/@PIXEL_RATIO@/$pixel_ratio/g" "$assets/desktop.gschema.override" \
+    > /usr/share/glib-2.0/schemas/99_beam.gschema.override
+  glib-compile-schemas --strict /usr/share/glib-2.0/schemas
+  install -d /etc/polkit-1/rules.d
+  sed "s/@DESKTOP_USER@/$desktop_user/g" "$assets/packagekit.rules" \
+    > /etc/polkit-1/rules.d/49-beam-packagekit.rules
+  chmod 0644 /etc/polkit-1/rules.d/49-beam-packagekit.rules
+  desktop_mime org.gnome.Software.desktop application/vnd.debian.binary-package application/x-deb
   if [ "$arch" = amd64 ]; then
     install -m 0755 "$assets/browser" /usr/local/bin/google-chrome-stable
     ln -sf google-chrome-stable /usr/local/bin/google-chrome
   fi
-  install -m 0644 "$assets/terminal.svg" /opt/beam-vm/
   install -d -m 0755 "$desktop_home/Desktop"
   install -m 0755 "$assets/browser.desktop" "$assets/terminal.desktop" "$desktop_home/Desktop"/
-  install -m 0644 "$assets/desktop-panel.xml" /opt/beam-vm/
-  install -m 0644 "$assets/whiskermenu-1.rc" /opt/beam-vm/
   runuser -u "$desktop_user" -- xdg-user-dirs-update
-  desktop_mime thunar.desktop inode/directory
+  desktop_mime org.gnome.Nautilus.desktop inode/directory
   if [ "$browser" = firefox ]; then
     sed -i 's/Name=Chrome/Name=Firefox/; s/Icon=google-chrome/Icon=firefox/; s/^Exec=.*/Exec=firefox %U/' \
       "$desktop_home/Desktop"/browser.desktop
@@ -225,6 +208,11 @@ PY
   install -m 0644 "$desktop_home/Desktop/browser.desktop" /usr/local/share/applications/beam-browser.desktop
   desktop_mime beam-browser.desktop text/html application/xhtml+xml x-scheme-handler/http x-scheme-handler/https
   chown -R "$desktop_user:$desktop_user" "$desktop_home/Desktop" "$desktop_home/.config"
+  runuser -u "$desktop_user" -- dbus-run-session -- sh -ec '
+    for launcher in "$HOME/Desktop/browser.desktop" "$HOME/Desktop/terminal.desktop"; do
+      gio set -t string "$launcher" metadata::trusted true
+    done
+  '
 fi
 
 if [ "$desktop" = true ] || [ "$kiosk" = true ]; then

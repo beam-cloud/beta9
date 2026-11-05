@@ -1,0 +1,20 @@
+[org.gnome.desktop.interface]
+scaling-factor=uint32 @PIXEL_RATIO@
+text-scaling-factor=1.0
+toolkit-accessibility=true
+enable-animations=false
+
+[org.gnome.desktop.session]
+idle-delay=uint32 0
+
+[org.gnome.desktop.screensaver]
+lock-enabled=false
+
+[org.gnome.desktop.background]
+picture-uri=''
+picture-uri-dark=''
+primary-color='#17171c'
+color-shading-type='solid'
+
+[org.gnome.shell]
+favorite-apps=['beam-browser.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Terminal.desktop']

@@ -13,6 +13,10 @@ if [ -z "${BEAM_VM_KIOSK:-}" ]; then
 fi
 if [ "${1:-}" = --launch ]; then
   shift
+  if [ -f /run/beam-desktop/session-bus ]; then
+    read -r DBUS_SESSION_BUS_ADDRESS < /run/beam-desktop/session-bus
+    export DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR=/run/beam-desktop
+  fi
   exec "${run_as[@]}" "$@"
 fi
 "${run_as[@]}" /opt/beam-vm/browser-trust

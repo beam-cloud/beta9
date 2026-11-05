@@ -20,8 +20,10 @@ if [ -f "$HOME/.Xresources" ]; then
 fi
 
 xsetroot -solid '#17171c'
-export XDG_CURRENT_DESKTOP=XFCE DESKTOP_SESSION=xfce
+export XDG_CURRENT_DESKTOP=ubuntu:GNOME DESKTOP_SESSION=ubuntu XDG_SESSION_TYPE=x11
+export GNOME_SHELL_SESSION_MODE=ubuntu
+export XDG_CONFIG_DIRS="/etc/xdg/xdg-ubuntu:${XDG_CONFIG_DIRS:-/etc/xdg}"
 if [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
-  exec xfce4-session
+  exec gnome-session --session=ubuntu
 fi
-exec dbus-run-session -- xfce4-session
+exec dbus-run-session -- gnome-session --session=ubuntu

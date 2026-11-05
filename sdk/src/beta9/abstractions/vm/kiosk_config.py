@@ -88,7 +88,7 @@ class DesktopRuntime:
     command_timeout: float = 2
     process_timeout: float = 3
     display_timeout: float = 30
-    manager_timeout: float = 10
+    manager_timeout: float = 30
     resize_timeout: float = 10
     application_timeout: float = 120
     retry_window: float = 60
@@ -99,7 +99,6 @@ class DesktopRuntime:
     desktop_launcher: str = "/opt/beam-vm/desktop"
     session_path: str = "/opt/beam-vm/kiosk"
     rate_control: str = "cbr"
-    desktop_window_classes: Tuple[str, ...] = ("xfce4-panel", "xfdesktop")
 
     @property
     def dpi(self):
