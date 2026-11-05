@@ -308,7 +308,6 @@ async function webrtc(sourcePath) {
     delete displayWindow.streamResolutionDiverged;videoEvents.resize();timers.get(1)();
     assert.equal(displayWindow.streamResolutionDiverged,true,'frame dimensions reconcile a viewer even before upstream bookkeeping arrives');
     assert.equal(displayWindow.beamKiosk.fitted(),true,'a second tab can display the owner\'s framebuffer');
-    assert.equal(video.style.objectFit,'contain','shared frames keep their aspect ratio and native input mapping');
     displayWindow.innerWidth=0;assert.equal(displayWindow.beamKiosk.fitted(),false,'hidden shared viewers still wait');
     displayWindow.innerWidth=960;displayWindow.streamResolutionDiverged=false;
     video.id='videoStream';video.width=1920;
@@ -338,13 +337,23 @@ async function webrtc(sourcePath) {
     document.hidden=false;events.visibilitychange();timers.get(1)();
     assert.equal(sent.length,3,'returning tabs reclaim their viewport even when its dimensions are unchanged');
     displayWindow.innerWidth=0;viewer.syncViewport();assert.equal(sent.length,3);
-    displayWindow.innerWidth=5000;displayWindow.innerHeight=10000;viewer.syncViewport();
-    assert.equal(sent.at(-1),'KIOSK_VIEWPORT,4080x4080','viewport requests retain the pinned encoder limit');
+    displayWindow.innerWidth=3840;displayWindow.innerHeight=2160;viewer.syncViewport();
+    assert.equal(sent.at(-1),'KIOSK_VIEWPORT,3840x2160','large displays retain their aspect ratio within the frame budget');
+    assert.equal(displayWindow.devicePixelRatio,1,'native resize and input use the same bounded density');
+    displayWindow.streamResolutionDiverged=false;
+    video.videoWidth=3840;video.videoHeight=2160;
+    assert.equal(viewer.viewportMatches(video),true,'a capped wide frame is ready without a divergence workaround');
+    displayWindow.innerWidth=1920;displayWindow.innerHeight=1080;
+    assert.equal(displayWindow.devicePixelRatio,2,'returning to a smaller display restores the session density');
+    displayWindow.innerWidth=3840;displayWindow.innerHeight=3840;viewer.syncViewport();
+    assert.equal(sent.at(-1),'KIOSK_VIEWPORT,2880x2880','square displays obey the total frame budget as well as the dimension limit');
+    displayWindow.innerWidth=2160;displayWindow.innerHeight=3840;viewer.syncViewport();
+    assert.equal(sent.at(-1),'KIOSK_VIEWPORT,2160x3840','portrait displays preserve their aspect ratio at the same frame budget');
     const requests=sent.length;
     events.pointerdown({isTrusted:false});assert.equal(sent.length,requests);
     events.pointerdown({isTrusted:true});
     assert.equal(sent.length,requests+1,'real input can reclaim a viewport when embedded-browser focus is retained');
-    video.videoWidth=video.videoHeight=4080;
+    video.videoWidth=2160;video.videoHeight=3840;
     events.pointerdown({isTrusted:true});
     assert.equal(sent.length,requests+1,'input on a fitted viewer does not send redundant resizes');
   }

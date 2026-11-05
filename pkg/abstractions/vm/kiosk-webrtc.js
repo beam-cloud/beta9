@@ -7,6 +7,7 @@
     statusFailures: 3,
     alignment: 8,
     maxDimension: 4080, // Pinned Selkies client's encoder limit.
+    maxPixels: 3840 * 2160, // Bound software capture to a 4K frame at 60 Hz.
     pollMs: 1000,
     requestMs: 5000,
     registrationMs: 10000,
@@ -146,11 +147,19 @@
       this.recoveryGeneration = 0;
       this.entry = typeof document !== 'undefined' &&
         document.documentElement?.hasAttribute('data-beam-kiosk-entry');
-      // The isolated client document uses the guest's stable render density.
-      // CSS retains the browser viewport, including when embedded by a parent.
+      // Native resize and input use the same bounded density as the shared
+      // viewport request. The browser retains its own CSS viewport.
       Object.defineProperty(window, 'devicePixelRatio', {
-        configurable: true, get: () => this.pixelRatio,
+        configurable: true, get: () => this.displayGeometry().scale,
       });
+    }
+
+    displayGeometry() {
+      const size = [window.innerWidth, window.innerHeight];
+      const scale = Math.min(this.pixelRatio, policy.maxDimension / Math.max(...size),
+        Math.sqrt(policy.maxPixels / (size[0] * size[1]))) || this.pixelRatio;
+      const [width, height] = size.map(value => Math.round(value * scale / 2) * 2);
+      return {width, height, scale};
     }
 
     endpoint(path) {
@@ -212,6 +221,7 @@
         [data-beam-kiosk] p { max-width:38em;padding:0 24px;text-align:center; }
         [data-beam-kiosk] button { font:inherit;padding:8px 16px;color:inherit;background:#242428;border:1px solid #3a3a40;border-radius:6px;cursor:pointer; }
         [data-beam-kiosk-playing] #playButton { display:none !important; }
+        video#stream, video#videoStream { image-rendering:auto !important; object-fit:contain !important; }
       </style>
       <p role="status" aria-live="polite"></p>
       <button>Reconnect</button><button>Reopen application</button>`;
@@ -226,9 +236,10 @@
     viewportMatches(surface) {
       const width = surface.videoWidth || surface.width;
       const height = surface.videoHeight || surface.height;
+      const target = this.displayGeometry();
       return window.innerWidth > 0 && window.innerHeight > 0 &&
-        (window.streamResolutionDiverged || Math.abs(width - window.innerWidth * this.pixelRatio) < policy.alignment &&
-          Math.abs(height - window.innerHeight * this.pixelRatio) < policy.alignment);
+        (window.streamResolutionDiverged || Math.abs(width - target.width) < policy.alignment &&
+          Math.abs(height - target.height) < policy.alignment);
     }
 
     playing(video = this.video) {
@@ -306,9 +317,6 @@
       }
       if (this.video) document.documentElement.toggleAttribute('data-beam-kiosk-playing',
         this.playing());
-      // Another tab can own the shared framebuffer size. Selkies maps input
-      // against the realized stream; preserve its aspect ratio in this tab.
-      if (this.video && window.streamResolutionDiverged) this.video.style.objectFit = 'contain';
       if (!this.fitted()) {
         this.ready = false;
         return; // Resizing keeps the last live image visible.
@@ -391,8 +399,8 @@
       if (!input?.inputAttached || !document.hasFocus() || document.hidden ||
           !(window.innerWidth > 0 && window.innerHeight > 0) ||
           this.activePeer?.connectionState !== 'connected') return;
-      const size = [window.innerWidth, window.innerHeight].map(value =>
-        Math.min(policy.maxDimension, Math.floor(value * this.pixelRatio / 2) * 2)).join('x');
+      const {width, height} = this.displayGeometry();
+      const size = `${width}x${height}`;
       const realized = `${this.video?.videoWidth}x${this.video?.videoHeight}`;
       if (size === this.viewport && (!activate || size === realized)) return;
       input.send(`KIOSK_VIEWPORT,${size}`);
