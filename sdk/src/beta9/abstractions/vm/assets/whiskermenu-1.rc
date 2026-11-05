@@ -1,0 +1,6 @@
+button-icon=view-app-grid-symbolic
+button-title=Applications
+show-button-title=true
+show-button-icon=true
+show-command-lockscreen=false
+show-command-logout=false

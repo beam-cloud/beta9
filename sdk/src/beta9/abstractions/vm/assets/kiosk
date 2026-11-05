@@ -18,6 +18,7 @@ import subprocess
 import sys
 import threading
 import time
+import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import URLError
 from urllib.request import urlopen
@@ -57,6 +58,45 @@ def visible_wm(env):
             r"0x[1-9a-fA-F][0-9a-fA-F]*", root_property("_NET_SUPPORTING_WM_CHECK", env) or ""
         )
     )
+
+
+def visible_desktop(env):
+    result = run_command(["wmctrl", "-lx"], env=env, check=False, capture_output=True, text=True)
+    classes = {
+        line.split()[2].lower().split(".")[-1]
+        for line in result.stdout.splitlines()
+        if len(line.split()) >= 3
+    }
+    return result.returncode == 0 and set(POLICY.desktop_window_classes) <= classes
+
+
+def configure_xfce(directory, channel, properties):
+    """Update managed session policy while preserving unrelated user preferences."""
+    path = directory / f"{channel}.xml"
+    root = (
+        ET.parse(path).getroot()
+        if path.exists()
+        else ET.Element("channel", name=channel, version="1.0")
+    )
+    for key, (kind, value) in properties.items():
+        parent = root
+        parts = key.strip("/").split("/")
+        for index, part in enumerate(parts):
+            node = parent.find(f"property[@name='{part}']")
+            if node is None:
+                node = ET.SubElement(parent, "property", name=part, type="empty")
+            if index == len(parts) - 1:
+                node.set("type", kind)
+                if kind == "array":
+                    node.attrib.pop("value", None)
+                    node[:] = []
+                    for item in value:
+                        ET.SubElement(node, "value", type="double", value=str(item))
+                else:
+                    node.set("value", str(value).lower() if isinstance(value, bool) else str(value))
+            parent = node
+    directory.mkdir(parents=True, exist_ok=True)
+    ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
 
 
 def toolkit_settings(source, dpi=None):
@@ -196,7 +236,7 @@ class Session:
             self.env.update(self.config.env)
         # These identify this exact display and cannot be redirected by app env.
         self.env.update(DISPLAY=":1", XAUTHORITY=str(RUNTIME / ".Xauthority"))
-        self.window_manager = "openbox" if self.desktop else str(ASSETS / "openbox/bin/openbox")
+        self.window_manager = str(ASSETS / "openbox/bin/openbox")
 
     @property
     def desktop(self):
@@ -409,7 +449,10 @@ class Session:
             env=self.env,
         )
         self.toolkit_file.write_text(self.settings_source)
-        self.spawn(["xsettingsd", "--config", str(self.toolkit_file)], role="settings")
+        if self.desktop:
+            self.configure_desktop(headless=display[0] == "Xvfb")
+        else:
+            self.spawn(["xsettingsd", "--config", str(self.toolkit_file)], role="settings")
         manager = (
             [str(ASSETS / "xstartup")]
             if self.desktop
@@ -420,6 +463,68 @@ class Session:
             ["pulseaudio", "--daemonize=no", "--exit-idle-time=-1", "--disallow-exit"],
             role="audio",
         )
+
+    def configure_desktop(self, *, headless):
+        config = Path(self.env["XDG_CONFIG_HOME"]) / "xfce4"
+        directory = config / "xfconf/xfce-perchannel-xml"
+        settings = {
+            "/Xft/DPI": ("int", POLICY.dpi),
+            "/Gdk/WindowScalingFactor": ("int", POLICY.pixel_ratio),
+            "/Gdk/UnscaledDPI": (
+                "int",
+                round(POLICY.dpi * POLICY.xsettings_unit / POLICY.pixel_ratio),
+            ),
+            "/Xft/RGBA": ("string", "none"),
+        }
+        if not (directory / "xsettings.xml").exists():
+            settings.update(
+                {
+                    "/Net/ThemeName": ("string", "Adwaita"),
+                    "/Net/IconThemeName": ("string", "Adwaita"),
+                }
+            )
+        configure_xfce(directory, "xsettings", settings)
+        manager = {
+            "/general/use_compositing": ("bool", True),
+            "/general/vblank_mode": ("string", "xpresent" if headless else "auto"),
+            "/general/unredirect_overlays": ("bool", False),
+        }
+        if not (directory / "xfwm4.xml").exists():
+            manager.update(
+                {
+                    "/general/theme": ("string", "Default-xhdpi"),
+                    "/general/workspace_count": ("int", 1),
+                }
+            )
+        configure_xfce(directory, "xfwm4", manager)
+        if not (directory / "xfce4-desktop.xml").exists():
+            backdrop = {
+                "/desktop-icons/file-icons/show-filesystem": ("bool", False),
+                "/desktop-icons/file-icons/show-home": ("bool", False),
+                "/desktop-icons/file-icons/show-trash": ("bool", False),
+            }
+            outputs = run_command(
+                ["xrandr", "--query"], env=self.env, capture_output=True, text=True
+            )
+            for line in outputs.stdout.splitlines():
+                fields = line.split()
+                if len(fields) >= 2 and fields[1] == "connected":
+                    prefix = f"/backdrop/screen0/monitor{fields[0]}/workspace0"
+                    backdrop.update(
+                        {
+                            prefix + "/image-style": ("int", 0),
+                            prefix + "/color-style": ("int", 0),
+                            prefix + "/rgba1": ("array", (0.09, 0.09, 0.11, 1.0)),
+                        }
+                    )
+            configure_xfce(directory, "xfce4-desktop", backdrop)
+        for name, target in (
+            ("desktop-panel.xml", directory / "xfce4-panel.xml"),
+            ("whiskermenu-1.rc", config / "panel/whiskermenu-1.rc"),
+        ):
+            if not target.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((ASSETS / name).read_bytes())
 
     def start_stream(self):
         transport = self.state.transport
@@ -476,7 +581,7 @@ class Session:
             source = self.settings_file.read_text()
         except FileNotFoundError:
             source = self.settings_source
-        if source != self.settings_source:
+        if not self.desktop and source != self.settings_source:
             temporary = self.toolkit_file.with_suffix(".tmp")
             temporary.write_text(toolkit_settings(source))
             temporary.replace(self.toolkit_file)
@@ -570,7 +675,11 @@ class Session:
         try:
             self.start_display()
             self.start_stream()
-            self.wait_for(lambda: visible_wm(self.env), "window-manager", POLICY.manager_timeout)
+            self.wait_for(
+                lambda: visible_wm(self.env) and (not self.desktop or visible_desktop(self.env)),
+                "window-manager",
+                POLICY.manager_timeout,
+            )
             if self.desktop:
                 self.update(state="ready", application="ready")
             else:
@@ -578,7 +687,10 @@ class Session:
             while not self.stopping.wait(POLICY.poll_interval):
                 if any(
                     self.processes[role].poll() is not None
-                    for role in ("display", "window-manager", "stream", "settings")
+                    for role in (
+                        ("display", "window-manager", "stream")
+                        + (() if self.desktop else ("settings",))
+                    )
                 ):
                     raise RuntimeError(
                         "Application streaming service exited; inspect beam-desktop.service logs"

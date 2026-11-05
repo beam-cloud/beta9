@@ -182,7 +182,9 @@ if [ "$desktop" = true ] && [ "$kiosk" != true ]; then
     browser=firefox
   fi
   apt-get update
-  apt_install "$browser" pcmanfm libfm-modules librsvg2-common xdg-user-dirs \
+  apt_install "$browser" xfce4-session xfce4-panel xfce4-whiskermenu-plugin \
+    xfce4-appfinder xfce4-settings xfdesktop4 xfwm4 thunar xfce4-terminal \
+    librsvg2-common xdg-user-dirs \
     xdg-utils shared-mime-info python3-xdg at-spi2-core gdebi file-roller unzip
   # Browser downloads and the file manager share the system package opener.
   install -d /usr/local/share/applications
@@ -195,32 +197,10 @@ if [ "$desktop" = true ] && [ "$kiosk" != true ]; then
   install -m 0644 "$assets/terminal.svg" /opt/beam-vm/
   install -d -m 0755 "$desktop_home/Desktop"
   install -m 0755 "$assets/browser.desktop" "$assets/terminal.desktop" "$desktop_home/Desktop"/
-  # Open desktop launchers directly instead of prompting to execute a script.
-  sed -i '/^\[config\]/a quick_exec=1' /etc/xdg/libfm/libfm.conf
-  sed -i 's/^big_icon_size=.*/big_icon_size=96/' /etc/xdg/libfm/libfm.conf
-  # Use the installed flat window theme and readable title bars at 192 DPI.
-  sed -i 's/<name>Clearlooks<\//<name>Breeze-ob<\//; /<font /,/<\/font>/s/<size>.*<\/size>/<size>11<\/size>/' \
-    /etc/xdg/openbox/rc.xml
-  desktop_config="$desktop_home/.config/pcmanfm/default/desktop-items-0.conf"
-  if [ ! -f "$desktop_config" ]; then
-    install -d "$(dirname "$desktop_config")"
-    cat > "$desktop_config" <<'EOF'
-[*]
-wallpaper_mode=color
-desktop_bg=#17171c
-desktop_fg=#ededee
-desktop_shadow=#17171c
-desktop_font=Ubuntu 9
-show_trash=0
-EOF
-  fi
+  install -m 0644 "$assets/desktop-panel.xml" /opt/beam-vm/
+  install -m 0644 "$assets/whiskermenu-1.rc" /opt/beam-vm/
   runuser -u "$desktop_user" -- xdg-user-dirs-update
-  # Noble's PCManFM uses GTK3, which otherwise doubles our already-2x icons.
-  # Keep its fonts at 192 DPI and its icons at their configured pixel size.
-  if ! grep -q '^env GDK_SCALE=1 GDK_DPI_SCALE=1 pcmanfm --desktop' /etc/xdg/openbox/autostart; then
-    sed -i '/^pcmanfm --desktop/d' /etc/xdg/openbox/autostart
-    printf '\nenv GDK_SCALE=1 GDK_DPI_SCALE=1 pcmanfm --desktop &\n' >> /etc/xdg/openbox/autostart
-  fi
+  desktop_mime thunar.desktop inode/directory
   if [ "$browser" = firefox ]; then
     sed -i 's/Name=Chrome/Name=Firefox/; s/Icon=google-chrome/Icon=firefox/; s/^Exec=.*/Exec=firefox %U/' \
       "$desktop_home/Desktop"/browser.desktop

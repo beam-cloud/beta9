@@ -1,7 +1,8 @@
 [Desktop Entry]
 Type=Application
 Name=Terminal
-Exec=xterm
+Exec=xfce4-terminal
 Icon=/opt/beam-vm/terminal.svg
 Path=/workspace
 Terminal=false
+X-XFCE-Trusted=true

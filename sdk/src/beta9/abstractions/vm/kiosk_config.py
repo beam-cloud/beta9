@@ -99,6 +99,7 @@ class DesktopRuntime:
     desktop_launcher: str = "/opt/beam-vm/desktop"
     session_path: str = "/opt/beam-vm/kiosk"
     rate_control: str = "cbr"
+    desktop_window_classes: Tuple[str, ...] = ("xfce4-panel", "xfdesktop")
 
     @property
     def dpi(self):

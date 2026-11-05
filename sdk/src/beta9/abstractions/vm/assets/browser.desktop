@@ -5,4 +5,5 @@ Exec=google-chrome-stable --start-maximized %U
 Icon=google-chrome
 Path=/workspace
 Terminal=false
+X-XFCE-Trusted=true
 MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;

@@ -178,7 +178,7 @@ def test_vm_image_is_deterministic_and_uses_selected_profile():
         assert assets.getmember("browser-trust").mode == 0o755
         installer = assets.extractfile("install").read().decode()
         assert "libnss3-tools" in installer
-        assert "env GDK_SCALE=1 GDK_DPI_SCALE=1 pcmanfm --desktop" in installer
+        assert "xfce4-whiskermenu-plugin" in installer
         assert "/etc/ca-certificates/update.d/beam-browser" in installer
 
 
@@ -192,7 +192,7 @@ def test_vm_image_bundle_matches_guest_files():
             assert archive.extractfile(name).read() == path.read_bytes(), (
                 f"Stale VM bundle: run python bin/generate_vm_assets.py after updating {name}"
             )
-            mode = 0o644 if path.suffix in (".service", ".desktop", ".svg", ".xml") else 0o755
+            mode = 0o644 if path.suffix in (".service", ".desktop", ".svg", ".xml", ".rc") else 0o755
             assert archive.getmember(name).mode == mode
 
 
@@ -227,7 +227,7 @@ def test_xstartup_preserves_defaults_and_tolerates_failed_user_resources(
     result = subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=5)
     assert result.returncode == 0, result.stderr
     assert "XTerm*faceSize: 12\n" in (tmp_path / "defaults").read_text()
-    assert (tmp_path / "launched").read_text() == "--\nopenbox-session\n"
+    assert (tmp_path / "launched").read_text() == "--\nxfce4-session\n"
     if resource_exit is not None:
         assert (tmp_path / "overrides").read_text() == "XTerm*faceSize: 20\n"
     else:
@@ -3356,6 +3356,67 @@ def test_guest_processes_share_the_display_but_not_the_bootstrap_config(desktop,
     assert "BEAM_VM_KIOSK" not in session.env
     assert [session.retry_allowed("application") for _ in range(4)] == [True, True, True, False]
     assert session.retry_allowed("mcp")
+
+
+@pytest.mark.parametrize(
+    "windows,ready",
+    [
+        ("", False),
+        ("0x1 -1 xfce4-panel.Xfce4-panel vm Panel", False),
+        ("0x2 -1 xfdesktop.Xfdesktop vm Desktop", False),
+        ("0x1 -1 xfce4-panel.Xfce4-panel vm Panel\n0x2 -1 xfdesktop.Xfdesktop vm Desktop", True),
+    ],
+)
+def test_full_desktop_readiness_requires_the_menu_and_icon_manager(monkeypatch, windows, ready):
+    guest = guest_module("kiosk")
+    monkeypatch.setattr(
+        guest, "run_command", lambda *a, **k: SimpleNamespace(returncode=0, stdout=windows)
+    )
+    assert guest.visible_desktop({}) is ready
+
+
+def test_native_desktop_defaults_preserve_customization_and_correct_retina_density(
+    tmp_path, monkeypatch
+):
+    import xml.etree.ElementTree as ET
+
+    guest = guest_module("kiosk")
+    monkeypatch.setattr(guest, "ASSETS", Path(vm_module.__file__).parent / "assets")
+    monkeypatch.setattr(
+        guest,
+        "run_command",
+        lambda *a, **k: SimpleNamespace(stdout="screen connected 2560x1600+0+0\n"),
+    )
+    session = guest.Session()
+    session.env["XDG_CONFIG_HOME"] = str(tmp_path)
+    session.configure_desktop(headless=True)
+    directory = tmp_path / "xfce4/xfconf/xfce-perchannel-xml"
+
+    def property(channel, path):
+        root = ET.parse(directory / (channel + ".xml")).getroot()
+        return root.find("/".join(f"property[@name='{name}']" for name in path.split("/")))
+
+    assert property("xsettings", "Xft/DPI").get("value") == "192"
+    assert property("xsettings", "Gdk/WindowScalingFactor").get("value") == "2"
+    assert property("xsettings", "Gdk/UnscaledDPI").get("value") == "98304"
+    assert property("xfwm4", "general/use_compositing").get("value") == "true"
+    assert property("xfwm4", "general/vblank_mode").get("value") == "xpresent"
+    assert property("xfwm4", "general/unredirect_overlays").get("value") == "false"
+    assert (
+        property("xfce4-desktop", "backdrop/screen0/monitorscreen/workspace0/image-style").get(
+            "value"
+        )
+        == "0"
+    )
+    assert len(property("xfce4-desktop", "backdrop/screen0/monitorscreen/workspace0/rgba1")) == 4
+
+    guest.configure_xfce(directory, "xsettings", {"/Net/ThemeName": ("string", "user-theme")})
+    panel = directory / "xfce4-panel.xml"
+    panel.write_text("custom user panel")
+    session.configure_desktop(headless=False)
+    assert property("xsettings", "Net/ThemeName").get("value") == "user-theme"
+    assert property("xfwm4", "general/vblank_mode").get("value") == "auto"
+    assert panel.read_text() == "custom user panel"
 
 
 @pytest.mark.parametrize(
