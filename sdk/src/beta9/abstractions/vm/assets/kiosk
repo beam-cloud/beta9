@@ -469,11 +469,12 @@ class Session:
                 f"--mode={transport}",
                 "--encoder=h264enc",
                 f"--framerate={POLICY.framerate}-{POLICY.framerate}",
-                # Bound full-color video bursts so TCP queues cannot starve input.
+                # Bound video bursts so TCP queues cannot starve input.
                 f"--video-bitrate={POLICY.max_bitrate},{POLICY.min_bitrate}-{POLICY.max_bitrate}",
                 f"--rate-control-mode={POLICY.rate_control}|locked",
                 f"--video-crf={POLICY.crf}-{POLICY.crf}",
-                "--video-fullcolor=true",
+                # Keep software encoding within the frame budget at HiDPI sizes.
+                f"--video-fullcolor={str(POLICY.full_color).lower()}|locked",
                 "--video-streaming-mode=true|locked",
                 "--use-paint-over-quality=false|locked",
                 f"--backpressure-queue-size={POLICY.frame_queue}",

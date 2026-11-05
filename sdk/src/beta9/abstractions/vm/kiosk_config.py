@@ -73,6 +73,7 @@ class DesktopRuntime:
     max_dimension: int = 8192
     min_size: Tuple[int, int] = (320, 200)
     framerate: int = 60
+    full_color: bool = False
     crf: int = 18
     min_bitrate: int = 1000
     max_bitrate: int = 8000
