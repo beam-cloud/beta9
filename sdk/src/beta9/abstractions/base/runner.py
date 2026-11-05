@@ -137,7 +137,6 @@ class RunnerAbstraction(BaseAbstraction):
         allow_list: Optional[List[str]] = None,
         docker_enabled: bool = False,
         use_vm: bool = False,
-        enable_exit_snapshot: bool = False,
         pool: Optional[Union[str, Pool]] = None,
         app_kind: str = "",
         serving_protocol: str = "",
@@ -148,6 +147,7 @@ class RunnerAbstraction(BaseAbstraction):
         checkpoint_readiness_timeout: int = 600,
         checkpoint_readiness_interval: int = 1,
         cpu_tier: Optional[CpuTier] = None,
+        enable_exit_snapshot: bool = False,
     ) -> None:
         super().__init__()
 

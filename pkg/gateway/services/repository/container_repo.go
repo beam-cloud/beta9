@@ -152,11 +152,31 @@ func (s *ContainerRepositoryService) SetContainerExitSnapshot(ctx context.Contex
 	if req == nil {
 		return &pb.SetContainerExitSnapshotResponse{Ok: false, ErrorMsg: "request is nil"}, nil
 	}
+	status := types.ExitSnapshotStatus(req.Status)
+	switch status {
+	case types.ExitSnapshotStatusPending, types.ExitSnapshotStatusFailed:
+	case types.ExitSnapshotStatusReady:
+		if req.ImageId == "" {
+			return &pb.SetContainerExitSnapshotResponse{Ok: false, ErrorMsg: "image_id is required for ready exit snapshots"}, nil
+		}
+	default:
+		return &pb.SetContainerExitSnapshotResponse{Ok: false, ErrorMsg: fmt.Sprintf("invalid exit snapshot status %q", req.Status)}, nil
+	}
+
+	// The workspace comes from the assigned container, not the worker's request,
+	// so a worker cannot relabel a snapshot to another workspace.
+	workspaceId := req.WorkspaceId
+	if containerState, stateErr := s.containerRepo.GetContainerState(req.ContainerId); stateErr == nil && containerState != nil {
+		if containerState.WorkspaceId != "" {
+			workspaceId = containerState.WorkspaceId
+		}
+	}
+
 	err := s.containerRepo.SetContainerExitSnapshot(req.ContainerId, &types.ExitSnapshotState{
-		Status:      types.ExitSnapshotStatus(req.Status),
+		Status:      status,
 		ImageId:     req.ImageId,
 		ErrorMsg:    req.ErrorMsg,
-		WorkspaceId: req.WorkspaceId,
+		WorkspaceId: workspaceId,
 		CreatedAt:   time.Now().Unix(),
 	})
 	if err != nil {

@@ -136,8 +136,8 @@ func (b *Builder) attachPlatformBuildStub(ctx context.Context, request *types.Co
 	// token. Reuse its identity; build context mounts remain request-specific.
 	object, err := b.backendRepo.GetObjectByHash(ctx, abstractions.EmptyStubObjectHash(), request.Workspace.Id)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) || err.Error() == "sql: no rows in result set" {
-			obj, ensureErr := abstractions.EnsureEmptyStubObject(ctx, b.backendRepo, &request.Workspace)
+		if errors.Is(err, sql.ErrNoRows) {
+			obj, ensureErr := abstractions.GetOrCreateEmptyStubObject(ctx, b.backendRepo, &request.Workspace)
 			if ensureErr != nil {
 				return fmt.Errorf("platform build object: %w", ensureErr)
 			}

@@ -648,11 +648,10 @@ func (s *Worker) setContainerExitCode(containerId string, exitCode int) bool {
 }
 
 func (s *Worker) setContainerExitSnapshot(containerId, workspaceId string, state *types.ExitSnapshotState) bool {
-	if s.containerRepoClient == nil || state == nil {
+	if state == nil {
 		return false
 	}
-
-	err := retryContainerRepositoryCall(func(ctx context.Context) error {
+	return s.callContainerRepo(containerId, "set exit snapshot state", func(ctx context.Context) error {
 		_, err := handleGRPCResponse(s.containerRepoClient.SetContainerExitSnapshot(ctx, &pb.SetContainerExitSnapshotRequest{
 			ContainerId: containerId,
 			Status:      string(state.Status),
@@ -662,8 +661,16 @@ func (s *Worker) setContainerExitSnapshot(containerId, workspaceId string, state
 		}))
 		return err
 	})
-	if err != nil {
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit snapshot state")
+}
+
+// callContainerRepo runs a container repository RPC with retries, logging a
+// failure under what. It reports false when the client is missing or the call fails.
+func (s *Worker) callContainerRepo(containerId, what string, call func(context.Context) error) bool {
+	if s.containerRepoClient == nil {
+		return false
+	}
+	if err := retryContainerRepositoryCall(call); err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msgf("failed to %s", what)
 		return false
 	}
 	return true
@@ -690,7 +697,12 @@ func (s *Worker) captureExitSnapshot(ctx context.Context, containerId string, re
 	defer cleanup()
 
 	_, layered := s.imageClient.GetSourceImageRef(request.ImageId)
-	if layered {
+	_, scratchOnly := instance.Runtime.(scratchUpperMounter)
+	if !layered && scratchOnly {
+		// A stopped microVM no longer exports its merged root, and only the
+		// writable layer is on the host, so a non-layered base cannot be rebuilt.
+		err = errors.New("exit snapshots for microVMs require a layered base image")
+	} else if layered {
 		err = s.imageClient.ArchiveLayer(ctx, request, upperDir, imageId, nil)
 	} else {
 		var rootDir string
@@ -1968,6 +1980,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	containerInstance.Overlay = overlay
 	containerInstance.Spec = spec
 	containerInstance.setExitCode(-1)
+	exitSnapshotPending := false
 	containerInstance.OutputWriter = common.NewOutputWriter(func(s string) {
 		outputLogger.Info(s, "done", false, "success", false, "stream", "stdout")
 	})
@@ -1976,6 +1989,17 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		s.setContainerExitSnapshot(containerId, request.WorkspaceId, &types.ExitSnapshotState{
 			Status: types.ExitSnapshotStatusPending,
 		})
+		// Every early return before the exit path must resolve PENDING, or
+		// get_exit_snapshot would wait for a snapshot that will never come.
+		exitSnapshotPending = true
+		defer func() {
+			if exitSnapshotPending {
+				s.setContainerExitSnapshot(containerId, request.WorkspaceId, &types.ExitSnapshotState{
+					Status:   types.ExitSnapshotStatusFailed,
+					ErrorMsg: "sandbox exited before an exit snapshot could be captured",
+				})
+			}
+		}()
 	}
 
 	// Setup container overlay filesystem
@@ -2273,17 +2297,15 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// Runtime deletion can be slow under burst load. Report completion before
 	// cleanup so clients are never blocked on resource reclamation. Durable-disk
 	// containers are reported by finalizeContainer after their final sync.
-	if !request.HasDurableDiskMount() && !request.EnableExitSnapshot {
+	if !request.HasDurableDiskMount() {
 		exitReported = s.setContainerExitCode(containerId, exitCode)
 	}
 	if request.EnableExitSnapshot && request.Stub.Type.Kind() == types.StubTypeSandbox {
+		exitSnapshotPending = false
 		s.captureExitSnapshot(ctx, containerId, request)
 	}
 	if err := s.deleteRuntimeContainer(containerId); err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
-	}
-	if request.EnableExitSnapshot && !request.HasDurableDiskMount() {
-		exitReported = s.setContainerExitCode(containerId, exitCode)
 	}
 }
 

@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import io
 import json
+import math
 import os
 import shlex
 import time
@@ -301,11 +302,12 @@ class Sandbox(Pod):
             docker_enabled=docker_enabled,
             use_vm=use_vm,
             cpu_tier=cpu_tier,
-            enable_exit_snapshot=enable_exit_snapshot,
             ports=ports,
             pool=pool,
             entrypoint=list(SANDBOX_IDLE_ENTRYPOINT),
         )
+        # Pod does not expose this option; only sandboxes support exit snapshots.
+        self.enable_exit_snapshot = enable_exit_snapshot
         if context is not None:
             self.config_context = context
 
@@ -373,7 +375,21 @@ class Sandbox(Pod):
             restored = Sandbox(image=image).create()
             ```
         """
-        return cls(context=context).connect(id)
+        sandbox = cls(context=context)
+        try:
+            return sandbox.connect(id)
+        except SandboxConnectionError:
+            # A terminated sandbox can never become ready, but its exit snapshot
+            # is still retrievable; return a handle without the readiness probe.
+            parts = id.split("-")
+            if len(parts) < 7:
+                raise
+            return SandboxInstance(
+                container_id=id,
+                ok=True,
+                error_msg="",
+                stub_id="-".join(parts[1:6]),
+            )
 
     def create_from_memory_snapshot(self, snapshot_id: str) -> "SandboxInstance":
         """
@@ -680,13 +696,14 @@ class SandboxInstance(BaseAbstraction):
         """
         terminal.header(f"Fetching exit snapshot for sandbox: {self.container_id}")
 
-        timeout_seconds = int(timeout) if timeout is not None else 300
-        res: "PodSandboxGetExitSnapshotResponse" = (
-            self.stub.sandbox_get_exit_snapshot(
-                PodSandboxGetExitSnapshotRequest(
-                    container_id=self.container_id,
-                    timeout_seconds=timeout_seconds,
-                )
+        if timeout is not None and timeout <= 0:
+            raise ValueError("timeout must be a positive number of seconds")
+        # Round up so fractional timeouts never collapse to 0 (the server default).
+        timeout_seconds = math.ceil(timeout) if timeout is not None else 300
+        res: "PodSandboxGetExitSnapshotResponse" = self.stub.sandbox_get_exit_snapshot(
+            PodSandboxGetExitSnapshotRequest(
+                container_id=self.container_id,
+                timeout_seconds=timeout_seconds,
             )
         )
 

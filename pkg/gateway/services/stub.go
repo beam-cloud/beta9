@@ -74,7 +74,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
-	if in.EnableExitSnapshot && types.StubType(in.StubType).Kind() != types.StubTypeSandbox {
+	if in.EnableExitSnapshot && !types.StubType(in.StubType).IsSandbox() {
 		return &pb.GetOrCreateStubResponse{
 			Ok:     false,
 			ErrMsg: "enable_exit_snapshot is only supported for sandboxes",

@@ -375,8 +375,7 @@ func (cr *ContainerRedisRepository) SetContainerExitSnapshot(containerId string,
 	if err != nil {
 		return fmt.Errorf("failed to marshal exit snapshot: %w", err)
 	}
-	ttl := 30 * 24 * time.Hour
-	if err := cr.rdb.SetEx(context.TODO(), key, data, ttl).Err(); err != nil {
+	if err := cr.rdb.SetEx(context.TODO(), key, data, types.ContainerExitSnapshotTTL).Err(); err != nil {
 		return fmt.Errorf("failed to set exit snapshot for container %s: %w", containerId, err)
 	}
 	return nil

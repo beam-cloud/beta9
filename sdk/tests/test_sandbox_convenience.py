@@ -120,8 +120,7 @@ def test_sandbox_instance_poll_defaults_terminal_exit_code():
     assert instance.poll() == 137
 
 
-def test_sandbox_prepare_runtime_uses_idle_entrypoint():
-    sandbox = Sandbox()
+def _prepare_sandbox_request(sandbox):
     sandbox.image.build = MagicMock(
         return_value=ImageBuildResult(
             success=True, image_id="image-id", python_version="python3.11"
@@ -139,35 +138,34 @@ def test_sandbox_prepare_runtime_uses_idle_entrypoint():
         force_create_stub=True,
         ignore_patterns=["*"],
     )
+    return sandbox.gateway_stub.get_or_create_stub.call_args.args[0]
 
-    request = sandbox.gateway_stub.get_or_create_stub.call_args.args[0]
+
+def test_sandbox_prepare_runtime_uses_idle_entrypoint():
+    request = _prepare_sandbox_request(Sandbox())
     assert request.entrypoint == ["tail", "-f", "/dev/null"]
 
 
 def test_sandbox_enable_exit_snapshot_passed_to_stub_request():
     sandbox = Sandbox(enable_exit_snapshot=True)
     assert sandbox.enable_exit_snapshot is True
-
-    sandbox.image.build = MagicMock(
-        return_value=ImageBuildResult(
-            success=True, image_id="image-id", python_version="python3.11"
-        )
-    )
-    sandbox.syncer.sync = MagicMock(
-        return_value=FileSyncResult(success=True, object_id="object-id")
-    )
-    sandbox.gateway_stub.get_or_create_stub = MagicMock(
-        return_value=GetOrCreateStubResponse(ok=True, stub_id="stub-id")
-    )
-
-    assert sandbox.prepare_runtime(
-        stub_type=SANDBOX_STUB_TYPE,
-        force_create_stub=True,
-        ignore_patterns=["*"],
-    )
-
-    request = sandbox.gateway_stub.get_or_create_stub.call_args.args[0]
+    request = _prepare_sandbox_request(sandbox)
     assert request.enable_exit_snapshot is True
+
+
+def test_sandbox_get_exit_snapshot_rejects_non_positive_timeout_and_rounds_up():
+    import pytest
+
+    stub = FakeSandboxStub()
+    captured = []
+    stub.sandbox_get_exit_snapshot = lambda req: (
+        captured.append(req) or SimpleNamespace(ok=True, error_msg="", image_id="img")
+    )
+    instance = fake_instance(stub)
+    with pytest.raises(ValueError):
+        instance.get_exit_snapshot(timeout=0)
+    instance.get_exit_snapshot(timeout=0.5)
+    assert captured[0].timeout_seconds == 1
 
 
 def test_sandbox_get_exit_snapshot_success():

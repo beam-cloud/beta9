@@ -908,24 +908,15 @@ func (f *fakeExitSnapshotContainerRepo) GetContainerExitSnapshot(containerId str
 	return f.state, f.err
 }
 
-func TestSandboxGetExitSnapshot(t *testing.T) {
+func exitSnapshotTestCall(t *testing.T, workspaceExternalId string, state *types.ExitSnapshotState, repoErr error) *pb.PodSandboxGetExitSnapshotResponse {
+	t.Helper()
 	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
 		Token:     &types.Token{Id: 1},
-		Workspace: &types.Workspace{Id: 1, ExternalId: "ws-1"},
+		Workspace: &types.Workspace{Id: 1, ExternalId: workspaceExternalId},
 	})
-
-	repo := &fakeExitSnapshotContainerRepo{
-		state: &types.ExitSnapshotState{
-			Status:      types.ExitSnapshotStatusReady,
-			ImageId:     "image-ready-123",
-			WorkspaceId: "ws-1",
-		},
-	}
-
 	service := &GenericPodService{
-		containerRepo: repo,
+		containerRepo: &fakeExitSnapshotContainerRepo{state: state, err: repoErr},
 	}
-
 	res, err := service.SandboxGetExitSnapshot(ctx, &pb.PodSandboxGetExitSnapshotRequest{
 		ContainerId:    "c-123",
 		TimeoutSeconds: 1,
@@ -933,35 +924,42 @@ func TestSandboxGetExitSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	return res
+}
+
+func TestSandboxGetExitSnapshot(t *testing.T) {
+	res := exitSnapshotTestCall(t, "ws-1", &types.ExitSnapshotState{
+		Status:      types.ExitSnapshotStatusReady,
+		ImageId:     "image-ready-123",
+		WorkspaceId: "ws-1",
+	}, nil)
 	if !res.Ok || res.ImageId != "image-ready-123" {
 		t.Fatalf("expected ready image-ready-123, got: %+v", res)
 	}
 }
 
 func TestSandboxGetExitSnapshotRejectsOtherWorkspace(t *testing.T) {
-	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
-		Token:     &types.Token{Id: 2},
-		Workspace: &types.Workspace{Id: 2, ExternalId: "ws-other"},
-	})
-
-	service := &GenericPodService{
-		containerRepo: &fakeExitSnapshotContainerRepo{
-			state: &types.ExitSnapshotState{
-				Status:      types.ExitSnapshotStatusReady,
-				ImageId:     "image-ready-123",
-				WorkspaceId: "ws-1",
-			},
-		},
-	}
-
-	res, err := service.SandboxGetExitSnapshot(ctx, &pb.PodSandboxGetExitSnapshotRequest{
-		ContainerId:    "c-123",
-		TimeoutSeconds: 1,
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	res := exitSnapshotTestCall(t, "ws-other", &types.ExitSnapshotState{
+		Status:      types.ExitSnapshotStatusReady,
+		ImageId:     "image-ready-123",
+		WorkspaceId: "ws-1",
+	}, nil)
 	if res.Ok || res.ImageId != "" {
 		t.Fatalf("snapshot leaked across workspaces: %+v", res)
+	}
+}
+
+func TestSandboxGetExitSnapshotFailsFastOnRepoErrorAndMissingState(t *testing.T) {
+	started := time.Now()
+	res := exitSnapshotTestCall(t, "ws-1", nil, errors.New("redis down"))
+	if res.Ok || res.ErrorMsg == "" {
+		t.Fatalf("expected failure on repository error, got: %+v", res)
+	}
+	res = exitSnapshotTestCall(t, "ws-1", nil, nil)
+	if res.Ok || res.Status != string(types.ExitSnapshotStatusDisabled) {
+		t.Fatalf("expected disabled for missing state, got: %+v", res)
+	}
+	if time.Since(started) >= 900*time.Millisecond {
+		t.Fatalf("handler waited for the timeout instead of failing fast")
 	}
 }

@@ -38,6 +38,8 @@ func containerExitUpperDir(ctx context.Context, instance *ContainerInstance) (st
 		return "", func() {}, fmt.Errorf("container instance is nil")
 	}
 	if mvm, ok := instance.Runtime.(scratchUpperMounter); ok {
+		// The mount is read-only; the guest's .beam plumbing is skipped when the
+		// layer is packed (see packOverlayLayersWithTarget).
 		return mvm.MountScratchUpper(instance.Id)
 	}
 	if instance.Overlay != nil {

@@ -2132,8 +2132,10 @@ func TestContainerExitSnapshotStateLifecycle(t *testing.T) {
 
 	// Set READY with ImageId
 	readyState := &types.ExitSnapshotState{
-		Status:  types.ExitSnapshotStatusReady,
-		ImageId: "img-exit-snapshot-789",
+		Status:      types.ExitSnapshotStatusReady,
+		ImageId:     "img-exit-snapshot-789",
+		WorkspaceId: "ws-1",
+		CreatedAt:   1234,
 	}
 	if err := repo.SetContainerExitSnapshot(containerId, readyState); err != nil {
 		t.Fatal(err)
@@ -2145,5 +2147,21 @@ func TestContainerExitSnapshotStateLifecycle(t *testing.T) {
 	}
 	if state == nil || state.Status != types.ExitSnapshotStatusReady || state.ImageId != "img-exit-snapshot-789" {
 		t.Fatalf("expected ready status with image id, got %+v", state)
+	}
+	if state.WorkspaceId != "ws-1" || state.CreatedAt != 1234 {
+		t.Fatalf("expected workspace and created_at to round trip, got %+v", state)
+	}
+
+	// FAILED keeps its error message.
+	failedState := &types.ExitSnapshotState{Status: types.ExitSnapshotStatusFailed, ErrorMsg: "disk full"}
+	if err := repo.SetContainerExitSnapshot(containerId, failedState); err != nil {
+		t.Fatal(err)
+	}
+	state, err = repo.GetContainerExitSnapshot(containerId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == nil || state.Status != types.ExitSnapshotStatusFailed || state.ErrorMsg != "disk full" {
+		t.Fatalf("expected failed status with error message, got %+v", state)
 	}
 }

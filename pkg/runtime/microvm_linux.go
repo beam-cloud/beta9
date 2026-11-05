@@ -1122,14 +1122,22 @@ func (m *MicroVM) MountScratchUpper(containerID string) (string, func(), error) 
 		return "", func() {}, err
 	}
 
-	out, err := exec.Command("mount", "-o", "ro,loop", inst.scratch, mntDir).CombinedOutput()
+	out, err := exec.Command("mount", "-o", "ro,noload,loop", inst.scratch, mntDir).CombinedOutput()
 	if err != nil {
 		_ = os.Remove(mntDir)
 		return "", func() {}, fmt.Errorf("mount scratch disk %s: %w: %s", inst.scratch, err, strings.TrimSpace(string(out)))
 	}
 
 	cleanup := func() {
-		_ = exec.Command("umount", "-f", mntDir).Run()
+		if out, err := exec.Command("umount", mntDir).CombinedOutput(); err != nil {
+			// Fall back to a lazy unmount so the loop device and mount point are not leaked.
+			if lazyOut, lazyErr := exec.Command("umount", "-l", mntDir).CombinedOutput(); lazyErr != nil {
+				log.Warn().Err(lazyErr).Str("mount_dir", mntDir).
+					Str("output", strings.TrimSpace(string(out)+" "+string(lazyOut))).
+					Msg("failed to unmount scratch disk")
+				return
+			}
+		}
 		_ = os.Remove(mntDir)
 	}
 

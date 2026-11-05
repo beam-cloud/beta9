@@ -112,6 +112,13 @@ func packOverlayLayersWithTarget(upperDir, dir string, mediaType ggcrtypes.Media
 		if err != nil || rel == "." {
 			return err
 		}
+		// Guest plumbing is never image content.
+		if rel == ".beam" {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		info, err := d.Info()
 		if err != nil {
 			return err

@@ -973,6 +973,10 @@ const (
 	ContainerExitCodeTTL       = 5 * time.Minute
 	ContainerFailureHistoryTTL = time.Hour
 	ContainerFailureCooldown   = time.Minute
+	// ContainerExitSnapshotTTL bounds how long a sandbox's exit-snapshot record
+	// stays retrievable after exit. Past it, get_exit_snapshot reports the
+	// snapshot as unavailable even if the image still exists.
+	ContainerExitSnapshotTTL = 30 * 24 * time.Hour
 )
 
 const (
