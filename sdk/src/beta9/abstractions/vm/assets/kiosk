@@ -166,6 +166,46 @@ def display_size(env):
     return (int(match[1]), int(match[2])) if match else None
 
 
+def fit_desktop_windows(size, env):
+    """Keep window controls reachable after the browser shrinks the display."""
+    result = run_command(["wmctrl", "-lG"], env=env, check=False, capture_output=True, text=True)
+    windows = []
+    for line in result.stdout.splitlines():
+        fields = line.split(maxsplit=6)
+        if len(fields) >= 6:
+            windows.append((fields[0], *map(int, fields[1:6])))
+    width, height = size
+    # Panels reserve space asynchronously after RandR updates the root work area.
+    for _, desktop, x, y, w, h in windows:
+        if desktop < 0 and x == 0 and w >= width and y > 0 and 0 < h < height / 2:
+            height -= h
+    for window, desktop, x, y, w, h in windows:
+        if desktop < 0:
+            continue
+        properties = run_command(
+            ["xprop", "-id", window, "_NET_FRAME_EXTENTS", "_NET_WM_STATE"],
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+        ).stdout
+        if "_NET_WM_STATE_FULLSCREEN" in properties:
+            continue
+        match = re.search(r"_NET_FRAME_EXTENTS\([^)]*\) = (\d+), (\d+), (\d+), (\d+)", properties)
+        left, right, top, bottom = map(int, match.groups()) if match else (0, 0, 0, 0)
+        new_w, new_h = min(w, width - left - right), min(h, height - top - bottom)
+        new_x, new_y = (
+            max(0, min(x - left, width - new_w - left - right)),
+            max(0, min(y - top, height - new_h - top - bottom)),
+        )
+        if (new_x, new_y, new_w, new_h) != (x - left, y - top, w, h):
+            run_command(
+                ["wmctrl", "-ir", window, "-e", f"0,{new_x},{new_y},{new_w},{new_h}"],
+                env=env,
+                check=False,
+            )
+
+
 def save_display(path, size):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
@@ -592,6 +632,8 @@ class Session:
             self.geometry_check = time.monotonic()
             size = display_size(self.env)
             if size and size != self.saved_size and POLICY.valid_size(size):
+                if self.desktop:
+                    fit_desktop_windows(size, self.env)
                 save_display(self.display_file, size)
                 self.saved_size = size
 
