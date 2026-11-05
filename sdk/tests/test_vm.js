@@ -149,12 +149,13 @@ async function webrtc(sourcePath) {
   async function check(path) {
     const calls = [], messages = [];
     const storage = new Map([['selkies_tab_id', 'copied-from-another-tab']]);
+    const createChannel = label => ({label,readyState:'open',events:{},addEventListener(name,callback){this.events[name]=callback;}});
     class Peer {
       constructor() { this.events = {}; this.connectionState = 'new'; }
       addEventListener(name, callback) { this.events[name] = callback; }
       async setRemoteDescription(value) { calls.push(['remote', value]); }
       async addIceCandidate(value) { calls.push(['candidate', value]); }
-      createDataChannel(label) { return {label,readyState:'open',events:{},addEventListener(name,callback){this.events[name]=callback;}}; }
+      createDataChannel(label) { return createChannel(label); }
       close() { this.connectionState = 'closed'; }
     }
     const origin = 'https://application.example';
@@ -231,7 +232,7 @@ async function webrtc(sourcePath) {
     const controlPeer = new Peer();
     await controlPeer.setRemoteDescription({type:'offer',sdp:'guest-description'});
     controlPeer.connectionState='connected';
-    const channel={label:'input',readyState:'open',events:{},addEventListener(name,callback){this.events[name]=callback;}};
+    const channel=createChannel('input');
     controlPeer.events.datachannel({channel});
     channel.readyState='closed';channel.events.close();
     assert.equal(controlPeer.connectionState,'closed','live video cannot conceal a failed input channel');
