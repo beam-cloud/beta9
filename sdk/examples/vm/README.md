@@ -8,7 +8,7 @@ rebuild the image to adopt the new desktop runtime.
 Create a clean desktop, then open its protected browser session:
 
 ```sh
-beam vm create app-base --desktop
+beam vm new app-base --desktop --no-ssh
 beam vm desktop app-base
 ```
 
@@ -17,6 +17,8 @@ Open the completed download to launch Install Package, install it, and open the
 application from the desktop menu. Desktop applications run as the
 ordinary desktop user. The package installer has a dedicated elevation rule;
 other commands do not receive passwordless sudo.
+Enabling SSH grants its account the usual administrator access; this example
+keeps SSH disabled.
 
 Build shared templates in a fresh VM that has never held personal data. Leave
 application and browser accounts signed out: publishing shares the **complete root
@@ -34,7 +36,7 @@ it using its own credentials:
 
 ```sh
 beam vm template show TEMPLATE_ID --json
-beam vm create my-desktop --template TEMPLATE_ID
+beam vm new my-desktop --template TEMPLATE_ID
 beam vm desktop my-desktop
 ```
 

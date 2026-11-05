@@ -154,6 +154,7 @@ async function webrtc(sourcePath) {
       addEventListener(name, callback) { this.events[name] = callback; }
       async setRemoteDescription(value) { calls.push(['remote', value]); }
       async addIceCandidate(value) { calls.push(['candidate', value]); }
+      createDataChannel(label) { return {label,readyState:'open',events:{},addEventListener(name,callback){this.events[name]=callback;}}; }
       close() { this.connectionState = 'closed'; }
     }
     const origin = 'https://application.example';
@@ -237,6 +238,17 @@ async function webrtc(sourcePath) {
     viewer.syncConnection();
     await timers.get(1)();
     assert.equal(reloads,2,'a failed input channel must reconnect the session');
+    const localPeer = new Peer();
+    const localChannel = localPeer.createDataChannel('input');
+    await localPeer.setRemoteDescription({type:'offer',sdp:'guest-description'});
+    assert.equal(viewer.inputChannel,localChannel,'SDP routing preserves channels created locally before signaling');
+    controlPeer.events.datachannel({channel});
+    assert.equal(viewer.inputChannel,localChannel,'a superseded peer cannot replace the current input channel');
+    localPeer.connectionState='connected';
+    localChannel.readyState='closed';localChannel.events.close();
+    assert.equal(localPeer.connectionState,'closed','local input channel failure closes a live video peer');
+    await timers.get(1)();
+    assert.equal(reloads,3,'local input channel failure must reconnect the session');
   }
   async function checkDisplay() {
     const messages=[],events={},videoEvents={},windowEvents={},timers=new Map();

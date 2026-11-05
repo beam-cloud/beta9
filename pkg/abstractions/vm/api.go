@@ -113,6 +113,14 @@ func artifactResponse(a types.VMArtifact) types.VMArtifact {
 	return a
 }
 
+func artifactKind(c echo.Context) (string, error) {
+	kind := c.Param("kind")
+	if kind != types.VMArtifactTemplate && kind != types.VMArtifactSnapshot {
+		return "", echo.NewHTTPError(http.StatusBadRequest, "invalid artifact kind")
+	}
+	return kind, nil
+}
+
 func redactedSpec(spec types.VMSpec) types.VMSpec {
 	spec.Env = nil
 	spec.Kiosk = spec.Kiosk.WithoutCredentials()
@@ -751,9 +759,9 @@ func (s *Service) remove(c echo.Context) error {
 
 func (s *Service) artifacts(c echo.Context) error {
 	ctx, info := requestContext(c)
-	kind := c.Param("kind")
-	if kind != "snapshot" && kind != "template" {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid artifact kind")
+	kind, err := artifactKind(c)
+	if err != nil {
+		return err
 	}
 
 	var filter types.VMArtifactFilter
@@ -811,11 +819,12 @@ func (s *Service) artifactPage(c echo.Context, kind string, filter types.VMArtif
 
 func (s *Service) removeArtifact(c echo.Context) error {
 	ctx, info := requestContext(c)
-	if c.Param("kind") != "template" && c.Param("kind") != "snapshot" {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid artifact kind")
+	kind, err := artifactKind(c)
+	if err != nil {
+		return err
 	}
 
-	if err := s.repo.DeleteVMArtifact(ctx, info.Workspace.Id, c.Param("kind"), c.Param("artifact")); err != nil {
+	if err := s.repo.DeleteVMArtifact(ctx, info.Workspace.Id, kind, c.Param("artifact")); err != nil {
 		return apiError(err)
 	}
 
@@ -824,9 +833,9 @@ func (s *Service) removeArtifact(c echo.Context) error {
 
 func (s *Service) showArtifact(c echo.Context) error {
 	ctx, info := requestContext(c)
-	kind := c.Param("kind")
-	if kind != types.VMArtifactTemplate && kind != types.VMArtifactSnapshot {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid artifact kind")
+	kind, err := artifactKind(c)
+	if err != nil {
+		return err
 	}
 	a, err := s.repo.GetVMArtifact(ctx, info.Workspace.Id, kind, c.Param("artifact"))
 	if errors.Is(err, sql.ErrNoRows) {

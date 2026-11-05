@@ -415,6 +415,25 @@ func diskSnapshotRows() *sqlmock.Rows {
 	})
 }
 
+func TestPublishSnapshotRequiresHeadOwnership(t *testing.T) {
+	for _, public := range []bool{false, true} {
+		backend, mock := NewBackendPostgresRepositoryForTest()
+		mock.ExpectBegin()
+		query := mock.ExpectQuery(`SELECT .* FROM disk_snapshot .* FOR UPDATE`).
+			WithArgs(uint(8), "private-head", types.DiskSnapshotStatusAvailable)
+		if public {
+			query.WillReturnRows(sqlmock.NewRows([]string{"external_id", "workspace_id", "status", "public"}).
+				AddRow("private-head", uint(7), types.DiskSnapshotStatusAvailable, true))
+		} else {
+			query.WillReturnError(sql.ErrNoRows)
+		}
+		mock.ExpectRollback() // No visibility update may be attempted, even for a public foreign head.
+		err := backend.PublishDiskSnapshot(context.Background(), 8, "private-head")
+		require.ErrorAs(t, err, new(*types.ErrDiskSnapshotNotFound))
+		require.NoError(t, mock.ExpectationsWereMet())
+	}
+}
+
 func TestPublishSnapshotChainIsAtomicAndDoesNotReplayStatus(t *testing.T) {
 	for _, test := range []struct {
 		name                                                                   string

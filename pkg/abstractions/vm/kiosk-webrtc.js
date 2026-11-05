@@ -438,21 +438,23 @@
       if (!recovered()) this.recoveryTimer = setTimeout(() => this.recover(), policy.pollMs);
     }
 
+    trackInput(peer, channel) {
+      if (peer !== this.activePeer || channel.label !== 'input') return;
+      this.inputChannel = channel;
+      const changed = () => {
+        if (peer !== this.activePeer || channel !== this.inputChannel) return;
+        this.checkInput();
+        this.syncConnection();
+      };
+      for (const event of ['closing', 'close']) channel.addEventListener(event, changed);
+    }
+
     trackPeer(peer) {
       this.activePeer = peer;
       this.inputChannel = null;
       this.peerState = undefined;
       this.syncConnection();
-      peer.addEventListener('datachannel', ({channel}) => {
-        if (peer !== this.activePeer || channel.label !== 'input') return;
-        this.inputChannel = channel;
-        const changed = () => {
-          if (peer !== this.activePeer) return;
-          this.checkInput();
-          this.syncConnection();
-        };
-        for (const event of ['closing', 'close']) channel.addEventListener(event, changed);
-      });
+      peer.addEventListener('datachannel', ({channel}) => this.trackInput(peer, channel));
       peer.addEventListener('track', ({receiver}) => {
         // Receive-side hints favor fresh desktop frames over playback buffering.
         try { if ('jitterBufferTarget' in receiver) receiver.jitterBufferTarget = 0; } catch (_) {}
@@ -469,11 +471,23 @@
       try { window.sessionStorage.setItem('selkies_tab_id', window.crypto.randomUUID()); } catch (_) {}
       const proto = window.RTCPeerConnection && RTCPeerConnection.prototype;
       if (!proto) return;
-      const viewer = this, routed = new WeakSet();
+      const viewer = this, routed = new WeakSet(), tracked = new WeakSet();
+      const track = peer => {
+        if (tracked.has(peer)) return;
+        tracked.add(peer);
+        viewer.trackPeer(peer);
+      };
+      const createChannel = proto.createDataChannel;
+      proto.createDataChannel = function(...args) {
+        const channel = createChannel.apply(this, args);
+        track(this);
+        viewer.trackInput(this, channel);
+        return channel;
+      };
       const remote = proto.setRemoteDescription, candidate = proto.addIceCandidate;
       proto.setRemoteDescription = async function(description) {
         if (!description?.sdp) return remote.call(this, description);
-        if (!routed.has(this)) viewer.trackPeer(this);
+        track(this);
         routed.add(this);
         try {
           const response = await fetch(viewer.endpoint('webrtc/session'), {

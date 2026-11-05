@@ -18,6 +18,14 @@ apt_repository() {
     > "/etc/apt/sources.list.d/$name.list"
 }
 
+desktop_mime() {
+  local desktop_id=$1 mime
+  shift
+  for mime in "$@"; do
+    runuser -u "$desktop_user" -- xdg-mime default "$desktop_id" "$mime"
+  done
+}
+
 if ! command -v apt-get >/dev/null; then
   echo 'Beam VM images require Debian/Ubuntu and systemd' >&2
   exit 1
@@ -161,7 +169,7 @@ if [ "$desktop" = true ] && [ "$kiosk" != true ]; then
   chmod 0440 /etc/sudoers.d/beam-desktop
   visudo --check --file=/etc/sudoers.d/beam-desktop
   test -u /usr/bin/sudo
-  chown "$desktop_user:$desktop_user" /workspace
+  chown -R "$desktop_user:$desktop_user" /workspace
   if [ "$arch" = amd64 ]; then
     apt_repository google-chrome https://dl.google.com/linux/linux_signing_key.pub \
       https://dl.google.com/linux/chrome/deb/ stable main
@@ -179,9 +187,7 @@ if [ "$desktop" = true ] && [ "$kiosk" != true ]; then
   # Browser downloads and the file manager share the system package opener.
   install -d /usr/local/share/applications
   install -m 0644 "$assets/package-installer.desktop" /usr/local/share/applications/
-  for mime in application/vnd.debian.binary-package application/x-deb; do
-    runuser -u "$desktop_user" -- xdg-mime default package-installer.desktop "$mime"
-  done
+  desktop_mime package-installer.desktop application/vnd.debian.binary-package application/x-deb
   if [ "$arch" = amd64 ]; then
     install -m 0755 "$assets/browser" /usr/local/bin/google-chrome-stable
     ln -sf google-chrome-stable /usr/local/bin/google-chrome
@@ -220,9 +226,7 @@ EOF
       "$desktop_home/Desktop"/browser.desktop
   fi
   install -m 0644 "$desktop_home/Desktop/browser.desktop" /usr/local/share/applications/beam-browser.desktop
-  for mime in text/html application/xhtml+xml x-scheme-handler/http x-scheme-handler/https; do
-    runuser -u "$desktop_user" -- xdg-mime default beam-browser.desktop "$mime"
-  done
+  desktop_mime beam-browser.desktop text/html application/xhtml+xml x-scheme-handler/http x-scheme-handler/https
   chown -R "$desktop_user:$desktop_user" "$desktop_home/Desktop" "$desktop_home/.config"
 fi
 

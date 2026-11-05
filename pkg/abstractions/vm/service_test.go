@@ -1195,7 +1195,7 @@ func TestPublishedTemplateDropsWorkspaceBindingsAndKeepsImmutableRoot(t *testing
 	a, err := s.capture(context.Background(), v, types.VMArtifactTemplate, "app-desktop", "", true)
 	require.NoError(t, err)
 	require.True(t, a.Public)
-	require.NotEmpty(t, a.RootSnapshotID)
+	require.Equal(t, "root-live", a.RootSnapshotID)
 	require.Empty(t, a.Spec.Env)
 	require.Empty(t, a.Spec.Secrets)
 	require.Empty(t, a.Spec.Disks)

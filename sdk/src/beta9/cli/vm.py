@@ -473,7 +473,7 @@ def image_group():
 @click.option("--secret", "--build-secret", "build_secret", multiple=True)
 @click.option("--desktop", is_flag=True)
 @click.option(
-    "--kiosk", is_flag=True, help="Install the application streaming backend instead of KasmVNC."
+    "--kiosk", is_flag=True, help="Install an application session instead of the full desktop."
 )
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
