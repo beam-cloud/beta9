@@ -12,6 +12,7 @@
     registrationMs: 10000,
     startupMs: 180000,
     recoveryMs: 8000,
+    inputChannel: 'input',
     settleMs: 150,
     wheelPixels: 100,
     wheelLines: 3,
@@ -230,6 +231,12 @@
       return this.video?.id === 'videoStream' && this.playing();
     }
 
+    accessDenied(response) {
+      if (![401, 403, 404].includes(response.status)) return false;
+      this.notify('error', 'Application access is unavailable. Reopen its link to check your access.');
+      return true;
+    }
+
     async poll() {
       this.checkInput();
       // Native close() changes peer state without emitting a connection event.
@@ -238,10 +245,7 @@
         const response = await fetch(this.endpoint('status'), {
           cache: 'no-store', signal: AbortSignal.timeout(policy.requestMs),
         });
-        if ([401, 403, 404].includes(response.status)) {
-          this.notify('error', 'Application access is unavailable. Reopen its link to check your access.');
-          return;
-        }
+        if (this.accessDenied(response)) return;
         if (!response.ok) throw new Error('Unavailable');
         this.status = await response.json();
         this.failures = 0;
@@ -424,10 +428,7 @@
           cache: 'no-store', signal: AbortSignal.timeout(policy.requestMs),
         });
         if (recovered()) return;
-        if ([401, 403, 404].includes(response.status)) {
-          this.notify('error', 'Application access is unavailable. Reopen its link to check your access.');
-          return;
-        }
+        if (this.accessDenied(response)) return;
         if (response.ok) {
           // Re-enter the gateway-owned loading page. The guest's status server
           // starts before its stream; the shared startup flow waits for both.
@@ -439,7 +440,7 @@
     }
 
     trackInput(peer, channel) {
-      if (peer !== this.activePeer || channel.label !== 'input') return;
+      if (peer !== this.activePeer || channel.label !== policy.inputChannel) return;
       this.inputChannel = channel;
       const changed = () => {
         if (peer !== this.activePeer || channel !== this.inputChannel) return;
@@ -480,8 +481,10 @@
       const createChannel = proto.createDataChannel;
       proto.createDataChannel = function(...args) {
         const channel = createChannel.apply(this, args);
-        track(this);
-        viewer.trackInput(this, channel);
+        if (channel.label === policy.inputChannel) {
+          track(this);
+          viewer.trackInput(this, channel);
+        }
         return channel;
       };
       const remote = proto.setRemoteDescription, candidate = proto.addIceCandidate;

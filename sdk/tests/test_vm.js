@@ -239,6 +239,8 @@ async function webrtc(sourcePath) {
     await timers.get(1)();
     assert.equal(reloads,2,'a failed input channel must reconnect the session');
     const localPeer = new Peer();
+    localPeer.createDataChannel('clipboard');
+    assert.equal(viewer.activePeer,controlPeer,'unrelated data channels cannot replace the viewer peer');
     const localChannel = localPeer.createDataChannel('input');
     await localPeer.setRemoteDescription({type:'offer',sdp:'guest-description'});
     assert.equal(viewer.inputChannel,localChannel,'SDP routing preserves channels created locally before signaling');

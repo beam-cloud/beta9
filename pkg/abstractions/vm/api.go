@@ -121,6 +121,17 @@ func artifactKind(c echo.Context) (string, error) {
 	return kind, nil
 }
 
+func (s *Service) lookupArtifact(ctx context.Context, workspace uint, kind, name string) (*types.VMArtifact, error) {
+	a, err := s.repo.GetVMArtifact(ctx, workspace, kind, name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, echo.NewHTTPError(http.StatusNotFound, kind+" not found")
+	}
+	if err != nil {
+		return nil, apiError(err)
+	}
+	return a, nil
+}
+
 func redactedSpec(spec types.VMSpec) types.VMSpec {
 	spec.Env = nil
 	spec.Kiosk = spec.Kiosk.WithoutCredentials()
@@ -343,12 +354,9 @@ func (s *Service) create(c echo.Context) error {
 
 	preserveDesktopTransport := false
 	if seed != "" {
-		a, err := s.repo.GetVMArtifact(ctx, info.Workspace.Id, kind, seed)
-		if errors.Is(err, sql.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusNotFound, kind+" not found")
-		}
+		a, err := s.lookupArtifact(ctx, info.Workspace.Id, kind, seed)
 		if err != nil {
-			return apiError(err)
+			return err
 		}
 
 		base, _ := json.Marshal(a.Spec)
@@ -837,12 +845,9 @@ func (s *Service) showArtifact(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	a, err := s.repo.GetVMArtifact(ctx, info.Workspace.Id, kind, c.Param("artifact"))
-	if errors.Is(err, sql.ErrNoRows) {
-		return echo.NewHTTPError(http.StatusNotFound, kind+" not found")
-	}
+	a, err := s.lookupArtifact(ctx, info.Workspace.Id, kind, c.Param("artifact"))
 	if err != nil {
-		return apiError(err)
+		return err
 	}
 	return c.JSON(http.StatusOK, artifactResponse(*a))
 }
