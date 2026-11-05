@@ -5,7 +5,8 @@ set -euo pipefail
 run_as=()
 if [ -z "${BEAM_VM_KIOSK:-}" ]; then
   read -r desktop_user < /opt/beam-vm/desktop-user
-  chown "$desktop_user:$desktop_user" /run/beam-desktop
+  # The worker overlays /workspace with a fresh root-owned directory.
+  chown "$desktop_user:$desktop_user" /run/beam-desktop /workspace
   desktop_home=$(getent passwd "$desktop_user" | cut -d: -f6)
   export XDG_CONFIG_HOME="$desktop_home/.config"
   run_as=(runuser -u "$desktop_user" --)
