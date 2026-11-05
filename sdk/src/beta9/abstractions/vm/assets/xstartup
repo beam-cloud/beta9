@@ -20,10 +20,12 @@ if [ -f "$HOME/.Xresources" ]; then
 fi
 
 xsetroot -solid '#17171c'
-export XDG_CURRENT_DESKTOP=ubuntu:GNOME DESKTOP_SESSION=ubuntu XDG_SESSION_TYPE=x11
-export GNOME_SHELL_SESSION_MODE=ubuntu
-export XDG_CONFIG_DIRS="/etc/xdg/xdg-ubuntu:${XDG_CONFIG_DIRS:-/etc/xdg}"
 if [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+  for launcher in "$HOME/Desktop/browser.desktop" "$HOME/Desktop/terminal.desktop"; do
+    if [ -f "$launcher" ]; then
+      gio set -t string "$launcher" metadata::trusted true || echo 'Unable to trust desktop launcher' >&2
+    fi
+  done
   exec gnome-session --session=ubuntu
 fi
 exec dbus-run-session -- gnome-session --session=ubuntu

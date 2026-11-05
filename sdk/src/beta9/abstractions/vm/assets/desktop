@@ -9,6 +9,9 @@ if [ -z "${BEAM_VM_KIOSK:-}" ]; then
   chown "$desktop_user:$desktop_user" /run/beam-desktop /workspace
   desktop_home=$(getent passwd "$desktop_user" | cut -d: -f6)
   export XDG_CONFIG_HOME="$desktop_home/.config"
+  export XDG_CURRENT_DESKTOP=ubuntu:GNOME DESKTOP_SESSION=ubuntu XDG_SESSION_TYPE=x11
+  export GNOME_SHELL_SESSION_MODE=ubuntu
+  export XDG_CONFIG_DIRS="/etc/xdg/xdg-ubuntu:${XDG_CONFIG_DIRS:-/etc/xdg}"
   run_as=(runuser -u "$desktop_user" --)
 fi
 if [ "${1:-}" = --launch ]; then

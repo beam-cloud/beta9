@@ -4235,6 +4235,8 @@ def test_full_desktop_supervision_does_not_depend_on_application_windows(
     monkeypatch.setattr(guest, "RUNTIME", tmp_path)
     session = guest.Session()
     session.env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/run/test-bus"
+    (tmp_path / "session-bus").write_text("stale address")
+    (tmp_path / "session-bus").chmod(0o644)
     session.processes = {
         name: SimpleNamespace(poll=lambda: None)
         for name in ("display", "window-manager", "stream", "settings")

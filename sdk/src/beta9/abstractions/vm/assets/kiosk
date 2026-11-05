@@ -588,6 +588,7 @@ class Session:
         RUNTIME.mkdir(parents=True, exist_ok=True)
         bus = RUNTIME / "session-bus"
         bus.touch(mode=0o600)
+        bus.chmod(0o600)
         bus.write_text(self.env["DBUS_SESSION_BUS_ADDRESS"] + "\n")
         if not self.desktop:
             defaults = Path(POLICY.mcp_defaults)

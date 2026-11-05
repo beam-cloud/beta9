@@ -197,7 +197,7 @@ if [ "$desktop" = true ] && [ "$kiosk" != true ]; then
     install -m 0755 "$assets/browser" /usr/local/bin/google-chrome-stable
     ln -sf google-chrome-stable /usr/local/bin/google-chrome
   fi
-  install -d -m 0755 "$desktop_home/Desktop"
+  install -d -m 0755 "$desktop_home/Desktop" /usr/local/share/applications
   install -m 0755 "$assets/browser.desktop" "$assets/terminal.desktop" "$desktop_home/Desktop"/
   runuser -u "$desktop_user" -- xdg-user-dirs-update
   desktop_mime org.gnome.Nautilus.desktop inode/directory
@@ -208,11 +208,6 @@ if [ "$desktop" = true ] && [ "$kiosk" != true ]; then
   install -m 0644 "$desktop_home/Desktop/browser.desktop" /usr/local/share/applications/beam-browser.desktop
   desktop_mime beam-browser.desktop text/html application/xhtml+xml x-scheme-handler/http x-scheme-handler/https
   chown -R "$desktop_user:$desktop_user" "$desktop_home/Desktop" "$desktop_home/.config"
-  runuser -u "$desktop_user" -- dbus-run-session -- sh -ec '
-    for launcher in "$HOME/Desktop/browser.desktop" "$HOME/Desktop/terminal.desktop"; do
-      gio set -t string "$launcher" metadata::trusted true
-    done
-  '
 fi
 
 if [ "$desktop" = true ] || [ "$kiosk" = true ]; then
