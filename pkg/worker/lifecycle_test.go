@@ -1981,44 +1981,64 @@ func TestSetContainerExitCodeTreatsMissingStateAsComplete(t *testing.T) {
 	}
 	worker := newContainerFinalizationTestWorker(request, repoClient, nil)
 
-	require.True(t, worker.setContainerExitCode(request.ContainerId, 0))
+	require.True(t, worker.setContainerExitCode(request.ContainerId, 0, false))
 	require.Equal(t, 1, repoClient.containerExitCodeCalls())
 }
 
 func TestSetContainerExitCodeReleasesStoppedGPUBeforePublication(t *testing.T) {
 	for _, test := range []struct {
-		name    string
-		state   runtime.State
-		err     error
-		release bool
+		name          string
+		state         runtime.State
+		err           error
+		runtimeExited bool
+		virtualized   bool
+		blockRoot     bool
+		unassigned    bool
+		release       bool
+		noStateQuery  bool
 	}{
+		{name: "confirmed runtime exit", runtimeExited: true, release: true, noStateQuery: true},
 		{name: "exited", state: runtime.State{Status: types.RuncContainerStatusStopped}, release: true},
 		{name: "deleted", err: runtime.ErrContainerNotFound{ContainerID: "exited-gpu"}, release: true},
 		{name: "still running", state: runtime.State{Status: types.RuncContainerStatusRunning}},
 		{name: "still created", state: runtime.State{Status: types.RuncContainerStatusCreated}},
+		{name: "still paused", state: runtime.State{Status: types.RuncContainerStatusPaused}},
 		{name: "state unavailable", err: errors.New("runtime state unavailable")},
+		{name: "virtual GPU", virtualized: true, noStateQuery: true},
+		{name: "microVM VFIO", blockRoot: true, runtimeExited: true, noStateQuery: true},
+		{name: "already released", unassigned: true, release: true, noStateQuery: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := &types.ContainerRequest{ContainerId: "exited-gpu", Gpu: "RTX5090", GpuCount: 1}
 			gpu := NewContainerNvidiaManagerForTest(1)
-			_, err := gpu.AssignGPUDevices(context.Background(), request)
-			require.NoError(t, err)
+			if !test.unassigned {
+				_, err := gpu.AssignGPUDevices(context.Background(), request)
+				require.NoError(t, err)
+			}
 
 			started, release := make(chan struct{}, 1), make(chan struct{})
 			unblock := sync.OnceFunc(func() { close(release) })
 			defer unblock()
 			repo := &fakeContainerRepoClient{setExitCodeStarted: started, setExitCodeRelease: release}
+			thunder := &fakeThunderServiceClient{deleteResp: &pb.DeleteClientEnrollmentResponse{Ok: true}}
 			worker := &Worker{
-				containerRepoClient: repo,
-				containerInstances:  common.NewSafeMap[*ContainerInstance](),
-				containerGPUManager: gpu,
+				containerRepoClient:     repo,
+				containerInstances:      common.NewSafeMap[*ContainerInstance](),
+				containerGPUManager:     gpu,
+				containerThunderManager: NewContainerThunderManager(thunder),
+				gpuVirtualized:          test.virtualized,
 			}
+			var stateQueries atomic.Int32
 			instance := &ContainerInstance{Id: request.ContainerId, Request: request, CPUSet: "2-5", Runtime: &mockRuntime{
-				state: func(context.Context, string) (runtime.State, error) { return test.state, test.err },
+				capabilities: runtime.Capabilities{BlockRoot: test.blockRoot},
+				state: func(context.Context, string) (runtime.State, error) {
+					stateQueries.Add(1)
+					return test.state, test.err
+				},
 			}}
 			worker.containerInstances.Set(request.ContainerId, instance)
 			done := make(chan bool, 1)
-			go func() { done <- worker.setContainerExitCode(request.ContainerId, 0) }()
+			go func() { done <- worker.setContainerExitCode(request.ContainerId, 0, test.runtimeExited) }()
 			select {
 			case <-started:
 			case <-time.After(time.Second):
@@ -2033,16 +2053,58 @@ func TestSetContainerExitCodeReleasesStoppedGPUBeforePublication(t *testing.T) {
 				require.NoError(t, err, "advertised capacity must already be allocable on the worker")
 				require.Equal(t, []int{0}, assigned)
 				require.Empty(t, gpu.GetContainerGPUDevices(request.ContainerId))
-				require.Empty(t, instance.CPUSet)
 			} else {
 				require.Error(t, err, "an unconfirmed runtime must keep its GPU reservation")
 				require.Equal(t, []int{0}, gpu.GetContainerGPUDevices(request.ContainerId))
-				require.Equal(t, "2-5", instance.CPUSet)
+			}
+			require.Equal(t, "2-5", instance.CPUSet, "GPU release must not change CPU-tier resource ownership")
+			require.False(t, instance.resourcesReleased.Load())
+			require.Empty(t, thunder.deleteReqs, "exit publication must not perform Thunder teardown")
+			if test.noStateQuery {
+				require.Zero(t, stateQueries.Load(), "completion must not wait for a state subprocess")
+			} else {
+				require.EqualValues(t, 1, stateQueries.Load())
 			}
 			unblock()
 			require.True(t, <-done)
+			if test.release {
+				queries := stateQueries.Load()
+				require.True(t, worker.setContainerExitCode(request.ContainerId, 0, false))
+				require.Equal(t, queries, stateQueries.Load(), "a publication retry must not recheck a released GPU")
+				require.Equal(t, []int{0}, gpu.GetContainerGPUDevices("replacement"), "late cleanup must not release the replacement's GPU")
+			}
 		})
 	}
+}
+
+func TestSetContainerExitCodeBoundsUnconfirmedGPUState(t *testing.T) {
+	request := &types.ContainerRequest{ContainerId: "unknown-gpu", Gpu: "RTX5090", GpuCount: 1}
+	gpu := NewContainerNvidiaManagerForTest(1)
+	_, err := gpu.AssignGPUDevices(context.Background(), request)
+	require.NoError(t, err)
+	repo := &fakeContainerRepoClient{}
+	worker := &Worker{
+		containerRepoClient: repo,
+		containerInstances:  common.NewSafeMap[*ContainerInstance](),
+		containerGPUManager: gpu,
+	}
+	var stateErr error
+	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{
+		Request: request,
+		Runtime: &mockRuntime{state: func(ctx context.Context, _ string) (runtime.State, error) {
+			deadline, ok := ctx.Deadline()
+			require.True(t, ok)
+			require.WithinDuration(t, time.Now().Add(containerRuntimeStateTimeout), deadline, time.Second)
+			<-ctx.Done()
+			stateErr = ctx.Err()
+			return runtime.State{}, stateErr
+		}},
+	})
+
+	require.True(t, worker.setContainerExitCode(request.ContainerId, 1, false))
+	require.ErrorIs(t, stateErr, context.DeadlineExceeded)
+	require.Equal(t, []int{0}, gpu.GetContainerGPUDevices(request.ContainerId))
+	require.Equal(t, 1, repo.containerExitCodeCalls())
 }
 
 func TestClearContainerTreatsMissingStateAsTerminal(t *testing.T) {

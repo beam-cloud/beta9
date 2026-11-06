@@ -429,7 +429,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		_ = os.RemoveAll(filepath.Join(baseConfigPath, containerId))
 	}
 	if !exitReported {
-		exitReported = s.setContainerExitCode(containerId, exitCode)
+		exitReported = s.setContainerExitCode(containerId, exitCode, false)
 	}
 
 	phases.Mark("exit_code")
@@ -526,7 +526,6 @@ func (s *Worker) releaseIfRuntimeStopped(containerId string) bool {
 	if runtimeNeedsGraceKill(ctx, rt, containerId) {
 		return false
 	}
-	s.releaseContainerResources(containerId, instance.Request)
 	instance.resourcesReleased.Store(true)
 	s.containerInstances.Wake()
 	return true
@@ -546,7 +545,7 @@ func (s *Worker) publishFinalizedVMExitCode(containerID string, exitCode int) bo
 	}
 	for {
 		s.markContainerStopping(containerID, types.ContainerStateTtlSWhileStopping)
-		if s.setContainerExitCode(containerID, exitCode) {
+		if s.setContainerExitCode(containerID, exitCode, false) {
 			return true
 		}
 		if err := waitForRetry(ctx, containerRepositoryRetryInterval); err != nil {
@@ -622,18 +621,37 @@ func (s *Worker) setLocalContainerExitCode(containerId string, exitCode int) {
 	s.containerInstances.Set(containerId, instance)
 }
 
-func (s *Worker) setContainerExitCode(containerId string, exitCode int) bool {
+// releaseContainerGPUForExit only hands back local physical devices. MicroVM
+// VFIO reservations and Thunder enrollments still belong to runtime cleanup.
+func (s *Worker) releaseContainerGPUForExit(containerId string, runtimeExited bool) {
+	if s.containerInstances == nil || s.containerGPUManager == nil || s.gpuVirtualized {
+		return
+	}
+	instance, rt, exists := s.observedContainerRuntime(containerId)
+	if !exists || instance.Request == nil || !instance.Request.RequiresGPU() || rt == nil || rt.Capabilities().BlockRoot {
+		return
+	}
+	if len(s.containerGPUManager.GetContainerGPUDevices(containerId)) == 0 {
+		return
+	}
+	if !runtimeExited {
+		ctx, cancel := context.WithTimeout(context.Background(), containerRuntimeStateTimeout)
+		defer cancel()
+		if runtimeNeedsGraceKill(ctx, rt, containerId) {
+			return
+		}
+	}
+	s.containerGPUManager.UnassignGPUDevices(context.Background(), containerId)
+}
+
+func (s *Worker) setContainerExitCode(containerId string, exitCode int, runtimeExited bool) bool {
 	if s.containerRepoClient == nil {
 		return false
 	}
 	// Consumers may retire the reservation as soon as this receipt is visible.
-	// A stopped GPU runtime must hand back its local devices first: runtime
-	// deletion and overlay cleanup can block after completion is published.
-	if s.containerInstances != nil {
-		if instance, exists := s.containerInstances.Get(containerId); exists && instance.Request != nil && instance.Request.RequiresGPU() {
-			s.releaseIfRuntimeStopped(containerId)
-		}
-	}
+	// Reuse a confirmed Run/Wait result to avoid a state subprocess on normal
+	// completion; uncertain failures need a state check before early release.
+	s.releaseContainerGPUForExit(containerId, runtimeExited)
 
 	err := retryContainerRepositoryCall(func(ctx context.Context) error {
 		_, err := handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(ctx, &pb.SetContainerExitCodeRequest{
@@ -2203,7 +2221,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// cleanup so clients are never blocked on resource reclamation. Durable-disk
 	// containers are reported by finalizeContainer after their final sync.
 	if !request.HasDurableDiskMount() {
-		exitReported = s.setContainerExitCode(containerId, exitCode)
+		// A normalized exit code alone does not prove that the runtime stopped.
+		exitReported = s.setContainerExitCode(containerId, exitCode, err == nil && rawExitCode >= 0)
 	}
 	if err := s.deleteRuntimeContainer(containerId); err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
