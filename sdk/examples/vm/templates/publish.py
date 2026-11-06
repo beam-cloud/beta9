@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from beta9 import VM, Image, Kiosk, MCPServer
+from beta9.abstractions.vm import default_base_image
 
 HERE = Path(__file__).resolve().parent
 KIOSK_RECIPES = HERE.parent.parent / "kiosk"
@@ -40,6 +41,9 @@ class Recipe:
     # MCP servers for a kiosk's app. Registered on the build VM, they're on the
     # root disk the template copies.
     mcp: Optional[Dict[str, MCPServer]] = None
+    # A GPU type, such as RTX4090. VMs from the template get one, and a kiosk's
+    # Dockerfile builds on Beam's NVIDIA image as BASE_IMAGE.
+    gpu: Optional[str] = None
     # Seconds a VM from the template may take to pass its check after it boots.
     timeout: int = 600
 
@@ -71,18 +75,37 @@ RECIPES = {
         check="hyperframes --version && test -d /workspace/hyperframes && test -d /workspace/remotion/node_modules",
     ),
     "blender": Recipe(
-        "Blender full screen in a kiosk desktop, with MCP for agents",
+        "Blender full screen on an RTX 4090 kiosk desktop, with MCP for agents",
         kiosk=["blender", "/workspace/project.blend"],
         mcp={
             "blender": MCPServer(
                 "/opt/blender-mcp/bin/mcp-for-blender", env={"DISABLE_TELEMETRY": "1"}
             )
         },
-        check="""pgrep -x blender && python3 - <<'PYTHON'
+        gpu="RTX4090",
+        check="""set -e
+nvidia-smi -L
+pgrep -x Xorg
+pgrep -x blender
+python3 - <<'PYTHON'
 import json, urllib.request
 health = json.load(urllib.request.urlopen("http://127.0.0.1:8082/health"))
 assert health["servers"]["blender"]["state"] == "ready", health
-PYTHON""",
+PYTHON
+BLENDER_USER_SCRIPTS=/opt/blender-scripts blender --background /workspace/project.blend \\
+    --python-exit-code 1 --python-expr '
+import bpy
+cycles = bpy.context.preferences.addons["cycles"].preferences
+assert cycles.compute_device_type == "OPTIX", cycles.compute_device_type
+assert any(d.use and d.type == "OPTIX" for d in cycles.devices), list(cycles.devices)
+scene = bpy.context.scene
+assert scene.cycles.device == "GPU", scene.cycles.device
+scene.render.engine = "CYCLES"
+scene.cycles.samples = 4
+scene.render.resolution_x = scene.render.resolution_y = 64
+scene.render.filepath = "/tmp/gpu-check.png"
+bpy.ops.render.render(write_still=True)
+'""",
     ),
 }
 
@@ -134,12 +157,14 @@ def build_vm(slug: str, recipe: Recipe, context: Optional[str]) -> VM:
         docker_enabled=True if recipe.docker else None,
         # The template shouldn't carry the publisher's SSH key.
         ssh=False,
+        gpu=recipe.gpu,
         context=context,
     )
     if recipe.kiosk:
         dockerfile = KIOSK_RECIPES / slug / "Dockerfile"
+        build_args = {"BASE_IMAGE": default_base_image(recipe.gpu)} if recipe.gpu else None
         options.update(
-            image=Image.from_dockerfile(str(dockerfile)),
+            image=Image.from_dockerfile(str(dockerfile), build_args=build_args),
             kiosk=Kiosk(recipe.kiosk, transport="webrtc"),
         )
 
