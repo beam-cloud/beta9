@@ -648,8 +648,8 @@ func (s *Worker) physicalGPUAllocation(containerId string) *ContainerNvidiaManag
 
 func (s *Worker) publishContainerRunExit(containerId string, rawExitCode int, runErr error, mappedExitCode int) bool {
 	if manager := s.physicalGPUAllocation(containerId); manager != nil {
-		// Normalized codes and runtime errors are not proof of exit. Keep the
-		// reservation until finalization for OOMs, failed starts and lost waits.
+		// Defer runtime errors (including native OOM errors) and unknown raw
+		// statuses. A watcher-only OOM annotation does not invalidate an exit.
 		if runErr != nil || rawExitCode < 0 {
 			return false
 		}
@@ -2231,6 +2231,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// cleanup so clients are never blocked on resource reclamation. Durable-disk
 	// containers are reported by finalizeContainer after their final sync.
 	if !request.HasDurableDiskMount() {
+		// A confirmed runc exit may hand back GPUs while deletion of the old
+		// container ID is still pending. runsc attempts deletion before Run returns.
 		exitReported = s.publishContainerRunExit(containerId, rawExitCode, err, exitCode)
 	}
 	if err := s.deleteRuntimeContainer(containerId); err != nil {

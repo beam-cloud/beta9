@@ -2002,6 +2002,7 @@ func TestPublishContainerRunExitPreservesCodesAndGPUOwnership(t *testing.T) {
 		{name: "graceful SIGTERM", raw: 143, mapped: 0, early: true},
 		{name: "stopped before runtime start", raw: 143, reason: types.StopContainerReasonUser, mapped: 560, early: true},
 		{name: "observed OOM after exit", raw: 0, oom: true, mapped: 137, early: true},
+		{name: "watcher-only OOM with native status", raw: 137, oom: true, mapped: 137, early: true},
 		{name: "native OOM error", raw: 137, err: runtime.ErrOOMKilled, oom: true, mapped: 137},
 		{name: "guest OOM error", raw: 42, err: runtime.ErrGuestOOM, oom: true, mapped: 137},
 		{name: "runc nonzero error", raw: 7, err: errors.New("runc exited with status 7"), mapped: 7},
@@ -2073,6 +2074,59 @@ func TestPublishContainerRunExitPreservesCodesAndGPUOwnership(t *testing.T) {
 			require.Equal(t, "2-5", instance.CPUSet)
 			require.False(t, instance.resourcesReleased.Load())
 		})
+	}
+}
+
+func TestRuncDeleteOverlapPreservesReplacementGPU(t *testing.T) {
+	worker, request, gpu := newGPUExitTestWorker(t)
+	deleteStarted, deleteRelease := make(chan string, 1), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(deleteRelease) })
+	defer unblock()
+	rt := &blockingGPUDeleteRuntime{
+		mockRuntime: mockRuntime{name: "runc", state: func(context.Context, string) (runtime.State, error) {
+			return runtime.State{Status: types.RuncContainerStatusStopped}, nil
+		}},
+		started: deleteStarted,
+		release: deleteRelease,
+	}
+	instance, _ := worker.containerInstances.Get(request.ContainerId)
+	instance.Runtime = rt
+	require.True(t, worker.publishContainerRunExit(request.ContainerId, 0, nil, 0))
+	deleted := make(chan error, 1)
+	go func() { deleted <- worker.deleteRuntimeContainer(request.ContainerId) }()
+	select {
+	case containerID := <-deleteStarted:
+		require.Equal(t, request.ContainerId, containerID)
+	case <-time.After(time.Second):
+		t.Fatal("runtime deletion did not start")
+	}
+	_, err := gpu.AssignGPUDevices(context.Background(), &types.ContainerRequest{ContainerId: "replacement", GpuCount: 1})
+	require.NoError(t, err, "replacement must be allocable while old runtime deletion is blocked")
+	select {
+	case <-deleted:
+		t.Fatal("runtime deletion returned before being unblocked")
+	default:
+	}
+	unblock()
+	require.NoError(t, <-deleted)
+	worker.finalizeContainer(request.ContainerId, request, 0, true)
+	require.Empty(t, gpu.GetContainerGPUDevices(request.ContainerId))
+	require.Equal(t, []int{0}, gpu.GetContainerGPUDevices("replacement"), "old runtime cleanup must not release the replacement's GPU")
+}
+
+type blockingGPUDeleteRuntime struct {
+	mockRuntime
+	started chan<- string
+	release <-chan struct{}
+}
+
+func (m *blockingGPUDeleteRuntime) Delete(ctx context.Context, containerID string, _ *runtime.DeleteOpts) error {
+	m.started <- containerID
+	select {
+	case <-m.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
