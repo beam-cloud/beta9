@@ -25,22 +25,40 @@ print("Hello from the cloud", flush=True)
 """
 
 
+def vm_template(service: ServiceClient, reference: str) -> Dict[str, Any]:
+    """Look up a workspace template by name or ID, or a public template by ID."""
+    from urllib.parse import quote
+
+    try:
+        return VM(_service=service)._api("GET", "/artifacts/template/" + quote(reference, safe=""))
+    except GatewayHTTPError as exc:
+        if exc.status != 404:
+            raise
+        raise ValueError(
+            f"VM template {reference!r} was not found. Use a public template ID, "
+            "or the name or ID of a template in this workspace."
+        ) from exc
+
+
 def prepare_vm(
     service: ServiceClient,
     state_directory: Path,
     name: Optional[str] = None,
     *,
-    desktop: bool = True,
+    desktop: Optional[bool] = True,
+    template: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Create or resume a setup-owned VM and verify its Linux guest.
 
     Without a name the gateway generates one, and reruns find the VM by the ID
-    saved when it was created.
+    saved when it was created. A template VM keeps the template's desktop and
+    Docker settings unless desktop is given.
     """
     workspace = service.http.workspace_id
     directory = state_directory / hashlib.sha256(workspace.encode()).hexdigest()[:24]
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    path = directory / (hashlib.sha256((name or "").encode()).hexdigest()[:24] + ".json")
+    key = f"template:{template}:{name or ''}" if template else (name or "")
+    path = directory / (hashlib.sha256(key.encode()).hexdigest()[:24] + ".json")
 
     with open(path.with_suffix(".lock"), "a", opener=_private_file) as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -56,7 +74,7 @@ def prepare_vm(
                     raise
 
         if vm is None:
-            vm = _create_vm(service, path, state, name, desktop)
+            vm = _create_vm(service, path, state, name, desktop, template)
         else:
             if (vm.info.get("metadata") or {}).get("beam.onboarding") != marker["beam.onboarding"]:
                 raise ValueError(f"VM {vm.name!r} already exists. Choose a different --name.")
@@ -72,12 +90,15 @@ def prepare_vm(
         return vm.refresh().info
 
 
-def _create_vm(service, path, state, name, desktop):
+def _create_vm(service, path, state, name, desktop, template=None):
     for attempt in range(2):
         vm = VM(
             name,
             desktop=desktop,
-            docker_enabled=True,
+            docker_enabled=None if template else True,
+            # Public templates drop SSH; setup VMs keep it for `vm ssh`.
+            ssh=True if template else None,
+            template=template,
             auto_resume=True,
             metadata={"beam.onboarding": state["request_id"]},
             request_id=state["request_id"],
