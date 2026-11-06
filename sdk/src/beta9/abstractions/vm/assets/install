@@ -192,6 +192,10 @@ if [ "$desktop" = true ] && [ "$kiosk" != true ]; then
   sed "s/@PIXEL_RATIO@/$pixel_ratio/g" "$assets/desktop.gschema.override" \
     > /usr/share/glib-2.0/schemas/99_beam.gschema.override
   glib-compile-schemas --strict /usr/share/glib-2.0/schemas
+  # GNOME records this acknowledgment itself after its first non-GDM session.
+  # Browser access authenticates this remote session; it has no local login screen.
+  runuser -u "$desktop_user" -- mkdir -p "$desktop_home/.local/share/gnome-shell"
+  runuser -u "$desktop_user" -- touch "$desktop_home/.local/share/gnome-shell/lock-warning-shown"
   install -d /etc/polkit-1/rules.d
   sed "s/@DESKTOP_USER@/$desktop_user/g" "$assets/packagekit.rules" \
     > /etc/polkit-1/rules.d/49-beam-packagekit.rules

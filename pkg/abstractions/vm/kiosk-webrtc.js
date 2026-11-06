@@ -299,39 +299,31 @@
       setTimeout(() => this.poll(), policy.pollMs);
     }
 
-    fitted() {
+    displayReady() {
       const video = this.video;
       return (this.webSocketLive || !this.activePeer || this.activePeer.connectionState === 'connected') &&
-        this.playing(video) && video.videoWidth > 0 && this.viewportMatches(video) &&
-        (window.streamResolutionDiverged || video.id === 'videoStream' ||
-          video.videoWidth === video.width && video.videoHeight === video.height);
+        window.innerWidth > 0 && window.innerHeight > 0 &&
+        this.playing(video) && video.videoWidth > 0 && video.videoHeight > 0;
     }
 
     checkDisplay() {
-      clearTimeout(this.settle);
       this.syncViewport();
-      // Video can arrive before the client's first resolution bookkeeping.
-      if (this.video?.id === 'stream' && this.video.videoWidth > 0 && this.video.width > 0) {
-        window.streamResolutionDiverged = this.video.videoWidth !== this.video.width ||
-          this.video.videoHeight !== this.video.height;
-      }
       if (this.video) document.documentElement.toggleAttribute('data-beam-kiosk-playing',
         this.playing());
-      if (!this.fitted()) {
+      // A shared viewer can display the owner's framebuffer before it gains
+      // focus. Native object-fit handles that picture while resizing separately.
+      if (!this.displayReady()) {
         this.ready = false;
         return; // Resizing keeps the last live image visible.
       }
-      this.settle = setTimeout(() => {
-        if (this.fitted() && !this.ready) {
-          this.ready = true;
-          this.notify('ready');
-        }
-      }, policy.settleMs);
+      if (!this.ready) {
+        this.ready = true;
+        this.notify('ready');
+      }
     }
 
     refreshDisplay() {
       this.ready = false;
-      clearTimeout(this.settle);
       if (this.video?.requestVideoFrameCallback) this.video.requestVideoFrameCallback(() => this.checkDisplay());
       else this.checkDisplay();
     }
@@ -345,9 +337,6 @@
       for (const event of ['playing', 'loadeddata', 'resize', 'pause', 'emptied']) {
         current.addEventListener(event, () => this.checkDisplay());
       }
-      new MutationObserver(() => this.checkDisplay()).observe(current, {
-        attributes: true, attributeFilter: ['width', 'height'],
-      });
       this.checkDisplay();
     }
 
@@ -377,7 +366,7 @@
       document.addEventListener('keydown', activate, true);
       const resize = () => {
         clearTimeout(this.viewportTimer);
-        this.viewportTimer = setTimeout(() => this.syncViewport(), policy.settleMs);
+        this.viewportTimer = setTimeout(() => this.checkDisplay(), policy.settleMs);
       };
       for (const event of ['focus', 'resize']) window.addEventListener(event, resize);
       const release = () => { this.viewport = null; };

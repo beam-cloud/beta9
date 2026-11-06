@@ -10,6 +10,9 @@ idle-delay=uint32 0
 [org.gnome.desktop.screensaver:ubuntu]
 lock-enabled=false
 
+[org.gnome.desktop.lockdown:ubuntu]
+disable-lock-screen=true
+
 [org.gnome.desktop.background:ubuntu]
 picture-uri=''
 picture-uri-dark=''
