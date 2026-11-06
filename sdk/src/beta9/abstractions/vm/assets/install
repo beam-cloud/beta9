@@ -12,6 +12,7 @@ apt_install() {
 
 apt_repository() {
   local name=$1 key_url=$2 repository=$3 suite=$4 component=$5
+  install -d -m 0755 /etc/apt/keyrings
   curl -fsSL "$key_url" -o "/etc/apt/keyrings/$name.asc"
   printf 'deb [arch=%s signed-by=/etc/apt/keyrings/%s.asc] %s %s %s\n' \
     "$arch" "$name" "$repository" "$suite" "$component" \
