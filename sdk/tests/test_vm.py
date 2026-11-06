@@ -1030,6 +1030,104 @@ def test_cli_reports_ready_once_vm_accepts_commands(cli_service, monkeypatch, ar
     vm.wait.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "command,options,method,call_args,call_kwargs",
+    [
+        ("start", [], "start", (), {"cold": False}),
+        ("start", ["--cold"], "start", (), {"cold": True}),
+        ("resume", [], "start", (), {"cold": False}),
+        ("resume", ["--cold"], "start", (), {"cold": True}),
+        ("pause", [], "pause", (), {}),
+        ("stop", [], "stop", (False,), {}),
+        ("stop", ["--no-snapshot"], "stop", (True,), {}),
+    ],
+)
+@pytest.mark.parametrize("json_mode", [None, "command", "global", "env"])
+def test_cli_lifecycle_accepts_multiple_vms(
+    cli_service, monkeypatch, command, options, method, call_args, call_kwargs, json_mode
+):
+    names = ["dev", "vm-12ab34cd56ef7890", "staging"]
+    vms = [
+        MagicMock(info={"name": name, "id": f"vm-{index}", "status": "running", "spec": {}})
+        for index, name in enumerate(names)
+    ]
+    for vm in vms:
+        getattr(vm, method).return_value = vm
+    lookup = MagicMock(side_effect=vms)
+    monkeypatch.setattr(vm_cli.VM, "get", lookup)
+    cli = load_cli(check_config=False, settings=SDKSettings(name="Beam"))
+    argv = (["--json"] if json_mode == "global" else []) + ["vm", command, *names]
+    argv.extend(options)
+    if json_mode == "command":
+        argv.append("--json")
+
+    result = CliRunner().invoke(
+        cli.common_group, argv, env={"BETA9_JSON": "1" if json_mode == "env" else "0"}
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [entry.args for entry in lookup.call_args_list] == [(name,) for name in names]
+    assert all(entry.kwargs == {"_service": cli_service} for entry in lookup.call_args_list)
+    for vm in vms:
+        getattr(vm, method).assert_called_once_with(*call_args, **call_kwargs)
+    if json_mode:
+        assert json.loads(result.output) == [vm.info for vm in vms]
+    else:
+        for name in names:
+            assert name in result.output
+
+
+@pytest.mark.parametrize("names", [["dev"], ["dev", "vm-12ab34cd56ef7890", "staging"]])
+def test_cli_rm_accepts_multiple_vms(cli_service, monkeypatch, names):
+    vms = [MagicMock() for _ in names]
+    lookup = MagicMock(side_effect=vms)
+    monkeypatch.setattr(vm_cli.VM, "get", lookup)
+
+    result = CliRunner().invoke(vm_cli.management, ["rm", *names])
+
+    assert result.exit_code == 0, result.output
+    assert [entry.args for entry in lookup.call_args_list] == [(name,) for name in names]
+    for vm in vms:
+        vm.remove.assert_called_once_with()
+    if len(names) > 1:
+        for name in names:
+            assert f"VM removed {name}" in result.output
+
+
+@pytest.mark.parametrize("command", ["start", "resume", "pause", "stop", "rm"])
+def test_cli_lifecycle_requires_a_vm(cli_service, command):
+    result = CliRunner().invoke(vm_cli.management, [command])
+
+    assert result.exit_code == 2
+    assert "Missing argument" in result.output
+    cli_service.http.json.assert_not_called()
+
+
+@pytest.mark.parametrize("command,method", [("start", "start"), ("resume", "start")])
+def test_cli_lifecycle_checks_each_vm_readiness(cli_service, monkeypatch, command, method):
+    vms = [
+        MagicMock(info={"name": name, "id": name, "spec": {"kiosk": {}}})
+        for name in ("dev", "staging", "prod")
+    ]
+    for vm in vms:
+        getattr(vm, method).return_value = vm
+    vms[1].wait.side_effect = TimeoutError("staging did not become ready")
+    lookup = MagicMock(side_effect=vms)
+    monkeypatch.setattr(vm_cli.VM, "get", lookup)
+
+    result = CliRunner().invoke(vm_cli.management, [command, "dev", "staging", "prod"])
+
+    assert result.exit_code == 1
+    assert "Error: staging did not become ready" in result.output
+    assert "✓ VM ready dev" in result.output
+    assert "✓ VM ready staging" not in result.output
+    assert "Traceback" not in result.output
+    vms[0].wait.assert_called_once_with(services=True)
+    vms[1].wait.assert_called_once_with(services=True)
+    assert lookup.call_count == 2
+    getattr(vms[2], method).assert_not_called()
+
+
 def test_cli_new_shows_sync_progress(cli_service, monkeypatch, tmp_path):
     vm = MagicMock(info={"name": "dev", "id": "vm-id", "status": "running", "spec": {"ssh": True}})
     monkeypatch.setattr(vm_cli, "VM", MagicMock(return_value=vm))

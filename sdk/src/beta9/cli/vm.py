@@ -803,52 +803,66 @@ def share_vm(service, name, port, desktop, port_option, expires_in, ttl, url_onl
 
 
 @management.command("start")
-@click.argument("name")
+@click.argument("names", nargs=-1, required=True)
 @click.option("--cold", is_flag=True, help="Explicitly discard paused RAM and boot from disk.")
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
-def start_vm(service, name, as_json, cold=False):
-    """Start a stopped VM or resume its saved memory."""
-    with _progress("Starting VM", "VM ready", as_json):
-        vm = _vm(service, name).start(cold=cold)
-        _ready(vm)
-    _show(vm.info, as_json)
+def start_vm(service, names, as_json, cold=False):
+    """Start stopped VMs or resume their saved memory."""
+    records = []
+    for name in names:
+        suffix = f" {name}" if len(names) > 1 else ""
+        with _progress("Starting VM" + suffix, "VM ready" + suffix, as_json):
+            vm = _vm(service, name).start(cold=cold)
+            _ready(vm)
+        records.append(vm.info)
+    _show(records[0] if len(records) == 1 else records, as_json)
 
 
 management.add_command(start_vm, "resume")
 
 
 @management.command("pause")
-@click.argument("name")
+@click.argument("names", nargs=-1, required=True)
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
-def pause_vm(service, name, as_json):
-    """Save memory and disk, then release compute."""
-    with _progress("Pausing VM", "VM paused", as_json):
-        vm = _vm(service, name).pause()
-    _show(vm.info, as_json)
+def pause_vm(service, names, as_json):
+    """Save memory and disk for VMs, then release compute."""
+    records = []
+    for name in names:
+        suffix = f" {name}" if len(names) > 1 else ""
+        with _progress("Pausing VM" + suffix, "VM paused" + suffix, as_json):
+            vm = _vm(service, name).pause()
+        records.append(vm.info)
+    _show(records[0] if len(records) == 1 else records, as_json)
 
 
 @management.command("stop")
-@click.argument("name")
+@click.argument("names", nargs=-1, required=True)
 @click.option("--no-snapshot", is_flag=True)
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
-def stop_vm(service, name, no_snapshot, as_json):
-    """Save the root and shut down the VM."""
+def stop_vm(service, names, no_snapshot, as_json):
+    """Save roots and shut down VMs."""
     message = "Stopping VM" if no_snapshot else "Snapshotting and stopping VM"
-    with _progress(message, "VM stopped", as_json):
-        vm = _vm(service, name).stop(no_snapshot)
-    _show(vm.info, as_json)
+    records = []
+    for name in names:
+        suffix = f" {name}" if len(names) > 1 else ""
+        with _progress(message + suffix, "VM stopped" + suffix, as_json):
+            vm = _vm(service, name).stop(no_snapshot)
+        records.append(vm.info)
+    _show(records[0] if len(records) == 1 else records, as_json)
 
 
 @management.command("rm")
-@click.argument("name")
+@click.argument("names", nargs=-1, required=True)
 @extraclick.pass_service_client
-def remove_vm(service, name):
-    """Delete a VM and its root disk."""
-    with _progress("Removing VM", "VM removed"):
-        _vm(service, name).remove()
+def remove_vm(service, names):
+    """Delete VMs and their root disks."""
+    for name in names:
+        suffix = f" {name}" if len(names) > 1 else ""
+        with _progress("Removing VM" + suffix, "VM removed" + suffix):
+            _vm(service, name).remove()
 
 
 @management.command("fork")
