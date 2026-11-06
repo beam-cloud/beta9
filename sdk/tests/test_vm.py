@@ -3073,6 +3073,131 @@ def test_setup_vm_emits_one_json_result_after_guest_readiness(
     prepare.assert_called_once()
     assert prepare.call_args.args[2] == name
     assert prepare.call_args.kwargs["desktop"] is desktop
+    assert prepare.call_args.kwargs["template"] is None
+
+
+def test_template_size_and_price_follow_the_template_spec(monkeypatch):
+    from decimal import Decimal
+    from beta9.cli import setup
+
+    assert setup.template_size({"cpu": 2000, "memory": 4096, "disk_size": "100Gi"}) == (
+        {"cpu": Decimal(2), "memory_gib": Decimal(4)},
+        "100 GiB",
+    )
+    assert setup.template_size({}) == ({"cpu": Decimal(4), "memory_gib": Decimal(8)}, "50 GiB")
+    assert setup.template_size({"disk_size": "53687091200"})[1] == "50 GiB"
+
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"vm": {"cpu": "0.0000000011875", "memory": "0.00000000059375"}}
+    monkeypatch.setattr("requests.get", lambda *_, **__: response)
+    context = ConfigContext(api_url="https://api.example/v2")
+    assert setup.vm_hourly_price(context, Decimal(2), Decimal(4)) == Decimal("0.0171")
+
+
+@pytest.mark.parametrize(("args", "desktop"), [([], None), (["--no-desktop"], False)])
+def test_setup_vm_from_template_prices_it_and_keeps_its_settings(
+    tmp_path, monkeypatch, args, desktop
+):
+    from decimal import Decimal
+    from click.testing import CliRunner
+    from beta9.cli import setup
+
+    template_id = "0b6f0f4e-7c1a-4b8e-9f1d-2a3b4c5d6e7f"
+    monkeypatch.setattr(setup, "connect_onboarding", lambda *_: (ConfigContext(), None))
+    monkeypatch.setattr(
+        setup, "get_settings", lambda: SimpleNamespace(config_path=tmp_path / "config")
+    )
+    monkeypatch.setattr(setup, "dashboard_link", lambda *_: None)
+    monkeypatch.setattr("beta9.config.get_config_context", lambda _: ConfigContext())
+    monkeypatch.setattr("beta9.channel.ServiceClient", lambda _: MagicMock())
+    lookup = MagicMock(
+        return_value={
+            "id": template_id,
+            "name": "n8n",
+            "spec": {"cpu": 2000, "memory": 4096, "disk_size": "50Gi"},
+        }
+    )
+    monkeypatch.setattr(onboarding, "vm_template", lookup)
+    price = MagicMock(return_value=Decimal("0.0171"))
+    monkeypatch.setattr(setup, "vm_hourly_price", price)
+    prepare = MagicMock(
+        return_value={
+            "name": "n8n",
+            "id": "vm-id",
+            "terminal_url": "https://terminal.example/",
+            "urls": {"7681": "https://terminal.example/", "5678": "https://n8n.example/"},
+            "spec": {"ports": [5678], "protected_ports": [5678]},
+        }
+    )
+    monkeypatch.setattr(onboarding, "prepare_vm", prepare)
+
+    result = CliRunner().invoke(
+        setup.common,
+        ["setup", "vm", "--template", "n8n", "--name", "n8n", "--skip-agents", *args],
+        input="y\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert lookup.call_args.args[1] == "n8n"
+    assert price.call_args.kwargs == {"cpu": Decimal(2), "memory_gib": Decimal(4)}
+    assert (
+        "Start a VM from template n8n (2 vCPU, 4 GiB RAM, 50 GiB disk, $0.0171/hour" in result.output
+    )
+    assert prepare.call_args.args[2] == "n8n"
+    assert prepare.call_args.kwargs == {"desktop": desktop, "template": template_id}
+    assert "Port 5678 (private)" in result.output
+    assert "https://n8n.example/" in result.output
+    assert "vm open n8n 5678" in result.output
+    assert "vm open n8n 7681" not in result.output
+
+
+def test_declining_a_template_vm_never_prepares_it(monkeypatch):
+    from click.testing import CliRunner
+    from beta9.cli import setup
+
+    monkeypatch.setattr(setup, "connect_onboarding", lambda *_: (ConfigContext(), None))
+    monkeypatch.setattr("beta9.config.get_config_context", lambda _: ConfigContext())
+    monkeypatch.setattr("beta9.channel.ServiceClient", lambda _: MagicMock())
+    monkeypatch.setattr(onboarding, "vm_template", lambda *_: {"id": "tpl", "spec": {}})
+    prepare = MagicMock()
+    monkeypatch.setattr(onboarding, "prepare_vm", prepare)
+    result = CliRunner().invoke(setup.common, ["setup", "vm", "--template", "tpl"], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "Setup canceled." in result.output
+    prepare.assert_not_called()
+
+
+def test_missing_template_is_a_clear_error(monkeypatch):
+    factory = MagicMock()
+    factory.return_value._api.side_effect = GatewayHTTPError(404, "template not found")
+    monkeypatch.setattr(onboarding, "VM", factory)
+    with pytest.raises(ValueError, match="VM template 'n8n' was not found"):
+        onboarding.vm_template(object(), "n8n")
+    factory.return_value._api.assert_called_once_with("GET", "/artifacts/template/n8n")
+
+
+def test_template_vm_keeps_template_settings_and_its_own_state(tmp_path, monkeypatch):
+    selected = SimpleNamespace(http=SimpleNamespace(workspace_id="workspace"))
+    vm = MagicMock(info={"id": "vm-id"})
+    vm._creation_body = None
+    vm.prepare.side_effect = lambda: setattr(vm, "_creation_body", {"request_id": "original"})
+    vm.process.exec.return_value.wait.return_value = 0
+    vm.process.exec.return_value.stdout.read.return_value = "Linux\n"
+    vm.refresh.return_value.info = {"name": "n8n", "id": "vm-id"}
+    factory = MagicMock(return_value=vm)
+    factory.get.side_effect = GatewayHTTPError(404, "missing")
+    monkeypatch.setattr(onboarding, "VM", factory)
+
+    onboarding.prepare_vm(selected, tmp_path, "n8n", desktop=None, template="tpl-id")
+    kwargs = factory.call_args.kwargs
+    assert (kwargs["template"], kwargs["desktop"], kwargs["docker_enabled"]) == ("tpl-id", None, None)
+    assert kwargs["ssh"] is True
+
+    vm._creation_body = None
+    onboarding.prepare_vm(selected, tmp_path, "n8n")
+    kwargs = factory.call_args.kwargs
+    assert (kwargs["template"], kwargs["desktop"], kwargs["docker_enabled"]) == (None, True, True)
+    assert kwargs["ssh"] is None
+    assert len(list(tmp_path.rglob("*.json"))) == 2
 
 
 def test_setup_vm_does_not_report_success_after_failed_probe(tmp_path, monkeypatch):
