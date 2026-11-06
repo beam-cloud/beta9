@@ -324,6 +324,15 @@ def test_template_preserves_unspecified_fields_and_channel():
     assert vm._service is selected
 
 
+def test_template_vm_enables_ssh_with_this_machines_key(monkeypatch):
+    monkeypatch.setattr(vm_module, "public_key", lambda: "ssh-ed25519 test")
+    selected = service()
+    selected.http.json.return_value = {"id": "resource", "name": "dev", "status": "starting"}
+    VM("dev", template="public-template", _service=selected).create(wait=False)
+    spec = selected.http.json.call_args.kwargs["json"]["spec"]
+    assert spec == {"ssh": True, "ssh_public_key": "ssh-ed25519 test"}
+
+
 def test_prepare_freezes_request_without_allocating_compute():
     selected = service()
     vm = VM("dev", template="base", ssh=False, _service=selected)
