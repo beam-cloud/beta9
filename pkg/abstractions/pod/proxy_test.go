@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -71,6 +73,52 @@ func TestForwardedWebSocketHeadersKeepsOriginAndDropsHandshake(t *testing.T) {
 			t.Fatalf("%s = %q, want it dropped so the dialer can set it", header, got)
 		}
 	}
+}
+
+func TestForwardedWebSocketHeadersAddsClientAddressLikeHTTP(t *testing.T) {
+	cases := []struct {
+		name  string
+		prior []string
+	}{
+		{name: "no prior header"},
+		{name: "one prior hop", prior: []string{"198.51.100.7"}},
+		{name: "two prior headers", prior: []string{"198.51.100.7", "203.0.113.9"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/socket", nil)
+			request.RemoteAddr = "[2001:db8::1]:51234"
+			request.Header.Set("Upgrade", "websocket")
+			for _, value := range tc.prior {
+				request.Header.Add("X-Forwarded-For", value)
+			}
+
+			var backendSaw http.Header
+			backend := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+				backendSaw = req.Header.Clone()
+			}))
+			defer backend.Close()
+			proxy := httputil.NewSingleHostReverseProxy(mustParseURL(t, backend.URL))
+			proxied := httptest.NewRequest(http.MethodGet, "/socket", nil)
+			proxied.RemoteAddr = request.RemoteAddr
+			proxied.Header = request.Header.Clone()
+			proxied.Header.Del("Upgrade")
+			proxy.ServeHTTP(httptest.NewRecorder(), proxied)
+
+			forwarded := forwardedWebSocketHeaders(request)
+
+			want := backendSaw.Values("X-Forwarded-For")
+			require.Equal(t, want, forwarded.Values("X-Forwarded-For"))
+			require.Contains(t, want[0], "2001:db8::1")
+		})
+	}
+}
+
+func mustParseURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	parsed, err := url.Parse(raw)
+	require.NoError(t, err)
+	return parsed
 }
 
 func TestWaitForConnectionWaitsForActiveWriterAfterCancellation(t *testing.T) {

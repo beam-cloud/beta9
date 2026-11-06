@@ -1153,6 +1153,15 @@ func forwardedWebSocketHeaders(request *http.Request) http.Header {
 	for _, header := range webSocketHandshakeHeaders {
 		forwarded.Del(header)
 	}
+
+	// The same client address httputil.ReverseProxy adds to HTTP requests.
+	// Backends that trust this proxy reject an upgrade that lacks it.
+	if clientIP, _, err := net.SplitHostPort(request.RemoteAddr); err == nil {
+		if prior := forwarded.Values("X-Forwarded-For"); len(prior) > 0 {
+			clientIP = strings.Join(prior, ", ") + ", " + clientIP
+		}
+		forwarded.Set("X-Forwarded-For", clientIP)
+	}
 	return forwarded
 }
 
