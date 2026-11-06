@@ -428,15 +428,20 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	if containerId != "" && !strings.HasPrefix(containerId, types.StubTypeVM+"-") {
 		_ = os.RemoveAll(filepath.Join(baseConfigPath, containerId))
 	}
-	if !exitReported {
+	// A failed or unconfirmed GPU run defers its receipt until the existing
+	// resource cleanup below has handed back its physical allocation.
+	waitForGPURelease := s.physicalGPUAllocation(containerId) != nil
+	if !exitReported && !waitForGPURelease {
 		exitReported = s.setContainerExitCode(containerId, exitCode)
 	}
-
-	phases.Mark("exit_code")
 
 	if !hasDurableDisk {
 		s.releaseContainerResources(containerId, request)
 	}
+	if !exitReported && waitForGPURelease {
+		exitReported = s.setContainerExitCode(containerId, exitCode)
+	}
+	phases.Mark("exit_code")
 
 	// Tear down container network components - best effort
 	if err := s.containerNetworkManager.TearDown(request.ContainerId); err != nil {
@@ -619,6 +624,38 @@ func (s *Worker) setLocalContainerExitCode(containerId string, exitCode int) {
 	}
 	instance.setExitCode(exitCode)
 	s.containerInstances.Set(containerId, instance)
+}
+
+// physicalGPUAllocation excludes runtime-owned VFIO devices and Thunder
+// enrollments. Only the local NVIDIA allocation map can be released early.
+func (s *Worker) physicalGPUAllocation(containerId string) *ContainerNvidiaManager {
+	if s.containerInstances == nil || s.containerGPUManager == nil || s.gpuVirtualized {
+		return nil
+	}
+	instance, rt, exists := s.observedContainerRuntime(containerId)
+	if !exists || instance.Request == nil || !instance.Request.RequiresGPU() {
+		return nil
+	}
+	if rt != nil && rt.Capabilities().BlockRoot {
+		return nil
+	}
+	manager, ok := s.containerGPUManager.(*ContainerNvidiaManager)
+	if !ok || len(manager.GetContainerGPUDevices(containerId)) == 0 {
+		return nil
+	}
+	return manager
+}
+
+func (s *Worker) publishContainerRunExit(containerId string, rawExitCode int, runErr error, mappedExitCode int) bool {
+	if manager := s.physicalGPUAllocation(containerId); manager != nil {
+		// Normalized codes and runtime errors are not proof of exit. Keep the
+		// reservation until finalization for OOMs, failed starts and lost waits.
+		if runErr != nil || rawExitCode < 0 {
+			return false
+		}
+		manager.UnassignGPUDevices(context.Background(), containerId)
+	}
+	return s.setContainerExitCode(containerId, mappedExitCode)
 }
 
 func (s *Worker) setContainerExitCode(containerId string, exitCode int) bool {
@@ -2194,7 +2231,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// cleanup so clients are never blocked on resource reclamation. Durable-disk
 	// containers are reported by finalizeContainer after their final sync.
 	if !request.HasDurableDiskMount() {
-		exitReported = s.setContainerExitCode(containerId, exitCode)
+		exitReported = s.publishContainerRunExit(containerId, rawExitCode, err, exitCode)
 	}
 	if err := s.deleteRuntimeContainer(containerId); err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
