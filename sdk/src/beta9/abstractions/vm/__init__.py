@@ -151,7 +151,9 @@ def prepare_image(
     data = base64.b64encode(Path(__file__).with_name("assets.tar.gz").read_bytes()).decode("ascii")
     prepared.add_commands(
         [
-            "mkdir -p /tmp/beam-vm-assets && "
+            # This step adds apt sources. Keep that setup visible to the builder
+            # so temporary mirror mounts cannot leave indexes for different sources.
+            "mkdir -p /etc/apt/keyrings /tmp/beam-vm-assets && "
             f"printf '%s' '{data}' | base64 -d | tar -xz -C /tmp/beam-vm-assets && "
             f"bash /tmp/beam-vm-assets/install {'true' if desktop or kiosk else 'false'}"
             + (" true" if kiosk else "")

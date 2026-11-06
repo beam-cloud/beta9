@@ -170,6 +170,9 @@ def test_vm_image_is_deterministic_and_uses_selected_profile():
     assert a.channel is selected.channel
     assert a.gateway_stub is selected.gateway
     assert len(a.build_steps) == len(original) + 1
+    # The worker must see that VM setup owns its apt configuration; otherwise
+    # retained package indexes refer to the temporary build mirror at runtime.
+    assert "/etc/apt/keyrings" in a.build_steps[-1].command
     # The shipped bundle has a fixed gzip header on every client.
     archive = base64.b64decode(a.build_steps[-1].command.split("'")[3])
     assert archive[9] == 255
