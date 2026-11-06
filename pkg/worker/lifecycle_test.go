@@ -1985,6 +1985,66 @@ func TestSetContainerExitCodeTreatsMissingStateAsComplete(t *testing.T) {
 	require.Equal(t, 1, repoClient.containerExitCodeCalls())
 }
 
+func TestSetContainerExitCodeReleasesStoppedGPUBeforePublication(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		state   runtime.State
+		err     error
+		release bool
+	}{
+		{name: "exited", state: runtime.State{Status: types.RuncContainerStatusStopped}, release: true},
+		{name: "deleted", err: runtime.ErrContainerNotFound{ContainerID: "exited-gpu"}, release: true},
+		{name: "still running", state: runtime.State{Status: types.RuncContainerStatusRunning}},
+		{name: "still created", state: runtime.State{Status: types.RuncContainerStatusCreated}},
+		{name: "state unavailable", err: errors.New("runtime state unavailable")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := &types.ContainerRequest{ContainerId: "exited-gpu", Gpu: "RTX5090", GpuCount: 1}
+			gpu := NewContainerNvidiaManagerForTest(1)
+			_, err := gpu.AssignGPUDevices(context.Background(), request)
+			require.NoError(t, err)
+
+			started, release := make(chan struct{}, 1), make(chan struct{})
+			unblock := sync.OnceFunc(func() { close(release) })
+			defer unblock()
+			repo := &fakeContainerRepoClient{setExitCodeStarted: started, setExitCodeRelease: release}
+			worker := &Worker{
+				containerRepoClient: repo,
+				containerInstances:  common.NewSafeMap[*ContainerInstance](),
+				containerGPUManager: gpu,
+			}
+			instance := &ContainerInstance{Id: request.ContainerId, Request: request, CPUSet: "2-5", Runtime: &mockRuntime{
+				state: func(context.Context, string) (runtime.State, error) { return test.state, test.err },
+			}}
+			worker.containerInstances.Set(request.ContainerId, instance)
+			done := make(chan bool, 1)
+			go func() { done <- worker.setContainerExitCode(request.ContainerId, 0) }()
+			select {
+			case <-started:
+			case <-time.After(time.Second):
+				t.Fatal("exit publication did not start")
+			}
+
+			// Once the gateway can observe completion, it may remove the old
+			// reservation and place another container, even while runtime deletion
+			// or filesystem cleanup is still blocked on this worker.
+			assigned, err := gpu.AssignGPUDevices(context.Background(), &types.ContainerRequest{ContainerId: "replacement", GpuCount: 1})
+			if test.release {
+				require.NoError(t, err, "advertised capacity must already be allocable on the worker")
+				require.Equal(t, []int{0}, assigned)
+				require.Empty(t, gpu.GetContainerGPUDevices(request.ContainerId))
+				require.Empty(t, instance.CPUSet)
+			} else {
+				require.Error(t, err, "an unconfirmed runtime must keep its GPU reservation")
+				require.Equal(t, []int{0}, gpu.GetContainerGPUDevices(request.ContainerId))
+				require.Equal(t, "2-5", instance.CPUSet)
+			}
+			unblock()
+			require.True(t, <-done)
+		})
+	}
+}
+
 func TestClearContainerTreatsMissingStateAsTerminal(t *testing.T) {
 	request := &types.ContainerRequest{
 		ContainerId: "container-missing-state",

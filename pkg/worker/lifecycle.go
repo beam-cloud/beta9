@@ -526,6 +526,7 @@ func (s *Worker) releaseIfRuntimeStopped(containerId string) bool {
 	if runtimeNeedsGraceKill(ctx, rt, containerId) {
 		return false
 	}
+	s.releaseContainerResources(containerId, instance.Request)
 	instance.resourcesReleased.Store(true)
 	s.containerInstances.Wake()
 	return true
@@ -624,6 +625,14 @@ func (s *Worker) setLocalContainerExitCode(containerId string, exitCode int) {
 func (s *Worker) setContainerExitCode(containerId string, exitCode int) bool {
 	if s.containerRepoClient == nil {
 		return false
+	}
+	// Consumers may retire the reservation as soon as this receipt is visible.
+	// A stopped GPU runtime must hand back its local devices first: runtime
+	// deletion and overlay cleanup can block after completion is published.
+	if s.containerInstances != nil {
+		if instance, exists := s.containerInstances.Get(containerId); exists && instance.Request != nil && instance.Request.RequiresGPU() {
+			s.releaseIfRuntimeStopped(containerId)
+		}
 	}
 
 	err := retryContainerRepositoryCall(func(ctx context.Context) error {
