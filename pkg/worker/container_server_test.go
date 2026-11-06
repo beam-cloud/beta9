@@ -51,6 +51,7 @@ type logAttachmentStream struct {
 	attached bool
 	ctx      context.Context
 	output   strings.Builder
+	onSend   func()
 }
 
 type execCapturingRuntime struct {
@@ -114,6 +115,9 @@ func (s *logAttachmentStream) Context() context.Context {
 
 func (s *logAttachmentStream) Send(entry *pb.ContainerLogEntry) error {
 	_, err := s.output.WriteString(entry.Msg)
+	if s.onSend != nil {
+		s.onSend()
+	}
 	return err
 }
 
@@ -1406,8 +1410,11 @@ func TestRequestJournalReplaysConsumedOutputUntilAcknowledged(t *testing.T) {
 func TestCompletedContainerReplaysLogsWithoutRetainingContainer(t *testing.T) {
 	dockerfile := "FROM ubuntu:22.04"
 	for name, request := range map[string]*types.ContainerRequest{
-		"function": {Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeFunction)}}},
-		"build":    {BuildOptions: types.BuildOptions{Dockerfile: &dockerfile}},
+		"function":       {Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeFunction)}}},
+		"build":          {BuildOptions: types.BuildOptions{Dockerfile: &dockerfile}},
+		"pod":            {Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypePod)}}},
+		"pod run":        {Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypePodRun)}}},
+		"pod deployment": {Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypePodDeployment)}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			logs := common.NewLogBuffer()
@@ -1428,6 +1435,67 @@ func TestCompletedContainerReplaysLogsWithoutRetainingContainer(t *testing.T) {
 			stream := &logAttachmentStream{ctx: metadata.NewIncomingContext(context.Background(), metadata.Pairs(common.LogOffsetHeader, "6"))}
 			require.NoError(t, server.ContainerStreamLogs(&pb.ContainerStreamLogsRequest{ContainerId: name}, stream))
 			require.Equal(t, "remaining\n", stream.output.String())
+		})
+	}
+}
+
+func TestPodLogStreamDrainsAcrossContainerDeletion(t *testing.T) {
+	for _, withOffset := range []bool{false, true} {
+		t.Run(fmt.Sprintf("offset=%t", withOffset), func(t *testing.T) {
+			logs := common.NewLogBuffer()
+			t.Cleanup(logs.Dispose)
+			// Force multiple reads, with cleanup between the first and second.
+			output := strings.Repeat("pod output\n", 1024)
+			require.True(t, logs.Write([]byte(output)))
+
+			instances := common.NewSafeMap[*ContainerInstance]()
+			server := &ContainerRuntimeServer{containerInstances: instances}
+			worker := &Worker{containerInstances: instances, containerServer: server}
+			const containerID = "completed-pod"
+			instances.Set(containerID, &ContainerInstance{
+				LogBuffer: logs,
+				Request: &types.ContainerRequest{Stub: types.StubWithRelated{Stub: types.Stub{
+					Type: types.StubType(types.StubTypePodRun),
+				}}},
+			})
+
+			firstChunk, resume := make(chan struct{}), make(chan struct{})
+			release := sync.OnceFunc(func() { close(resume) })
+			defer release()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if withOffset {
+				ctx = metadata.NewIncomingContext(ctx, metadata.Pairs(common.LogOffsetHeader, "0"))
+			}
+			stream := &logAttachmentStream{ctx: ctx, onSend: sync.OnceFunc(func() {
+				close(firstChunk)
+				<-resume
+			})}
+			done := make(chan error, 1)
+			go func() {
+				done <- server.ContainerStreamLogs(&pb.ContainerStreamLogsRequest{ContainerId: containerID}, stream)
+			}()
+			select {
+			case <-firstChunk:
+			case <-ctx.Done():
+				t.Fatal("log stream did not send its first chunk")
+			}
+
+			worker.deleteContainer(containerID)
+			_, active := instances.Get(containerID)
+			require.False(t, active, "container cleanup must not wait for the reader")
+			// Log capture may still be flushing its final records during cleanup.
+			const tail = "last pod output\n"
+			require.True(t, logs.Write([]byte(tail)))
+			logs.Close()
+			release()
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-ctx.Done():
+				t.Fatal("log stream did not finish after cleanup")
+			}
+			require.Equal(t, output+tail, stream.output.String())
 		})
 	}
 }

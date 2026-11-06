@@ -708,7 +708,10 @@ func (s *Worker) deleteContainer(containerId string) {
 	if exists {
 		instance.tunnels.close()
 		if instance.LogBuffer != nil {
-			if s.containerServer != nil && instance.Request != nil && (instance.Request.Stub.Type.Kind() == types.StubTypeFunction || instance.Request.IsBuildRequest()) {
+			// Attached readers can still be draining logs after container cleanup.
+			if s.containerServer != nil && instance.Request != nil &&
+				(instance.Request.Stub.Type.Kind() == types.StubTypeFunction ||
+					instance.Request.Stub.Type.Kind() == types.StubTypePod || instance.Request.IsBuildRequest()) {
 				s.containerServer.retainCompletedLogs(containerId, instance.LogBuffer)
 			} else {
 				instance.LogBuffer.Dispose()
