@@ -364,7 +364,7 @@ func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.Re
 		// Non-ephemeral so a restarted agent resumes its persisted node (hostnames
 		// are per machine) and keeps the tailnet IP gateway clients dial.
 		Ephemeral:  false,
-		TailnetSsh: agentTailnetSSHEnabled(s.appConfig.Tailscale, agentState),
+		TailnetSsh: s.agentTailnetSSHEnabled(ctx, agentState),
 	}, nil
 }
 
@@ -372,8 +372,19 @@ func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.Re
 // managed pools. Workspace hardware never gets it, whatever the tailnet policy
 // allows; that includes provider pools, which run platform workloads on
 // machines the workspace owns.
-func agentTailnetSSHEnabled(config types.TailscaleConfig, agentState *model.AgentTokenState) bool {
-	return config.AgentSSH.Enabled && agentState.ManagedPoolInstanceID != ""
+func (s *Service) agentTailnetSSHEnabled(ctx context.Context, agentState *model.AgentTokenState) bool {
+	if s == nil || !s.appConfig.Tailscale.AgentSSH.Enabled || agentState == nil ||
+		agentState.Mode != string(types.PoolModeExternal) || agentState.ManagedPoolInstanceID == "" ||
+		s.managedPoolRepo == nil {
+		return false
+	}
+	pool, err := s.getAgentPoolState(ctx, agentState)
+	return err == nil && pool != nil && pool.Status == types.ComputePoolStatusActive &&
+		pool.WorkspaceID == agentState.WorkspaceID && pool.Name == agentState.PoolName &&
+		pool.ManagedInstanceID == agentState.ManagedPoolInstanceID &&
+		pool.WorkerConfig != nil && !pool.WorkerConfig.RequiresPoolSelector &&
+		pool.CreatedByTokenID != types.FailoverOnDemandPoolCreator &&
+		pool.BYOC == nil && pool.ReservedNodes == 0 && len(pool.Reservations) == 0
 }
 
 func (s *Service) GetAgentPoolVirtualization(ctx context.Context, in *pb.GetAgentPoolVirtualizationRequest) (*pb.GetAgentPoolVirtualizationResponse, error) {
