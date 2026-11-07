@@ -132,6 +132,9 @@ def _inventory_json(
     epilog="""
     Examples:
 
+      # List all machines (the default)
+      {cli_name} machine list
+
       # List the first 10 machines
       {cli_name} machine list --limit 10
 
@@ -145,9 +148,9 @@ def _inventory_json(
 )
 @click.option(
     "--limit",
-    type=click.IntRange(1, 100),
-    default=20,
-    help="The number of machines to fetch.",
+    type=click.IntRange(0, 2**32 - 1),
+    default=0,
+    help="Maximum number of machines to fetch (0 means all).",
 )
 @click.option(
     "--format",

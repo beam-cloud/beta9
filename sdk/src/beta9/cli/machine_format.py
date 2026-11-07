@@ -131,6 +131,7 @@ def format_memory_pair(free_mb: int, total_mb: int) -> str:
 def format_gpu(gpu: str, gpu_count: int = 0) -> str:
     if not gpu:
         return "-"
+    gpu = ", ".join(dict.fromkeys(part.strip() for part in gpu.split(",") if part.strip()))
     if gpu_count == 0:
         return gpu
     return f"{gpu} x {gpu_count}"

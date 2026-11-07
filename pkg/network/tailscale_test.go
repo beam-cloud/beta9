@@ -37,6 +37,27 @@ func testTailscale(t *testing.T, status *ipnstate.Status) *Tailscale {
 	return ts
 }
 
+func TestPeerStatuses(t *testing.T) {
+	status := statusWithPeers("beam-agent-machine")
+	status.Peer[key.NewNode().Public()] = nil
+	peers, err := testTailscale(t, status).PeerStatuses(context.Background())
+	if err != nil || len(peers) != 1 || peers[0].HostName != "beam-agent-machine" {
+		t.Fatalf("PeerStatuses() = %+v, %v", peers, err)
+	}
+}
+
+func TestPeerStatusesUnavailable(t *testing.T) {
+	ts := testTailscale(t, nil)
+	if peers, err := ts.PeerStatuses(context.Background()); err != nil || len(peers) != 0 {
+		t.Fatalf("PeerStatuses() = %+v, %v, want empty status", peers, err)
+	}
+	want := errors.New("status unavailable")
+	ts.statusFunc = func(context.Context) (*ipnstate.Status, error) { return nil, want }
+	if _, err := ts.PeerStatuses(context.Background()); !errors.Is(err, want) {
+		t.Fatalf("PeerStatuses() error = %v, want %v", err, want)
+	}
+}
+
 func withFastPeerPolling(t *testing.T) {
 	t.Helper()
 	prev := tailnetPeerPollInterval
