@@ -229,6 +229,22 @@ func (t *Tailscale) netmapStatus(ctx context.Context) (*ipnstate.Status, error) 
 	return client.Status(statusCtx)
 }
 
+// PeerStatuses returns the gateway's current view of its tailnet peers,
+// including their advertised endpoints and tailnet addresses.
+func (t *Tailscale) PeerStatuses(ctx context.Context) ([]*ipnstate.PeerStatus, error) {
+	status, err := t.netmapStatus(ctx)
+	if err != nil || status == nil {
+		return nil, err
+	}
+	peers := make([]*ipnstate.PeerStatus, 0, len(status.Peer))
+	for _, peer := range status.Peer {
+		if peer != nil {
+			peers = append(peers, peer)
+		}
+	}
+	return peers, nil
+}
+
 func tailnetPeerMatchesHost(hostName, dnsName, target string) bool {
 	target = strings.TrimSuffix(target, ".")
 	hostName = strings.TrimSuffix(hostName, ".")

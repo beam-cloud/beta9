@@ -767,6 +767,7 @@ func (s *Service) ListManagedMachines(ctx context.Context, authInfo *auth.AuthIn
 	if !found {
 		return nil, model.ErrManagedPoolNotFound
 	}
+	s.fillMissingMachineNetwork(ctx, out)
 	sort.Slice(out, func(i, j int) bool { return out[i].Id < out[j].Id })
 	return out, nil
 }
