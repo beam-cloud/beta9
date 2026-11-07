@@ -356,35 +356,60 @@ func (s *Service) RequestAgentTransportCredential(ctx context.Context, in *pb.Re
 		Transport:   transport,
 	})
 
+	authKey, tailnetSSH := s.agentTransportIdentity(ctx, agentState)
 	return &pb.RequestAgentTransportCredentialResponse{
 		Ok:         true,
-		AuthKey:    s.appConfig.Tailscale.AgentAuthKey,
+		AuthKey:    authKey,
 		ControlUrl: s.appConfig.Tailscale.ControlURL,
 		Hostname:   types.AgentTailnetHostnamePrefix + agentState.MachineID,
 		// Non-ephemeral so a restarted agent resumes its persisted node (hostnames
 		// are per machine) and keeps the tailnet IP gateway clients dial.
 		Ephemeral:  false,
-		TailnetSsh: s.agentTailnetSSHEnabled(ctx, agentState),
+		TailnetSsh: tailnetSSH,
 	}, nil
 }
 
-// agentTailnetSSHEnabled limits Tailscale SSH to machines in control-plane
-// managed pools. Workspace hardware never gets it, whatever the tailnet policy
-// allows; that includes provider pools, which run platform workloads on
-// machines the workspace owns.
-func (s *Service) agentTailnetSSHEnabled(ctx context.Context, agentState *model.AgentTokenState) bool {
-	if s == nil || !s.appConfig.Tailscale.AgentSSH.Enabled || agentState == nil ||
+// The local SSH preference is not an authorization boundary: a private machine
+// owner can change it. Only a trusted serverless enrollment gets the credential
+// carrying the extra SSH tag. Missing configuration disables SSH, not transport.
+func (s *Service) agentTransportIdentity(ctx context.Context, agentState *model.AgentTokenState) (string, bool) {
+	config := s.appConfig.Tailscale
+	key := strings.TrimSpace(config.ServerlessAgentAuthKey)
+	if key == "" || key == strings.TrimSpace(config.AgentAuthKey) || !s.agentBelongsToServerlessPool(ctx, agentState) {
+		return config.AgentAuthKey, false
+	}
+	return key, config.AgentSSH.Enabled
+}
+
+func (s *Service) agentBelongsToServerlessPool(ctx context.Context, agentState *model.AgentTokenState) bool {
+	if s == nil || agentState == nil ||
 		agentState.Mode != string(types.PoolModeExternal) || agentState.ManagedPoolInstanceID == "" ||
 		s.managedPoolRepo == nil {
 		return false
 	}
-	pool, err := s.getAgentPoolState(ctx, agentState)
-	return err == nil && pool != nil && pool.Status == types.ComputePoolStatusActive &&
-		pool.WorkspaceID == agentState.WorkspaceID && pool.Name == agentState.PoolName &&
-		pool.ManagedInstanceID == agentState.ManagedPoolInstanceID &&
-		pool.WorkerConfig != nil && !pool.WorkerConfig.RequiresPoolSelector &&
-		pool.CreatedByTokenID != types.FailoverOnDemandPoolCreator &&
-		pool.BYOC == nil && pool.ReservedNodes == 0 && len(pool.Reservations) == 0
+	pool, err := s.managedPoolRepo.GetManagedPoolState(ctx, agentState.WorkspaceID, agentState.PoolName)
+	if err != nil || pool == nil || pool.Status != types.ComputePoolStatusActive ||
+		pool.WorkspaceID != agentState.WorkspaceID || pool.Name != agentState.PoolName ||
+		pool.ManagedInstanceID != agentState.ManagedPoolInstanceID ||
+		pool.CreatedByTokenID == types.FailoverOnDemandPoolCreator ||
+		pool.BYOC != nil || pool.ReservedNodes != 0 || len(pool.Reservations) != 0 {
+		return false
+	}
+	// Check the original definition before activeManagedPoolState normalizes
+	// selector requirements. A selector-bound pool must never receive SSH.
+	config := pool.WorkerConfig
+	if pool.ManagementSource == types.WorkerPoolManagementSourceConfig {
+		configured, ok := s.appConfig.Worker.Pools[pool.Name]
+		if !ok {
+			return false
+		}
+		config = &configured
+	}
+	if config == nil || config.Mode != types.PoolModeExternal || config.RequiresPoolSelector {
+		return false
+	}
+	active, err := s.activeManagedPoolState(pool)
+	return err == nil && active != nil
 }
 
 func (s *Service) GetAgentPoolVirtualization(ctx context.Context, in *pb.GetAgentPoolVirtualizationRequest) (*pb.GetAgentPoolVirtualizationResponse, error) {

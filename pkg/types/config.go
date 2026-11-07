@@ -1170,6 +1170,10 @@ type TailscaleConfig struct {
 	Enabled      bool                    `key:"enabled" json:"enabled"`
 	Debug        bool                    `key:"debug" json:"debug"`
 	AgentSSH     TailscaleAgentSSHConfig `key:"agentSsh" json:"agent_ssh"`
+
+	// ServerlessAgentAuthKey carries the additional, operator-owned SSH tag.
+	// It must never be issued to workspace-owned or reserved capacity.
+	ServerlessAgentAuthKey string `key:"serverlessAgentAuthKey" json:"serverless_agent_auth_key"`
 }
 
 // TailscaleAgentSSHConfig runs Tailscale SSH on agent nodes in control-plane

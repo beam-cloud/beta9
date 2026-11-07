@@ -445,12 +445,16 @@ tailscale:
   authKey:
   # Private pool agent tsnet auth key. Use a separate environment-scoped agent tag, for example tag:beam-staging-agent.
   agentAuthKey:
+  # Optional auth key for cluster-managed serverless agents. Give it the SAME
+  # transport tag as agentAuthKey plus the environment's serverless SSH tag.
+  # Never put that SSH tag on agentAuthKey or let an agent tag own it.
+  # Existing persisted nodes keep their identity; changing this key does not retag them.
+  serverlessAgentAuthKey:
   enabled: false
   debug: false
   hostName: headscale.internal
-  # Run Tailscale SSH on agents in control-plane managed pools (never on workspace
-  # hardware, provider pools included): `tailscale ssh root@beam-agent-<machine id>`. The tailnet policy
-  # needs an acls rule to tag:<agent tag>:22 and an ssh rule to tag:<agent tag>.
+  # Run Tailscale SSH only on cluster-owned serverless agents with the separate
+  # credential above. Policy must target the SSH tag, never the shared transport tag.
   agentSsh:
     enabled: false
 monitoring:
