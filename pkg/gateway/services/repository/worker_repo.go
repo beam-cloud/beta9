@@ -102,7 +102,10 @@ func (s *WorkerRepositoryService) AuthorizeRequest(ctx context.Context, req inte
 			return err
 		}
 		if req.WorkerAddress != nil {
-			return authorizeBackendRoute(state, req.WorkerAddress.Route)
+			if req.WorkerAddress.Route == nil && req.WorkerAddress.Address == "" {
+				return nil
+			}
+			return authorizeWorkerBackendRoute(state, req.WorkerAddress.Route, caller.Trusted)
 		}
 	}
 	return nil

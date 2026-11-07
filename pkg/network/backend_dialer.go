@@ -113,12 +113,16 @@ func (d *BackendDialer) Dial(ctx context.Context, address string) (net.Conn, err
 	}
 }
 
-// dialTSNetRoute connects to the agent's tsnet proxy target. A ready route is
-// dialed immediately: tsnet.Status can omit reachable peers, so checking the
-// netmap first only adds latency. After a failed dial, WaitForPeer enriches the
-// error before retrying; it never mutates the shared tsnet server.
+// dialTSNetRoute validates and pins the agent address before connecting.
+// Peer lookup and connection retries share the existing dial deadline.
 func (d *BackendDialer) dialTSNetRoute(ctx context.Context, route *types.BackendRoute, routeID string, deadline time.Time) (net.Conn, error) {
 	host := tailnetHostFromAddr(route.ProxyTarget)
+	verifyCtx, verifyCancel := context.WithDeadline(ctx, deadline)
+	defer verifyCancel()
+	verifiedTarget, err := d.tailscale.agentRouteTarget(verifyCtx, route.MachineID, route.ProxyTarget)
+	if err != nil {
+		return nil, err
+	}
 	var lastErr error
 	dialSlots := d.dialSlots
 	if dialSlots == nil {
@@ -144,7 +148,7 @@ func (d *BackendDialer) dialTSNetRoute(ctx context.Context, route *types.Backend
 			<-dialSlots
 			return nil, context.DeadlineExceeded
 		}
-		conn, err := d.dialTSNetTarget(ctx, route.ProxyTarget, dialTimeout)
+		conn, err := d.dialTSNetTarget(ctx, verifiedTarget, dialTimeout)
 		<-dialSlots
 		if err == nil {
 			return writeBackendRoutePreface(conn, routeID)

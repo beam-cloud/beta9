@@ -50,14 +50,44 @@ func (s *ContainerRepositoryService) AuthorizeRequest(ctx context.Context, req i
 	var routes []*pb.BackendRoute
 	switch req := req.(type) {
 	case *pb.SetContainerAddressRequest:
+		if req.Route == nil && req.Address == "" {
+			return nil
+		}
 		routes = []*pb.BackendRoute{req.Route}
 	case *pb.SetContainerAddressMapRequest:
 		routes = req.Routes
+		if !worker.Trusted {
+			covered := make(map[int32]bool, len(routes))
+			for _, route := range routes {
+				if route != nil {
+					covered[route.Port] = true
+				}
+			}
+			for port, address := range req.AddressMap {
+				if address != "" && !covered[port] {
+					id, ok := types.ParseBackendRouteAddress(address)
+					if !ok {
+						return status.Error(codes.PermissionDenied, "private workers require agent routes")
+					}
+					route, err := s.containerRepo.GetBackendRoute(ctx, id)
+					if err != nil || route == nil || route.RouteID != id || route.Port != port ||
+						route.Kind != types.BackendRouteKindContainer || route.Transport != types.BackendRouteTransportTSNet {
+						return status.Error(codes.PermissionDenied, "invalid retained container route")
+					}
+					if err := authorizeBackendRoute(state, *route); err != nil {
+						return err
+					}
+				}
+			}
+		}
 	case *pb.SetWorkerAddressRequest:
+		if req.Route == nil && req.Address == "" {
+			return nil
+		}
 		routes = []*pb.BackendRoute{req.Route}
 	}
 	for _, route := range routes {
-		if err := authorizeBackendRoute(state, route); err != nil {
+		if err := authorizeWorkerBackendRoute(state, route, worker.Trusted); err != nil {
 			return err
 		}
 	}
@@ -257,11 +287,18 @@ func (s *ContainerRepositoryService) registerBackendRoute(ctx context.Context, c
 	return address, nil
 }
 
-func authorizeBackendRoute(state *types.ContainerState, route *pb.BackendRoute) error {
+func authorizeWorkerBackendRoute(state *types.ContainerState, route *pb.BackendRoute, trusted bool) error {
+	if !trusted && (route == nil || route.Transport != types.BackendRouteTransportTSNet) {
+		return status.Error(codes.PermissionDenied, "private workers require authenticated agent routing")
+	}
 	if route == nil {
 		return nil
 	}
-	if route.WorkspaceId != state.WorkspaceId || route.WorkerId != state.WorkerId || route.MachineId != state.MachineId {
+	return authorizeBackendRoute(state, backendRouteFromProto(route))
+}
+
+func authorizeBackendRoute(state *types.ContainerState, route types.BackendRoute) error {
+	if route.WorkspaceID != state.WorkspaceId || route.WorkerID != state.WorkerId || route.MachineID != state.MachineId {
 		return status.Error(codes.PermissionDenied, "route does not belong to container")
 	}
 	containerID := state.ContainerId
@@ -270,7 +307,7 @@ func authorizeBackendRoute(state *types.ContainerState, route *pb.BackendRoute) 
 	} else if route.Kind != types.BackendRouteKindContainer {
 		return status.Error(codes.PermissionDenied, "invalid route kind")
 	}
-	if route.ContainerId != containerID || route.RouteId != types.BackendRouteID(state.MachineId, state.WorkerId, containerID, route.Kind, route.Port) {
+	if route.ContainerID != containerID || route.RouteID != types.BackendRouteID(state.MachineId, state.WorkerId, containerID, route.Kind, route.Port) {
 		return status.Error(codes.PermissionDenied, "invalid route identity")
 	}
 	return nil

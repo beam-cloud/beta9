@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/netip"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -156,8 +157,11 @@ type tsnetRouteResolver struct {
 }
 
 func (f *tsnetRouteResolver) GetBackendRoute(ctx context.Context, routeID string) (*types.BackendRoute, error) {
+	host, _, _ := net.SplitHostPort(f.proxyTarget)
+	label, _, _ := strings.Cut(host, ".")
 	return &types.BackendRoute{
 		RouteID:     routeID,
+		MachineID:   strings.TrimPrefix(label, "beam-agent-"),
 		State:       types.BackendRouteStateReady,
 		Transport:   types.BackendRouteTransportTSNet,
 		ProxyTarget: f.proxyTarget,
@@ -470,4 +474,40 @@ func TestBackendDialerBackgroundSlotsDoNotBlockDefaultRequestDial(t *testing.T) 
 		t.Fatalf("default request dial was blocked by saturated background slots: %v", err)
 	}
 	_ = conn.Close()
+}
+
+type staticBackendRouteResolver struct{ route types.BackendRoute }
+
+func (r staticBackendRouteResolver) GetBackendRoute(context.Context, string) (*types.BackendRoute, error) {
+	return &r.route, nil
+}
+
+// An agent may report only its own route, but its reported destination is still
+// untrusted. The gateway must never turn that into a dial to another machine.
+func TestBackendDialerRejectsForeignAgentDestination(t *testing.T) {
+	for _, target := range []string{"100.64.0.20:6379", "100.64.0.20:22", "100.64.0.20:29443", "127.0.0.1:6379"} {
+		t.Run(target, func(t *testing.T) {
+			status := statusWithPeers("beam-agent-private", "control-plane-redis")
+			for _, peer := range status.Peer {
+				if peer.HostName == "beam-agent-private" {
+					peer.TailscaleIPs = []netip.Addr{netip.MustParseAddr("100.64.0.10")}
+				} else {
+					peer.TailscaleIPs = []netip.Addr{netip.MustParseAddr("100.64.0.20")}
+				}
+			}
+			resolver := staticBackendRouteResolver{route: types.BackendRoute{RouteID: "private-worker", MachineID: "private", Transport: types.BackendRouteTransportTSNet, State: types.BackendRouteStateReady, ProxyTarget: target}}
+			dialer := NewBackendDialer(testTailscale(t, status), types.TailscaleConfig{Enabled: true}, resolver, 25*time.Millisecond)
+			foreignDial := false
+			dialer.tsnetDial = func(_ context.Context, addr string, _ time.Duration) (net.Conn, error) {
+				if addr == target {
+					foreignDial = true
+				}
+				return nil, context.DeadlineExceeded
+			}
+			_, _ = dialer.Dial(context.Background(), types.BackendRouteAddress("private-worker"))
+			if foreignDial {
+				t.Fatalf("private agent caused the gateway to dial foreign destination %s", target)
+			}
+		})
+	}
 }
