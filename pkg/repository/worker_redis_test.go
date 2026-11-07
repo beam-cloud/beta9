@@ -1419,6 +1419,96 @@ func TestScheduleContainerRequestsReservesAndQueuesBatch(t *testing.T) {
 	}
 }
 
+func TestContainerRequestDeliverySkipsExpiredState(t *testing.T) {
+	for _, expired := range [][]int{{0}, {1}, {2}, {0, 1, 2}} {
+		t.Run(fmt.Sprint(expired), func(t *testing.T) {
+			ctx := context.Background()
+			rdb, err := NewRedisClientForTest()
+			require.NoError(t, err)
+			repo := NewWorkerRedisRepositoryForTest(rdb)
+			worker := &types.Worker{Id: "worker-expired-delivery", Status: types.WorkerStatusAvailable,
+				TotalCpu: 300, TotalMemory: 375, FreeCpu: 300, FreeMemory: 375}
+			require.NoError(t, repo.AddWorker(worker))
+			requests := []*types.ContainerRequest{
+				{ContainerId: "delivery-0", Cpu: 100, Memory: 100},
+				{ContainerId: "delivery-1", Cpu: 100, Memory: 100},
+				{ContainerId: "delivery-2", Cpu: 100, Memory: 100},
+			}
+			setPendingContainerRequests(t, rdb, requests...)
+			require.NoError(t, repo.ScheduleContainerRequests(worker, requests))
+			expiredIDs := map[string]bool{}
+			for _, index := range expired {
+				id := requests[index].ContainerId
+				expiredIDs[id] = true
+				require.NoError(t, rdb.Del(ctx, common.RedisKeys.SchedulerContainerState(id)).Err())
+			}
+			var expected []string
+			for _, request := range requests {
+				if !expiredIDs[request.ContainerId] {
+					expected = append(expected, request.ContainerId)
+				}
+			}
+
+			for attempt := 0; attempt < 2; attempt++ {
+				delivered, err := repo.GetNextContainerRequests(worker.Id, len(requests))
+				require.NoError(t, err)
+				var actual []string
+				for _, request := range delivered {
+					actual = append(actual, request.ContainerId)
+					require.NotEmpty(t, request.DeliveryToken)
+				}
+				if attempt == 0 {
+					require.Equal(t, expected, actual)
+				} else {
+					require.ElementsMatch(t, expected, actual)
+				}
+				require.Zero(t, rdb.LLen(ctx, common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Val())
+				require.Equal(t, int64(len(expected)), rdb.HLen(ctx, common.RedisKeys.SchedulerWorkerPendingRequests(worker.Id)).Val())
+				for id := range expiredIDs {
+					require.Zero(t, rdb.Exists(ctx, common.RedisKeys.SchedulerContainerState(id)).Val())
+				}
+				if attempt == 0 {
+					// A reconnect must still recover every unacknowledged live request.
+					require.NoError(t, repo.RecoverPendingContainerRequests(worker.Id))
+				}
+			}
+			if len(expected) == 0 {
+				// The controller's normal refresh now sees no outstanding reservation.
+				require.NoError(t, repo.AddWorker(worker))
+				worker, err = repo.GetWorkerById(worker.Id)
+				require.NoError(t, err)
+				require.Equal(t, worker.TotalCpu, worker.FreeCpu)
+				fresh := &types.ContainerRequest{ContainerId: "delivery-fresh", Cpu: 100, Memory: 100}
+				setPendingContainerRequests(t, rdb, fresh)
+				require.NoError(t, repo.ScheduleContainerRequest(worker, fresh))
+				delivered, err := repo.GetNextContainerRequests(worker.Id, 1)
+				require.NoError(t, err)
+				require.Len(t, delivered, 1)
+				require.Equal(t, fresh.ContainerId, delivered[0].ContainerId)
+			}
+		})
+	}
+}
+
+func TestContainerRequestDeliveryPreservesLiveStateWithoutAssignment(t *testing.T) {
+	ctx := context.Background()
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	request := &types.ContainerRequest{ContainerId: "delivery-unassigned", Cpu: 100, Memory: 100}
+	setPendingContainerRequests(t, rdb, request)
+	raw, err := json.Marshal(request)
+	require.NoError(t, err)
+	queue := common.RedisKeys.SchedulerWorkerRequests("worker-unassigned")
+	require.NoError(t, rdb.RPush(ctx, queue, raw).Err())
+
+	_, err = repo.GetNextContainerRequests("worker-unassigned", 1)
+	require.ErrorContains(t, err, "missing schedule assignment")
+	require.Equal(t, int64(1), rdb.LLen(ctx, queue).Val())
+	require.Equal(t, int64(1), rdb.Exists(ctx, common.RedisKeys.SchedulerContainerState(request.ContainerId)).Val())
+	require.Zero(t, rdb.HLen(ctx, common.RedisKeys.SchedulerWorkerPendingRequests("worker-unassigned")).Val())
+}
+
 func TestContainerRequestRemainsRecoverableUntilWorkerAcknowledgesIt(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(t, rdb)
