@@ -40,9 +40,10 @@ type WorkerUsageMetrics struct {
 	quoteProvider       func(context.Context, *types.ContainerRequest) (clients.ContainerCostQuote, error)
 
 	// Usage events the metering endpoint refused, waiting to be resent.
-	backlogMu sync.Mutex
-	backlog   []pendingUsageEvent
-	drainMu   sync.Mutex
+	backlogMu          sync.Mutex
+	backlog            []pendingUsageEvent
+	backlogHeadVersion uint64
+	drainMu            sync.Mutex
 }
 
 const usageBacklogDrainInterval = 30 * time.Second
@@ -367,6 +368,7 @@ func (wm *WorkerUsageMetrics) enqueueUsage(event pendingUsageEvent) {
 	if len(wm.backlog) >= usageBacklogLimit {
 		dropped := wm.backlog[0]
 		wm.backlog = wm.backlog[1:]
+		wm.backlogHeadVersion++
 		log.Error().Str("metric", dropped.name).Str("container_id", fmt.Sprint(dropped.labels["container_id"])).Msg("usage backlog full; dropping oldest usage event")
 	}
 	wm.backlog = append(wm.backlog, event)
@@ -388,6 +390,7 @@ func (wm *WorkerUsageMetrics) drainBacklog() {
 			return
 		}
 		event := wm.backlog[0]
+		headVersion := wm.backlogHeadVersion
 		wm.backlogMu.Unlock()
 
 		if err := wm.metricsRepo.IncrementCounter(event.name, event.labels, event.value); err != nil {
@@ -395,7 +398,11 @@ func (wm *WorkerUsageMetrics) drainBacklog() {
 		}
 
 		wm.backlogMu.Lock()
-		wm.backlog = wm.backlog[1:]
+		// Overflow may have already evicted the event while it was being sent.
+		if wm.backlogHeadVersion == headVersion {
+			wm.backlog = wm.backlog[1:]
+			wm.backlogHeadVersion++
+		}
 		wm.backlogMu.Unlock()
 	}
 }
