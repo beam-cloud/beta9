@@ -382,6 +382,20 @@ class PodSandboxListUrlsResponse(betterproto.Message):
     error_msg: str = betterproto.string_field(3)
 
 
+@dataclass(eq=False, repr=False)
+class PodSandboxGetExitSnapshotRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    timeout_seconds: int = betterproto.uint32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxGetExitSnapshotResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    status: str = betterproto.string_field(2)
+    image_id: str = betterproto.string_field(3)
+    error_msg: str = betterproto.string_field(4)
+
+
 class PodServiceStub(SyncServiceStub):
     def create_pod(self, create_pod_request: "CreatePodRequest") -> "CreatePodResponse":
         return self._unary_unary(
@@ -598,3 +612,12 @@ class PodServiceStub(SyncServiceStub):
             PodSandboxListUrlsRequest,
             PodSandboxListUrlsResponse,
         )(pod_sandbox_list_urls_request)
+
+    def sandbox_get_exit_snapshot(
+        self, pod_sandbox_get_exit_snapshot_request: "PodSandboxGetExitSnapshotRequest"
+    ) -> "PodSandboxGetExitSnapshotResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxGetExitSnapshot",
+            PodSandboxGetExitSnapshotRequest,
+            PodSandboxGetExitSnapshotResponse,
+        )(pod_sandbox_get_exit_snapshot_request)

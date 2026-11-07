@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -145,6 +146,64 @@ func (s *ContainerRepositoryService) SetContainerExitCode(ctx context.Context, r
 	}
 
 	return &pb.SetContainerExitCodeResponse{Ok: true}, nil
+}
+
+func (s *ContainerRepositoryService) SetContainerExitSnapshot(ctx context.Context, req *pb.SetContainerExitSnapshotRequest) (*pb.SetContainerExitSnapshotResponse, error) {
+	if req == nil {
+		return &pb.SetContainerExitSnapshotResponse{Ok: false, ErrorMsg: "request is nil"}, nil
+	}
+	status := types.ExitSnapshotStatus(req.Status)
+	switch status {
+	case types.ExitSnapshotStatusPending, types.ExitSnapshotStatusFailed:
+	case types.ExitSnapshotStatusReady:
+		if req.ImageId == "" {
+			return &pb.SetContainerExitSnapshotResponse{Ok: false, ErrorMsg: "image_id is required for ready exit snapshots"}, nil
+		}
+	default:
+		return &pb.SetContainerExitSnapshotResponse{Ok: false, ErrorMsg: fmt.Sprintf("invalid exit snapshot status %q", req.Status)}, nil
+	}
+
+	// The workspace comes from the assigned container, not the worker's request,
+	// so a worker cannot relabel a snapshot to another workspace.
+	workspaceId := req.WorkspaceId
+	if containerState, stateErr := s.containerRepo.GetContainerState(req.ContainerId); stateErr == nil && containerState != nil {
+		if containerState.WorkspaceId != "" {
+			workspaceId = containerState.WorkspaceId
+		}
+	}
+
+	err := s.containerRepo.SetContainerExitSnapshot(req.ContainerId, &types.ExitSnapshotState{
+		Status:      status,
+		ImageId:     req.ImageId,
+		ErrorMsg:    req.ErrorMsg,
+		WorkspaceId: workspaceId,
+		CreatedAt:   time.Now().Unix(),
+	})
+	if err != nil {
+		return &pb.SetContainerExitSnapshotResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	return &pb.SetContainerExitSnapshotResponse{Ok: true}, nil
+}
+
+func (s *ContainerRepositoryService) GetContainerExitSnapshot(ctx context.Context, req *pb.GetContainerExitSnapshotRequest) (*pb.GetContainerExitSnapshotResponse, error) {
+	if req == nil {
+		return &pb.GetContainerExitSnapshotResponse{Ok: false, ErrorMsg: "request is nil"}, nil
+	}
+	state, err := s.containerRepo.GetContainerExitSnapshot(req.ContainerId)
+	if err != nil {
+		return &pb.GetContainerExitSnapshotResponse{Ok: false, ErrorMsg: err.Error(), Status: string(types.ExitSnapshotStatusDisabled)}, nil
+	}
+	if state == nil {
+		return &pb.GetContainerExitSnapshotResponse{Ok: true, Status: string(types.ExitSnapshotStatusDisabled)}, nil
+	}
+	return &pb.GetContainerExitSnapshotResponse{
+		Ok:          state.Status == types.ExitSnapshotStatusReady,
+		Status:      string(state.Status),
+		ImageId:     state.ImageId,
+		ErrorMsg:    state.ErrorMsg,
+		WorkspaceId: state.WorkspaceId,
+	}, nil
 }
 
 func (s *ContainerRepositoryService) SetContainerAddress(ctx context.Context, req *pb.SetContainerAddressRequest) (*pb.SetContainerAddressResponse, error) {

@@ -407,9 +407,13 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		instance.statusHeartbeatMu.Lock()
 	}
 
-	if hasDurableDisk {
+	if hasDurableDisk || (request != nil && request.EnableExitSnapshot) {
+		expiry := int64(120)
+		if hasDurableDisk {
+			expiry = s.containerStoppingLease(containerId, request).expirySeconds
+		}
 		// Publish the finalization lease while the heartbeat fence prevents a stale overwrite.
-		s.markContainerStopping(containerId, s.containerStoppingLease(containerId, request).expirySeconds)
+		s.markContainerStopping(containerId, expiry)
 	}
 	s.setLocalContainerExitCode(containerId, exitCode)
 	if exists {
@@ -678,6 +682,89 @@ func (s *Worker) setContainerExitCode(containerId string, exitCode int) bool {
 		return false
 	}
 	return true
+}
+
+func (s *Worker) setContainerExitSnapshot(containerId, workspaceId string, state *types.ExitSnapshotState) bool {
+	if state == nil {
+		return false
+	}
+	return s.callContainerRepo(containerId, "set exit snapshot state", func(ctx context.Context) error {
+		_, err := handleGRPCResponse(s.containerRepoClient.SetContainerExitSnapshot(ctx, &pb.SetContainerExitSnapshotRequest{
+			ContainerId: containerId,
+			Status:      string(state.Status),
+			ImageId:     state.ImageId,
+			ErrorMsg:    state.ErrorMsg,
+			WorkspaceId: workspaceId,
+		}))
+		return err
+	})
+}
+
+// callContainerRepo runs a container repository RPC with retries, logging a
+// failure under what. It reports false when the client is missing or the call fails.
+func (s *Worker) callContainerRepo(containerId, what string, call func(context.Context) error) bool {
+	if s.containerRepoClient == nil {
+		return false
+	}
+	if err := retryContainerRepositoryCall(call); err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msgf("failed to %s", what)
+		return false
+	}
+	return true
+}
+
+func (s *Worker) captureExitSnapshot(ctx context.Context, containerId string, request *types.ContainerRequest) {
+	instance, exists := s.containerInstances.Get(containerId)
+	if !exists || instance == nil {
+		return
+	}
+
+	imageId := fmt.Sprintf("exit-snapshot-%s-%d", request.ContainerId, time.Now().Unix())
+	log.Info().Str("container_id", containerId).Str("image_id", imageId).Msg("capturing sandbox exit snapshot")
+
+	upperDir, cleanup, err := containerExitUpperDir(ctx, instance)
+	if err != nil {
+		log.Error().Err(err).Str("container_id", containerId).Msg("failed to resolve upper dir for exit snapshot")
+		s.setContainerExitSnapshot(containerId, request.WorkspaceId, &types.ExitSnapshotState{
+			Status:   types.ExitSnapshotStatusFailed,
+			ErrorMsg: err.Error(),
+		})
+		return
+	}
+	defer cleanup()
+
+	_, layered := s.imageClient.GetSourceImageRef(request.ImageId)
+	_, scratchOnly := instance.Runtime.(scratchUpperMounter)
+	if !layered && scratchOnly {
+		// A stopped microVM no longer exports its merged root, and only the
+		// writable layer is on the host, so a non-layered base cannot be rebuilt.
+		err = errors.New("exit snapshots for microVMs require a layered base image")
+	} else if layered {
+		err = s.imageClient.ArchiveLayer(ctx, request, upperDir, imageId, nil)
+	} else {
+		var rootDir string
+		var rootCleanup func()
+		rootDir, rootCleanup, err = containerRootDir(ctx, instance)
+		if err == nil {
+			defer rootCleanup()
+			err = s.imageClient.Archive(ctx, NewPathInfo(rootDir), imageId, nil, request)
+		}
+	}
+
+	if err != nil {
+		log.Error().Err(err).Str("container_id", containerId).Msg("failed to archive exit snapshot")
+		s.setContainerExitSnapshot(containerId, request.WorkspaceId, &types.ExitSnapshotState{
+			Status:   types.ExitSnapshotStatusFailed,
+			ErrorMsg: err.Error(),
+		})
+		return
+	}
+
+	log.Info().Str("container_id", containerId).Str("image_id", imageId).Msg("sandbox exit snapshot created successfully")
+	s.setContainerExitSnapshot(containerId, request.WorkspaceId, &types.ExitSnapshotState{
+		Status:  types.ExitSnapshotStatusReady,
+		ImageId: imageId,
+	})
 }
 
 func (s *Worker) markContainerStopping(containerId string, expirySeconds int64) bool {
@@ -1933,10 +2020,27 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	containerInstance.Overlay = overlay
 	containerInstance.Spec = spec
 	containerInstance.setExitCode(-1)
+	exitSnapshotPending := false
 	containerInstance.OutputWriter = common.NewOutputWriter(func(s string) {
 		outputLogger.Info(s, "done", false, "success", false, "stream", "stdout")
 	})
 	s.containerInstances.Set(containerId, containerInstance)
+	if request.EnableExitSnapshot && request.Stub.Type.Kind() == types.StubTypeSandbox {
+		s.setContainerExitSnapshot(containerId, request.WorkspaceId, &types.ExitSnapshotState{
+			Status: types.ExitSnapshotStatusPending,
+		})
+		// Every early return before the exit path must resolve PENDING, or
+		// get_exit_snapshot would wait for a snapshot that will never come.
+		exitSnapshotPending = true
+		defer func() {
+			if exitSnapshotPending {
+				s.setContainerExitSnapshot(containerId, request.WorkspaceId, &types.ExitSnapshotState{
+					Status:   types.ExitSnapshotStatusFailed,
+					ErrorMsg: "sandbox exited before an exit snapshot could be captured",
+				})
+			}
+		}()
+	}
 
 	// Setup container overlay filesystem
 	var err error
@@ -2237,6 +2341,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		// A confirmed runc exit may hand back GPUs while deletion of the old
 		// container ID is still pending. runsc attempts deletion before Run returns.
 		exitReported = s.publishContainerRunExit(containerId, rawExitCode, err, exitCode)
+	}
+	if request.EnableExitSnapshot && request.Stub.Type.Kind() == types.StubTypeSandbox {
+		exitSnapshotPending = false
+		s.captureExitSnapshot(ctx, containerId, request)
 	}
 	if err := s.deleteRuntimeContainer(containerId); err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)

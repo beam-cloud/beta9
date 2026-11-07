@@ -147,6 +147,7 @@ class RunnerAbstraction(BaseAbstraction):
         checkpoint_readiness_timeout: int = 600,
         checkpoint_readiness_interval: int = 1,
         cpu_tier: Optional[CpuTier] = None,
+        enable_exit_snapshot: bool = False,
     ) -> None:
         super().__init__()
 
@@ -209,6 +210,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.checkpoint_readiness_interval = checkpoint_readiness_interval
         self.docker_enabled = docker_enabled
         self.use_vm = use_vm
+        self.enable_exit_snapshot = enable_exit_snapshot
         self.is_service = False
         self.serving = ServingConfig.from_options(
             app_kind=app_kind,
@@ -744,6 +746,7 @@ class RunnerAbstraction(BaseAbstraction):
             docker_enabled=self.docker_enabled,
             use_vm=self.use_vm,
             cpu_tier=self.cpu_tier,
+            enable_exit_snapshot=self.enable_exit_snapshot,
             tcp=self.tcp,
             block_network=self.block_network,
             allow_list=self.allow_list,

@@ -164,6 +164,12 @@ service PodService {
       get : "/pods/{container_id}/urls"
     };
   }
+  rpc SandboxGetExitSnapshot(PodSandboxGetExitSnapshotRequest)
+      returns (PodSandboxGetExitSnapshotResponse) {
+    option (google.api.http) = {
+      get : "/pods/{container_id}/exit-snapshot"
+    };
+  }
 }
 
 message CreatePodRequest {
@@ -459,4 +465,16 @@ message PodSandboxListUrlsResponse {
   bool ok = 1;
   map<int32, string> urls = 2;
   string error_msg = 3;
+}
+
+message PodSandboxGetExitSnapshotRequest {
+  string container_id = 1;
+  uint32 timeout_seconds = 2;
+}
+
+message PodSandboxGetExitSnapshotResponse {
+  bool ok = 1;
+  string status = 2;
+  string image_id = 3;
+  string error_msg = 4;
 }

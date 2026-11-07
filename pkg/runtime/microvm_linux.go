@@ -1106,6 +1106,50 @@ func (m *MicroVM) ExportGuestTree(ctx context.Context, containerID, guestPath, h
 	return nil
 }
 
+// MountScratchUpper mounts the stopped MicroVM's scratch disk read-only via loopback
+// to expose the guest's overlay upper directory on the host.
+func (m *MicroVM) MountScratchUpper(containerID string) (string, func(), error) {
+	inst, ok := m.instance(containerID)
+	if !ok {
+		return "", func() {}, ErrContainerNotFound{ContainerID: containerID}
+	}
+	if inst.scratch == "" {
+		return "", func() {}, fmt.Errorf("microvm %s has no scratch disk", containerID)
+	}
+
+	mntDir, err := os.MkdirTemp("", "microvm-scratch-mnt-"+containerID+"-")
+	if err != nil {
+		return "", func() {}, err
+	}
+
+	out, err := exec.Command("mount", "-o", "ro,noload,loop", inst.scratch, mntDir).CombinedOutput()
+	if err != nil {
+		_ = os.Remove(mntDir)
+		return "", func() {}, fmt.Errorf("mount scratch disk %s: %w: %s", inst.scratch, err, strings.TrimSpace(string(out)))
+	}
+
+	cleanup := func() {
+		if out, err := exec.Command("umount", mntDir).CombinedOutput(); err != nil {
+			// Fall back to a lazy unmount so the loop device and mount point are not leaked.
+			if lazyOut, lazyErr := exec.Command("umount", "-l", mntDir).CombinedOutput(); lazyErr != nil {
+				log.Warn().Err(lazyErr).Str("mount_dir", mntDir).
+					Str("output", strings.TrimSpace(string(out)+" "+string(lazyOut))).
+					Msg("failed to unmount scratch disk")
+				return
+			}
+		}
+		_ = os.Remove(mntDir)
+	}
+
+	upperDir := filepath.Join(mntDir, "overlay", "upper")
+	if _, err := os.Stat(upperDir); err != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("overlay upper dir not found in scratch disk %s: %w", inst.scratch, err)
+	}
+
+	return upperDir, cleanup, nil
+}
+
 // extractTree replays the guest's tar under dst. The guest controls every
 // name, type and link target, so nothing below dst is resolved through a
 // symlink: each entry's parent is walked one component at a time with
