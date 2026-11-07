@@ -2,8 +2,21 @@ import contextvars
 import functools
 import io
 import json
+import re
 import sys
 from typing import Any, Callable, Dict
+
+# Matches the token value in printed Authorization headers (the curl/websocat
+# invocation examples). Restricted to the RFC 6750 token68 charset so
+# surrounding quotes survive redaction.
+_BEARER_TOKEN_PATTERN = re.compile(
+    r"(Authorization:\s*Bearer\s+)[A-Za-z0-9\-._~+/=]+", re.IGNORECASE
+)
+
+
+def redact_bearer_tokens(text: str) -> str:
+    """Replace bearer token values with [REDACTED], keeping the header shape."""
+    return _BEARER_TOKEN_PATTERN.sub(r"\1[REDACTED]", text)
 
 
 _stdout_json_context: contextvars.ContextVar[Dict[str, Any]] = contextvars.ContextVar(
@@ -120,6 +133,11 @@ class StoredStdoutInterceptor(io.TextIOBase):
         sys.stdout = self.previous_stdout
 
     def write(self, data: str):
+        if self.capture_logs:
+            # Captured logs end up in machine-readable output (e.g. deploy
+            # --format json) that gets piped into CI logs and files, so strip
+            # credentials that are fine to show interactively.
+            data = redact_bearer_tokens(data)
         self.logs.append(data)
         self.stream.write(data)
         self.stream.flush()
