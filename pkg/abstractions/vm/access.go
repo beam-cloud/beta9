@@ -103,14 +103,23 @@ func (s *Service) acceptBrowserSession(c echo.Context, v *types.VM, port uint32)
 	host := origin.Hostname()
 	ip := net.ParseIP(host)
 	localHTTP := origin.Scheme == "http" && (host == "localhost" || strings.HasSuffix(host, ".localhost") || (ip != nil && ip.IsLoopback()))
+	sameSite := http.SameSiteLaxMode
+	// Embedded desktop sessions must survive cross-site iframe navigation and
+	// third-party cookie blocking. Partition them by the embedding site; the
+	// access link establishes a separate authenticated session in each embed.
+	embedded := !localHTTP && v.Spec.StreamingDesktop() && port == types.VMDesktopPort
+	if embedded {
+		sameSite = http.SameSiteNoneMode
+	}
 	c.SetCookie(&http.Cookie{
-		Name:     sessionCookie(v, port),
-		Value:    session,
-		Path:     "/",
-		Expires:  time.Unix(sessionExpiry(session), 0),
-		Secure:   !localHTTP,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
+		Name:        sessionCookie(v, port),
+		Value:       session,
+		Path:        "/",
+		Expires:     time.Unix(sessionExpiry(session), 0),
+		Secure:      !localHTTP,
+		HttpOnly:    true,
+		SameSite:    sameSite,
+		Partitioned: embedded,
 	})
 
 	setBrowserHeaders(c)
@@ -118,12 +127,16 @@ func (s *Service) acceptBrowserSession(c echo.Context, v *types.VM, port uint32)
 }
 
 func (s *Service) browserSession(c echo.Context, v *types.VM, port uint32) bool {
-	cookie, err := c.Cookie(sessionCookie(v, port))
-	valid := err == nil && validAccessSession(v, port, cookie.Value, time.Now())
+	valid := false
 	// Preserve the application's own cookies without forwarding ours.
 	cookies := c.Request().Cookies()
 	c.Request().Header.Del("Cookie")
 	for _, other := range cookies {
+		// A partitioned session can coexist with an older unpartitioned cookie.
+		// A stale cookie must not shadow a fresh, valid access session.
+		if other.Name == sessionCookie(v, port) && validAccessSession(v, port, other.Value, time.Now()) {
+			valid = true
+		}
 		if !strings.HasPrefix(other.Name, sessionParameter+"_") {
 			c.Request().AddCookie(other)
 		}
@@ -133,7 +146,7 @@ func (s *Service) browserSession(c echo.Context, v *types.VM, port uint32) bool 
 		return false
 	}
 
-	_, err = s.browserOrigin(c, v, port)
+	_, err := s.browserOrigin(c, v, port)
 	return err == nil
 }
 

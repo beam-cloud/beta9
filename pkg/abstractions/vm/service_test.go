@@ -395,6 +395,7 @@ type vmRuntime struct {
 	network         *pb.PodSandboxUpdateNetworkPermissionsRequest
 	connectError    error
 	forwardStatus   int
+	forwardHeaders  http.Header
 	iceHandler      func(net.Conn)
 }
 
@@ -421,6 +422,11 @@ func (r *vmRuntime) VMPortReady(context.Context, string, string, uint32) (bool, 
 }
 func (r *vmRuntime) ForwardVM(c echo.Context, stub, cid string) error {
 	r.forwarded = fmt.Sprintf("%s:%s:%s", cid, c.Param("port"), c.Param("subPath"))
+	for name, values := range r.forwardHeaders {
+		for _, value := range values {
+			c.Response().Header().Add(name, value)
+		}
+	}
 	status := r.forwardStatus
 	if status == 0 {
 		status = http.StatusOK
