@@ -5,12 +5,16 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
 )
 
@@ -61,7 +65,7 @@ type Tailscale struct {
 	// statusFunc and dialFunc override tailnet operations in tests.
 	statusFunc    func(ctx context.Context) (*ipnstate.Status, error)
 	dialFunc      func(ctx context.Context, network, addr string) (net.Conn, error)
-	agentPeerFunc agentPeerLookup
+	agentPeerFunc func(context.Context, string) (netip.Addr, *tailcfg.Node, error)
 }
 
 func (t *Tailscale) logF(format string, v ...interface{}) {
@@ -268,4 +272,100 @@ func (t *Tailscale) DialContextTimeout(ctx context.Context, network, addr string
 // Stops the Tailscale server
 func (t *Tailscale) Close() error {
 	return t.currentServer().Close()
+}
+
+// agentRouteTarget pins the destination to the expected machine's tailnet IP.
+// Lookup failures may reflect peer propagation; identity mismatches fail immediately.
+func (t *Tailscale) agentRouteTarget(ctx context.Context, machineID, target string) (string, error) {
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return "", fmt.Errorf("invalid agent proxy target: %w", err)
+	}
+	if port != strconv.Itoa(types.DefaultAgentTSNetRouteProxyPort) || machineID == "" {
+		return "", fmt.Errorf("invalid agent proxy identity or port")
+	}
+	lookup := t.agentPeerFunc
+	if lookup == nil {
+		lookup = t.lookupAgentPeer
+	}
+	for {
+		ip, peer, err := lookup(ctx, host)
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return "", fmt.Errorf("lookup agent route: %v: %w", err, ctx.Err())
+			case <-time.After(backendRouteDialRetryInterval):
+				continue
+			}
+		}
+		if peer == nil || !peer.Hostinfo.Valid() || peer.Hostinfo.Hostname() != types.AgentTailnetHostnamePrefix+machineID {
+			return "", fmt.Errorf("agent proxy destination does not belong to machine %s", machineID)
+		}
+		for _, address := range peer.Addresses {
+			if address.IsSingleIP() && address.Addr().Unmap() == ip.Unmap() {
+				return net.JoinHostPort(ip.String(), port), nil
+			}
+		}
+		return "", fmt.Errorf("agent proxy destination is not an address of machine %s", machineID)
+	}
+}
+
+func (t *Tailscale) lookupAgentPeer(ctx context.Context, host string) (netip.Addr, *tailcfg.Node, error) {
+	if err := t.ensureUp(ctx); err != nil {
+		return netip.Addr{}, nil, err
+	}
+	client, err := t.currentServer().LocalClient()
+	if err != nil {
+		return netip.Addr{}, nil, err
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		// Resolve legacy names through this node's MagicDNS.
+		if !strings.Contains(host, ".") {
+			status, statusErr := client.StatusWithoutPeers(ctx)
+			if statusErr != nil {
+				return netip.Addr{}, nil, statusErr
+			}
+			if status.CurrentTailnet == nil || status.CurrentTailnet.MagicDNSSuffix == "" {
+				return netip.Addr{}, nil, fmt.Errorf("tailnet DNS suffix is unavailable")
+			}
+			host += "." + status.CurrentTailnet.MagicDNSSuffix
+		}
+		for _, query := range []string{"A", "AAAA"} {
+			packet, _, queryErr := client.QueryDNS(ctx, host, query)
+			if queryErr != nil {
+				err = queryErr
+				continue
+			}
+			var message dnsmessage.Message
+			if err = message.Unpack(packet); err != nil {
+				continue
+			}
+			for _, answer := range message.Answers {
+				switch value := answer.Body.(type) {
+				case *dnsmessage.AResource:
+					ip = netip.AddrFrom4(value.A)
+				case *dnsmessage.AAAAResource:
+					ip = netip.AddrFrom16(value.AAAA)
+				}
+				if ip.IsValid() {
+					break
+				}
+			}
+			if ip.IsValid() {
+				break
+			}
+		}
+		if !ip.IsValid() {
+			return netip.Addr{}, nil, fmt.Errorf("resolve agent proxy destination: %v", err)
+		}
+	}
+	identity, err := client.WhoIs(ctx, ip.String())
+	if err != nil {
+		return netip.Addr{}, nil, err
+	}
+	if identity == nil || identity.Node == nil {
+		return netip.Addr{}, nil, fmt.Errorf("tailnet node identity is unavailable")
+	}
+	return ip, identity.Node, nil
 }

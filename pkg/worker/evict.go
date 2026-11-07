@@ -148,9 +148,7 @@ func (s *Worker) evictContainer(containerID string, drain time.Duration, forCont
 	if drain == 0 {
 		// Immediate preemption needs one runtime signal. A synchronous TERM
 		// followed by KILL adds a second runsc invocation before GPU cleanup.
-		if err := s.stopContainer(containerID, true); err != nil && !runtimeContainerNotFound(err) {
-			log.Warn().Str("container_id", containerID).Err(err).Msg("failed to kill evicted container")
-		}
+		s.killEvictedContainer(containerID)
 		return true
 	}
 	if err := s.stopContainer(containerID, false); err != nil && !runtimeContainerNotFound(err) {
@@ -175,8 +173,20 @@ func (s *Worker) escalateEviction(containerID string, drain time.Duration) {
 		return
 	}
 	log.Info().Str("container_id", containerID).Dur("drain", drain).Msg("evicted container still running after drain window; killing")
-	if err := s.stopContainer(containerID, true); err != nil && !runtimeContainerNotFound(err) {
-		log.Warn().Str("container_id", containerID).Err(err).Msg("failed to kill evicted container")
+	s.killEvictedContainer(containerID)
+}
+
+func (s *Worker) killEvictedContainer(containerID string) {
+	instance, _ := s.containerInstances.Get(containerID)
+	if err := s.stopContainer(containerID, true); err != nil {
+		// The runtime may not exist yet during startup. Let the status
+		// heartbeat retry instead of permanently suppressing the stop.
+		if instance != nil {
+			instance.StopEscalationStarted.Store(false)
+		}
+		if !runtimeContainerNotFound(err) {
+			log.Warn().Str("container_id", containerID).Err(err).Msg("failed to kill evicted container")
+		}
 	}
 }
 

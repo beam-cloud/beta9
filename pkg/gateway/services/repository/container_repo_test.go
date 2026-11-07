@@ -36,10 +36,15 @@ type authorizationContainerRepo struct {
 	repository.ContainerRepository
 	state *types.ContainerState
 	err   error
+	route *types.BackendRoute
 }
 
 func (r *authorizationContainerRepo) GetContainerState(string) (*types.ContainerState, error) {
 	return r.state, r.err
+}
+
+func (r *authorizationContainerRepo) GetBackendRoute(context.Context, string) (*types.BackendRoute, error) {
+	return r.route, nil
 }
 
 func TestMissingContainerStatePassesOnlyForTrustedWorkersFinishingIt(t *testing.T) {
@@ -91,8 +96,9 @@ func TestPrivateWorkerCannotPublishForeignRoutes(t *testing.T) {
 		RouteId:     types.BackendRouteID("machine", "worker", "container", types.BackendRouteKindContainer, 80),
 		WorkspaceId: "own", WorkerId: "worker", MachineId: "machine", ContainerId: "container", Kind: types.BackendRouteKindContainer, Port: 80,
 	}
-	require.NoError(t, authorizeBackendRoute(state, valid))
-	containers := &ContainerRepositoryService{containerRepo: &authorizationContainerRepo{state: state}}
+	require.NoError(t, authorizeBackendRoute(state, backendRouteFromProto(valid)))
+	repo := &authorizationContainerRepo{state: state}
+	containers := &ContainerRepositoryService{containerRepo: repo}
 	conn := repositoryAuthClient(t, &WorkerRepositoryService{}, containers)
 	for _, tc := range []struct {
 		name   string
@@ -108,17 +114,106 @@ func TestPrivateWorkerCannotPublishForeignRoutes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			route := proto.Clone(valid).(*pb.BackendRoute)
 			tc.change(route)
+			saved := backendRouteFromProto(route)
+			repo.route = &saved
 			for _, rpc := range []struct {
 				method            string
 				request, response proto.Message
 			}{
 				{pb.ContainerRepositoryService_SetContainerAddress_FullMethodName, &pb.SetContainerAddressRequest{ContainerId: "container", Route: route}, &pb.SetContainerAddressResponse{}},
 				{pb.ContainerRepositoryService_SetContainerAddressMap_FullMethodName, &pb.SetContainerAddressMapRequest{ContainerId: "container", Routes: []*pb.BackendRoute{route}}, &pb.SetContainerAddressMapResponse{}},
+				{pb.ContainerRepositoryService_SetContainerAddressMap_FullMethodName, &pb.SetContainerAddressMapRequest{ContainerId: "container", AddressMap: map[int32]string{80: types.BackendRouteAddress(valid.RouteId)}}, &pb.SetContainerAddressMapResponse{}},
 				{pb.ContainerRepositoryService_SetWorkerAddress_FullMethodName, &pb.SetWorkerAddressRequest{ContainerId: "container", Route: route}, &pb.SetWorkerAddressResponse{}},
 			} {
 				err := conn.Invoke(repositoryAuthContext(types.TokenTypeWorkerPrivate), rpc.method, rpc.request, rpc.response)
 				require.Equal(t, codes.PermissionDenied, status.Code(err), rpc.method)
 			}
+		})
+	}
+}
+
+func TestPrivateWorkerCannotBypassAgentRouteFence(t *testing.T) {
+	state := &types.ContainerState{ContainerId: "container", WorkspaceId: "own", WorkerId: "worker", MachineId: "machine"}
+	service := &ContainerRepositoryService{containerRepo: &authorizationContainerRepo{state: state}}
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Token: &types.Token{TokenType: types.TokenTypeWorkerPrivate, WorkerID: "worker"}, Workspace: &types.Workspace{ExternalId: "own"}})
+	route := func(transport string) *pb.BackendRoute {
+		return &pb.BackendRoute{RouteId: types.BackendRouteID("machine", "worker", "container", types.BackendRouteKindContainer, 80), WorkspaceId: "own", WorkerId: "worker", MachineId: "machine", ContainerId: "container", Kind: types.BackendRouteKindContainer, Port: 80, Transport: transport}
+	}
+	for name, req := range map[string]any{
+		"raw container address":  &pb.SetContainerAddressRequest{ContainerId: "container", Address: "100.64.0.20:6379"},
+		"raw worker address":     &pb.SetWorkerAddressRequest{ContainerId: "container", Address: "100.64.0.20:6379"},
+		"direct transport":       &pb.SetContainerAddressRequest{ContainerId: "container", Route: route(types.BackendRouteTransportDirect)},
+		"local direct transport": &pb.SetContainerAddressRequest{ContainerId: "container", Route: route(types.BackendRouteTransportLocalDirect)},
+		"omitted transport":      &pb.SetContainerAddressRequest{ContainerId: "container", Route: route("")},
+		"raw map":                &pb.SetContainerAddressMapRequest{ContainerId: "container", AddressMap: map[int32]string{80: "100.64.0.20:6379"}},
+		"partly covered map":     &pb.SetContainerAddressMapRequest{ContainerId: "container", AddressMap: map[int32]string{80: "127.0.0.1:80", 81: "100.64.0.20:6379"}, Routes: []*pb.BackendRoute{route(types.BackendRouteTransportTSNet)}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := status.Code(service.AuthorizeRequest(ctx, req)); got != codes.PermissionDenied {
+				t.Fatalf("private address publication = %v, want PermissionDenied", got)
+			}
+		})
+	}
+	worker := &WorkerRepositoryService{containerRepo: &authorizationContainerRepo{state: state}}
+	for _, transport := range []string{"", types.BackendRouteTransportDirect, types.BackendRouteTransportLocalDirect} {
+		t.Run("claim/"+transport, func(t *testing.T) {
+			var r *pb.BackendRoute
+			if transport != "" {
+				r = route(transport)
+				r.Kind = types.BackendRouteKindWorker
+				r.ContainerId = ""
+				r.RouteId = types.BackendRouteID("machine", "worker", "", types.BackendRouteKindWorker, 80)
+			}
+			req := &pb.ClaimContainerRequest{WorkerId: "worker", ContainerId: "container", WorkerAddress: &pb.SetWorkerAddressRequest{ContainerId: "container", Address: "100.64.0.20:6379", Route: r}}
+			if got := status.Code(worker.AuthorizeRequest(ctx, req)); got != codes.PermissionDenied {
+				t.Fatalf("private claim address = %v, want PermissionDenied", got)
+			}
+		})
+	}
+}
+
+func TestPrivateAgentRoutesAndTrustedDirectRoutesRemainAllowed(t *testing.T) {
+	state := &types.ContainerState{ContainerId: "container", WorkspaceId: "own", WorkerId: "worker", MachineId: "machine"}
+	service := &ContainerRepositoryService{containerRepo: &authorizationContainerRepo{state: state}}
+	for _, tokenType := range []string{types.TokenTypeWorkerPrivate, types.TokenTypeWorker} {
+		ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Token: &types.Token{TokenType: tokenType, WorkerID: "worker"}, Workspace: &types.Workspace{ExternalId: "own"}})
+		transport := types.BackendRouteTransportTSNet
+		if tokenType == types.TokenTypeWorker {
+			transport = types.BackendRouteTransportDirect
+		}
+		route := &pb.BackendRoute{RouteId: types.BackendRouteID("machine", "worker", "container", types.BackendRouteKindContainer, 80), WorkspaceId: "own", WorkerId: "worker", MachineId: "machine", ContainerId: "container", Kind: types.BackendRouteKindContainer, Port: 80, Transport: transport}
+		for _, request := range []any{
+			&pb.SetContainerAddressRequest{ContainerId: "container", Route: route},
+			&pb.SetContainerAddressMapRequest{ContainerId: "container", AddressMap: map[int32]string{80: "127.0.0.1:80"}, Routes: []*pb.BackendRoute{route}},
+			&pb.SetContainerAddressRequest{ContainerId: "container"},
+			&pb.SetContainerAddressMapRequest{ContainerId: "container"},
+		} {
+			if err := service.AuthorizeRequest(ctx, request); err != nil {
+				t.Fatalf("%s %T: %v", tokenType, request, err)
+			}
+		}
+	}
+}
+
+func TestPrivateWorkerAddsPortWithRetainedRoutes(t *testing.T) {
+	state := &types.ContainerState{ContainerId: "container", WorkspaceId: "own", WorkerId: "worker", MachineId: "machine"}
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{Token: &types.Token{TokenType: types.TokenTypeWorkerPrivate, WorkerID: "worker"}, Workspace: &types.Workspace{ExternalId: "own"}})
+	route := types.BackendRoute{RouteID: types.BackendRouteID("machine", "worker", "container", types.BackendRouteKindContainer, 80), WorkspaceID: "own", WorkerID: "worker", MachineID: "machine", ContainerID: "container", Kind: types.BackendRouteKindContainer, Port: 80}
+	added := &pb.BackendRoute{RouteId: types.BackendRouteID("machine", "worker", "container", types.BackendRouteKindContainer, 81), WorkspaceId: "own", WorkerId: "worker", MachineId: "machine", ContainerId: "container", Kind: types.BackendRouteKindContainer, Port: 81, Transport: types.BackendRouteTransportTSNet}
+	request := &pb.SetContainerAddressMapRequest{ContainerId: "container", AddressMap: map[int32]string{80: types.BackendRouteAddress(route.RouteID), 81: "127.0.0.1:81"}, Routes: []*pb.BackendRoute{added}}
+	for _, transport := range []string{types.BackendRouteTransportTSNet, types.BackendRouteTransportDirect, "missing"} {
+		t.Run(transport, func(t *testing.T) {
+			route.Transport = transport
+			repo := &authorizationContainerRepo{state: state, route: &route}
+			if transport == "missing" {
+				repo.route = nil
+			}
+			err := (&ContainerRepositoryService{containerRepo: repo}).AuthorizeRequest(ctx, request)
+			want := codes.PermissionDenied
+			if transport == types.BackendRouteTransportTSNet {
+				want = codes.OK
+			}
+			require.Equal(t, want, status.Code(err))
 		})
 	}
 }

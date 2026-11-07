@@ -36,32 +36,11 @@ func testTailscale(t *testing.T, status *ipnstate.Status) *Tailscale {
 	ts.statusFunc = func(ctx context.Context) (*ipnstate.Status, error) {
 		return status, nil
 	}
-	// Model the authenticated address lookup separately from Status, which may
-	// omit peers. Transport retry tests must not start a real tsnet daemon.
+	// Status can omit peers; model the independent LocalAPI lookup.
 	ts.agentPeerFunc = func(_ context.Context, host string) (netip.Addr, *tailcfg.Node, error) {
-		ip, err := netip.ParseAddr(host)
-		name := ""
-		if err == nil {
-			if status != nil {
-				for _, peer := range status.Peer {
-					if peer != nil {
-						for _, address := range peer.TailscaleIPs {
-							if address == ip {
-								name = peer.HostName
-							}
-						}
-					}
-				}
-			}
-		} else {
-			name, _, _ = strings.Cut(strings.TrimSuffix(host, "."), ".")
-			ip = netip.MustParseAddr("100.64.0.42")
-		}
-		if name == "" {
-			return netip.Addr{}, nil, errors.New("peer not found")
-		}
-		node := &tailcfg.Node{Hostinfo: (&tailcfg.Hostinfo{Hostname: name}).View(), Addresses: []netip.Prefix{netip.PrefixFrom(ip, ip.BitLen())}}
-		return ip, node, nil
+		name, _, _ := strings.Cut(host, ".")
+		ip := netip.MustParseAddr("100.64.0.42")
+		return ip, &tailcfg.Node{Hostinfo: (&tailcfg.Hostinfo{Hostname: name}).View(), Addresses: []netip.Prefix{netip.PrefixFrom(ip, ip.BitLen())}}, nil
 	}
 	return ts
 }
@@ -276,5 +255,76 @@ func TestConcurrentPeerChecksDoNotMutateSharedServer(t *testing.T) {
 	}
 	if ts.currentServer() != originalServer {
 		t.Fatal("concurrent peer checks replaced the shared tsnet server")
+	}
+}
+
+func TestAgentRoutePinsAuthenticatedDestination(t *testing.T) {
+	withFastRouteDialRetry(t)
+	for _, test := range []struct {
+		name, reported, ip string
+		lookupFailures     int
+	}{
+		{"ipv4", "100.64.0.10:29443", "100.64.0.10", 0},
+		{"ipv6", "[fd7a:115c:a1e0::10]:29443", "fd7a:115c:a1e0::10", 0},
+		{"legacy DNS", "beam-agent-private.tailnet.ts.net:29443", "100.64.0.10", 0},
+		{"collision DNS", "beam-agent-private-1.tailnet.ts.net:29443", "100.64.0.10", 0},
+		{"peer propagation", "100.64.0.10:29443", "100.64.0.10", 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ip := netip.MustParseAddr(test.ip)
+			ts := testTailscale(t, nil)
+			lookups := 0
+			ts.agentPeerFunc = func(context.Context, string) (netip.Addr, *tailcfg.Node, error) {
+				lookups++
+				if lookups <= test.lookupFailures {
+					return netip.Addr{}, nil, errors.New("peer not yet known")
+				}
+				return ip, &tailcfg.Node{Hostinfo: (&tailcfg.Hostinfo{Hostname: "beam-agent-private"}).View(), Addresses: []netip.Prefix{netip.PrefixFrom(ip, ip.BitLen())}}, nil
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			target, err := ts.agentRouteTarget(ctx, "private", test.reported)
+			if err != nil || target != net.JoinHostPort(test.ip, "29443") {
+				t.Fatalf("target = %q, %v", target, err)
+			}
+			if lookups != test.lookupFailures+1 {
+				t.Fatalf("lookups = %d", lookups)
+			}
+		})
+	}
+}
+
+func TestAgentRouteLookupHonorsDeadline(t *testing.T) {
+	withFastRouteDialRetry(t)
+	ts := testTailscale(t, nil)
+	lookups := 0
+	ts.agentPeerFunc = func(context.Context, string) (netip.Addr, *tailcfg.Node, error) {
+		lookups++
+		return netip.Addr{}, nil, errors.New("peer not yet known")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	_, err := ts.agentRouteTarget(ctx, "private", "100.64.0.10:29443")
+	if !errors.Is(err, context.DeadlineExceeded) || lookups < 2 {
+		t.Fatalf("lookup attempts = %d, error = %v", lookups, err)
+	}
+}
+
+func TestAgentRouteRejectsMissingOrMismatchedIdentity(t *testing.T) {
+	ip := netip.MustParseAddr("100.64.0.10")
+	for name, node := range map[string]*tailcfg.Node{
+		"missing node":          nil,
+		"missing host identity": {Addresses: []netip.Prefix{netip.PrefixFrom(ip, 32)}},
+		"wrong machine":         {Hostinfo: (&tailcfg.Hostinfo{Hostname: "beam-agent-other"}).View(), Addresses: []netip.Prefix{netip.PrefixFrom(ip, 32)}},
+		"address not owned":     {Hostinfo: (&tailcfg.Hostinfo{Hostname: "beam-agent-private"}).View(), Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.20/32")}},
+		"routed subnet":         {Hostinfo: (&tailcfg.Hostinfo{Hostname: "beam-agent-private"}).View(), Addresses: []netip.Prefix{netip.MustParsePrefix("100.64.0.0/10")}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ts := testTailscale(t, nil)
+			ts.agentPeerFunc = func(context.Context, string) (netip.Addr, *tailcfg.Node, error) { return ip, node, nil }
+			if _, err := ts.agentRouteTarget(context.Background(), "private", "100.64.0.10:29443"); err == nil {
+				t.Fatal("unverified destination was accepted")
+			}
+		})
 	}
 }

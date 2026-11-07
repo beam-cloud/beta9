@@ -173,6 +173,37 @@ func TestEvictForRequestKillsAfterDrainWindow(t *testing.T) {
 	require.Equal(t, []syscall.Signal{syscall.SIGKILL}, rt.observed("victim-1"))
 }
 
+func TestEvictionRetriesKillBeforeRuntimeExists(t *testing.T) {
+	for _, escalated := range []bool{false, true} {
+		t.Run(fmt.Sprintf("escalated=%t", escalated), func(t *testing.T) {
+			worker, _ := evictionWorkerForTest(false)
+			rt := &retryStoppingRuntime{worker: worker, containerID: "victim"}
+			firstKill := true
+			rt.killError = func(signal syscall.Signal) error {
+				if signal == syscall.SIGKILL && firstKill {
+					firstKill = false
+					return runtime.ErrContainerNotFound{ContainerID: "victim"}
+				}
+				return nil
+			}
+			victim := addRunningInstance(worker, rt, "victim")
+			if escalated {
+				victim.StopEscalationStarted.Store(true)
+				worker.escalateEviction("victim", 0)
+			} else {
+				require.True(t, worker.evictContainer("victim", 0, "replacement"))
+			}
+			require.False(t, victim.StopEscalationStarted.Load())
+			victim.markRuntimeStarted(123)
+			_, present, err := worker.releaseVictim(context.Background(), "victim", 0, "replacement")
+			require.NoError(t, err)
+			require.True(t, present)
+			require.Empty(t, worker.waitForContainersReleased(context.Background(), []string{"victim"}, 0))
+			require.Equal(t, []syscall.Signal{syscall.SIGKILL, syscall.SIGKILL}, rt.observedSignals())
+		})
+	}
+}
+
 func TestEvictForRequestWaitsForVictimAlreadyFinalizing(t *testing.T) {
 	worker, rt := evictionWorkerForTest(false)
 	// The victim has exited (exit code recorded) but clearContainer has not yet

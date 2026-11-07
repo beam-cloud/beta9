@@ -65,7 +65,18 @@ func (s *ContainerRepositoryService) AuthorizeRequest(ctx context.Context, req i
 			}
 			for port, address := range req.AddressMap {
 				if address != "" && !covered[port] {
-					return status.Error(codes.PermissionDenied, "private workers require agent routes for every published address")
+					id, ok := types.ParseBackendRouteAddress(address)
+					if !ok {
+						return status.Error(codes.PermissionDenied, "private workers require agent routes")
+					}
+					route, err := s.containerRepo.GetBackendRoute(ctx, id)
+					if err != nil || route == nil || route.RouteID != id || route.Port != port ||
+						route.Kind != types.BackendRouteKindContainer || route.Transport != types.BackendRouteTransportTSNet {
+						return status.Error(codes.PermissionDenied, "invalid retained container route")
+					}
+					if err := authorizeBackendRoute(state, *route); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -280,14 +291,14 @@ func authorizeWorkerBackendRoute(state *types.ContainerState, route *pb.BackendR
 	if !trusted && (route == nil || route.Transport != types.BackendRouteTransportTSNet) {
 		return status.Error(codes.PermissionDenied, "private workers require authenticated agent routing")
 	}
-	return authorizeBackendRoute(state, route)
-}
-
-func authorizeBackendRoute(state *types.ContainerState, route *pb.BackendRoute) error {
 	if route == nil {
 		return nil
 	}
-	if route.WorkspaceId != state.WorkspaceId || route.WorkerId != state.WorkerId || route.MachineId != state.MachineId {
+	return authorizeBackendRoute(state, backendRouteFromProto(route))
+}
+
+func authorizeBackendRoute(state *types.ContainerState, route types.BackendRoute) error {
+	if route.WorkspaceID != state.WorkspaceId || route.WorkerID != state.WorkerId || route.MachineID != state.MachineId {
 		return status.Error(codes.PermissionDenied, "route does not belong to container")
 	}
 	containerID := state.ContainerId
@@ -296,7 +307,7 @@ func authorizeBackendRoute(state *types.ContainerState, route *pb.BackendRoute) 
 	} else if route.Kind != types.BackendRouteKindContainer {
 		return status.Error(codes.PermissionDenied, "invalid route kind")
 	}
-	if route.ContainerId != containerID || route.RouteId != types.BackendRouteID(state.MachineId, state.WorkerId, containerID, route.Kind, route.Port) {
+	if route.ContainerID != containerID || route.RouteID != types.BackendRouteID(state.MachineId, state.WorkerId, containerID, route.Kind, route.Port) {
 		return status.Error(codes.PermissionDenied, "invalid route identity")
 	}
 	return nil
