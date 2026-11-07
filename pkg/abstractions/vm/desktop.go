@@ -46,6 +46,7 @@ func (s *Service) serveDesktop(c echo.Context, v *types.VM, status string) error
 
 	c.Response().Header().Set("Cache-Control", "no-store")
 	if v.Spec.StreamingDesktop() {
+		allowDesktopFrame(c)
 		return c.HTML(http.StatusOK, streamingDesktopPage)
 	}
 	return c.HTML(http.StatusOK, desktopPage)
@@ -69,7 +70,37 @@ type desktopContext struct {
 }
 
 func (c *desktopContext) forward(port uint32, path string) error {
+	if port == types.VMDesktopPort {
+		allowDesktopFrame(c)
+	}
 	return c.forwardVM(c, c.vm, port, path)
+}
+
+// Authenticated desktop links can be embedded on any site. Selkies defaults to
+// frame-ancestors 'self'; adapt that default after upstream headers arrive so
+// existing VM images work without coupling embedding to the sign-in provider.
+func allowDesktopFrame(c echo.Context) {
+	c.Response().Before(func() {
+		headers := c.Response().Header()
+		policies := headers.Values("Content-Security-Policy")
+		if len(policies) == 0 {
+			headers.Set("Content-Security-Policy", "frame-ancestors *")
+			return
+		}
+		headers.Del("Content-Security-Policy")
+		for _, policy := range policies {
+			directives := strings.Split(policy, ";")
+			for i, directive := range directives {
+				fields := strings.Fields(directive)
+				// Only relax the native default, preserving all other directives
+				// and any explicitly configured frame-ancestors policy.
+				if len(fields) == 2 && strings.EqualFold(fields[0], "frame-ancestors") && fields[1] == "'self'" {
+					directives[i] = strings.Replace(directive, "'self'", "*", 1)
+				}
+			}
+			headers.Add("Content-Security-Policy", strings.Join(directives, ";"))
+		}
+	})
 }
 
 var desktopRoutes = newDesktopRouter()

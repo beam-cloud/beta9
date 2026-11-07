@@ -22,6 +22,14 @@ Omit `mcp` for an application without an adapter. Stdio commands inherit the app
 
 The printed link authenticates a browser temporarily. `vm.kiosk_url` is the stable protected URL; `beta9 vm kiosk my-app` opens it using your local profile. Closing a viewer detaches it; the VM's idle policy controls compute lifetime.
 
+To embed a kiosk or streaming desktop on another site, use a fresh `vm.access_url(8080)` as the iframe's `src`:
+
+```html
+<iframe src="ACCESS_URL" title="Application" allow="fullscreen; clipboard-read; clipboard-write" style="width:100%;height:720px;border:0"></iframe>
+```
+
+HTTPS sessions use a secure, partitioned cookie for each embedding site. Generate the access URL on your server for an authorized viewer and renew it when its session expires (600 seconds by default, up to 3600). The stable protected URL alone does not authenticate an iframe.
+
 ## Connect an agent
 
 Add this standard configuration to a local agent:
