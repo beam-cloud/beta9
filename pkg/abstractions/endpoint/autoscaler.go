@@ -20,13 +20,12 @@ func endpointSampleFunc(i *endpointInstance) (*endpointAutoscalerSample, error) 
 		totalRequests = -1
 	}
 
-	currentContainers := 0
 	state, err := i.State()
 	if err != nil {
-		currentContainers = -1
+		return nil, err
 	}
 
-	currentContainers = state.PendingContainers + state.RunningContainers
+	currentContainers := state.PendingContainers + state.RunningContainers
 
 	sample := &endpointAutoscalerSample{
 		TotalRequests:     int64(totalRequests),
