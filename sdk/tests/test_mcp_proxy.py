@@ -20,9 +20,21 @@ import pytest
 
 from beta9 import auth
 from beta9 import config as config_module
+from beta9.channel import caller_metadata
 from beta9.config import ConfigContext, SDKSettings, load_config, set_settings
 from beta9.mcp import server as mcp_server
 from beta9.mcp import tools as mcp_tools
+
+
+@pytest.fixture(autouse=True)
+def restore_attribution():
+    """A proxy records its client in os.environ, for the CLI runs its tools start."""
+    saved = {key: os.environ.pop(key, None) for key in ("BETA9_CALLER", "BETA9_AGENT_SESSION")}
+    yield
+    for key, value in saved.items():
+        os.environ.pop(key, None)
+        if value is not None:
+            os.environ[key] = value
 
 
 @pytest.fixture
@@ -937,6 +949,50 @@ def test_remote_retries_only_tools_advertised_as_read_only(monkeypatch):
         with pytest.raises(mcp_server.requests.ConnectionError):
             remote.call(rpc("tools/call", name=name))
         assert calls == [name] * attempts
+
+
+def test_gateway_requests_name_the_client_that_connected(settings, monkeypatch):
+    monkeypatch.setattr(mcp_server, "context_or_none", lambda name: ConfigContext(token="t"))
+    monkeypatch.setattr(mcp_server, "RemoteMCP", lambda context: FakeRemote())
+    proxy = mcp_server.StdioProxy(cwd=os.getcwd())
+    assert dict(caller_metadata())["x-beta9-caller"] == f"mcp/{proxy.version}"
+
+    run_proxy(proxy, rpc("initialize", 1, clientInfo={"name": "claude-code", "version": "2.1.306"}))
+
+    metadata = dict(caller_metadata())
+    assert metadata["x-beta9-caller"] == f"mcp/{proxy.version} (claude-code/2.1.306)"
+    # CLI runs started by local tools inherit the same session.
+    assert metadata["x-beta9-agent-session"] == os.environ["BETA9_AGENT_SESSION"]
+
+
+def test_attribution_set_by_the_user_wins(settings, monkeypatch):
+    monkeypatch.setenv("BETA9_CALLER", "ci/7")
+    monkeypatch.setenv("BETA9_AGENT_SESSION", "run-9")
+    monkeypatch.setattr(mcp_server, "context_or_none", lambda name: ConfigContext(token="t"))
+    monkeypatch.setattr(mcp_server, "RemoteMCP", lambda context: FakeRemote())
+    proxy = mcp_server.StdioProxy(cwd=os.getcwd())
+
+    run_proxy(proxy, rpc("initialize", 1, clientInfo={"name": "cursor", "version": "1"}))
+
+    assert dict(caller_metadata()) == {"x-beta9-caller": "ci/7", "x-beta9-agent-session": "run-9"}
+
+
+def test_remote_calls_carry_the_current_attribution(monkeypatch):
+    remote = object.__new__(mcp_server.RemoteMCP)
+    remote.url = "http://gateway.example/api/v1/mcp"
+    remote.session = mcp_server.requests.Session()
+    remote.read_only_tools = set()
+    sent = []
+
+    def post(url, data, timeout):
+        sent.append(remote.session.headers["x-beta9-caller"])
+        return FakeResponse(202, None)
+
+    monkeypatch.setattr(remote.session, "post", post)
+    for caller in ("mcp/1", "mcp/1 (cursor/2)"):
+        monkeypatch.setenv("BETA9_CALLER", caller)
+        remote.call({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    assert sent == ["mcp/1", "mcp/1 (cursor/2)"]
 
 
 def test_login_tool_drives_device_flow_and_saves_context(settings, monkeypatch, tmp_path):
