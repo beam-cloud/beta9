@@ -87,6 +87,7 @@ func TestPrivateWorkerContainerOwnership(t *testing.T) {
 func TestPrivateWorkerCannotPublishForeignRoutes(t *testing.T) {
 	state := &types.ContainerState{ContainerId: "container", WorkspaceId: "own", WorkerId: "worker", MachineId: "machine"}
 	valid := &pb.BackendRoute{
+		Transport:   types.BackendRouteTransportTSNet,
 		RouteId:     types.BackendRouteID("machine", "worker", "container", types.BackendRouteKindContainer, 80),
 		WorkspaceId: "own", WorkerId: "worker", MachineId: "machine", ContainerId: "container", Kind: types.BackendRouteKindContainer, Port: 80,
 	}

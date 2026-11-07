@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 )
 
@@ -33,6 +35,33 @@ func testTailscale(t *testing.T, status *ipnstate.Status) *Tailscale {
 	ts.initialized = true
 	ts.statusFunc = func(ctx context.Context) (*ipnstate.Status, error) {
 		return status, nil
+	}
+	// Model the authenticated address lookup separately from Status, which may
+	// omit peers. Transport retry tests must not start a real tsnet daemon.
+	ts.agentPeerFunc = func(_ context.Context, host string) (netip.Addr, *tailcfg.Node, error) {
+		ip, err := netip.ParseAddr(host)
+		name := ""
+		if err == nil {
+			if status != nil {
+				for _, peer := range status.Peer {
+					if peer != nil {
+						for _, address := range peer.TailscaleIPs {
+							if address == ip {
+								name = peer.HostName
+							}
+						}
+					}
+				}
+			}
+		} else {
+			name, _, _ = strings.Cut(strings.TrimSuffix(host, "."), ".")
+			ip = netip.MustParseAddr("100.64.0.42")
+		}
+		if name == "" {
+			return netip.Addr{}, nil, errors.New("peer not found")
+		}
+		node := &tailcfg.Node{Hostinfo: (&tailcfg.Hostinfo{Hostname: name}).View(), Addresses: []netip.Prefix{netip.PrefixFrom(ip, ip.BitLen())}}
+		return ip, node, nil
 	}
 	return ts
 }

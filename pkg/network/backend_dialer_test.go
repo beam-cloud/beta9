@@ -156,8 +156,11 @@ type tsnetRouteResolver struct {
 }
 
 func (f *tsnetRouteResolver) GetBackendRoute(ctx context.Context, routeID string) (*types.BackendRoute, error) {
+	host, _, _ := net.SplitHostPort(f.proxyTarget)
+	label, _, _ := strings.Cut(host, ".")
 	return &types.BackendRoute{
 		RouteID:     routeID,
+		MachineID:   strings.TrimPrefix(label, "beam-agent-"),
 		State:       types.BackendRouteStateReady,
 		Transport:   types.BackendRouteTransportTSNet,
 		ProxyTarget: f.proxyTarget,

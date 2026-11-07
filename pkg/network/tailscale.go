@@ -59,8 +59,9 @@ type Tailscale struct {
 	debug bool
 
 	// statusFunc and dialFunc override tailnet operations in tests.
-	statusFunc func(ctx context.Context) (*ipnstate.Status, error)
-	dialFunc   func(ctx context.Context, network, addr string) (net.Conn, error)
+	statusFunc    func(ctx context.Context) (*ipnstate.Status, error)
+	dialFunc      func(ctx context.Context, network, addr string) (net.Conn, error)
+	agentPeerFunc agentPeerLookup
 }
 
 func (t *Tailscale) logF(format string, v ...interface{}) {

@@ -50,14 +50,33 @@ func (s *ContainerRepositoryService) AuthorizeRequest(ctx context.Context, req i
 	var routes []*pb.BackendRoute
 	switch req := req.(type) {
 	case *pb.SetContainerAddressRequest:
+		if req.Route == nil && req.Address == "" {
+			return nil
+		}
 		routes = []*pb.BackendRoute{req.Route}
 	case *pb.SetContainerAddressMapRequest:
 		routes = req.Routes
+		if !worker.Trusted {
+			covered := make(map[int32]bool, len(routes))
+			for _, route := range routes {
+				if route != nil {
+					covered[route.Port] = true
+				}
+			}
+			for port, address := range req.AddressMap {
+				if address != "" && !covered[port] {
+					return status.Error(codes.PermissionDenied, "private workers require agent routes for every published address")
+				}
+			}
+		}
 	case *pb.SetWorkerAddressRequest:
+		if req.Route == nil && req.Address == "" {
+			return nil
+		}
 		routes = []*pb.BackendRoute{req.Route}
 	}
 	for _, route := range routes {
-		if err := authorizeBackendRoute(state, route); err != nil {
+		if err := authorizeWorkerBackendRoute(state, route, worker.Trusted); err != nil {
 			return err
 		}
 	}
@@ -255,6 +274,13 @@ func (s *ContainerRepositoryService) registerBackendRoute(ctx context.Context, c
 		return "", err
 	}
 	return address, nil
+}
+
+func authorizeWorkerBackendRoute(state *types.ContainerState, route *pb.BackendRoute, trusted bool) error {
+	if !trusted && (route == nil || route.Transport != types.BackendRouteTransportTSNet) {
+		return status.Error(codes.PermissionDenied, "private workers require authenticated agent routing")
+	}
+	return authorizeBackendRoute(state, route)
 }
 
 func authorizeBackendRoute(state *types.ContainerState, route *pb.BackendRoute) error {

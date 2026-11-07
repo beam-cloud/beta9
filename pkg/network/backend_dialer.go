@@ -119,6 +119,17 @@ func (d *BackendDialer) Dial(ctx context.Context, address string) (net.Conn, err
 // error before retrying; it never mutates the shared tsnet server.
 func (d *BackendDialer) dialTSNetRoute(ctx context.Context, route *types.BackendRoute, routeID string, deadline time.Time) (net.Conn, error) {
 	host := tailnetHostFromAddr(route.ProxyTarget)
+	verifyCtx, verifyCancel := context.WithDeadline(ctx, deadline)
+	defer verifyCancel()
+	verifiedTarget, err := d.tailscale.agentRouteTarget(verifyCtx, route.MachineID, route.ProxyTarget)
+	if err != nil {
+		return nil, err
+	}
+	// Preserve the stored route and validate again on future connections.
+	// This also fences routes that were reported before this check existed.
+	verifiedRoute := *route
+	verifiedRoute.ProxyTarget = verifiedTarget
+	route = &verifiedRoute
 	var lastErr error
 	dialSlots := d.dialSlots
 	if dialSlots == nil {
