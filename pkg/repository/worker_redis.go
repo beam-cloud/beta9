@@ -233,15 +233,21 @@ for i, raw in ipairs(requests) do
 	if not container_id or container_id == "" then
 		return redis.error_reply("container request is missing container_id")
 	end
-	local assignment = redis.call("HGET", ARGV[2] .. container_id, ARGV[3])
-	if not assignment or assignment == "" then
-		return redis.error_reply("container request is missing schedule assignment")
+	local state = ARGV[2] .. container_id
+	-- The queue can outlive its container state during a worker outage. An
+	-- expired request must not block every live request behind it or recreate
+	-- state for a container that the scheduler no longer owns.
+	if redis.call("EXISTS", state) ~= 0 then
+		local assignment = redis.call("HGET", state, ARGV[3])
+		if not assignment or assignment == "" then
+			return redis.error_reply("container request is missing schedule assignment")
+		end
+		local attempt = redis.call("HINCRBY", state, ARGV[4], 1)
+		local token = assignment .. ":" .. attempt
+		table.insert(pending, {assignment, cjson.encode({delivery_token = token, request = raw})})
+		table.insert(deliveries, raw)
+		table.insert(deliveries, token)
 	end
-	local attempt = redis.call("HINCRBY", ARGV[2] .. container_id, ARGV[4], 1)
-	local token = assignment .. ":" .. attempt
-	pending[i] = {assignment, cjson.encode({delivery_token = token, request = raw})}
-	table.insert(deliveries, raw)
-	table.insert(deliveries, token)
 end
 
 if #requests > 0 then
