@@ -1,6 +1,12 @@
+import ntpath
+import os
 from textwrap import dedent
+from types import SimpleNamespace
+
+import pytest
 
 from beta9 import multipart
+from beta9.multipart import RemotePath
 
 
 def test_calculate_chunk_size():
@@ -31,3 +37,44 @@ def test_calculate_chunk_size():
         print(line)
 
     assert output.splitlines() == lines
+
+
+@pytest.fixture
+def windows_os_path(monkeypatch):
+    """Make os.path behave the way it does on Windows."""
+    monkeypatch.setattr(os, "path", ntpath)
+
+
+def test_remote_path_uses_forward_slashes_on_windows(windows_os_path):
+    remote = RemotePath.parse("beam://my-volume/uploads/data.tar")
+
+    assert remote.path == "my-volume/uploads/data.tar"
+    assert remote.name == "data.tar"
+    assert RemotePath.parse("beam://my-volume").path == "my-volume/"
+
+
+def test_joined_remote_path_uses_forward_slashes_on_windows(windows_os_path):
+    runs = RemotePath.parse("beam://my-volume/runs")
+
+    joined = runs / "exp/metrics.csv"
+    assert joined.volume_path == "runs/exp/metrics.csv"
+    assert joined.path == "my-volume/runs/exp/metrics.csv"
+
+    child = runs / RemotePath("beam", "my-volume", "model.pth", is_dir=False)
+    assert child.volume_path == "runs/model.pth"
+    assert child.is_dir is False
+
+
+def test_stat_path_request_uses_forward_slashes_on_windows(windows_os_path):
+    requested_paths = []
+
+    class FakeVolumeService:
+        def stat_path(self, request):
+            requested_paths.append(request.path)
+            path_info = SimpleNamespace(is_dir=False)
+            return SimpleNamespace(ok=True, err_msg="", path_info=path_info)
+
+    handler = multipart.Beta9Handler(service=FakeVolumeService())
+    handler.is_dir(RemotePath.parse("beam://my-volume/runs/metrics.csv"))
+
+    assert requested_paths == ["my-volume/runs/metrics.csv"]

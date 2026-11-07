@@ -3,6 +3,7 @@ import concurrent.futures
 import io
 import math
 import os
+import posixpath
 import signal
 import tempfile
 import time
@@ -517,6 +518,11 @@ def beta9_download(
 
 
 class RemotePath:
+    """
+    A path inside a volume. Volume paths always use "/", so they are joined with
+    posixpath instead of os.path, which would use "\\" on Windows.
+    """
+
     def __init__(
         self, scheme: str, volume_name: str, volume_path: str, is_dir: Optional[bool] = None
     ):
@@ -558,19 +564,19 @@ class RemotePath:
         return RemotePath(
             self.scheme,
             self.volume_name,
-            os.path.join(self.volume_path, path),
+            posixpath.join(self.volume_path, path),
             other.is_dir if isinstance(other, RemotePath) else self.is_dir,
         )
 
     @property
     def name(self) -> str:
-        return os.path.basename(self.volume_path)
+        return posixpath.basename(self.volume_path)
 
     @property
     def path(self) -> str:
         if self.volume_path == "":
             return self.volume_name + "/"
-        return os.path.join(self.volume_name, self.volume_path)
+        return posixpath.join(self.volume_name, self.volume_path)
 
 
 class PathTypeConverter(click.ParamType):
