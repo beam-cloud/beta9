@@ -107,13 +107,46 @@ scene.render.filepath = "/tmp/gpu-check.png"
 bpy.ops.render.render(write_still=True)
 '""",
     ),
+    "kicad": Recipe(
+        "The KiCad 10 PCB editor full screen on an RTX 4090 kiosk desktop, with MCP for agents",
+        kiosk=["pcbnew", "/workspace/project.kicad_pcb"],
+        mcp={
+            "kicad": MCPServer(
+                "node",
+                ["/opt/kicad-mcp/dist/index.js"],
+                env={
+                    "KICAD_PYTHON": "/opt/kicad-mcp/.venv/bin/python",
+                    "KICAD_BACKEND": "auto",
+                    "KICAD_AUTO_LAUNCH": "false",
+                    "KICAD_MCP_TOOLBOXES": "core",
+                },
+            )
+        },
+        gpu="RTX4090",
+        check="""set -e
+nvidia-smi -L
+pgrep -x Xorg
+pgrep -x pcbnew
+python3 - <<'PYTHON'
+import json, urllib.request
+health = json.load(urllib.request.urlopen("http://127.0.0.1:8082/health"))
+assert health["servers"]["kicad"]["state"] == "ready", health
+PYTHON
+/opt/kicad-mcp/.venv/bin/python - <<'PYTHON'
+from kipy import KiCad
+# KiCad's API refuses requests while a dialog covers the board.
+print(KiCad(socket_path="ipc:///tmp/kicad/api.sock", timeout_ms=5000).get_board().name)
+PYTHON""",
+    ),
 }
 
 # Leaves nothing from the build that a new VM doesn't need: the recipe, caches,
-# package downloads and logs.
+# package downloads and logs. KiCad's lock files name the build VM, so a VM from
+# the template would open its board behind an "already open" dialog.
 CLEAN = """
 set -e
 rm -rf /root/template /root/.cache/uv /root/.npm /home/*/.npm /var/tmp/*
+rm -f /workspace/~*.lck
 apt-get clean
 journalctl --rotate >/dev/null 2>&1 || true
 journalctl --vacuum-time=1s >/dev/null 2>&1 || true

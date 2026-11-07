@@ -2,8 +2,8 @@
 
 The recipes behind [beam.cloud/templates](https://www.beam.cloud/templates). Each
 directory builds one public VM template: a 4 vCPU, 8 GiB VM with a 50 GiB disk and
-the software installed, plus an RTX 4090 for Blender. Starting a template gives
-you an independent VM in your own workspace:
+the software installed, plus an RTX 4090 for Blender and KiCad. Starting a
+template gives you an independent VM in your own workspace:
 
 ```sh
 curl -fsSL https://www.beam.cloud/install | sh -s -- --template openclaw   # a new machine
@@ -19,6 +19,7 @@ beam vm terminal openclaw
 | Computer use | [computer-use](computer-use) | desktop | sign in to `claude` or `codex` |
 | Video studio | [video-studio](video-studio) | desktop | sign in to `claude` or `codex` |
 | Blender | [blender](blender) | kiosk desktop, RTX 4090 | connect an agent to its MCP server |
+| KiCad | [kicad](kicad) | kiosk desktop, RTX 4090 | connect an agent to its MCP server |
 
 Every template ships signed out: accounts, API keys and chat apps are yours to
 add on your own VM.
@@ -30,9 +31,9 @@ runs; [common.sh](common.sh) has the shared steps. `publish.py` then deletes the
 recipe, caches, package downloads and logs, so the template carries only what a
 new VM needs. The personal agents, OpenClaw and Hermes, run as the `ubuntu` user
 with systemd user services that start at boot; their commands in root's shell
-switch to that user. Blender's image is the [kiosk example](../../kiosk/blender)'s
-Dockerfile, built on Beam's NVIDIA image because the recipe sets a GPU, and its
-MCP server is registered on the build VM's disk.
+switch to that user. Blender's and KiCad's images are the Dockerfiles of their
+[kiosk examples](../../kiosk), built on Beam's NVIDIA image because the recipes
+set a GPU, and their MCP servers are registered on the build VM's disk.
 
 ## Build or change a template
 
@@ -47,8 +48,8 @@ python sdk/examples/vm/templates/publish.py openclaw --context staging --keep
 
 It prints the template ID. A private template is named after the recipe in your
 workspace: `beam vm new my-openclaw --template openclaw`. Build and check VMs and
-kiosk image builds count against your workspace's CPU quota, and Blender's need
-an RTX 4090 each, so build a few templates at a time.
+kiosk image builds count against your workspace's CPU quota, and Blender's and
+KiCad's need an RTX 4090 each, so build a few templates at a time.
 
 **A public template shares the build VM's whole root disk and its snapshot history
 with every workspace, and that can't be undone.** Deleting the template removes
