@@ -279,6 +279,12 @@ func (n *FSNode) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, fuse
 	n.log("Open called with flags: %v", flags)
 
 	handle := newCacheFileHandle(n.filesystem.Client, n.bfsNode, n.filesystem.Config.PageFDCacheSize)
+	// A worker also reads its own cache mount. During process exit a FLUSH
+	// would wait for that dying FUSE server. Read-only handles have no writes
+	// to flush; RELEASE still closes their cached page descriptors.
+	if flags&syscall.O_ACCMODE == syscall.O_RDONLY {
+		fuseFlags |= fuse.FOPEN_NOFLUSH
+	}
 
 	// Enable DirectIO if specified
 	if n.filesystem.Config.CacheFS.DirectIO {
@@ -287,7 +293,7 @@ func (n *FSNode) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, fuse
 		return handle, fuseFlags, fs.OK
 	}
 
-	return handle, 0, fs.OK
+	return handle, fuseFlags, fs.OK
 }
 
 func (n *FSNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {

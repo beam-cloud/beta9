@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -9,6 +11,140 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestWorkerRolloutPrunesExpiredRequests(t *testing.T) {
+	for _, delivered := range []bool{false, true} {
+		t.Run(fmt.Sprint("delivered=", delivered), func(t *testing.T) {
+			ctx := context.Background()
+			rdb, err := NewRedisClientForTest()
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = rdb.Close() })
+			repo := NewWorkerRedisRepositoryForTest(rdb)
+			require.NoError(t, repo.AddWorker(&types.Worker{Id: "worker", Status: types.WorkerStatusAvailable}))
+			queue := common.RedisKeys.SchedulerWorkerRequests("worker")
+			pending := common.RedisKeys.SchedulerWorkerPendingRequests("worker")
+			live := []string{}
+			deliveries := map[string]string{}
+			for _, id := range []string{"expired-head", "live-first", "expired-middle", "live-last", "expired-tail"} {
+				raw, err := json.Marshal(types.ContainerRequest{ContainerId: id})
+				require.NoError(t, err)
+				if id == "live-first" || id == "live-last" {
+					require.NoError(t, rdb.HSet(ctx, common.RedisKeys.SchedulerContainerState(id), "worker_id", "worker", schedulerAssignmentIDField, id).Err())
+					live = append(live, string(raw))
+				}
+				if delivered {
+					payload, err := json.Marshal(map[string]string{"delivery_token": id + ":1", "request": string(raw)})
+					require.NoError(t, err)
+					require.NoError(t, rdb.HSet(ctx, pending, id, payload).Err())
+					if id == "live-first" || id == "live-last" {
+						deliveries[id] = string(payload)
+					}
+				} else {
+					require.NoError(t, rdb.RPush(ctx, queue, raw).Err())
+				}
+			}
+			require.NoError(t, rdb.PExpire(ctx, queue, time.Minute).Err())
+			for range 2 {
+				ready, err := repo.PrepareWorkerRollout("worker", "next")
+				require.NoError(t, err)
+				require.False(t, ready, "live requests still block replacement")
+				if delivered {
+					require.Equal(t, deliveries, rdb.HGetAll(ctx, pending).Val(), "live delivery tokens and payloads must be preserved")
+				} else {
+					actual, err := rdb.LRange(ctx, queue, 0, -1)
+					require.NoError(t, err)
+					require.Equal(t, live, actual, "live request bytes and order must be preserved")
+					require.Positive(t, rdb.PTTL(ctx, queue).Val())
+				}
+			}
+			// An outage can expire state before a worker can consume or acknowledge it.
+			// The rollout must progress without starting the obsolete worker first.
+			require.NoError(t, rdb.Del(ctx, common.RedisKeys.SchedulerContainerState("live-first"), common.RedisKeys.SchedulerContainerState("live-last")).Err())
+			ready, err := repo.PrepareWorkerRollout("worker", "next")
+			require.NoError(t, err)
+			require.True(t, ready)
+			require.Zero(t, rdb.Exists(ctx, queue, pending).Val())
+			require.Zero(t, rdb.Exists(ctx, common.RedisKeys.SchedulerContainerState("expired-head")).Val(), "pruning must not recreate state")
+		})
+	}
+}
+
+func TestWorkerRolloutPrunesQueueInBatches(t *testing.T) {
+	ctx := context.Background()
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	require.NoError(t, repo.AddWorker(&types.Worker{Id: "worker", Status: types.WorkerStatusAvailable}))
+	queue := common.RedisKeys.SchedulerWorkerRequests("worker")
+	for i := 0; i <= workerRolloutRequestBatchSize; i++ {
+		require.NoError(t, rdb.RPush(ctx, queue, fmt.Sprintf(`{"container_id":"expired-%d"}`, i)).Err())
+	}
+	ready, err := repo.PrepareWorkerRollout("worker", "next")
+	require.NoError(t, err)
+	require.False(t, ready, "the unexamined tail still blocks replacement")
+	require.EqualValues(t, 1, rdb.LLen(ctx, queue).Val())
+	ready, err = repo.PrepareWorkerRollout("worker", "next")
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.Zero(t, rdb.Exists(ctx, queue).Val())
+}
+
+func TestWorkerRolloutPreservesMalformedRequests(t *testing.T) {
+	for _, delivered := range []bool{false, true} {
+		t.Run(fmt.Sprint("delivered=", delivered), func(t *testing.T) {
+			ctx := context.Background()
+			rdb, err := NewRedisClientForTest()
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = rdb.Close() })
+			repo := NewWorkerRedisRepositoryForTest(rdb)
+			require.NoError(t, repo.AddWorker(&types.Worker{Id: "worker", Status: types.WorkerStatusAvailable}))
+			queue := common.RedisKeys.SchedulerWorkerRequests("worker")
+			pending := common.RedisKeys.SchedulerWorkerPendingRequests("worker")
+			require.NoError(t, rdb.RPush(ctx, queue, `{"container_id":"expired"}`).Err())
+			if delivered {
+				require.NoError(t, rdb.HSet(ctx, pending, "broken", `{"request":{}}`).Err())
+			} else {
+				require.NoError(t, rdb.RPush(ctx, queue, `null`).Err())
+			}
+			before, err := rdb.LRange(ctx, queue, 0, -1)
+			require.NoError(t, err)
+			ready, err := repo.PrepareWorkerRollout("worker", "next")
+			require.Error(t, err)
+			require.False(t, ready)
+			after, err := rdb.LRange(ctx, queue, 0, -1)
+			require.NoError(t, err)
+			require.Equal(t, before, after, "validate the whole batch before pruning anything")
+			if delivered {
+				require.Equal(t, `{"request":{}}`, rdb.HGet(ctx, pending, "broken").Val())
+			}
+		})
+	}
+}
+
+func TestWorkerRolloutScansExpiredPendingDeliveries(t *testing.T) {
+	ctx := context.Background()
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	require.NoError(t, repo.AddWorker(&types.Worker{Id: "worker", Status: types.WorkerStatusAvailable}))
+	pending := common.RedisKeys.SchedulerWorkerPendingRequests("worker")
+	for i := 0; i < 3*workerRolloutRequestBatchSize; i++ {
+		raw := fmt.Sprintf(`{"request":"{\"container_id\":\"expired-%d\"}","delivery_token":"token-%d"}`, i, i)
+		require.NoError(t, rdb.HSet(ctx, pending, fmt.Sprint(i), raw).Err())
+	}
+	// HSCAN may return an empty page after deliveries expire between snapshots.
+	// Its cursor must advance rather than repeatedly restarting a sparse hash.
+	ready := false
+	for i := 0; i < 10 && !ready; i++ {
+		ready, err = repo.PrepareWorkerRollout("worker", "next")
+		require.NoError(t, err)
+	}
+	require.True(t, ready)
+	require.Zero(t, rdb.Exists(ctx, pending).Val())
+	require.Empty(t, rdb.HGet(ctx, common.RedisKeys.SchedulerWorkerState("worker"), workerRolloutPendingCursor).Val())
+}
 
 func TestCancelBusyWorkerRolloutRestoresCapacityAndCordon(t *testing.T) {
 	for _, cordoned := range []bool{false, true} {

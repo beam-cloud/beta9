@@ -73,6 +73,11 @@ jobs:
           sudo apt-get update && sudo apt-get install -y tini
           go test -c -o /tmp/worker-init.test ./cmd/worker
           sudo /tmp/worker-init.test -test.v
+          sudo modprobe fuse
+          test -c /dev/fuse
+          mountpoint -q /sys/fs/fuse/connections || sudo mount -t fusectl fusectl /sys/fs/fuse/connections
+          go test -c -o /tmp/cachefs.test ./pkg/cache
+          sudo /tmp/cachefs.test -test.v -test.run '^TestCacheFSProcessExitWithOpenFile$'
   
   verify_microvm_image_pin:
     runs-on: ubuntu-latest

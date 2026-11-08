@@ -33,6 +33,8 @@ const (
 	schedulerDeliveryTokenField   = "schedule_delivery_token"
 	schedulerDeliveryAttemptField = "schedule_delivery_attempt"
 	schedulerLastBatchIDField     = "last_schedule_batch_id"
+	workerRolloutRequestBatchSize = 128
+	workerRolloutPendingCursor    = "rollout_pending_cursor"
 	// containerEvictedForField records, on an evicting victim's state, the
 	// container ids whose placement consumed its capacity (comma separated).
 	containerEvictedForField = "evicted_for"
@@ -1109,7 +1111,7 @@ func (r *WorkerRedisRepository) PrepareWorkerRollout(workerId, generation string
 			}
 		}
 		busy, err := r.workerHasOutstandingWork(ctx, workerId)
-		ready = !busy
+		ready = err == nil && !busy
 		return err
 	})
 	return ready, err
@@ -1146,11 +1148,53 @@ func (r *WorkerRedisRepository) CancelWorkerRollout(workerId, generation string)
 	})
 }
 
+// Prune only requests whose state has expired. Validate the batch before any
+// mutation, and keep live payloads, delivery tokens, and FIFO order unchanged.
+// Bounded batches let subsequent snapshots drain large orphaned queues without
+// holding Redis or the scheduling lock for an unbounded scan.
+var pruneExpiredRolloutRequestsScript = redis.NewScript(`
+local requests = redis.call("LRANGE", KEYS[1], 0, tonumber(ARGV[2]) - 1)
+local cursor = redis.call("HGET", KEYS[3], ARGV[3]) or "0"
+local scan = redis.call("HSCAN", KEYS[2], cursor, "COUNT", ARGV[2])
+local pending = scan[2]
+local kept = {}
+local expired = {}
+local function is_expired(raw)
+  local request = cjson.decode(raw)
+  assert(type(request) == "table" and type(request.container_id) == "string" and request.container_id ~= "", "invalid container request")
+  return redis.call("EXISTS", ARGV[1] .. request.container_id) == 0
+end
+for _, raw in ipairs(requests) do
+  if not is_expired(raw) then table.insert(kept, raw) end
+end
+for i = 1, #pending, 2 do
+  local delivery = cjson.decode(pending[i + 1])
+  if type(delivery) ~= "table" or type(delivery.request) ~= "string" then
+    return redis.error_reply("invalid pending container request")
+  end
+  if is_expired(delivery.request) then table.insert(expired, pending[i]) end
+end
+if #kept < #requests then
+  local ttl = redis.call("PTTL", KEYS[1])
+  redis.call("LTRIM", KEYS[1], #requests, -1)
+  for i = #kept, 1, -1 do redis.call("LPUSH", KEYS[1], kept[i]) end
+  if ttl > 0 then redis.call("PEXPIRE", KEYS[1], ttl) end
+end
+for _, assignment in ipairs(expired) do redis.call("HDEL", KEYS[2], assignment) end
+if scan[1] == "0" or redis.call("EXISTS", KEYS[2]) == 0 then
+  redis.call("HDEL", KEYS[3], ARGV[3])
+else
+  redis.call("HSET", KEYS[3], ARGV[3], scan[1])
+end
+return redis.call("EXISTS", KEYS[1], KEYS[2])
+`)
+
 func (r *WorkerRedisRepository) workerHasOutstandingWork(ctx context.Context, workerId string) (bool, error) {
-	pending, err := r.rdb.Exists(ctx,
+	pending, err := pruneExpiredRolloutRequestsScript.Run(ctx, r.rdb, []string{
 		common.RedisKeys.SchedulerWorkerRequests(workerId),
 		common.RedisKeys.SchedulerWorkerPendingRequests(workerId),
-	).Result()
+		common.RedisKeys.SchedulerWorkerState(workerId),
+	}, common.RedisKeys.SchedulerContainerState(""), workerRolloutRequestBatchSize, workerRolloutPendingCursor).Int()
 	if err != nil || pending > 0 {
 		return pending > 0, err
 	}
