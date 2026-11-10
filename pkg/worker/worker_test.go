@@ -128,6 +128,11 @@ type fakeWorkerRepoClient struct {
 	disables          int
 	cordons           int
 	metering          *pb.GetWorkerMeteringConfigResponse
+	// ToggleWorkerAvailable fails with toggleErr, counting its calls and
+	// keeping the most recent request in lastToggle.
+	toggleErr  error
+	toggles    int
+	lastToggle *pb.ToggleWorkerAvailableRequest
 	// GetWorkerServiceProxyConfig answers serviceProxy, or fails with
 	// serviceProxyErr, counting its calls.
 	serviceProxy      *pb.GetWorkerServiceProxyConfigResponse
@@ -218,6 +223,38 @@ func (f *fakeWorkerRepoClient) SetWorkerKeepAlive(ctx context.Context, req *pb.S
 		return nil, err
 	}
 	return &pb.SetWorkerKeepAliveResponse{Ok: true, PoolHeadroom: f.keepAliveHeadroom}, nil
+}
+
+func (f *fakeWorkerRepoClient) ToggleWorkerAvailable(ctx context.Context, req *pb.ToggleWorkerAvailableRequest, _ ...grpc.CallOption) (*pb.ToggleWorkerAvailableResponse, error) {
+	if err := f.call(&f.toggles, &f.toggleErr, func() { f.lastToggle = req }); err != nil {
+		return nil, err
+	}
+	return &pb.ToggleWorkerAvailableResponse{Ok: true}, nil
+}
+
+func TestKeepAliveRecoveryReacknowledgesAvailability(t *testing.T) {
+	repo := &fakeWorkerRepoClient{}
+	worker := &Worker{ctx: context.Background(), workerId: "worker", workerGeneration: "generation", workerRepoClient: repo}
+
+	require.Equal(t, 0, worker.renewKeepAlive(0))
+	require.Zero(t, repo.count(&repo.toggles), "a healthy renewal must not re-acknowledge")
+
+	repo.keepAliveErr = errors.New("gateway unavailable")
+	require.Equal(t, 1, worker.renewKeepAlive(0))
+	require.Zero(t, repo.count(&repo.toggles))
+
+	repo.keepAliveErr = nil
+	repo.toggleErr = errors.New("worker startup is disabled; awaiting controller readiness")
+	require.Equal(t, 2, worker.renewKeepAlive(1), "a failed acknowledgment is retried on the next renewal")
+
+	repo.toggleErr = nil
+	require.Equal(t, 0, worker.renewKeepAlive(2))
+	require.Equal(t, 2, repo.count(&repo.toggles))
+	require.Equal(t, "worker", repo.lastToggle.WorkerId)
+	require.Equal(t, "generation", repo.lastToggle.Generation)
+
+	require.Equal(t, 0, worker.renewKeepAlive(0))
+	require.Equal(t, 2, repo.count(&repo.toggles), "renewals stop re-acknowledging once it succeeds")
 }
 
 func (f *fakeWorkerRepoClient) GetWorkerMeteringConfig(context.Context, *pb.GetWorkerMeteringConfigRequest, ...grpc.CallOption) (*pb.GetWorkerMeteringConfigResponse, error) {
