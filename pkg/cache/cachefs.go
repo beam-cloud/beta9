@@ -136,19 +136,21 @@ func Mount(ctx context.Context, opts FSSystemOpts) (func() error, <-chan error, 
 
 	serverError := make(chan error, 1)
 	startServer := func() error {
+		go server.Serve()
+		// WaitMount opens and closes go-fuse's readiness probe on this mount.
+		// Finish it before a caller can exit with descriptors on its own mount.
+		err := server.WaitMount()
+		if err != nil {
+			serverError <- err
+			_ = server.Unmount()
+		}
+
 		go func() {
-			go server.Serve()
-
-			if err := server.WaitMount(); err != nil {
-				serverError <- err
-				return
-			}
-
 			server.Wait()
 			close(serverError)
 		}()
 
-		return nil
+		return err
 	}
 
 	return startServer, serverError, server, nil
