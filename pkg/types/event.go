@@ -218,6 +218,7 @@ const (
 	EventComputeActionPoolExtended               = "pool.extended"
 	EventComputeActionPoolCreditExhausted        = "pool.credit_exhausted"
 	EventComputeActionPoolBillingDegraded        = "pool.billing_degraded"
+	EventComputeActionPoolCreditLow              = "pool.credit_low"
 	EventComputeActionReservationUsageRecorded   = "reservation.usage_recorded"
 	EventComputeActionReservationRenewed         = "reservation.renewed"
 	EventComputeActionReservationTerminating     = "reservation.terminating"

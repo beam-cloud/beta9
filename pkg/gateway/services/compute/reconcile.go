@@ -227,18 +227,33 @@ func (s *Service) reconcileBilling(ctx context.Context, workspaceID string, stat
 		state.Reservations[i].LastBillingCheckAt = now
 	}
 
-	if !decision.OK {
-		reason := firstNonEmpty(decision.Message, "managed compute credits exhausted")
-		return s.exhaustPoolCredit(ctx, workspaceID, state, decision, reconcileReasonCreditExhausted, reason, now) || changed
-	}
-
 	// Usage is recorded in arrears; project accrued cost plus one interval of
 	// burn so termination happens before the balance hits zero.
 	accrued := s.accruedUnrecordedCents(state, now)
 	buffer := s.exhaustionBufferCents(state, now)
-	if accrued+buffer > 0 && float64(decision.AvailableCents) < accrued+buffer {
-		reason := fmt.Sprintf("managed compute credits nearly exhausted (available %d cents, accrued %.2f cents)", decision.AvailableCents, accrued)
+	reason := ""
+	if !decision.OK {
+		reason = firstNonEmpty(decision.Message, "managed compute credits exhausted")
+	} else if accrued+buffer > 0 && float64(decision.AvailableCents) < accrued+buffer {
+		reason = fmt.Sprintf("managed compute credits nearly exhausted (available %d cents, accrued %.2f cents)", decision.AvailableCents, accrued)
+	}
+	if reason != "" {
+		// Releasing reserved machines is not undoable, so give an auto
+		// top-up or a manual purchase time to land first.
+		grace := s.appConfig.ManagedCompute.Billing.CreditGracePeriodOrDefault()
+		if state.CreditLowSince.IsZero() {
+			state.CreditLowSince = now
+			changed = true
+		}
+		if now.Sub(state.CreditLowSince) < grace {
+			s.emitCreditLowEvent(workspaceID, state, decision, reason, state.CreditLowSince.Add(grace))
+			return changed
+		}
 		return s.exhaustPoolCredit(ctx, workspaceID, state, decision, reconcileReasonCreditExhausted, reason, now) || changed
+	}
+	if !state.CreditLowSince.IsZero() {
+		state.CreditLowSince = time.Time{}
+		changed = true
 	}
 
 	changed = s.renewManagedReservations(ctx, workspaceID, state, decision, accrued+buffer, now, s.computeVendors()) || changed
@@ -300,7 +315,7 @@ func (s *Service) exhaustPoolCredit(ctx context.Context, workspaceID string, sta
 	s.emitCreditExhaustedEvent(workspaceID, state, decision, message)
 	changed := closeManagedReservationBillingWindows(state, now)
 	changed = s.recordManagedUsage(ctx, workspaceID, state, now, true) || changed
-	s.disablePoolMachines(ctx, workspaceID, state.Name, reconcileReasonCreditExhausted)
+	s.disablePoolMachines(ctx, workspaceID, state.Name, terminateReason)
 	return s.terminateManagedReservations(ctx, workspaceID, state, terminateReason, message) || changed
 }
 
@@ -868,7 +883,7 @@ func (s *Service) disablePoolMachines(ctx context.Context, workspaceID, poolName
 		return
 	}
 	for _, machine := range machines {
-		if reason == reconcileReasonCreditExhausted && machine != nil && machine.Schedulable {
+		if (reason == reconcileReasonCreditExhausted || reason == reconcileReasonBillingUnreachable) && machine != nil && machine.Schedulable {
 			machine.Schedulable = false
 			_ = s.saveComputeAgentTokenState(ctx, machine)
 		}
@@ -959,6 +974,20 @@ func (s *Service) emitCreditExhaustedEvent(workspaceID string, state *model.Pool
 	}
 	event.Attrs["available_cents"] = fmt.Sprintf("%d", decision.AvailableCents)
 	event.Attrs["required_cents"] = fmt.Sprintf("%d", decision.RequiredCents)
+	s.emitComputeEvent(types.EventComputePool, event)
+}
+
+// emitCreditLowEvent warns that the pool will be released at releaseAt unless
+// credits are added. Emitted every reconcile while the pool is in grace.
+func (s *Service) emitCreditLowEvent(workspaceID string, state *model.PoolState, decision billingDecision, message string, releaseAt time.Time) {
+	event := computePoolEvent(workspaceID, state, types.EventComputeActionPoolCreditLow, "credit_low")
+	event.Message = message
+	if event.Attrs == nil {
+		event.Attrs = map[string]string{}
+	}
+	event.Attrs["available_cents"] = fmt.Sprintf("%d", decision.AvailableCents)
+	event.Attrs["required_cents"] = fmt.Sprintf("%d", decision.RequiredCents)
+	event.Attrs["release_at"] = releaseAt.UTC().Format(time.RFC3339)
 	s.emitComputeEvent(types.EventComputePool, event)
 }
 

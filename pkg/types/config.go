@@ -1080,6 +1080,11 @@ type ManagedComputeBillingConfig struct {
 	// FailureGracePeriod is how long balance checks may fail before managed
 	// reservations are terminated.
 	FailureGracePeriod time.Duration `key:"failureGracePeriod" json:"failure_grace_period"`
+	// CreditGracePeriod is how long a pool keeps running after its balance
+	// first reads as exhausted, so an auto top-up or a manual purchase can
+	// land before reserved machines are released. Zero means the default;
+	// a negative value terminates immediately (the old behaviour).
+	CreditGracePeriod time.Duration `key:"creditGracePeriod" json:"credit_grace_period"`
 }
 
 type ManagedComputeBillingPoolRouteConfig struct {
@@ -1116,6 +1121,16 @@ func (c ManagedComputeBillingConfig) FailureGracePeriodOrDefault() time.Duration
 		return c.FailureGracePeriod
 	}
 	return 10 * time.Minute
+}
+
+func (c ManagedComputeBillingConfig) CreditGracePeriodOrDefault() time.Duration {
+	if c.CreditGracePeriod < 0 {
+		return 0
+	}
+	if c.CreditGracePeriod > 0 {
+		return c.CreditGracePeriod
+	}
+	return 30 * time.Minute
 }
 
 func (c ManagedComputeBillingConfig) TimeoutOrDefault() time.Duration {
