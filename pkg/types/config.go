@@ -1077,8 +1077,11 @@ type ManagedComputeBillingConfig struct {
 	Timeout            time.Duration                          `key:"timeout" json:"timeout"`
 	ReconcileInterval  time.Duration                          `key:"reconcileInterval" json:"reconcile_interval"`
 	MinimumCreditCents int64                                  `key:"minimumCreditCents" json:"minimum_credit_cents"`
-	// FailureGracePeriod is how long balance checks may fail before managed
-	// reservations are terminated.
+	// FailureGracePeriod is how long balance checks may keep failing (billing
+	// unreachable, timing out or erroring) before managed reservations are
+	// terminated. Pools keep running and accruing cost unchecked meanwhile.
+	// Zero means the default; a negative value terminates on the first
+	// failed check. Independent of CreditGracePeriod.
 	FailureGracePeriod time.Duration `key:"failureGracePeriod" json:"failure_grace_period"`
 	// CreditGracePeriod is how long a pool keeps running after its balance
 	// first reads as exhausted, so an auto top-up or a manual purchase can
@@ -1117,10 +1120,13 @@ func (c ManagedComputeBillingConfig) MinimumCreditCentsOrDefault() int64 {
 }
 
 func (c ManagedComputeBillingConfig) FailureGracePeriodOrDefault() time.Duration {
+	if c.FailureGracePeriod < 0 {
+		return 0
+	}
 	if c.FailureGracePeriod > 0 {
 		return c.FailureGracePeriod
 	}
-	return 10 * time.Minute
+	return 30 * time.Minute
 }
 
 func (c ManagedComputeBillingConfig) CreditGracePeriodOrDefault() time.Duration {
