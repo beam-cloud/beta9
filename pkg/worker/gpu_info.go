@@ -137,9 +137,19 @@ var queryGPUHealth = func(deviceUUIDs string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	output, err := exec.CommandContext(ctx, "nvidia-smi", "--query-gpu=uuid,gpu_recovery_action", "--format=csv,noheader,nounits", "--id="+deviceUUIDs).CombinedOutput()
-	if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 2 &&
-		strings.TrimSpace(string(output)) == `Field "gpu_recovery_action" is not a valid field to query.` {
-		return nil, nil // Older drivers do not expose recovery state.
+	if exit, ok := err.(*exec.ExitError); ok {
+		if exit.ExitCode() == 2 && strings.TrimSpace(string(output)) == `Field "gpu_recovery_action" is not a valid field to query.` {
+			return nil, nil // Older drivers do not expose recovery state.
+		}
+		// NVIDIA reports an internal driver error with status 255 instead of
+		// a recovery action. Leaving that worker available repeatedly sends
+		// containers to GPUs that it cannot allocate.
+		if exit.ExitCode() == 255 {
+			err = errors.Join(errGPUUnhealthy, err)
+		}
+	}
+	if err != nil && strings.TrimSpace(string(output)) != "" {
+		err = fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return output, err
 }
