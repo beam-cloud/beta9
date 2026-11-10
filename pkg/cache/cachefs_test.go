@@ -34,6 +34,7 @@ func TestCacheFSOpenPreservesWriteFlushAndDirectIO(t *testing.T) {
 }
 
 func TestCacheFSProcessExitWithOpenFile(t *testing.T) {
+	const exitReadyMarker = "cachefs exit test ready"
 	if os.Getenv("BEAM_TEST_CACHEFS_EXIT") != "" {
 		ctx := context.Background()
 		metadata := NewMockCacheMetadataStore()
@@ -44,15 +45,15 @@ func TestCacheFSProcessExitWithOpenFile(t *testing.T) {
 		config.CacheFS.MountPoint = os.Getenv("BEAM_TEST_CACHEFS_MOUNT")
 		config.CacheFS.DirectMount = true
 		config.CacheFS.DirectIO = os.Getenv("BEAM_TEST_CACHEFS_DIRECT") == "true"
-		start, _, server, err := Mount(ctx, FSSystemOpts{Config: config, MetadataStore: metadata})
+		start, _, _, err := Mount(ctx, FSSystemOpts{Config: config, MetadataStore: metadata})
 		require.NoError(t, err)
 		require.NoError(t, start())
-		require.NoError(t, server.WaitMount())
 		file, err := os.Open(filepath.Join(config.CacheFS.MountPoint, "file"))
 		require.NoError(t, err)
 		defer file.Close() // Keep it live; abrupt exit deliberately bypasses cleanup.
 		_, err = file.Read(make([]byte, 1))
 		require.ErrorIs(t, err, io.EOF)
+		fmt.Fprintln(os.Stdout, exitReadyMarker)
 		// Keep a descriptor on our own FUSE mount open while all server threads
 		// exit. A synchronous FLUSH here waits forever for this dying process.
 		if os.Getenv("BEAM_TEST_CACHEFS_EXIT") == "kill" {
@@ -102,8 +103,13 @@ func TestCacheFSProcessExitWithOpenFile(t *testing.T) {
 					case <-time.After(time.Second):
 						t.Fatal("could not recover blocked FUSE test process")
 					}
-					t.Fatalf("process exit blocked on its own cache mount: %s", output.String())
+					phase := "before reaching process exit"
+					if strings.Contains(output.String(), exitReadyMarker) {
+						phase = "during process exit"
+					}
+					t.Fatalf("process blocked on its own cache mount %s: %s", phase, output.String())
 				}
+				require.Contains(t, output.String(), exitReadyMarker)
 				if mode == "kill" {
 					var exit *exec.ExitError
 					require.True(t, errors.As(err, &exit), "%s", output.String())
