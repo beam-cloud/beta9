@@ -185,8 +185,14 @@ func (s *Service) poolNeedsManagedBilling(state *model.PoolState, now time.Time)
 	if state != nil && state.BYOC != nil {
 		return true
 	}
+	inGrace := state != nil && (!state.BillingDegradedSince.IsZero() || !state.CreditLowSince.IsZero())
 	for _, reservation := range state.Reservations {
 		if reservation.Managed() && reservation.ActiveAt(now) {
+			return true
+		}
+		// Keep checking a pool whose reservations are held past their TTL by a
+		// grace period, so recovery renews them and expiry releases them.
+		if inGrace && reservation.Managed() && !reservationClosed(reservation.Status) && reservation.Status != model.ReservationTerminating {
 			return true
 		}
 		if _, _, ok := reservationBillingWindow(&reservation, now); ok {
@@ -209,9 +215,28 @@ func (s *Service) reconcileBilling(ctx context.Context, workspaceID string, stat
 			state.BillingDegradedSince = now
 			changed = true
 		}
-		s.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolBillingDegraded, "degraded"))
-
 		grace := s.appConfig.ManagedCompute.Billing.FailureGracePeriodOrDefault()
+		event := computePoolEvent(workspaceID, state, types.EventComputeActionPoolBillingDegraded, "degraded")
+		if event.Attrs == nil {
+			event.Attrs = map[string]string{}
+		}
+		// Customer-visible: class and status only. The raw error can carry
+		// the internal billing response body, so it goes to private logs.
+		errorClass, httpStatus := classifyBillingError(err)
+		event.Attrs["error_class"] = errorClass
+		if httpStatus > 0 {
+			event.Attrs["http_status"] = fmt.Sprintf("%d", httpStatus)
+		}
+		log.Warn().Err(err).
+			Str("workspace_id", workspaceID).
+			Str("pool_name", state.Name).
+			Str("error_class", errorClass).
+			Int("http_status", httpStatus).
+			Time("billing_degraded_since", state.BillingDegradedSince).
+			Msg("managed compute balance check failed")
+		event.Attrs["release_at"] = state.BillingDegradedSince.Add(grace).UTC().Format(time.RFC3339)
+		s.emitComputeEvent(types.EventComputePool, event)
+
 		if now.Sub(state.BillingDegradedSince) >= grace {
 			reason := fmt.Sprintf("managed compute billing unreachable for %s", grace)
 			return s.exhaustPoolCredit(ctx, workspaceID, state, billingDecision{}, reconcileReasonBillingUnreachable, reason, now) || changed
@@ -227,18 +252,33 @@ func (s *Service) reconcileBilling(ctx context.Context, workspaceID string, stat
 		state.Reservations[i].LastBillingCheckAt = now
 	}
 
-	if !decision.OK {
-		reason := firstNonEmpty(decision.Message, "managed compute credits exhausted")
-		return s.exhaustPoolCredit(ctx, workspaceID, state, decision, reconcileReasonCreditExhausted, reason, now) || changed
-	}
-
 	// Usage is recorded in arrears; project accrued cost plus one interval of
 	// burn so termination happens before the balance hits zero.
 	accrued := s.accruedUnrecordedCents(state, now)
 	buffer := s.exhaustionBufferCents(state, now)
-	if accrued+buffer > 0 && float64(decision.AvailableCents) < accrued+buffer {
-		reason := fmt.Sprintf("managed compute credits nearly exhausted (available %d cents, accrued %.2f cents)", decision.AvailableCents, accrued)
+	reason := ""
+	if !decision.OK {
+		reason = firstNonEmpty(decision.Message, "managed compute credits exhausted")
+	} else if accrued+buffer > 0 && float64(decision.AvailableCents) < accrued+buffer {
+		reason = fmt.Sprintf("managed compute credits nearly exhausted (available %d cents, accrued %.2f cents)", decision.AvailableCents, accrued)
+	}
+	if reason != "" {
+		// Releasing reserved machines is not undoable, so give an auto
+		// top-up or a manual purchase time to land first.
+		grace := s.appConfig.ManagedCompute.Billing.CreditGracePeriodOrDefault()
+		if state.CreditLowSince.IsZero() {
+			state.CreditLowSince = now
+			changed = true
+		}
+		if now.Sub(state.CreditLowSince) < grace {
+			s.emitCreditLowEvent(workspaceID, state, decision, reason, state.CreditLowSince.Add(grace))
+			return changed
+		}
 		return s.exhaustPoolCredit(ctx, workspaceID, state, decision, reconcileReasonCreditExhausted, reason, now) || changed
+	}
+	if !state.CreditLowSince.IsZero() {
+		state.CreditLowSince = time.Time{}
+		changed = true
 	}
 
 	changed = s.renewManagedReservations(ctx, workspaceID, state, decision, accrued+buffer, now, s.computeVendors()) || changed
@@ -256,7 +296,9 @@ func (s *Service) renewManagedReservations(ctx context.Context, workspaceID stri
 	changed := false
 	for i := range state.Reservations {
 		reservation := &state.Reservations[i]
-		if !reservation.Managed() || !reservation.ActiveAt(now) || reservation.ExpiresAt.IsZero() {
+		// Not ActiveAt(now): a reservation held past its TTL by a billing
+		// grace period must still be renewable once billing recovers.
+		if !reservation.Managed() || reservationClosed(reservation.Status) || reservation.Status == model.ReservationTerminating || reservation.ExpiresAt.IsZero() {
 			continue
 		}
 		if reservation.ExpiresAt.Sub(now) > renewLead {
@@ -274,20 +316,30 @@ func (s *Service) renewManagedReservations(ctx context.Context, workspaceID stri
 			changed = true
 			continue
 		}
+		// A reservation held past its expiry by a billing grace period renews
+		// from where it lapsed, committing the hours it ran in the meantime.
+		hours := int64(1)
 		newExpiry := reservation.ExpiresAt.Add(time.Hour)
+		for newExpiry.Sub(now) <= renewLead {
+			newExpiry = newExpiry.Add(time.Hour)
+			hours++
+		}
+		if float64(decision.AvailableCents) < reservedCents+float64(hours)*hourlyCents {
+			continue
+		}
 		if err := vendor.ExtendReservation(ctx, computeReservationInstanceID(*reservation), newExpiry); err != nil {
 			reservation.LastError = fmt.Sprintf("renewal failed: %v", err)
 			changed = true
 			continue
 		}
 		reservation.ExpiresAt = newExpiry
-		reservation.CommittedMicros += reservation.HourlyCostMicros
+		reservation.CommittedMicros += reservation.HourlyCostMicros * hours
 		reservation.LastError = ""
-		state.CommittedSpendMicros += s.billableMicros(reservation.HourlyCostMicros)
+		state.CommittedSpendMicros += s.billableMicros(reservation.HourlyCostMicros) * hours
 		if state.ExpiresAt.Before(newExpiry) {
 			state.ExpiresAt = newExpiry
 		}
-		reservedCents += hourlyCents
+		reservedCents += float64(hours) * hourlyCents
 		s.emitComputeEvent(types.EventComputePool, computeReservationEvent(workspaceID, state, *reservation, types.EventComputeActionReservationRenewed, string(reservation.Status)))
 		changed = true
 	}
@@ -300,7 +352,7 @@ func (s *Service) exhaustPoolCredit(ctx context.Context, workspaceID string, sta
 	s.emitCreditExhaustedEvent(workspaceID, state, decision, message)
 	changed := closeManagedReservationBillingWindows(state, now)
 	changed = s.recordManagedUsage(ctx, workspaceID, state, now, true) || changed
-	s.disablePoolMachines(ctx, workspaceID, state.Name, reconcileReasonCreditExhausted)
+	s.disablePoolMachines(ctx, workspaceID, state.Name, terminateReason)
 	return s.terminateManagedReservations(ctx, workspaceID, state, terminateReason, message) || changed
 }
 
@@ -722,6 +774,13 @@ func (s *Service) reconcileReservationExpiry(ctx context.Context, workspaceID st
 	if !reservation.Managed() || reservation.ExpiresAt.IsZero() || reservation.ExpiresAt.After(now) {
 		return false
 	}
+	// Renewal cannot run while billing is degraded or credit is low, so a
+	// reservation can reach its TTL mid-grace. Hold it until the grace
+	// resolves: billing recovers (renewal catches up) or the grace runs out
+	// (the pool is released with the billing reason, at the advertised time).
+	if releaseAt, ok := s.billingGraceReleaseAt(state); ok && now.Before(releaseAt) {
+		return false
+	}
 	return s.terminateReservation(ctx, workspaceID, state, reservation, vendors, reconcileReasonReservationExpired, "reservation ttl expired")
 }
 
@@ -868,7 +927,7 @@ func (s *Service) disablePoolMachines(ctx context.Context, workspaceID, poolName
 		return
 	}
 	for _, machine := range machines {
-		if reason == reconcileReasonCreditExhausted && machine != nil && machine.Schedulable {
+		if (reason == reconcileReasonCreditExhausted || reason == reconcileReasonBillingUnreachable) && machine != nil && machine.Schedulable {
 			machine.Schedulable = false
 			_ = s.saveComputeAgentTokenState(ctx, machine)
 		}
@@ -959,6 +1018,39 @@ func (s *Service) emitCreditExhaustedEvent(workspaceID string, state *model.Pool
 	}
 	event.Attrs["available_cents"] = fmt.Sprintf("%d", decision.AvailableCents)
 	event.Attrs["required_cents"] = fmt.Sprintf("%d", decision.RequiredCents)
+	s.emitComputeEvent(types.EventComputePool, event)
+}
+
+// billingGraceReleaseAt is when a pool in a billing grace period (balance
+// checks failing, or balance low) will be released if nothing changes.
+func (s *Service) billingGraceReleaseAt(state *model.PoolState) (time.Time, bool) {
+	if state == nil {
+		return time.Time{}, false
+	}
+	cfg := s.appConfig.ManagedCompute.Billing
+	var releaseAt time.Time
+	if !state.BillingDegradedSince.IsZero() {
+		releaseAt = state.BillingDegradedSince.Add(cfg.FailureGracePeriodOrDefault())
+	}
+	if !state.CreditLowSince.IsZero() {
+		if at := state.CreditLowSince.Add(cfg.CreditGracePeriodOrDefault()); at.After(releaseAt) {
+			releaseAt = at
+		}
+	}
+	return releaseAt, !releaseAt.IsZero()
+}
+
+// emitCreditLowEvent warns that the pool will be released at releaseAt unless
+// credits are added. Emitted every reconcile while the pool is in grace.
+func (s *Service) emitCreditLowEvent(workspaceID string, state *model.PoolState, decision billingDecision, message string, releaseAt time.Time) {
+	event := computePoolEvent(workspaceID, state, types.EventComputeActionPoolCreditLow, "credit_low")
+	event.Message = message
+	if event.Attrs == nil {
+		event.Attrs = map[string]string{}
+	}
+	event.Attrs["available_cents"] = fmt.Sprintf("%d", decision.AvailableCents)
+	event.Attrs["required_cents"] = fmt.Sprintf("%d", decision.RequiredCents)
+	event.Attrs["release_at"] = releaseAt.UTC().Format(time.RFC3339)
 	s.emitComputeEvent(types.EventComputePool, event)
 }
 

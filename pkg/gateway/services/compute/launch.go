@@ -194,6 +194,9 @@ func (s *Service) launchPoolCapacityLocked(ctx context.Context, workspaceID, act
 		if !existing.BillingDegradedSince.IsZero() {
 			state.BillingDegradedSince = existing.BillingDegradedSince
 		}
+		if !existing.CreditLowSince.IsZero() {
+			state.CreditLowSince = existing.CreditLowSince
+		}
 	}
 	if err := s.savePrivatePoolState(ctx, workspaceID, state); err != nil {
 		err = s.compensatePoolLaunchFailure(ctx, workspaceID, pool.Name, existing, vendors, createdReservations, err)

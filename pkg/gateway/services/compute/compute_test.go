@@ -4103,6 +4103,7 @@ func TestReconcileManagedComputeTerminatesReservationsWhenCreditsAreExhausted(t 
 		machines: map[string][]*model.AgentTokenState{fakeComputeKey("workspace-1", "pool-1"): {machine}},
 	}
 	service := &Service{
+		appConfig:   types.AppConfig{ManagedCompute: types.ManagedComputeConfig{Billing: types.ManagedComputeBillingConfig{CreditGracePeriod: -1}}},
 		computeRepo: repo,
 		billing: &fakeManagedBilling{
 			balanceDecision: billingDecision{
@@ -4131,6 +4132,81 @@ func TestReconcileManagedComputeTerminatesReservationsWhenCreditsAreExhausted(t 
 	}
 	if machine.Schedulable {
 		t.Fatal("credit exhaustion did not mark the machine unschedulable")
+	}
+}
+
+func TestReconcileManagedComputeWaitsOutCreditGraceBeforeTerminating(t *testing.T) {
+	now := time.Now().UTC()
+	state := &model.PoolState{
+		WorkspaceID: "workspace-1",
+		Name:        "pool-1",
+		Reservations: []model.Reservation{
+			{
+				ID:               "reservation-1",
+				Provider:         "shadeform",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationActive,
+				CreatedAt:        now.Add(-time.Hour),
+				ExpiresAt:        now.Add(time.Hour),
+				HourlyCostMicros: 1_000_000,
+			},
+		},
+	}
+	machine := &model.AgentTokenState{
+		WorkspaceID:         "workspace-1",
+		PoolName:            "pool-1",
+		MachineID:           "machine-1",
+		Schedulable:         true,
+		LastHeartbeatAt:     now,
+		LastJoinAt:          now,
+		Executor:            types.DefaultAgentWorkerContainerMode,
+		CPUCount:            4,
+		CPUMillicores:       4000,
+		MemoryMB:            8192,
+		NetworkSlotPoolSize: 16,
+	}
+	repo := &fakeComputeRepo{
+		pools:    map[string][]*model.PoolState{"workspace-1": {state}},
+		machines: map[string][]*model.AgentTokenState{fakeComputeKey("workspace-1", "pool-1"): {machine}},
+	}
+	service := &Service{
+		computeRepo: repo,
+		billing: &fakeManagedBilling{
+			balanceDecision: billingDecision{
+				OK:             false,
+				ErrorCode:      launchErrorInsufficientCredit,
+				Message:        "credits exhausted",
+				AvailableCents: 0,
+				RequiredCents:  2500,
+			},
+		},
+	}
+
+	if err := service.ReconcileManagedCompute(context.Background()); err != nil {
+		t.Fatalf("ReconcileManagedCompute() error = %v", err)
+	}
+	saved := repo.pools["workspace-1"][0]
+	if got := saved.Reservations[0].Status; got != model.ReservationActive {
+		t.Fatalf("reservation status in grace = %q, want active", got)
+	}
+	if saved.CreditLowSince.IsZero() {
+		t.Fatal("grace start was not recorded")
+	}
+	if !machine.Schedulable {
+		t.Fatal("machine was disabled during the credit grace period")
+	}
+
+	// Grace elapsed without a top-up: the pool is released.
+	saved.CreditLowSince = time.Now().Add(-31 * time.Minute)
+	if err := service.ReconcileManagedCompute(context.Background()); err != nil {
+		t.Fatalf("ReconcileManagedCompute() error = %v", err)
+	}
+	saved = repo.pools["workspace-1"][0]
+	if got, want := saved.Reservations[0].Status, model.ReservationTerminating; got != want {
+		t.Fatalf("reservation status after grace = %q, want %q", got, want)
+	}
+	if machine.Schedulable {
+		t.Fatal("machine still schedulable after grace expired")
 	}
 }
 

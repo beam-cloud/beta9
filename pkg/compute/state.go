@@ -28,8 +28,12 @@ type PoolState struct {
 	ExpiresAt            time.Time      `json:"expires_at"`
 	// BillingDegradedSince marks when balance checks started failing;
 	// reservations terminate once the grace period is exceeded.
-	BillingDegradedSince time.Time          `json:"billing_degraded_since,omitempty"`
-	BYOC                 *BYOCProviderState `json:"byoc,omitempty"`
+	BillingDegradedSince time.Time `json:"billing_degraded_since,omitempty"`
+	// CreditLowSince marks when the balance first read as exhausted; the pool
+	// is released only once the credit grace period has passed without a
+	// top-up.
+	CreditLowSince time.Time          `json:"credit_low_since,omitempty"`
+	BYOC           *BYOCProviderState `json:"byoc,omitempty"`
 	// ManagementSource marks serverless inventory owned by the control plane
 	// rather than a tenant. WorkerConfig preserves its complete configuration.
 	ManagementSource types.WorkerPoolManagementSource `json:"management_source,omitempty"`
