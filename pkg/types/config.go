@@ -1242,9 +1242,27 @@ type VMConfig struct {
 	// Optional external browser sign-in endpoint; empty disables redirects.
 	// Receives workspace, vm, port and a relative next path. The provider must
 	// authorize the viewer and obtain a session through the management API.
-	BrowserAuthURL string          `key:"browserAuthURL" json:"browser_auth_url"`
-	Network        VMNetworkConfig `key:"network" json:"network"`
-	WebRTC         VMWebRTCConfig  `key:"webrtc" json:"webrtc"`
+	BrowserAuthURL string             `key:"browserAuthURL" json:"browser_auth_url"`
+	Network        VMNetworkConfig    `key:"network" json:"network"`
+	WebRTC         VMWebRTCConfig     `key:"webrtc" json:"webrtc"`
+	GitHubRunners  GitHubRunnerConfig `key:"githubRunners" json:"github_runners"`
+}
+
+// GitHubRunnerConfig runs GitHub Actions jobs on ordinary CPU VMs through a
+// GitHub App; an empty AppID disables it. The App needs Actions (read) and
+// Administration (write) on repositories, Members (read) on organizations, and
+// Workflow job events at the gateway's /api/v1/vm/github-runners/webhook. Its
+// setup URL, with redirect on update, and its callback URL are the dashboard's
+// /runners page, without OAuth during installation. ImageID is
+// docker/Dockerfile.github-runner, registered with beam vm image build.
+type GitHubRunnerConfig struct {
+	AppID         string `key:"appID" json:"app_id"`
+	AppSlug       string `key:"appSlug" json:"app_slug"`
+	ClientID      string `key:"clientID" json:"client_id"`
+	ClientSecret  string `key:"clientSecret" json:"client_secret"`
+	PrivateKey    string `key:"privateKey" json:"private_key"`
+	WebhookSecret string `key:"webhookSecret" json:"webhook_secret"`
+	ImageID       string `key:"imageID" json:"image_id"`
 }
 
 // VMWebRTCConfig bounds authenticated kiosk media on the shared TCP gateway.
