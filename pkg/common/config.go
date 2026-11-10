@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -83,23 +84,14 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 	// Attempt to load configuration from string in CONFIG_JSON
 	configJson := os.Getenv("CONFIG_JSON")
 	if configJson != "" {
-		// CONFIG_JSON uses JSON field names, while the defaults and file
-		// overlays use key tags. Preserve those values before switching tags.
-		var merged T
-		if err := cm.kf.UnmarshalWithConf("", &merged, koanf.UnmarshalConf{Tag: cm.tag}); err != nil {
-			return nil, err
+		// Translate only the overlay. Serializing the base configuration would
+		// discard fields tagged json:"-", including file-supplied secrets.
+		data, err := configJSONKeySpace([]byte(configJson), reflect.TypeOf((*T)(nil)).Elem())
+		if err == nil {
+			err = cm.LoadConfig(JSONConfigFormat, rawbytes.Provider(data))
 		}
-		baseline, err := stdjson.Marshal(merged)
 		if err != nil {
-			return nil, err
-		}
-		if err := cm.LoadConfig(JSONConfigFormat, rawbytes.Provider(baseline)); err != nil {
-			return nil, err
-		}
-		if err := cm.LoadConfig(JSONConfigFormat, rawbytes.Provider([]byte(configJson))); err != nil {
 			log.Error().Err(err).Msg("failed to load config from CONFIG_JSON")
-		} else {
-			cm.tag = "json"
 		}
 	}
 
@@ -122,7 +114,77 @@ func minimalConfigEnabled() bool {
 
 // Print returns a string representation of the current configuration state.
 func (cm *ConfigManager[T]) Print() string {
-	return cm.kf.Sprint()
+	// Match the config's JSON visibility rules, especially json:"-" fields.
+	data, err := stdjson.MarshalIndent(cm.GetConfig(), "", "  ")
+	if err != nil {
+		return fmt.Sprintf("failed to print config: %v", err)
+	}
+	return string(data)
+}
+
+// configJSONKeySpace maps JSON field names to the key tags used by file
+// configuration. Unknown struct fields are ignored, as they are when decoding
+// JSON configuration; forwarding them could expose key-only, json:"-" fields.
+func configJSONKeySpace(data []byte, configType reflect.Type) ([]byte, error) {
+	var overlay map[string]any
+	if err := stdjson.Unmarshal(data, &overlay); err != nil {
+		return nil, err
+	}
+	return stdjson.Marshal(configJSONValue(overlay, configType))
+}
+
+func configJSONValue(value any, configType reflect.Type) any {
+	for configType.Kind() == reflect.Pointer {
+		configType = configType.Elem()
+	}
+	switch configType.Kind() {
+	case reflect.Struct:
+		object, ok := value.(map[string]any)
+		if !ok {
+			return value
+		}
+		mapped := make(map[string]any, len(object))
+		for i := 0; i < configType.NumField(); i++ {
+			field := configType.Field(i)
+			jsonName, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+			if field.PkgPath != "" || jsonName == "-" {
+				continue
+			}
+			if jsonName == "" {
+				jsonName = field.Name
+			}
+			value, found := object[jsonName]
+			if !found {
+				for name, candidate := range object {
+					if strings.EqualFold(name, jsonName) {
+						value, found = candidate, true
+						break
+					}
+				}
+			}
+			keyName, _, _ := strings.Cut(field.Tag.Get("key"), ",")
+			if keyName == "" {
+				keyName = field.Name
+			}
+			if found && keyName != "-" {
+				mapped[keyName] = configJSONValue(value, field.Type)
+			}
+		}
+		return mapped
+	case reflect.Map:
+		if object, ok := value.(map[string]any); ok {
+			for name, value := range object {
+				object[name] = configJSONValue(value, configType.Elem())
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		if array, ok := value.([]any); ok {
+			for i, value := range array {
+				array[i] = configJSONValue(value, configType.Elem())
+			}
+		}
+	}
+	return value
 }
 
 // GetConfig retrieves the current configuration of type 'T' from the ConfigManager.
