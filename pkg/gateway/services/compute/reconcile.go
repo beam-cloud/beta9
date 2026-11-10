@@ -220,7 +220,20 @@ func (s *Service) reconcileBilling(ctx context.Context, workspaceID string, stat
 		if event.Attrs == nil {
 			event.Attrs = map[string]string{}
 		}
-		event.Attrs["error"] = err.Error()
+		// Customer-visible: class and status only. The raw error can carry
+		// the internal billing response body, so it goes to private logs.
+		errorClass, httpStatus := classifyBillingError(err)
+		event.Attrs["error_class"] = errorClass
+		if httpStatus > 0 {
+			event.Attrs["http_status"] = fmt.Sprintf("%d", httpStatus)
+		}
+		log.Warn().Err(err).
+			Str("workspace_id", workspaceID).
+			Str("pool_name", state.Name).
+			Str("error_class", errorClass).
+			Int("http_status", httpStatus).
+			Time("billing_degraded_since", state.BillingDegradedSince).
+			Msg("managed compute balance check failed")
 		event.Attrs["release_at"] = state.BillingDegradedSince.Add(grace).UTC().Format(time.RFC3339)
 		s.emitComputeEvent(types.EventComputePool, event)
 

@@ -3,12 +3,28 @@ package compute
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	model "github.com/beam-cloud/beta9/pkg/compute"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
+
+// capturedEvents records compute events; other EventRepository methods are
+// not used by these tests.
+type capturedEvents struct {
+	repository.EventRepository
+	events []types.EventComputeSchema
+}
+
+func (c *capturedEvents) PushComputeEvent(_ string, event types.EventComputeSchema) {
+	c.events = append(c.events, event)
+}
 
 // graceFixture is one managed reservation on one schedulable machine.
 func graceFixture(now, expiresAt time.Time) (*model.PoolState, *model.AgentTokenState, *fakeComputeRepo) {
@@ -236,5 +252,90 @@ func TestBillingGraceDefaults(t *testing.T) {
 	cfg.FailureGracePeriod = -1
 	if got := cfg.FailureGracePeriodOrDefault(); got != 0 {
 		t.Fatalf("negative failure grace = %s, want 0 (release on first failure)", got)
+	}
+}
+
+// Billing failures reach customer-visible pool events only as a fixed class
+// and status code, never the internal response body.
+func TestBillingDegradedEventCarriesOnlySanitizedErrorFields(t *testing.T) {
+	const secret = "Traceback (most recent call last): psycopg.errors.LockNotAvailable internal-host:5432 token=abc"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(secret + strings.Repeat("x", 4096)))
+	}))
+	defer upstream.Close()
+
+	now := time.Now().UTC()
+	_, _, repo := graceFixture(now, now.Add(time.Hour))
+	events := &capturedEvents{}
+	service := &Service{
+		computeRepo: repo,
+		eventRepo:   events,
+		billing:     &httpManagedBilling{endpoint: upstream.URL, client: upstream.Client()},
+	}
+	reconcileOnce(t, service, repo)
+
+	var degraded *types.EventComputeSchema
+	for i := range events.events {
+		if events.events[i].Action == types.EventComputeActionPoolBillingDegraded {
+			degraded = &events.events[i]
+		}
+	}
+	if degraded == nil {
+		t.Fatal("no pool.billing_degraded event emitted")
+	}
+	if got := degraded.Attrs["error_class"]; got != billingErrorClassHTTP {
+		t.Fatalf("error_class = %q, want %q", got, billingErrorClassHTTP)
+	}
+	if got := degraded.Attrs["http_status"]; got != "500" {
+		t.Fatalf("http_status = %q, want 500", got)
+	}
+	if _, ok := degraded.Attrs["error"]; ok {
+		t.Fatal("raw error attr present on customer-visible event")
+	}
+	for _, e := range events.events {
+		for k, v := range e.Attrs {
+			if strings.Contains(v, "Traceback") || strings.Contains(v, "token=") || len(v) > 64 {
+				t.Fatalf("event %s attr %s leaks billing response: %.80q", e.Action, k, v)
+			}
+		}
+		if strings.Contains(e.Message, "Traceback") {
+			t.Fatalf("event %s message leaks billing response", e.Action)
+		}
+	}
+}
+
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string   { return "i/o timeout" }
+func (timeoutErr) Timeout() bool   { return true }
+func (timeoutErr) Temporary() bool { return true }
+
+type refusedErr struct{}
+
+func (refusedErr) Error() string   { return "dial tcp 10.0.0.1:443: connect: connection refused" }
+func (refusedErr) Timeout() bool   { return false }
+func (refusedErr) Temporary() bool { return false }
+
+func TestClassifyBillingError(t *testing.T) {
+	cases := []struct {
+		err        error
+		class      string
+		httpStatus int
+	}{
+		{&billingHTTPError{Path: "balance/", StatusCode: 503, Body: "nginx"}, billingErrorClassHTTP, 503},
+		{fmt.Errorf("wrap: %w", &billingHTTPError{StatusCode: 500}), billingErrorClassHTTP, 500},
+		{context.DeadlineExceeded, billingErrorClassTimeout, 0},
+		{timeoutErr{}, billingErrorClassTimeout, 0},
+		{refusedErr{}, billingErrorClassUnreachable, 0},
+		{context.Canceled, billingErrorClassCanceled, 0},
+		{errManagedBillingUnavailable, billingErrorClassNotConfigured, 0},
+		{errors.New("something with a body"), billingErrorClassUnknown, 0},
+	}
+	for _, tc := range cases {
+		class, status := classifyBillingError(tc.err)
+		if class != tc.class || status != tc.httpStatus {
+			t.Errorf("classifyBillingError(%v) = (%q, %d), want (%q, %d)", tc.err, class, status, tc.class, tc.httpStatus)
+		}
 	}
 }
