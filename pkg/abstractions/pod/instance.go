@@ -28,6 +28,7 @@ type podInstance struct {
 	durableDiskPlacementRepos abstractions.DurableDiskPlacementRepos
 	readyChecks               singleflight.Group
 	statusChecks              containerStatusChecks
+	lockDeletes               keepWarmLockDeletes
 }
 
 const (
