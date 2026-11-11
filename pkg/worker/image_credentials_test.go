@@ -49,6 +49,20 @@ func TestBuildahAuthFileScopesOnlySourceRegistry(t *testing.T) {
 	require.Equal(t, []string{"--creds", "user:pa:ss"}, client.buildahAuthArgs(context.Background(), request, "private.example/base:tag"), "single-registry pre-pull is unchanged")
 }
 
+func TestBuildahAuthFileLeavesOutBuildRegistry(t *testing.T) {
+	client := &ImageClient{config: types.AppConfig{ImageService: types.ImageServiceConfig{BuildRegistry: "registry.example.com"}}}
+	request := &types.ContainerRequest{BuildOptions: types.BuildOptions{SourceImageCreds: "user:secret"}}
+	sourceImage := "registry.example.com/users:0123456789abcdef"
+	runroot := t.TempDir()
+	args, err := client.buildahAuthFileArgs(context.Background(), request, sourceImage, runroot)
+	require.NoError(t, err)
+	require.Nil(t, args)
+	entries, err := os.ReadDir(runroot)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+	require.Equal(t, []string{"--creds", "user:secret"}, client.buildahAuthArgs(context.Background(), request, sourceImage), "the pull before the build keeps them")
+}
+
 func TestBuildahWithoutCredentialsPreservesAmbientAuth(t *testing.T) {
 	ambient := filepath.Join(t.TempDir(), "ambient.json")
 	require.NoError(t, os.WriteFile(ambient, []byte("ambient-canary"), 0600))

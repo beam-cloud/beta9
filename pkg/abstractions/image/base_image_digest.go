@@ -40,6 +40,27 @@ func dockerfileCredentialSource(dockerfile string) (string, error) {
 	return "", fmt.Errorf("registry credentials require a literal Dockerfile FROM image")
 }
 
+// dockerfileBaseImages lists the literal images that a Dockerfile's stages
+// start from, skipping scratch and earlier stages.
+func dockerfileBaseImages(dockerfile string) []string {
+	var images []string
+	stages := make(map[string]bool)
+	for _, line := range strings.SplitAfter(dockerfile, "\n") {
+		matches := dockerfileFromLinePattern.FindStringSubmatch(line)
+		if matches == nil {
+			continue
+		}
+		if source := matches[2]; !strings.EqualFold(source, "scratch") && !stages[strings.ToLower(source)] && !strings.ContainsAny(source, "$\\") {
+			images = append(images, source)
+		}
+		fields := strings.Fields(matches[3])
+		if len(fields) >= 2 && strings.EqualFold(fields[0], "AS") {
+			stages[strings.ToLower(fields[1])] = true
+		}
+	}
+	return images
+}
+
 type baseImageDigestCacheEntry struct {
 	digest    string
 	expiresAt time.Time
