@@ -9,7 +9,7 @@ import sys
 import tempfile
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Dict, Mapping, MutableMapping, Optional, Tuple, Union
+from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Tuple, Union
 
 from . import terminal
 from .env import is_remote
@@ -66,6 +66,9 @@ class SDKSettings:
     auth_url: str = os.getenv("BETA9_AUTH_URL", "")
     # Public documentation, quoted in the agent skill; empty omits the links.
     docs_url: str = os.getenv("BETA9_DOCS_URL", "")
+    # Markdown sections appended to the agent skill's SKILL.md, for commands a
+    # CLI built on this SDK adds. They use the skill's placeholders ({{cli}}, ...).
+    skill_sections: List[str] = field(default_factory=list)
     # Other clusters this CLI is built for, by name (a staging cluster, say):
     # `login --environment X` signs in there and `--context X` uses it.
     # Tokenless; sign-in saves the token. The fields above are the default.
