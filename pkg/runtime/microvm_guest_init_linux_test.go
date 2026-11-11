@@ -25,7 +25,7 @@ func TestMicroVMGuestInitReadOnlySharedMount(t *testing.T) {
 		inst := &microVMInstance{canvas: filepath.Join(root, name)}
 		require.NoError(t, os.MkdirAll(filepath.Join(inst.canvas, microvm.CanvasDir), 0o700))
 		target := filepath.Join(inst.canvas, microvm.InitPath)
-		require.NoError(t, inst.installGuestInit(source))
+		require.NoError(t, inst.installGuestBinary(source, microvm.InitPath))
 		t.Cleanup(func() { require.NoError(t, unix.Unmount(target, unix.MNT_DETACH)) })
 		installed, err := os.Stat(target)
 		require.NoError(t, err)
@@ -38,6 +38,6 @@ func TestMicroVMGuestInitReadOnlySharedMount(t *testing.T) {
 	}
 	inst := &microVMInstance{canvas: filepath.Join(root, "missing")}
 	require.NoError(t, os.MkdirAll(filepath.Join(inst.canvas, microvm.CanvasDir), 0o700))
-	require.ErrorIs(t, inst.installGuestInit(filepath.Join(root, "absent")), os.ErrNotExist)
+	require.ErrorIs(t, inst.installGuestBinary(filepath.Join(root, "absent"), microvm.InitPath), os.ErrNotExist)
 	require.Empty(t, inst.submounts)
 }

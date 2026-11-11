@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -48,6 +49,9 @@ type Service struct {
 	config        types.VMConfig
 	publicNetwork *publicVMNetwork
 	webrtc        *vmWebRTC
+
+	runningLock sync.Mutex
+	running     map[string]*types.VM // by container, as of the last reconciliation pass
 }
 
 type ServiceOpts struct {
@@ -98,6 +102,9 @@ func New(ctx context.Context, opts ServiceOpts) error {
 	}
 
 	go s.reconcile(ctx)
+	if s.stateRepo != nil {
+		go s.relaunchExited(ctx, s.stateRepo.ContainerExits(ctx))
+	}
 	return nil
 }
 

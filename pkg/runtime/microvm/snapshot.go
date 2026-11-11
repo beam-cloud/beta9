@@ -82,7 +82,129 @@ type snapshotMemoryRanges struct {
 
 type snapshotMemory struct {
 	MemoryRanges snapshotMemoryRanges `json:"memory_ranges"`
+	RAM          []snapshotRAMMapping `json:"guest_ram_mappings"`
 	file         *os.File
+}
+
+// SnapshotMemoryFile holds a snapshot's guest RAM: the ranges state.json
+// lists, one after another.
+const SnapshotMemoryFile = "memory-ranges"
+
+type snapshotRAMMapping struct {
+	GPA        uint64 `json:"gpa"`
+	Size       uint64 `json:"size"`
+	VirtioMem  bool   `json:"virtio_mem"`
+	FileOffset uint64 `json:"file_offset"`
+}
+
+// RAMRun is a run of the bytes of a guest's RAM file.
+type RAMRun struct {
+	Offset, Length int64
+}
+
+// ListSnapshotRAM completes a snapshot whose guest RAM the hypervisor left
+// out because it is a linked file: state.json then lists no saved ranges. It
+// lists the runs kept of a RAM file of size bytes, in the file's order, so
+// that a file named SnapshotMemoryFile that holds them one after another
+// restores like one the hypervisor wrote. The rest of the guest's RAM is
+// restored as the zeroes new RAM holds.
+func ListSnapshotRAM(dir string, size int64, kept []RAMRun) error {
+	path := filepath.Join(dir, "state.json")
+	state, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	state, err = editJSON(state, []string{"snapshots", "memory-manager", "snapshot_data", "state"}, func(encoded []byte) ([]byte, error) {
+		var manager string
+		if err := json.Unmarshal(encoded, &manager); err != nil {
+			return nil, err
+		}
+		// Only the list changes: the other fields hold numbers that do not
+		// survive a float64.
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(manager), &fields); err != nil {
+			return nil, err
+		}
+		var saved snapshotMemoryRanges
+		if err := json.Unmarshal(fields["memory_ranges"], &saved); err != nil {
+			return nil, err
+		}
+		if len(saved.Data) != 0 {
+			return nil, fmt.Errorf("snapshot already lists %d saved memory ranges", len(saved.Data))
+		}
+		var mappings []snapshotRAMMapping
+		if err := json.Unmarshal(fields["guest_ram_mappings"], &mappings); err != nil {
+			return nil, err
+		}
+		sort.Slice(mappings, func(i, j int) bool { return mappings[i].FileOffset < mappings[j].FileOffset })
+		var end uint64
+		for _, mapping := range mappings {
+			if mapping.VirtioMem || mapping.Size == 0 || mapping.FileOffset != end || mapping.Size > math.MaxInt64-end {
+				return nil, fmt.Errorf("snapshot guest RAM is not one file in order")
+			}
+			end += mapping.Size
+		}
+		if size <= 0 || end != uint64(size) {
+			return nil, fmt.Errorf("snapshot has %d bytes of guest RAM, its RAM file has %d", end, size)
+		}
+		// A run is listed by guest address: once for each mapping it is in.
+		var at uint64
+		mapping := mappings[0]
+		for _, run := range kept {
+			if run.Length <= 0 || run.Offset < int64(at) || run.Length > size-run.Offset {
+				return nil, fmt.Errorf("kept runs of guest RAM are not in order within its file")
+			}
+			at = uint64(run.Offset)
+			for end := at + uint64(run.Length); at < end; {
+				for mapping.FileOffset+mapping.Size <= at {
+					mappings = mappings[1:]
+					mapping = mappings[0]
+				}
+				gpa := mapping.GPA + at - mapping.FileOffset
+				length := min(end, mapping.FileOffset+mapping.Size) - at
+				saved.Data = append(saved.Data, snapshotMemoryRange{GPA: &gpa, Length: length})
+				at += length
+			}
+		}
+		if fields["memory_ranges"], err = json.Marshal(saved); err != nil {
+			return nil, err
+		}
+		edited, err := json.Marshal(fields)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(string(edited))
+	})
+	if err != nil {
+		return fmt.Errorf("list snapshot RAM: %w", err)
+	}
+	// Renamed into place: a restore must never read half a state file.
+	staged := path + ".listed"
+	if err := os.WriteFile(staged, state, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(staged, path)
+}
+
+// editJSON replaces the value at path inside a JSON object, leaving every
+// other value as it was written.
+func editJSON(data []byte, path []string, edit func([]byte) ([]byte, error)) ([]byte, error) {
+	if len(path) == 0 {
+		return edit(data)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err != nil {
+		return nil, err
+	}
+	if _, ok := object[path[0]]; !ok {
+		return nil, fmt.Errorf("snapshot state has no %q", path[0])
+	}
+	value, err := editJSON(object[path[0]], path[1:], edit)
+	if err != nil {
+		return nil, err
+	}
+	object[path[0]] = value
+	return json.Marshal(object)
 }
 
 func readSnapshotJSON(dir, name string, target any) error {
@@ -117,7 +239,7 @@ func ValidateSnapshotBlockQueues(dir string) error {
 	if err := state.decode("memory-manager", &memory); err != nil {
 		return err
 	}
-	file, err := os.Open(filepath.Join(dir, "memory-ranges"))
+	file, err := os.Open(filepath.Join(dir, SnapshotMemoryFile))
 	if err != nil {
 		return err
 	}
@@ -173,17 +295,25 @@ func (m *snapshotMemory) bind(file *os.File) error {
 	return nil
 }
 
+// readIndex reads the index of a ring: the two bytes after its flags.
 func (m *snapshotMemory) readIndex(ring uint64) (uint16, error) {
 	if ring <= math.MaxUint64-4 {
+		index := ring + 2
 		for _, r := range m.MemoryRanges.Data {
-			if ring >= *r.GPA && ring+4 <= *r.GPA+r.Length {
+			if index >= *r.GPA && index+2 <= *r.GPA+r.Length {
 				var value [2]byte
-				_, err := m.file.ReadAt(value[:], int64(r.offset+(ring-*r.GPA)+2))
+				_, err := m.file.ReadAt(value[:], int64(r.offset+(index-*r.GPA)))
 				return binary.LittleEndian.Uint16(value[:]), err
 			}
 		}
+		// RAM that was not saved held zeroes.
+		for _, ram := range m.RAM {
+			if index >= ram.GPA && index-ram.GPA < ram.Size {
+				return 0, nil
+			}
+		}
 	}
-	return 0, fmt.Errorf("snapshot disk index is outside saved memory")
+	return 0, fmt.Errorf("snapshot disk index is outside guest memory")
 }
 
 func (q snapshotQueue) validate(m *snapshotMemory, capacity uint64) error {

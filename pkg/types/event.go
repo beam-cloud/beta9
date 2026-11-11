@@ -96,6 +96,10 @@ type CacheRequiredContentItem struct {
 	Accelerator        string           `json:"accelerator,omitempty"`
 	DiskName           string           `json:"disk_name,omitempty"`
 	SnapshotGeneration int64            `json:"snapshot_generation,omitempty"`
+	// Retired withdraws the checkpoint named by CheckpointID from what the
+	// stub requires: it has been restored, and will not be again. It carries
+	// no hash, so a reader that predates it skips it.
+	Retired bool `json:"retired,omitempty"`
 }
 
 // CoalescingKey identifies requirements that replace one another. A mutable

@@ -29,6 +29,7 @@ import (
 const (
 	testObjectKey                  = "test-access-object"
 	storageMultipartUploadPartSize = 64 * 1024 * 1024
+	storageMultipartUploadMinPart  = 8 * 1024 * 1024
 	storageMultipartUploadWorkers  = 8
 	storageStreamingUploadWorkers  = 1
 )
@@ -372,11 +373,37 @@ func newStorageMultipartUploader(client *s3.Client, body io.Reader) *manager.Upl
 	return manager.NewUploader(client, func(u *manager.Uploader) {
 		u.PartSize = storageMultipartUploadPartSize
 		u.Concurrency = storageMultipartConcurrency(body)
-		// Unseekable streams buffer each part; keep concurrent uploads bounded.
-		if _, seekable := body.(seekableReaderAt); !seekable {
+		seekable, ok := body.(seekableReaderAt)
+		if !ok {
+			// Unseekable streams buffer each part; keep concurrent uploads bounded.
 			u.PartSize = manager.MinUploadPartSize
+			return
+		}
+		if size, err := remainingBytes(seekable); err == nil {
+			u.PartSize = storageUploadPartSize(size)
 		}
 	})
+}
+
+// storageUploadPartSize gives each worker a part of an object that they
+// could not all have a full one of, so that it is sent over every connection.
+func storageUploadPartSize(size int64) int64 {
+	part := (size + storageMultipartUploadWorkers - 1) / storageMultipartUploadWorkers
+	return min(max(part, storageMultipartUploadMinPart), storageMultipartUploadPartSize)
+}
+
+// remainingBytes is how much of body is left to read.
+func remainingBytes(body io.Seeker) (int64, error) {
+	at, err := body.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return 0, err
+	}
+	end, err := body.Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, err
+	}
+	_, err = body.Seek(at, io.SeekStart)
+	return end - at, err
 }
 
 func storageMultipartConcurrency(body io.Reader) int {
@@ -837,6 +864,10 @@ func (c *WorkspaceStorageClient) VerifyConditionalWrites(ctx context.Context) er
 
 func (c WorkspaceStorageClient) DownloadWithReader(ctx context.Context, key string) (io.ReadCloser, error) {
 	return c.StorageClient.DownloadWithReader(ctx, key, *c.WorkspaceStorage.BucketName)
+}
+
+func (c WorkspaceStorageClient) DownloadLargeWithReader(ctx context.Context, key string, size int64) (io.ReadCloser, error) {
+	return c.StorageClient.DownloadLargeWithReader(ctx, key, *c.WorkspaceStorage.BucketName, size)
 }
 
 func (c *WorkspaceStorageClient) Delete(ctx context.Context, key string) error {

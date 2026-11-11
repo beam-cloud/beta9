@@ -17,6 +17,7 @@ import sys
 import tarfile
 import textwrap
 import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -25,6 +26,7 @@ import pytest
 from click.testing import CliRunner
 from jsonschema import Draft202012Validator
 
+from beta9 import channel as channel_module
 from beta9.abstractions import vm as vm_module
 from beta9.abstractions.image import Image
 from beta9.abstractions.vm import Kiosk, MCPServer, VM, prepare_image
@@ -774,6 +776,36 @@ def test_wait_for_exec_uses_live_connection_without_status_ticker(sandbox_vm, mo
     refresh.assert_not_called()
     sandbox.process.exec.assert_not_called()
     sandbox.process.run_code.assert_not_called()
+
+
+def test_wait_follows_a_vm_to_the_container_that_replaced_its_own(monkeypatch):
+    vm = VM(_service=service())._set(
+        {"name": "dev", "status": "starting", "container_id": "lost", "spec": {}}
+    )
+    monkeypatch.setattr(vm, "refresh", lambda: vm._set({**vm.info, "container_id": "replacement"}))
+    sandbox = SimpleNamespace(process=MagicMock())
+    asked = []
+
+    def connect(**kwargs):
+        asked.append(vm.info["container_id"])
+        # No longer than this is spent on a container that may be gone.
+        assert channel_module._deadline.get() - time.monotonic() <= vm_module.CONTAINER_WAIT
+        if vm.info["container_id"] == "lost":
+            raise ConnectionError("Failed to connect to sandbox")
+        return sandbox
+
+    monkeypatch.setattr(vm, "_sandbox", connect)
+    assert vm.wait() is vm
+    assert asked == ["lost", "replacement"]
+    assert vm.info["status"] == "running"
+
+
+def test_wait_reports_what_is_not_a_lost_connection(sandbox_vm, monkeypatch):
+    vm, _ = sandbox_vm
+    vm.info["status"] = "starting"
+    monkeypatch.setattr(vm, "_sandbox", MagicMock(side_effect=ValueError("invalid workspace")))
+    with pytest.raises(ValueError, match="invalid workspace"):
+        vm.wait()
 
 
 @pytest.fixture

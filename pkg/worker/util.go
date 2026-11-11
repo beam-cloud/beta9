@@ -8,12 +8,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -354,12 +357,18 @@ func createTarWithSHA256Progress(ctx context.Context, srcDir, destTar string, pr
 
 		hasher := sha256.New()
 		counter := &countingWriter{progress: progress}
+		if progress != nil {
+			// This attempt's archive has nothing of the one before.
+			progress(0)
+		}
 		tarArgs := append(tarSparseArgs(), "-cf", "-", "-C", filepath.Dir(srcDir), filepath.Base(srcDir))
 		cmd := exec.CommandContext(ctx, "tar", tarArgs...)
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 
-		runErr := writeCheckpointTar(ctx, cmd, io.MultiWriter(out, hasher, counter))
+		hashing := hashBehind(hasher)
+		runErr := writeCheckpointTar(ctx, cmd, io.MultiWriter(out, hashing, counter))
+		hashing.Close()
 		closeErr := out.Close()
 		if runErr != nil {
 			_ = os.Remove(destTar)
@@ -399,6 +408,26 @@ func writeCheckpointTar(ctx context.Context, tar *exec.Cmd, output io.Writer) er
 	return errors.Join(runErr, encoder.Close())
 }
 
+// checkpointEncoders counts the archives being compressed.
+var checkpointEncoders atomic.Int32
+
+// checkpointEncoderBurst is how many archives may each have a second thread.
+const checkpointEncoderBurst = 4
+
+// checkpointEncoderThreads is how the active'th concurrent archive is
+// compressed. Independent checkpoints already provide parallel work. One
+// encoder thread avoids oversubscribing the host during a burst; at 32
+// concurrent checkpoints this halved CPU cost without increasing archive
+// size. A checkpoint that has the host to itself only waits on that thread:
+// with a second one reading ahead, tar is the limit, for little more CPU
+// time.
+func checkpointEncoderThreads(active int) string {
+	if active > checkpointEncoderBurst {
+		return "--single-thread"
+	}
+	return "-T2"
+}
+
 func writeCheckpointTarNative(ctx context.Context, tar *exec.Cmd, output io.Writer, binary string) error {
 	reader, writer, err := os.Pipe()
 	if err != nil {
@@ -406,11 +435,9 @@ func writeCheckpointTarNative(ctx context.Context, tar *exec.Cmd, output io.Writ
 	}
 	defer reader.Close()
 	defer writer.Close()
-	// Independent checkpoints already provide parallel work. One encoder
-	// thread avoids oversubscribing the host during a burst; at 32 concurrent
-	// checkpoints this halved CPU cost without increasing archive size.
 	// The checksum is mandatory: restore validates the frame footer.
-	encoder := exec.CommandContext(ctx, binary, "-q", "-1", "--single-thread", "--check", "-c")
+	encoder := exec.CommandContext(ctx, binary, "-q", "-1", checkpointEncoderThreads(int(checkpointEncoders.Add(1))), "--check", "-c")
+	defer checkpointEncoders.Add(-1)
 	var stderr bytes.Buffer
 	encoder.Stdin, encoder.Stdout, encoder.Stderr = reader, output, &stderr
 	tar.Stdout = writer
@@ -435,6 +462,43 @@ func writeCheckpointTarNative(ctx context.Context, tar *exec.Cmd, output io.Writ
 		encodeErr = tarCommandError("compress checkpoint", encodeErr, stderr)
 	}
 	return errors.Join(tarErr, encodeErr)
+}
+
+// behindHash hashes what it is given on another goroutine, so the encoder
+// that writes an archive and the decoder that reads it back do not wait for
+// its SHA-256.
+type behindHash struct {
+	chunks chan *[]byte
+	done   chan struct{}
+	closed sync.Once
+}
+
+var behindHashChunks = sync.Pool{New: func() any { return new([]byte) }}
+
+func hashBehind(hasher hash.Hash) *behindHash {
+	h := &behindHash{chunks: make(chan *[]byte, 32), done: make(chan struct{})}
+	go func() {
+		defer close(h.done)
+		for chunk := range h.chunks {
+			hasher.Write(*chunk)
+			behindHashChunks.Put(chunk)
+		}
+	}()
+	return h
+}
+
+func (h *behindHash) Write(p []byte) (int, error) {
+	chunk := behindHashChunks.Get().(*[]byte)
+	*chunk = append((*chunk)[:0], p...)
+	h.chunks <- chunk
+	return len(p), nil
+}
+
+// Close waits for the hash to cover everything written. Nothing may be
+// written after it.
+func (h *behindHash) Close() {
+	h.closed.Do(func() { close(h.chunks) })
+	<-h.done
 }
 
 type countingWriter struct {

@@ -6,21 +6,20 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
 )
 
-// A read-only bind shares executable pages across fresh canvases without
-// allowing a guest to modify the worker's executable. Checkpoints still copy
-// their exact executable, and restores bind that pinned copy.
-func (inst *microVMInstance) installGuestInit(source string) error {
-	target := filepath.Join(inst.canvas, microvm.InitPath)
+// installGuestBinary puts a host executable at rel in the canvas. A read-only
+// bind shares executable pages across fresh canvases without allowing a
+// guest to modify the worker's executable. Checkpoints still copy the exact
+// guest init, and restores bind that pinned copy.
+func (inst *microVMInstance) installGuestBinary(source, rel string) error {
+	target := filepath.Join(inst.canvas, rel)
 	info, err := os.Stat(source)
 	if err != nil {
 		return err
 	}
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("guest init is not a regular file")
+		return fmt.Errorf("%s is not a regular file", source)
 	}
 	if err := writeFileNoFollow(target, nil, 0o755); err != nil {
 		return err

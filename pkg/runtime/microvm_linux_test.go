@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -53,6 +54,301 @@ func TestWaitForGuestControl(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A guest waits for late devices only when told they are coming. It asks on
+// every boot, and one rescan follows the first.
+func TestBootAnnouncementIsAnsweredOnce(t *testing.T) {
+	vsock := filepath.Join(t.TempDir(), "vsock.sock")
+	ctrl := &microVMControl{booted: make(chan struct{})}
+	require.NoError(t, ctrl.listenBoot(vsock))
+	t.Cleanup(ctrl.close)
+	path := fmt.Sprintf("%s_%d", vsock, microvm.BootPort)
+
+	conn, err := net.Dial("unix", path)
+	require.NoError(t, err)
+	answer, err := io.ReadAll(conn)
+	require.NoError(t, err)
+	require.Len(t, answer, 1)
+	require.NoError(t, conn.Close())
+	select {
+	case <-ctrl.booted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the host did not hear the guest's init start")
+	}
+
+	require.Eventually(t, func() bool {
+		conn, err := net.Dial("unix", path)
+		if err != nil {
+			return true
+		}
+		answer, _ := io.ReadAll(conn)
+		_ = conn.Close()
+		return len(answer) == 0
+	}, 5*time.Second, 5*time.Millisecond)
+}
+
+func TestWaitForDevices(t *testing.T) {
+	for _, outcome := range []string{"attached", "pending", "exit", "missing"} {
+		t.Run(outcome, func(t *testing.T) {
+			devices, exited := make(chan struct{}), make(chan struct{})
+			// The guest has reported in: it answers before it has its GPU.
+			inst := &microVMInstance{ctrl: &microVMControl{ready: make(chan struct{})}, devices: devices, exitDone: exited}
+			close(inst.ctrl.ready)
+			m := &MicroVM{vms: map[string]*microVMInstance{"guest": inst}}
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			require.NoError(t, m.WaitForGuestControl(ctx, "guest"))
+			switch outcome {
+			case "attached":
+				time.AfterFunc(10*time.Millisecond, func() { close(devices) })
+			case "exit":
+				close(exited)
+			case "missing":
+				delete(m.vms, "guest")
+			}
+			err := m.WaitForDevices(ctx, "guest")
+			if outcome == "attached" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
+// vfioTestGuest is a hypervisor and a guest for attach and detach: the
+// hypervisor's API, and the guest's end of the control channel.
+type vfioTestGuest struct {
+	mu      sync.Mutex
+	inst    *microVMInstance
+	state   func() microVMState
+	tree    []string // device ids vm.info reports
+	calls   []string // API requests and guest commands, in order
+	reject  string   // API request to fail
+	refuses string   // guest command to refuse
+}
+
+func newVFIOTestGuest(t *testing.T, paths ...string) *vfioTestGuest {
+	t.Helper()
+	g := newBootingVFIOTestGuest(t, paths...)
+	g.reportIn(t)
+	return g
+}
+
+// newBootingVFIOTestGuest is a guest that has not reported in yet.
+func newBootingVFIOTestGuest(t *testing.T, paths ...string) *vfioTestGuest {
+	t.Helper()
+	g := &vfioTestGuest{state: func() microVMState { return microVMRunning }}
+	g.inst = snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		var body struct{ ID, Path string }
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		action := strings.TrimPrefix(r.URL.Path, "/api/v1/")
+		if action == "vm.info" {
+			tree := map[string]struct{}{"_disk0": {}}
+			for _, id := range g.tree {
+				tree[id] = struct{}{}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"state": g.state(), "device_tree": tree})
+			return
+		}
+		call := action + " " + body.ID
+		if body.Path != "" {
+			call += "=" + filepath.Base(body.Path)
+		}
+		g.calls = append(g.calls, call)
+		if call == g.reject {
+			http.Error(w, "device busy", http.StatusInternalServerError)
+			return
+		}
+		if action == "vm.add-device" {
+			// The guest finds device vfioN in PCI slot 6+N.
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": body.ID, "bdf": "0000:00:0" + string(body.ID[4]+6) + ".0"})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	g.inst.vfio = &microVMVFIO{paths: paths}
+	g.inst.exitDone = make(chan struct{})
+	g.inst.ctrl = &microVMControl{ready: make(chan struct{}), booted: make(chan struct{}), pending: map[uint64]chan microvm.Message{}}
+	return g
+}
+
+func (g *vfioTestGuest) reportIn(t *testing.T) {
+	t.Helper()
+	host, guest := net.Pipe()
+	t.Cleanup(func() { _ = host.Close(); _ = guest.Close() })
+	go g.inst.ctrl.serve(host)
+	go func() {
+		dec, enc := microvm.NewDecoder(guest), microvm.NewEncoder(guest)
+		for {
+			msg, err := dec.Decode()
+			if err != nil {
+				return
+			}
+			g.mu.Lock()
+			g.calls = append(g.calls, strings.TrimSpace(msg.Type+" "+strings.Join(msg.Devices, ",")))
+			ok := msg.Type != g.refuses
+			g.mu.Unlock()
+			_ = enc.Encode(microvm.Message{Type: microvm.MsgAck, ID: msg.ID, OK: ok, Error: "guest says no"})
+		}
+	}()
+}
+
+func (g *vfioTestGuest) require(t *testing.T, calls ...string) {
+	t.Helper()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	require.Equal(t, calls, g.calls)
+	g.calls = nil
+}
+
+func TestMicroVMAttachVFIO(t *testing.T) {
+	gpu, audio := "/sys/bus/pci/devices/0000:01:00.0", "/sys/bus/pci/devices/0000:01:00.1"
+	addGPU, addAudio := "vm.add-device vfio0=0000:01:00.0", "vm.add-device vfio1=0000:01:00.1"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	t.Run("a device added before the VM runs is not hot-plugged", func(t *testing.T) {
+		g := newVFIOTestGuest(t, gpu, audio)
+		polls := 0
+		g.state = func() microVMState {
+			if polls++; polls < 3 {
+				return "Created"
+			}
+			return microVMRunning
+		}
+		require.NoError(t, g.inst.hotplugVFIO(ctx))
+		require.GreaterOrEqual(t, polls, 3)
+		g.require(t, addGPU, addAudio, microvm.MsgRescan)
+		require.Equal(t, []microVMVFIOSlot{{bdf: "0000:00:06.0"}, {bdf: "0000:00:07.0"}}, g.inst.slots)
+	})
+	t.Run("a booting guest is not held up by its devices", func(t *testing.T) {
+		g := newBootingVFIOTestGuest(t, gpu)
+		attached := make(chan error, 1)
+		go func() { attached <- g.inst.hotplugVFIO(ctx) }()
+		waits := func(why string) {
+			t.Helper()
+			select {
+			case err := <-attached:
+				t.Fatalf("attached before the guest %s: %v", why, err)
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+		waits("had its boot devices")
+		g.require(t)
+		close(g.inst.ctrl.booted) // its init has started
+		waits("could look for the device")
+		g.require(t, addGPU)
+		g.reportIn(t)
+		require.NoError(t, <-attached)
+		g.require(t, microvm.MsgRescan)
+	})
+	t.Run("a restored guest takes its GPU state back", func(t *testing.T) {
+		g := newVFIOTestGuest(t, gpu, audio)
+		g.inst.restored = true
+		require.NoError(t, g.inst.hotplugVFIO(ctx))
+		g.require(t, addGPU, addAudio, microvm.MsgGPUResume)
+	})
+	t.Run("hypervisor rejects", func(t *testing.T) {
+		g := newVFIOTestGuest(t, gpu, audio)
+		g.reject = addAudio
+		err := g.inst.hotplugVFIO(ctx)
+		require.ErrorContains(t, err, "0000:01:00.1")
+		require.ErrorContains(t, err, "device busy")
+		g.require(t, addGPU, addAudio) // the guest is not told about a failed attach
+	})
+	for command, restored := range map[string]bool{microvm.MsgRescan: false, microvm.MsgGPUResume: true} {
+		t.Run("guest refuses "+command, func(t *testing.T) {
+			g := newVFIOTestGuest(t, gpu)
+			g.inst.restored, g.refuses = restored, command
+			require.ErrorContains(t, g.inst.hotplugVFIO(ctx), "guest says no")
+		})
+	}
+	t.Run("cancelled before boot", func(t *testing.T) {
+		g := newVFIOTestGuest(t, gpu)
+		g.state = func() microVMState { return "Created" }
+		ctx, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+		defer cancel()
+		require.ErrorIs(t, g.inst.hotplugVFIO(ctx), context.DeadlineExceeded)
+		g.require(t)
+	})
+	t.Run("hypervisor exits before boot", func(t *testing.T) {
+		g := newVFIOTestGuest(t, gpu)
+		g.state = func() microVMState { return "Created" }
+		close(g.inst.exitDone)
+		require.ErrorContains(t, g.inst.hotplugVFIO(ctx), "exited")
+	})
+}
+
+func TestMicroVMDetachVFIO(t *testing.T) {
+	gpu, audio := "/sys/bus/pci/devices/0000:01:00.0", "/sys/bus/pci/devices/0000:01:00.1"
+	addGPU, addAudio := "vm.add-device vfio0=0000:01:00.0", "vm.add-device vfio1=0000:01:00.1"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	attached := func(t *testing.T) *vfioTestGuest {
+		g := newVFIOTestGuest(t, gpu, audio)
+		require.NoError(t, g.inst.attachVFIO(ctx, false, nil))
+		g.require(t, addGPU, addAudio, microvm.MsgRescan)
+		return g
+	}
+
+	t.Run("the guest saves its GPU state, then its devices go", func(t *testing.T) {
+		g := attached(t)
+		require.NoError(t, g.inst.detachVFIO(ctx))
+		g.require(t, microvm.MsgGPUSuspend, "vm.remove-device vfio1", "vm.remove-device vfio0",
+			microvm.MsgUnplugged+" 0000:00:07.0,0000:00:06.0")
+		require.NoError(t, g.inst.vfioDetached(ctx))
+
+		// The same guest, or one restored from its snapshot, gets them back.
+		require.NoError(t, g.inst.attachVFIO(ctx, true, nil))
+		g.require(t, addGPU, addAudio, microvm.MsgGPUResume)
+	})
+	t.Run("a guest that cannot save its GPU state keeps its devices", func(t *testing.T) {
+		g := attached(t)
+		g.refuses = microvm.MsgGPUSuspend
+		require.ErrorContains(t, g.inst.detachVFIO(ctx), "guest says no")
+		g.require(t, microvm.MsgGPUSuspend)
+		g.refuses = ""
+		require.NoError(t, g.inst.attachVFIO(ctx, true, nil))
+		g.require(t, microvm.MsgGPUResume) // nothing to add; what it had suspended resumes
+	})
+	t.Run("a device the guest holds on to cannot be given back", func(t *testing.T) {
+		g := attached(t)
+		g.refuses = microvm.MsgUnplugged
+		err := g.inst.detachVFIO(ctx)
+		require.ErrorContains(t, err, "did not release its VFIO devices")
+		require.ErrorContains(t, err, "guest says no")
+		g.require(t, microvm.MsgGPUSuspend, "vm.remove-device vfio1", "vm.remove-device vfio0",
+			microvm.MsgUnplugged+" 0000:00:07.0,0000:00:06.0")
+		// The guest may eject it at any moment, so it is neither attached
+		// nor free to attach again.
+		require.ErrorContains(t, g.inst.attachVFIO(ctx, true, nil), "still releasing")
+		g.require(t)
+	})
+	t.Run("hypervisor rejects", func(t *testing.T) {
+		g := attached(t)
+		g.reject = "vm.remove-device vfio0"
+		err := g.inst.detachVFIO(ctx)
+		require.ErrorContains(t, err, "unplug 0000:01:00.0")
+		require.ErrorContains(t, err, "device busy")
+		require.ErrorContains(t, g.inst.attachVFIO(ctx, true, nil), "0000:01:00.1: the guest is still releasing it")
+	})
+	t.Run("a snapshot is not taken around a device the hypervisor still has", func(t *testing.T) {
+		g := attached(t)
+		g.tree = []string{"vfio0"}
+		require.ErrorContains(t, g.inst.vfioDetached(ctx), "0000:01:00.0 is still attached")
+	})
+}
+
+func TestMicroVMAttachVFIONeedsGuestAddress(t *testing.T) {
+	inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"id":"vfio0"}`)) })
+	inst.vfio = &microVMVFIO{paths: []string{"/sys/bus/pci/devices/0000:01:00.0"}}
+	inst.ctrl = &microVMControl{ready: make(chan struct{})}
+	require.ErrorContains(t, inst.attachVFIO(context.Background(), false, nil), "did not say where the guest finds it",
+		"a device that cannot be named to the guest cannot be detached")
 }
 
 func TestMicroVMCPUWeightAppliesWhileQuotaIsDeferred(t *testing.T) {
@@ -156,6 +452,48 @@ func TestMicroVMSnapshotSealsDisksBeforeCapture(t *testing.T) {
 	require.True(t, mustStop)
 	require.True(t, inst.isPaused())
 	actions.require(t, "/api/v1/vm.pause", "seal", "/api/v1/vm.snapshot")
+}
+
+// The hypervisor is asked whether the devices are gone only of a paused
+// guest, and before anything is done with it: a guest that runs may be
+// ejecting one.
+func TestMicroVMSnapshotFindsDevicesGoneOncePaused(t *testing.T) {
+	for name, tc := range map[string]struct {
+		tree  []string
+		calls []string
+		err   string
+	}{
+		"gone":           {calls: []string{"/api/v1/vm.pause", "/api/v1/vm.info", "seal", "/api/v1/vm.snapshot"}},
+		"still attached": {tree: []string{"vfio0"}, calls: []string{"/api/v1/vm.pause", "/api/v1/vm.info", "/api/v1/vm.resume"}, err: "0000:01:00.0 is still attached to the paused guest"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var actions snapshotActions
+			inst := snapshotTestInstance(t, func(w http.ResponseWriter, r *http.Request) {
+				actions.record(r.URL.Path)
+				if r.URL.Path != "/api/v1/vm.info" {
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+				tree := map[string]struct{}{}
+				for _, id := range tc.tree {
+					tree[id] = struct{}{}
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"state": microVMPaused, "device_tree": tree})
+			})
+			inst.vfio = &microVMVFIO{paths: []string{"/sys/bus/pci/devices/0000:01:00.0"}}
+			mustStop, err := snapshotMicroVM(context.Background(), inst, t.TempDir(), inst.onceDetached(func(context.Context) error {
+				actions.record("seal")
+				return nil
+			}))
+			if tc.err == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.err)
+			}
+			require.Equal(t, tc.err == "", mustStop)
+			actions.require(t, tc.calls...)
+		})
+	}
 }
 
 func TestMicroVMSnapshotOtherErrorsAreNotSafeToRetry(t *testing.T) {
@@ -760,6 +1098,29 @@ func TestExtractTreeReplaysTheGuestTree(t *testing.T) {
 	require.True(t, dir.ModTime().Equal(treeModTime), "directory times are restored after their children")
 }
 
+func TestGuestReset(t *testing.T) {
+	// As Cloud Hypervisor writes them: indented, with a blank line between.
+	event := func(source, name string) string {
+		return fmt.Sprintf("{\n  \"timestamp\": {\n    \"secs\": 12,\n    \"nanos\": 345\n  },\n  \"source\": %q,\n  \"event\": %q,\n  \"properties\": null\n}\n\n", source, name)
+	}
+	booted := event("vm", "booting") + event("virtio-device", "activated") + event("vm", "booted")
+	for name, test := range map[string]struct {
+		events string
+		reset  bool
+	}{
+		"a guest that rebooted":              {booted + event("vm", "rebooting") + event("vm", "rebooted"), true},
+		"a guest that powered off":           {booted + event("vm", "shutdown"), false},
+		"a guest that is still running":      {booted, false},
+		"another source's event":             {booted + event("vmm", "rebooting"), false},
+		"a hypervisor that died mid-event":   {booted + `{"source": "vm", "event": "reboo`, false},
+		"a hypervisor that reported nothing": {"", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, test.reset, guestReset(strings.NewReader(test.events)))
+		})
+	}
+}
+
 func TestMicroVMStateWaitsForTerminalResult(t *testing.T) {
 	cmd := exec.Command("sh", "-c", "exit 0")
 	require.NoError(t, cmd.Start())
@@ -813,7 +1174,7 @@ func TestMicroVMVFIOValidation(t *testing.T) {
 	caps := (&MicroVM{cfg: Config{MicroVMVFIODevices: []string{"0000:01:00.0"}}}).Capabilities()
 	require.True(t, caps.GPU)
 	require.False(t, caps.CDI, "guest drivers do not use host CDI injection")
-	require.False(t, caps.CheckpointRestore)
+	require.True(t, caps.CheckpointRestore, "a GPU guest gives its devices up for the snapshot")
 	for _, value := range []string{"../77", "01:00.0", "0000:01:20.0", "0000:01:00.8", "0000:01:00.0,path=/tmp/evil", "0000:01:00.0,0000:01:00.0"} {
 		_, err := (microVMVFIOHost{devices: []string{"0000:01:00.0"}}).acquire(value)
 		require.ErrorContains(t, err, "invalid or duplicate", value)
@@ -885,12 +1246,11 @@ func TestMicroVMVFIOOwnership(t *testing.T) {
 	claim.close()
 	claim.close()
 
-	base := microVMHypervisorArgs("/state", "/kernel", "", 4, 8<<30, "02:00:00:00:00:01", microVMDisk{}, nil, nil)
-	args := microVMHypervisorArgs("/state", "/kernel", "", 4, 8<<30, "02:00:00:00:00:01", microVMDisk{}, nil, nil, claim.paths...)
+	base := microVMHypervisorArgs("/state", "/kernel", "", 4, 8<<30, "", "02:00:00:00:00:01", microVMDisk{}, nil, nil, false)
+	args := microVMHypervisorArgs("/state", "/kernel", "", 4, 8<<30, "", "02:00:00:00:00:01", microVMDisk{}, nil, nil, true)
 	require.Contains(t, base, "--balloon")
 	require.NotContains(t, args, "--balloon", "DMA-pinned RAM cannot be reclaimed")
-	require.Contains(t, strings.Join(args, " "), "--device path="+claim.paths[0]+" path="+claim.paths[1])
-	_, err = rewriteSnapshotConfig([]byte(`{"devices":[{"path":"/sys/bus/pci/devices/0000:01:00.0"}]}`), "/state", microvm.Network{}, microVMDisk{}, nil)
+	_, err = rewriteSnapshotConfig([]byte(`{"devices":[{"path":"/sys/bus/pci/devices/0000:01:00.0"}]}`), "/state", microvm.Network{}, microVMDisk{}, nil, snapshotHost{})
 	require.ErrorContains(t, err, "VFIO", "a foreign snapshot cannot bypass device authorization")
 }
 
@@ -1027,23 +1387,6 @@ func TestMicroVMVFIODoesNotSkipPreflightFailures(t *testing.T) {
 	claim.close()
 }
 
-func TestMicroVMVFIORestoreRequiresColdBoot(t *testing.T) {
-	for _, explicit := range []bool{false, true} {
-		rt := &MicroVM{cfg: Config{MicroVMVFIODevices: []string{"0000:01:00.0"}}}
-		spec := &specs.Spec{Annotations: map[string]string{MicroVMGPUCountAnnotation: "1"}}
-		if explicit {
-			rt.cfg.MicroVMVFIODevices = nil
-			delete(spec.Annotations, MicroVMGPUCountAnnotation)
-			spec.Annotations[MicroVMVFIOAnnotation] = "0000:01:00.0"
-		}
-		inst := &microVMInstance{stateDir: filepath.Join(t.TempDir(), "state")}
-		_, _, _, err := rt.prepare(context.Background(), inst, spec, "checkpoint")
-		require.ErrorContains(t, err, "cold boot")
-		require.Nil(t, inst.vfio, "memory restore must reject GPU assignment before claiming devices")
-		require.NoDirExists(t, inst.stateDir)
-	}
-}
-
 func TestMicroVMVFIORequestValidation(t *testing.T) {
 	for _, test := range []struct {
 		count, devices, want string
@@ -1084,8 +1427,16 @@ func imageKernelTestInstance(t *testing.T) (*MicroVM, *microVMInstance, string) 
 	require.NoError(t, os.MkdirAll(filepath.Dir(image), 0o755))
 	workerKernel := filepath.Join(t.TempDir(), "vmlinux")
 	require.NoError(t, os.WriteFile(workerKernel, []byte("invalid worker kernel"), 0o600))
-	return &MicroVM{cfg: Config{MicroVMKernelPath: workerKernel}},
-		&microVMInstance{canvas: canvas, stateDir: t.TempDir(), vfio: &microVMVFIO{paths: []string{"gpu"}}}, image
+	inherited := func(name string) *os.File {
+		file, err := os.Create(filepath.Join(t.TempDir(), name))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = file.Close() })
+		return file
+	}
+	inst := &microVMInstance{canvas: canvas, stateDir: t.TempDir(), ram: &microVMRAM{file: inherited("ram")},
+		vfio: &microVMVFIO{paths: []string{"gpu"}, locks: []*os.File{inherited("lock")}}}
+	t.Cleanup(inst.releaseKernel)
+	return &MicroVM{cfg: Config{MicroVMKernelPath: workerKernel}}, inst, image
 }
 
 func TestMicroVMImageKernelSelection(t *testing.T) {
@@ -1103,20 +1454,29 @@ func TestMicroVMImageKernelSelection(t *testing.T) {
 			require.NoError(t, err)
 			if mode != "GPU" {
 				require.Equal(t, rt.cfg.MicroVMKernelPath, kernel)
-				files, err := os.ReadDir(inst.stateDir)
-				require.NoError(t, err)
-				require.Empty(t, files)
+				require.Nil(t, inst.kernel)
 				return
 			}
-			require.Equal(t, inst.stateDir, filepath.Dir(kernel))
-			require.NotEqual(t, rt.cfg.MicroVMKernelPath, kernel, "the image kernel takes precedence over an invalid worker kernel")
-			require.NoError(t, os.WriteFile(image, []byte("changed"), 0o644))
-			copied, err := os.ReadFile(kernel)
+			require.Equal(t, "/proc/self/fd/5", kernel, "the hypervisor inherits the kernel after the group lock and the guest RAM")
+			require.Equal(t, []*os.File{inst.vfio.locks[0], inst.ram.file, inst.kernel}, inst.inherited())
+			require.Equal(t, "/proc/self/fd/4", inst.inheritedPath(inst.ramFile()))
+
+			replacement := filepath.Join(t.TempDir(), "vmlinux")
+			require.NoError(t, os.WriteFile(replacement, []byte("another kernel"), 0o644))
+			require.NoError(t, os.Rename(replacement, image))
+			inherited, err := io.ReadAll(inst.kernel)
 			require.NoError(t, err)
-			require.Equal(t, content, copied, "the VMM uses a private copy, not a mutable image path")
-			info, err := os.Stat(kernel)
+			require.Equal(t, content, inherited, "the VMM loads the file that was checked, not whatever the image path names later")
+
+			inst.releaseKernel()
+			require.Equal(t, []*os.File{inst.vfio.locks[0], inst.ram.file}, inst.inherited(), "the worker keeps the guest RAM, which a checkpoint saves")
+			ram := inst.ram.file
+			inst.releaseRAM()
+			require.Equal(t, inst.vfio.locks, inst.inherited())
+			require.ErrorIs(t, ram.Close(), os.ErrClosed, "the RAM goes with the VM")
+			files, err := os.ReadDir(inst.stateDir)
 			require.NoError(t, err)
-			require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+			require.Empty(t, files, "booting must not copy the kernel")
 		})
 	}
 }
@@ -1155,9 +1515,7 @@ func TestMicroVMImageKernelRejectsUnsafeFiles(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("image kernel probe blocked")
 			}
-			files, err := os.ReadDir(inst.stateDir)
-			require.NoError(t, err)
-			require.Empty(t, files, "unsafe kernels must be rejected before writing VM state")
+			require.Nil(t, inst.kernel, "the hypervisor must not inherit an unsafe kernel")
 		})
 	}
 }
@@ -1176,12 +1534,13 @@ func TestMicroVMImageKernelRelativeRoot(t *testing.T) {
 	require.Equal(t, spec.Root.Path, loaded.Root.Path, "OCI root paths remain relative to their bundle")
 	require.Equal(t, original.canvas, inst.canvas)
 	inst.vfio = original.vfio
-	require.NoError(t, os.MkdirAll(inst.stateDir, 0o700))
-	kernel, err := rt.kernelPath(inst)
+	_, err = rt.kernelPath(inst)
 	require.NoError(t, err)
-	copied, err := os.ReadFile(kernel)
+	t.Cleanup(inst.releaseKernel)
+	require.NotNil(t, inst.kernel)
+	inherited, err := io.ReadAll(inst.kernel)
 	require.NoError(t, err)
-	require.Equal(t, "image kernel", string(copied))
+	require.Equal(t, "image kernel", string(inherited))
 }
 
 func assertCPUFile(t *testing.T, cgroup, name, want string) {

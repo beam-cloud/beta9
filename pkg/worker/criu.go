@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -785,7 +786,11 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 			}
 			return err
 		}
-		return forwardRestoreStarted(ctx, startedChan, pid)
+		if err := forwardRestoreStarted(ctx, startedChan, pid); err != nil {
+			return err
+		}
+		s.retireRestoredCheckpoint(request, checkpoint.CheckpointId)
+		return nil
 	}
 	for restoreDone != nil {
 		select {
@@ -1731,6 +1736,12 @@ func (s *Worker) persistCheckpoint(ctx context.Context, request *types.Container
 	}
 	_ = os.Remove(archivePath)
 
+	originKey := checkpointOriginKey(checkpointId)
+	storageClient, err := clients.NewWorkspaceStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
+	if err != nil {
+		return nil, err
+	}
+
 	if outputLogger != nil {
 		outputLogger.Info("Creating checkpoint archive...\n")
 	}
@@ -1741,10 +1752,34 @@ func (s *Worker) persistCheckpoint(ctx context.Context, request *types.Container
 	if err != nil {
 		return nil, err
 	}
+
+	// An upload that can start now does, with the archive. One that has to
+	// wait its turn waits for the archive as well. What it has sent is
+	// reported once the archive's size is known.
+	var uploadProgress atomic.Pointer[checkpointPersistenceProgress]
+	var sending *archiveUpload
+	releaseUpload := tryCheckpointSlot(checkpointOriginUploadSlots)
+	if releaseUpload != nil {
+		sending = &archiveUpload{
+			ctx: ctx, client: storageClient, key: originKey, path: archivePath,
+			partSize: checkpointArchivePartSize(checkpointPath),
+			sent:     func(sent int64) { uploadProgress.Load().update(sent) },
+		}
+	}
+	defer func() {
+		sending.abandon()
+		if releaseUpload != nil {
+			releaseUpload()
+		}
+	}()
+
 	archiveStarted := time.Now()
 	hash, size, err := func() (string, int64, error) {
 		defer releaseArchive()
-		return createTarWithSHA256Progress(ctx, checkpointPath, archivePath, archiveProgress.update)
+		return createTarWithSHA256Progress(ctx, checkpointPath, archivePath, func(written int64) {
+			archiveProgress.update(written)
+			sending.wrote(written)
+		})
 	}()
 
 	if err != nil {
@@ -1759,20 +1794,14 @@ func (s *Worker) persistCheckpoint(ctx context.Context, request *types.Container
 	// The archive remains private until the origin upload and state publication
 	// succeed. Pipelining changes admission, never the durability boundary.
 
-	releaseUpload, err := acquireCheckpointSlot(ctx, checkpointOriginUploadSlots)
-
-	if err != nil {
-		_ = os.Remove(archivePath)
-		return nil, err
+	if releaseUpload == nil {
+		releaseUpload, err = acquireCheckpointSlot(ctx, checkpointOriginUploadSlots)
+		if err != nil {
+			_ = os.Remove(archivePath)
+			return nil, err
+		}
 	}
-	defer releaseUpload()
 
-	originKey := checkpointOriginKey(checkpointId)
-	storageClient, err := clients.NewWorkspaceStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
-	if err != nil {
-		_ = os.Remove(archivePath)
-		return nil, err
-	}
 	f, err := os.Open(archivePath)
 	if err != nil {
 		_ = os.Remove(archivePath)
@@ -1781,18 +1810,36 @@ func (s *Worker) persistCheckpoint(ctx context.Context, request *types.Container
 	if outputLogger != nil {
 		outputLogger.Info("Uploading checkpoint archive...\n")
 	}
-	uploadProgress := newCheckpointPersistenceProgress(outputLogger, "upload", size)
+	progress := newCheckpointPersistenceProgress(outputLogger, "upload", size)
 	uploadStarted := time.Now()
-	uploadReader := &checkpointUploadReader{file: f, total: size, progress: uploadProgress.update}
-	uploadErr := storageClient.UploadWithReader(ctx, originKey, uploadReader)
+	if began := sending.began(); !began.IsZero() {
+		uploadStarted, progress.started = began, began
+	}
+	uploadProgress.Store(progress)
+	// The cache is offered the archive while it uploads, so that it has it
+	// by the time the checkpoint is published: a host that looks for one the
+	// cache does not have yet downloads it from the origin instead. The
+	// cache keeps it under its hash, which nothing knows until then; an
+	// upload that fails leaves it there for the cache to evict. The upload
+	// reads the file it has open, which the cache removes when done.
+	s.cacheCheckpointArchiveAsync(checkpointId, archivePath, originKey, hash, nil)
+	uploadErr := sending.finish(size)
+	whileArchiving := uploadErr == nil
+	if uploadErr != nil {
+		if !errors.Is(uploadErr, errArchiveNotSent) {
+			log.Warn().Err(uploadErr).Str("checkpoint_id", checkpointId).Msg("checkpoint archive was not uploaded while it was written; uploading it whole")
+			uploadStarted = time.Now()
+		}
+		uploadReader := &checkpointUploadReader{file: f, total: size, progress: progress.update}
+		uploadErr = storageClient.UploadWithReader(ctx, originKey, uploadReader)
+	}
 
 	if uploadErr != nil {
 		_ = f.Close()
-		_ = os.Remove(archivePath)
 		return nil, uploadErr
 	}
-	uploadProgress.finish(size)
-	log.Info().Str("checkpoint_id", checkpointId).Int64("bytes", size).Dur("duration", time.Since(uploadStarted)).Msg("checkpoint archive uploaded")
+	progress.finish(size)
+	log.Info().Str("checkpoint_id", checkpointId).Int64("bytes", size).Dur("duration", time.Since(uploadStarted)).Bool("while_archiving", whileArchiving).Msg("checkpoint archive uploaded")
 	if err := f.Close(); err != nil {
 		log.Warn().Err(err).Str("checkpoint_id", checkpointId).Msg("failed to close uploaded checkpoint archive")
 	}
@@ -1804,7 +1851,6 @@ func (s *Worker) persistCheckpoint(ctx context.Context, request *types.Container
 		locality:    s.cacheManager.locality,
 		accelerator: checkpointAccelerator(request),
 	}
-	s.cacheCheckpointArchiveAsync(checkpointId, archivePath, originKey, hash, nil)
 
 	return metadata, nil
 }
@@ -1815,12 +1861,151 @@ func tryCheckpointArchiveCacheSlot(ctx context.Context) func() {
 	if ctx.Err() != nil {
 		return nil
 	}
+	return tryCheckpointSlot(checkpointArchiveCacheSlots)
+}
+
+// tryCheckpointSlot takes a slot that is free now, or returns nil.
+func tryCheckpointSlot(slots chan struct{}) func() {
 	select {
-	case checkpointArchiveCacheSlots <- struct{}{}:
-		return sync.OnceFunc(func() { <-checkpointArchiveCacheSlots })
+	case slots <- struct{}{}:
+		return sync.OnceFunc(func() { <-slots })
 	default:
 		return nil
 	}
+}
+
+// checkpointArchivePart is the least an archive is uploaded in while it is
+// written. Eight of them are sent at once, and an idle guest's archive is
+// some twenty: small enough for the upload to start with the archive, and
+// large enough for a part to cost little more than its bytes.
+var checkpointArchivePart int64 = 16 << 20
+
+// checkpointArchiveParts is how many parts an archive is planned in, of the
+// 10000 an object may have. The rest is for what an archive adds to its
+// files.
+const checkpointArchiveParts = 8000
+
+// checkpointArchivePartSize is the size of the parts that the archive of dir
+// is uploaded in while it is written, when nothing knows its size yet. An
+// archive is no larger than its files, so their size gives the parts that
+// are sure to hold all of it.
+func checkpointArchivePartSize(dir string) int64 {
+	var size int64
+	_ = filepath.WalkDir(dir, func(_ string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info, err := entry.Info(); err == nil && info.Mode().IsRegular() {
+			size += info.Size()
+		}
+		return nil
+	})
+	return max(checkpointArchivePart, size/checkpointArchiveParts)
+}
+
+var errArchiveNotSent = errors.New("checkpoint archive was not uploaded while it was written")
+
+// archiveUpload sends a checkpoint archive to its origin while the archive is
+// written, so that the two take as long as the upload does.
+//
+// It gives up for anything that goes wrong, and the archive is uploaded whole
+// as it would have been without: an archive that is started again, a part
+// that the store refuses. The checkpoint has its archive in the origin only
+// once finish returns nil.
+type archiveUpload struct {
+	ctx      context.Context
+	client   *clients.WorkspaceStorageClient
+	key      string
+	path     string
+	partSize int64
+	sent     func(int64)
+
+	mu      sync.Mutex
+	written int64
+	file    *os.File
+	upload  *clients.GrowingUpload
+	started time.Time
+	gaveUp  bool
+}
+
+// wrote is told how much of the archive its file holds.
+func (a *archiveUpload) wrote(written int64) {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.gaveUp {
+		return
+	}
+	if written < a.written && a.upload != nil {
+		// The archive was started again: the store has parts of another.
+		a.giveUp()
+		return
+	}
+	a.written = written
+	if a.upload == nil {
+		if written < a.partSize {
+			return
+		}
+		file, err := os.Open(a.path)
+		if err != nil {
+			a.giveUp()
+			return
+		}
+		a.file, a.started = file, time.Now()
+		a.upload = a.client.UploadGrowing(a.ctx, a.key, file, a.partSize, a.sent)
+	}
+	a.upload.Wrote(written)
+}
+
+// began is when the upload started, if it has.
+func (a *archiveUpload) began() time.Time {
+	if a == nil {
+		return time.Time{}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.started
+}
+
+// finish says that the archive is whole at size bytes, and returns once the
+// origin has it. errArchiveNotSent is for an upload that never started, or
+// that gave up.
+func (a *archiveUpload) finish(size int64) error {
+	if a == nil {
+		return errArchiveNotSent
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.upload == nil {
+		return errArchiveNotSent
+	}
+	err := a.upload.Finish(size)
+	_ = a.file.Close()
+	a.upload, a.file, a.gaveUp = nil, nil, true
+	return err
+}
+
+// abandon is for an archive that will not be finished. It does nothing to
+// one that was.
+func (a *archiveUpload) abandon() {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.giveUp()
+}
+
+// giveUp discards what the store was sent. a.mu is held.
+func (a *archiveUpload) giveUp() {
+	a.gaveUp = true
+	if a.upload != nil {
+		a.upload.Abort()
+		_ = a.file.Close()
+	}
+	a.upload, a.file = nil, nil
 }
 
 func fillCheckpointArchiveCache(ctx context.Context, archivePath string, release func(), store func() error) error {
@@ -1833,7 +2018,8 @@ func fillCheckpointArchiveCache(ctx context.Context, archivePath string, release
 }
 
 // cacheCheckpointArchiveAsync takes the archive and, when supplied, its staging
-// reservation. Admission never delays the already durable origin acknowledgement.
+// reservation. Admission waits for nothing, so it delays neither an origin
+// upload nor its acknowledgement.
 func (s *Worker) cacheCheckpointArchiveAsync(checkpointId, archivePath, originKey, hash string, release func()) {
 	if s.cacheManager == nil || s.cacheManager.client == nil {
 		_ = os.Remove(archivePath)
@@ -1852,13 +2038,42 @@ func (s *Worker) cacheCheckpointArchiveAsync(checkpointId, archivePath, originKe
 	}
 	go func() {
 		err := fillCheckpointArchiveCache(manager.ctx, archivePath, release, func() error {
-			_, err := manager.client.StoreContentFromLocalFile(cache.LocalContentSource{Path: archivePath, CachePath: originKey}, cache.StoreContentOptions{RoutingKey: hash, Lock: true})
-			return err
+			return manager.storeCheckpointArchive(archivePath, originKey, hash)
 		})
 		if err != nil {
 			log.Warn().Err(err).Str("checkpoint_id", checkpointId).Str("hash", hash).Msg("failed to store checkpoint archive in cache")
 		}
 	}()
+}
+
+// storeCheckpointArchive puts an archive in this host's own cache. Every
+// host of the locality keeps a copy of a checkpoint and looks for one on all
+// the others, so the host its hash selects has no special part: storing the
+// archive there sends it across the network, and brings it back for this
+// host's own copy. A worker that serves no cache has only that host to use.
+func (m *WorkerCacheManager) storeCheckpointArchive(archivePath, originKey, hash string) error {
+	m.mu.Lock()
+	server := m.server
+	m.mu.Unlock()
+	if server == nil {
+		_, err := m.client.StoreContentFromLocalFile(cache.LocalContentSource{Path: archivePath, CachePath: originKey}, cache.StoreContentOptions{RoutingKey: hash, Lock: true})
+		return err
+	}
+
+	archive, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer archive.Close()
+	info, err := archive.Stat()
+	if err != nil {
+		return err
+	}
+	if server.HasCompleteContent(hash, info.Size()) {
+		return nil
+	}
+	_, _, err = server.StoreReader(m.ctx, archive, hash)
+	return err
 }
 
 func (s *Worker) ensureCheckpointMaterialized(ctx context.Context, request *types.ContainerRequest, checkpoint *types.Checkpoint) (string, error) {
@@ -1891,7 +2106,11 @@ func (s *Worker) ensureCheckpointMaterializedWithLogger(ctx context.Context, req
 	if checkpoint.CacheHash == "" || checkpoint.CacheSizeBytes <= 0 || checkpoint.OriginKey == "" {
 		return "", fmt.Errorf("checkpoint cache metadata is incomplete")
 	}
-	s.reportCheckpointRequiredContent(request, checkpoint.CheckpointId, checkpointCacheMetadataFromRecord(request, checkpoint))
+	// A checkpoint that restores again is wanted on every host. A persistent
+	// VM's is used up by this restore.
+	if !request.IsPersistentVM() {
+		s.reportCheckpointRequiredContent(request, checkpoint.CheckpointId, checkpointCacheMetadataFromRecord(request, checkpoint))
+	}
 	s.cacheManager.mu.Lock()
 	server := s.cacheManager.server
 	s.cacheManager.mu.Unlock()
@@ -1966,12 +2185,18 @@ func (s *Worker) materializeCheckpointFromOrigin(ctx context.Context, request *t
 	if err != nil {
 		return err
 	}
-	return s.materializeCheckpointOrigin(ctx, checkpointPath, checkpoint, storageClient.DownloadWithReader, outputLogger, checkpointOriginIdleTimeout)
+	open := func(ctx context.Context, key string) (io.ReadCloser, error) {
+		return storageClient.DownloadLargeWithReader(ctx, key, checkpoint.CacheSizeBytes)
+	}
+	// This restore uses up a persistent VM's checkpoint. Its archive would
+	// be written beside the files it holds, and into the cache, for no host
+	// to read.
+	return s.materializeCheckpointOrigin(ctx, checkpointPath, checkpoint, open, outputLogger, checkpointOriginIdleTimeout, !request.IsPersistentVM())
 }
 
 // Memory archives are much larger than disk chunks. Queue them separately so
 // burst restores do not multiply large streams and temporary archive files.
-func (s *Worker) materializeCheckpointOrigin(ctx context.Context, checkpointPath string, checkpoint *types.Checkpoint, open func(context.Context, string) (io.ReadCloser, error), outputLogger *slog.Logger, idleTimeout time.Duration) error {
+func (s *Worker) materializeCheckpointOrigin(ctx context.Context, checkpointPath string, checkpoint *types.Checkpoint, open func(context.Context, string) (io.ReadCloser, error), outputLogger *slog.Logger, idleTimeout time.Duration, cacheArchive bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -1989,7 +2214,7 @@ func (s *Worker) materializeCheckpointOrigin(ctx context.Context, checkpointPath
 	var lastErr error
 	for attempt := 1; attempt <= checkpointOriginReadAttempts; attempt++ {
 		var retry bool
-		lastErr, retry = s.materializeCheckpointOriginAttempt(ctx, checkpointPath, checkpoint, open, outputLogger, idleTimeout)
+		lastErr, retry = s.materializeCheckpointOriginAttempt(ctx, checkpointPath, checkpoint, open, outputLogger, idleTimeout, cacheArchive)
 		if lastErr == nil {
 			return nil
 		}
@@ -2007,7 +2232,7 @@ func (s *Worker) materializeCheckpointOrigin(ctx context.Context, checkpointPath
 	return lastErr
 }
 
-func (s *Worker) materializeCheckpointOriginAttempt(ctx context.Context, checkpointPath string, checkpoint *types.Checkpoint, open func(context.Context, string) (io.ReadCloser, error), outputLogger *slog.Logger, idleTimeout time.Duration) (error, bool) {
+func (s *Worker) materializeCheckpointOriginAttempt(ctx context.Context, checkpointPath string, checkpoint *types.Checkpoint, open func(context.Context, string) (io.ReadCloser, error), outputLogger *slog.Logger, idleTimeout time.Duration, cacheArchive bool) (error, bool) {
 	transfer, stop := withStorageInactivityWatchdog(ctx, idleTimeout, errCheckpointOriginInactive)
 	defer stop()
 	reader, err := open(transfer, checkpoint.OriginKey)
@@ -2033,7 +2258,7 @@ func (s *Worker) materializeCheckpointOriginAttempt(ctx context.Context, checkpo
 			cacheRelease()
 		}
 	}()
-	if s.cacheManager != nil && s.cacheManager.client != nil {
+	if cacheArchive && s.cacheManager != nil && s.cacheManager.client != nil {
 		cacheRelease = tryCheckpointArchiveCacheSlot(s.cacheManager.ctx)
 	}
 	if cacheRelease != nil {
@@ -2135,8 +2360,10 @@ func materializeCheckpointReader(ctx context.Context, reader io.Reader, expected
 	defer os.RemoveAll(tmpRoot)
 
 	hasher := sha256.New()
+	hashing := hashBehind(hasher)
+	defer hashing.Close()
 	counter := &countingWriter{}
-	writers := []io.Writer{hasher, counter}
+	writers := []io.Writer{hashing, counter}
 	if archiveWriter != nil {
 		writers = append(writers, archiveWriter)
 	}
@@ -2150,6 +2377,7 @@ func materializeCheckpointReader(ctx context.Context, reader io.Reader, expected
 	if counter.n != expectedSize {
 		return fmt.Errorf("checkpoint archive size mismatch: expected %d, got %d", expectedSize, counter.n)
 	}
+	hashing.Close()
 	if expectedHash != "" {
 		actualHash := hex.EncodeToString(hasher.Sum(nil))
 		if actualHash != expectedHash {
@@ -2203,14 +2431,18 @@ func untarCheckpointReader(ctx context.Context, reader io.Reader, destDir string
 	}
 	reader = buffered
 	if bytes.Equal(header, []byte{0x28, 0xb5, 0x2f, 0xfd}) {
-		decoder, err := zstd.NewReader(buffered, zstd.WithDecoderConcurrency(1))
+		// Decoded on other goroutines than the one that reads the archive
+		// and the one that feeds tar.
+		decoder, err := zstd.NewReader(buffered, zstd.WithDecoderConcurrency(4))
 		if err != nil {
 			return err
 		}
 		defer decoder.Close()
 		reader = decoder
 	}
-	cmd := exec.CommandContext(ctx, "tar", append(tarXattrArgs(), "-xf", "-", "-C", destDir)...)
+	// tar writes a file in pieces the size of the records it reads: in 64 KiB
+	// ones, guest RAM is extracted 1.6 times as fast as in its usual 10 KiB.
+	cmd := exec.CommandContext(ctx, "tar", append(tarXattrArgs(), "-b", "128", "-xf", "-", "-C", destDir)...)
 	var stderr bytes.Buffer
 	cmd.Stdin = reader
 	cmd.Stderr = &stderr
@@ -2509,6 +2741,20 @@ func checkpointCacheMetadataFromRecord(request *types.ContainerRequest, checkpoi
 	}
 }
 
+// retireRestoredCheckpoint withdraws a persistent VM's memory checkpoint from
+// what its locality keeps warm. A VM resumes from a checkpoint once and its
+// next pause makes another, so a host that has not copied this one need not,
+// and one that has can let it go before a checkpoint that is still waited on.
+// The origin keeps it for a restore that has to be repeated.
+func (s *Worker) retireRestoredCheckpoint(request *types.ContainerRequest, checkpointId string) {
+	if s.cacheManager == nil || !request.IsPersistentVM() {
+		return
+	}
+	if reporter := s.cacheManager.ContentReporter(); reporter != nil {
+		reporter.retireCheckpoint(cacheRequestWorkspaceID(request), cacheRequestStubID(request), checkpointId)
+	}
+}
+
 func (s *Worker) reportCheckpointRequiredContent(request *types.ContainerRequest, checkpointId string, metadata *checkpointCacheMetadata) {
 	if s.cacheManager == nil || metadata == nil {
 		return
@@ -2719,6 +2965,13 @@ func checkpointRuntimeHasStopped(ctx context.Context, rt runtime.Runtime, contai
 		return runtimeContainerNotFound(err)
 	}
 	return state.Status == types.RuncContainerStatusStopped
+}
+
+func checkpointRuntimeStillRuns(ctx context.Context, rt runtime.Runtime, containerID string) bool {
+	stateCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	state, err := rt.State(stateCtx, containerID)
+	return err == nil && state.Status == types.RuncContainerStatusRunning
 }
 
 func shouldAwaitTerminalCheckpointStop(request *types.ContainerRequest) bool {

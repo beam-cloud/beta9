@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
@@ -252,6 +253,64 @@ func TestGuestAgentStopsAfterOrdinaryServices(t *testing.T) {
 	}
 	if !strings.Contains(guestAgentUnit, "TimeoutStopSec=infinity") || !strings.Contains(guestAgentUnit, "OnFailure=poweroff.target") {
 		t.Fatal("host owns shutdown deadline, and agent failures must power off the guest")
+	}
+}
+
+// The host plugs a GPU in once the guest has reported in. Nothing that could
+// look for it starts before then, except the process manager.
+func TestLateDevicesHoldBackWorkloadAndUnits(t *testing.T) {
+	blocks := func(wait func()) chan struct{} {
+		t.Helper()
+		done := make(chan struct{})
+		go func() { wait(); close(done) }()
+		select {
+		case <-done:
+			t.Fatal("started before the devices arrived")
+		case <-time.After(30 * time.Millisecond):
+		}
+		return done
+	}
+	returns := func(done chan struct{}) {
+		t.Helper()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("still waiting after the devices arrived")
+		}
+	}
+
+	ctrl := &control{devices: make(chan struct{})}
+	ctrl.awaitDevices("/usr/local/bin/goproc")
+	workload := blocks(func() { ctrl.awaitDevices("/usr/bin/python3") })
+	ctrl.devicesArrived()
+	ctrl.devicesArrived()
+	returns(workload)
+	(&control{}).awaitDevices("/usr/bin/python3") // a guest that is given none
+
+	marker := filepath.Join(t.TempDir(), "late-devices")
+	alive := true
+	if err := awaitLateDevices(marker, func() bool { return alive }); err != nil {
+		t.Fatalf("guest that is given no devices: %v", err)
+	}
+	if err := os.WriteFile(marker, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	units := blocks(func() { err = awaitLateDevices(marker, func() bool { return true }) })
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+	returns(units)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(marker, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	alive = false
+	if err := awaitLateDevices(marker, func() bool { return alive }); err == nil {
+		t.Fatal("units must not start when the agent died without its devices")
 	}
 }
 
