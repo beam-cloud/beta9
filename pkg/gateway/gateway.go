@@ -206,6 +206,10 @@ func NewGateway() (*Gateway, error) {
 	})
 	gateway.ComputeService.Start(ctx)
 
+	// Removes Redis keys left behind by containers and workers that are gone.
+	// Every replica runs the loop; a Redis lock lets one sweep at a time.
+	go repository.NewOrphanSweeper(redisClient).Run(ctx)
+
 	return gateway, nil
 }
 

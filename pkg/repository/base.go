@@ -70,6 +70,7 @@ type ContainerRepository interface {
 	DeleteBackendRoutesByContainerID(ctx context.Context, containerID string) error
 	DeleteBackendRoutesByMachine(ctx context.Context, workspaceID, poolName, machineID string) error
 	UpdateContainerStatus(string, types.ContainerStatus, int64) error
+	RenewContainerLeases(ctx context.Context, workerId, workspaceId string, renewals []types.ContainerLeaseRenewal) []types.ContainerLease
 	MarkPendingContainerStoppingIfUnassigned(containerId string, expirySeconds int64, exitCode int) (bool, error)
 	DeleteContainerState(containerId string) error
 	SetContainerRequestStatus(containerId string, status types.ContainerRequestStatus) error
@@ -78,6 +79,7 @@ type ContainerRepository interface {
 	GetWorkerAddress(ctx context.Context, containerId string) (string, error)
 	SetContainerAddressMap(containerId string, addressMap map[int32]string) error
 	GetContainerAddressMap(containerId string) (map[int32]string, error)
+	GetContainerAddressMaps(containerIds []string) (map[string]map[int32]string, error)
 	CheckContainerConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
 	CreateContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
 	ReserveContainerConcurrencyForPending(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
@@ -87,6 +89,7 @@ type ContainerRepository interface {
 	GetSandboxActivity(workspaceId string, appIds []string, since time.Time) (map[string][]types.AppActivityBucket, error)
 	GetActiveContainersByWorkerId(workerId string) ([]types.ContainerState, error)
 	GetFailedContainersByStubId(stubId string) ([]string, error)
+	GetContainersByStubId(stubId string) (active []types.ContainerState, failed []string, err error)
 	GetStubState(stubId string) (string, error)
 	SetStubState(stubId, state string) error
 	DeleteStubState(stubId string) error
@@ -100,6 +103,7 @@ type ContainerRepository interface {
 	EndpointRequestHeartbeatExists(ctx context.Context, workspaceName, stubId, taskId, containerId string) (bool, error)
 	SetPodKeepWarmLock(ctx context.Context, workspaceName, stubId, containerId string, keepWarmSeconds int) error
 	PodKeepWarmLockExists(ctx context.Context, workspaceName, stubId, containerId string) (bool, error)
+	PodKeepWarmLocksExist(ctx context.Context, workspaceName, stubId string, containerIds []string) (map[string]bool, error)
 }
 
 type WorkerPoolRepository interface {

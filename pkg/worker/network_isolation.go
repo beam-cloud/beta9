@@ -118,8 +118,12 @@ func (m *ContainerNetworkManager) isolateContainers() error {
 			return err
 		}
 		if !exists {
+			// Workers that start together on one host network all find the
+			// chain missing, and all but the first to create it are refused.
 			if err := family.ipt.NewChain("mangle", containerIsolationChain); err != nil {
-				return err
+				if created, _ := family.ipt.ChainExists("mangle", containerIsolationChain); !created {
+					return err
+				}
 			}
 		}
 		allow, deny := containerIsolationRules(family.ipv6, m.privateNetworks, m.hostNetworks, endpoints)

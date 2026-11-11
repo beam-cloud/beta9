@@ -106,6 +106,10 @@ type WorkerKeepAlive struct {
 	MachineId                  string `json:"machine_id"`
 	CheckpointCompatibilityKey string `json:"checkpoint_compatibility_key"`
 	CPUTierProtocol            uint32 `json:"cpu_tier_protocol"`
+	// RequestStreamOpen is set by the gateway that received the keepalive when
+	// it also holds this worker's container request stream. A worker opens
+	// that stream only after it has started.
+	RequestStreamOpen bool `json:"request_stream_open"`
 }
 
 func StableStorageNodeID(machineID, workerID string) string {
@@ -264,6 +268,29 @@ type ContainerState struct {
 // CapacityCpu is the CPU the container takes from its worker's capacity.
 func (s *ContainerState) CapacityCpu() int64 {
 	return max(s.ReservedCpu, s.Cpu)
+}
+
+// ContainerLeaseRenewal is one container in a worker's routine status
+// heartbeat. RuntimeStarted says the worker has seen the container's process
+// start, so a state that is still PENDING becomes RUNNING.
+type ContainerLeaseRenewal struct {
+	ContainerId    string
+	RuntimeStarted bool
+}
+
+// ContainerLease is what the routine status heartbeat found for a container.
+// Err is set when nothing could be renewed: ErrContainerStateNotFound when
+// the container has no state, ErrContainerNotAssigned when its state is not
+// the calling worker's. Otherwise Status is the persisted status after the
+// call: a PENDING or RUNNING container was renewed, a STOPPING one was left
+// as it is. Started is set when the call moved it from PENDING to RUNNING.
+type ContainerLease struct {
+	ContainerId  string
+	Err          error
+	Status       ContainerStatus
+	Started      bool
+	Evicting     bool
+	DrainSeconds uint32
 }
 
 // @go2proto
@@ -1006,6 +1033,15 @@ func (e *ErrContainerStateNotFound) From(err error) bool {
 	}
 
 	return false
+}
+
+// ErrContainerNotAssigned reports a container whose state is assigned to
+// another worker, or to no worker yet.
+type ErrContainerNotAssigned struct {
+}
+
+func (e *ErrContainerNotAssigned) Error() string {
+	return "container is not assigned to this worker"
 }
 
 type ErrInvalidWorkerStatus struct {

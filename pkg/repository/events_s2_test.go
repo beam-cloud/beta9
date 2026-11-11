@@ -2487,6 +2487,47 @@ func TestS2WriterSlowStreamDoesNotBlockUnrelatedMetrics(t *testing.T) {
 	}
 }
 
+func TestEventRepoWithoutQueueWaitDoesNotHoldItsCaller(t *testing.T) {
+	// An event store that has fallen behind: the queue is full and not draining.
+	fullWriter := func() *s2EventWriter {
+		writer := &s2EventWriter{name: "s2", queue: make(chan cloudevents.Event, 1), enqueueWait: s2EventEnqueueTimeout}
+		writer.queue <- writerTestEvent("stream", 0)
+		return writer
+	}
+	sinks := func() []eventSink {
+		return []eventSink{&S2EventRepository{writer: fullWriter()}, &ScopedS2EventRepository{writer: fullWriter()}}
+	}
+	push := func(events *EventClientRepo) time.Duration {
+		start := time.Now()
+		events.PushContainerLifecycleEvent(types.EventContainerLifecycleSchema{
+			ID:          types.ContainerLifecycleSchedulerBatchPlan,
+			ContainerID: "sandbox-1",
+			StartTime:   start,
+		})
+		return time.Since(start)
+	}
+
+	// By default each sink holds its caller for room.
+	waits := &EventClientRepo{storageSinks: sinks()}
+	if took := push(waits); took < 2*s2EventEnqueueTimeout {
+		t.Fatalf("push returned after %s, want it to wait %s for room in each of two sinks", took, s2EventEnqueueTimeout)
+	}
+
+	drops := &EventClientRepo{storageSinks: sinks()}
+	WithoutQueueWait()(drops)
+	if took := push(drops); took > s2EventEnqueueTimeout/5 {
+		t.Fatalf("push held its caller for %s with the queue full", took)
+	}
+
+	// Events are still stored whenever there is room.
+	writer := drops.storageSinks[0].(*S2EventRepository).writer
+	<-writer.queue
+	push(drops)
+	if len(writer.queue) != 1 {
+		t.Fatal("an event was dropped though the queue had room")
+	}
+}
+
 func TestS2WriterBoundsPendingWorkAndPreservesStreamOrder(t *testing.T) {
 	const streams, count = s2EventAppendConcurrency, 50000
 	queue := make(chan cloudevents.Event)

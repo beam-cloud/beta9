@@ -62,6 +62,20 @@ func (b *workerEventBroker) registerRequests(workerID string) (uint64, <-chan st
 	return b.addSink(&workerEventSink{workerID: workerID, requests: requests}), requests
 }
 
+// hasRequestStream reports whether this gateway holds the worker's container
+// request stream.
+func (b *workerEventBroker) hasRequestStream(workerID string) bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	for _, sink := range b.sinks {
+		if sink.workerID == workerID && sink.requests != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func (b *workerEventBroker) addSink(sink *workerEventSink) uint64 {
 	b.mu.Lock()
 	b.nextID++

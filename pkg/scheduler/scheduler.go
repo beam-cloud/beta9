@@ -89,7 +89,8 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
 	computeRepo := repo.NewComputeRedisRepository(redisClient)
 	schedulerUsage := NewSchedulerUsageMetrics(usageRepo)
-	eventRepo := repo.NewEventClientRepo(config)
+	// Recording a placement must never hold up the next one.
+	eventRepo := repo.NewEventClientRepo(config, repo.WithoutQueueWait())
 	pushPoolMetrics := newPoolMetricsPusher(ctx, backendRepo, eventRepo)
 
 	// Load worker pools

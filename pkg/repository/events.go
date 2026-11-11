@@ -84,6 +84,21 @@ func WithWorkspaceWebhooks(source WebhookSource) EventClientOption {
 	}
 }
 
+// WithoutQueueWait drops an event at once when the event store's queue is
+// full, where the default is to hold the caller briefly for room. It is for
+// callers that must not slow down when events are produced faster than they
+// can be stored, such as the scheduling loop: held up, it placed containers
+// only as fast as their timings could be written.
+func WithoutQueueWait() EventClientOption {
+	return func(r *EventClientRepo) {
+		for _, sink := range r.storageSinks {
+			if queued, ok := sink.(interface{ dropWhenFull() }); ok {
+				queued.dropWhenFull()
+			}
+		}
+	}
+}
+
 func NewEventClientRepo(config types.AppConfig, opts ...EventClientOption) EventRepository {
 	storageSinks := []eventSink{}
 	callbackSinks := []eventSink{}
