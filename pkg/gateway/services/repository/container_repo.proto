@@ -20,6 +20,10 @@ service ContainerRepositoryService {
       returns (GetContainerAddressMapResponse);
   rpc SetWorkerAddress(SetWorkerAddressRequest)
       returns (SetWorkerAddressResponse);
+  rpc SetContainerExitSnapshot(SetContainerExitSnapshotRequest)
+      returns (SetContainerExitSnapshotResponse);
+  rpc GetContainerExitSnapshot(GetContainerExitSnapshotRequest)
+      returns (GetContainerExitSnapshotResponse);
 }
 
 message GetContainerStateRequest { string container_id = 1; }
@@ -120,4 +124,29 @@ message BackendRoute {
   string state = 13;
   string error = 14;
   int64 updated_at = 15;
+}
+
+message SetContainerExitSnapshotRequest {
+  string container_id = 1;
+  string status = 2;
+  string image_id = 3;
+  string error_msg = 4;
+  string workspace_id = 5;
+}
+
+message SetContainerExitSnapshotResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message GetContainerExitSnapshotRequest {
+  string container_id = 1;
+}
+
+message GetContainerExitSnapshotResponse {
+  bool ok = 1;
+  string status = 2;
+  string image_id = 3;
+  string error_msg = 4;
+  string workspace_id = 5;
 }

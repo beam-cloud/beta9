@@ -120,8 +120,7 @@ def test_sandbox_instance_poll_defaults_terminal_exit_code():
     assert instance.poll() == 137
 
 
-def test_sandbox_prepare_runtime_uses_idle_entrypoint():
-    sandbox = Sandbox()
+def _prepare_sandbox_request(sandbox):
     sandbox.image.build = MagicMock(
         return_value=ImageBuildResult(
             success=True, image_id="image-id", python_version="python3.11"
@@ -139,6 +138,81 @@ def test_sandbox_prepare_runtime_uses_idle_entrypoint():
         force_create_stub=True,
         ignore_patterns=["*"],
     )
+    return sandbox.gateway_stub.get_or_create_stub.call_args.args[0]
 
-    request = sandbox.gateway_stub.get_or_create_stub.call_args.args[0]
+
+def test_sandbox_prepare_runtime_uses_idle_entrypoint():
+    request = _prepare_sandbox_request(Sandbox())
     assert request.entrypoint == ["tail", "-f", "/dev/null"]
+
+
+def test_sandbox_enable_exit_snapshot_passed_to_stub_request():
+    sandbox = Sandbox(enable_exit_snapshot=True)
+    assert sandbox.enable_exit_snapshot is True
+    request = _prepare_sandbox_request(sandbox)
+    assert request.enable_exit_snapshot is True
+
+
+def test_sandbox_get_exit_snapshot_rejects_non_positive_timeout_and_rounds_up():
+    import pytest
+
+    stub = FakeSandboxStub()
+    captured = []
+    stub.sandbox_get_exit_snapshot = lambda req: (
+        captured.append(req) or SimpleNamespace(ok=True, error_msg="", image_id="img")
+    )
+    instance = fake_instance(stub)
+    with pytest.raises(ValueError):
+        instance.get_exit_snapshot(timeout=0)
+    instance.get_exit_snapshot(timeout=0.5)
+    assert captured[0].timeout_seconds == 1
+
+
+def test_sandbox_get_exit_snapshot_success():
+    stub = FakeSandboxStub()
+    captured_requests = []
+
+    def mock_get_exit_snapshot(req):
+        captured_requests.append(req)
+        return SimpleNamespace(ok=True, error_msg="", image_id="img-snapshot-12345")
+
+    stub.sandbox_get_exit_snapshot = mock_get_exit_snapshot
+
+    instance = fake_instance(stub)
+    image = instance.get_exit_snapshot(timeout=45)
+
+    assert len(captured_requests) == 1
+    assert captured_requests[0].container_id == "sandbox-123"
+    assert captured_requests[0].timeout_seconds == 45
+    assert image.image_id == "img-snapshot-12345"
+
+    # Also test experimental alias
+    image_alias = instance._experimental_get_exit_snapshot()
+    assert len(captured_requests) == 2
+    assert captured_requests[1].timeout_seconds == 300
+    assert image_alias.image_id == "img-snapshot-12345"
+
+
+def test_sandbox_get_exit_snapshot_failure():
+    import pytest
+    from beta9.exceptions import SandboxProcessError
+
+    stub = FakeSandboxStub()
+    stub.sandbox_get_exit_snapshot = lambda req: SimpleNamespace(
+        ok=False, error_msg="snapshot creation failed: disk full", image_id=""
+    )
+
+    instance = fake_instance(stub)
+    with pytest.raises(SandboxProcessError, match="snapshot creation failed: disk full"):
+        instance.get_exit_snapshot()
+
+
+def test_sandbox_from_id():
+    from unittest.mock import patch
+
+    mock_inst = SimpleNamespace(container_id="sandbox-999", stub_id="stub-abc")
+    with patch.object(Sandbox, "connect", return_value=mock_inst) as mock_connect:
+        inst = Sandbox.from_id("sandbox-999")
+        assert inst.container_id == "sandbox-999"
+        mock_connect.assert_called_once_with("sandbox-999")
+

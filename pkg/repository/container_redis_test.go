@@ -2095,3 +2095,73 @@ func TestSandboxActivityCountersBucketByHour(t *testing.T) {
 		t.Fatalf("expected stale bucket to be trimmed, got fields %v", fields)
 	}
 }
+
+func TestContainerExitSnapshotStateLifecycle(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewContainerRedisRepositoryForTest(rdb)
+
+	containerId := "test-container-exit-snapshot-123"
+
+	// Initially nil
+	state, err := repo.GetContainerExitSnapshot(containerId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != nil {
+		t.Fatalf("expected nil state initially, got %+v", state)
+	}
+
+	// Set PENDING
+	pendingState := &types.ExitSnapshotState{
+		Status: types.ExitSnapshotStatusPending,
+	}
+	if err := repo.SetContainerExitSnapshot(containerId, pendingState); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err = repo.GetContainerExitSnapshot(containerId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == nil || state.Status != types.ExitSnapshotStatusPending {
+		t.Fatalf("expected pending status, got %+v", state)
+	}
+
+	// Set READY with ImageId
+	readyState := &types.ExitSnapshotState{
+		Status:      types.ExitSnapshotStatusReady,
+		ImageId:     "img-exit-snapshot-789",
+		WorkspaceId: "ws-1",
+		CreatedAt:   1234,
+	}
+	if err := repo.SetContainerExitSnapshot(containerId, readyState); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err = repo.GetContainerExitSnapshot(containerId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == nil || state.Status != types.ExitSnapshotStatusReady || state.ImageId != "img-exit-snapshot-789" {
+		t.Fatalf("expected ready status with image id, got %+v", state)
+	}
+	if state.WorkspaceId != "ws-1" || state.CreatedAt != 1234 {
+		t.Fatalf("expected workspace and created_at to round trip, got %+v", state)
+	}
+
+	// FAILED keeps its error message.
+	failedState := &types.ExitSnapshotState{Status: types.ExitSnapshotStatusFailed, ErrorMsg: "disk full"}
+	if err := repo.SetContainerExitSnapshot(containerId, failedState); err != nil {
+		t.Fatal(err)
+	}
+	state, err = repo.GetContainerExitSnapshot(containerId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == nil || state.Status != types.ExitSnapshotStatusFailed || state.ErrorMsg != "disk full" {
+		t.Fatalf("expected failed status with error message, got %+v", state)
+	}
+}

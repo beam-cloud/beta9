@@ -1337,3 +1337,84 @@ func (s *GenericPodService) SandboxListProcesses(ctx context.Context, in *pb.Pod
 		Processes: resp.Processes,
 	}, nil
 }
+
+func (s *GenericPodService) SandboxGetExitSnapshot(ctx context.Context, in *pb.PodSandboxGetExitSnapshotRequest) (*pb.PodSandboxGetExitSnapshotResponse, error) {
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "missing request")
+	}
+
+	authInfo, ok := sandboxAuthInfoFromContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "invalid or missing token")
+	}
+
+	if s.containerRepo == nil {
+		return &pb.PodSandboxGetExitSnapshotResponse{
+			Ok:       false,
+			ErrorMsg: "container repository unavailable",
+		}, nil
+	}
+
+	timeout := time.Duration(in.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 300 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+
+	for {
+		state, err := s.containerRepo.GetContainerExitSnapshot(in.ContainerId)
+		if err != nil {
+			return &pb.PodSandboxGetExitSnapshotResponse{
+				Ok:       false,
+				ErrorMsg: "failed to read exit snapshot state",
+			}, nil
+		}
+		// A snapshot owned by another workspace is indistinguishable from a missing one.
+		if state != nil && state.WorkspaceId != authInfo.Workspace.ExternalId {
+			state = nil
+		}
+		// The worker records PENDING when the sandbox starts, so no record means
+		// exit snapshots were never enabled (or the record expired): don't wait.
+		if state == nil {
+			return &pb.PodSandboxGetExitSnapshotResponse{
+				Ok:       false,
+				Status:   string(types.ExitSnapshotStatusDisabled),
+				ErrorMsg: "exit snapshot not found or not enabled",
+			}, nil
+		}
+		switch state.Status {
+		case types.ExitSnapshotStatusReady:
+			return &pb.PodSandboxGetExitSnapshotResponse{
+				Ok:      true,
+				Status:  string(state.Status),
+				ImageId: state.ImageId,
+			}, nil
+		case types.ExitSnapshotStatusFailed:
+			return &pb.PodSandboxGetExitSnapshotResponse{
+				Ok:       false,
+				Status:   string(state.Status),
+				ErrorMsg: state.ErrorMsg,
+			}, nil
+		case types.ExitSnapshotStatusDisabled:
+			return &pb.PodSandboxGetExitSnapshotResponse{
+				Ok:       false,
+				Status:   string(state.Status),
+				ErrorMsg: "exit snapshot was not enabled for this sandbox",
+			}, nil
+		}
+
+		if time.Now().After(deadline) {
+			return &pb.PodSandboxGetExitSnapshotResponse{
+				Ok:       false,
+				Status:   string(types.ExitSnapshotStatusPending),
+				ErrorMsg: "timed out waiting for sandbox exit snapshot",
+			}, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}

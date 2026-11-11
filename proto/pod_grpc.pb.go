@@ -43,6 +43,7 @@ const (
 	PodService_SandboxSnapshotMemory_FullMethodName            = "/pod.PodService/SandboxSnapshotMemory"
 	PodService_SandboxSnapshotDisks_FullMethodName             = "/pod.PodService/SandboxSnapshotDisks"
 	PodService_SandboxListUrls_FullMethodName                  = "/pod.PodService/SandboxListUrls"
+	PodService_SandboxGetExitSnapshot_FullMethodName           = "/pod.PodService/SandboxGetExitSnapshot"
 )
 
 // PodServiceClient is the client API for PodService service.
@@ -73,6 +74,7 @@ type PodServiceClient interface {
 	SandboxSnapshotMemory(ctx context.Context, in *PodSandboxSnapshotMemoryRequest, opts ...grpc.CallOption) (*PodSandboxSnapshotMemoryResponse, error)
 	SandboxSnapshotDisks(ctx context.Context, in *PodSandboxSnapshotDisksRequest, opts ...grpc.CallOption) (*PodSandboxSnapshotDisksResponse, error)
 	SandboxListUrls(ctx context.Context, in *PodSandboxListUrlsRequest, opts ...grpc.CallOption) (*PodSandboxListUrlsResponse, error)
+	SandboxGetExitSnapshot(ctx context.Context, in *PodSandboxGetExitSnapshotRequest, opts ...grpc.CallOption) (*PodSandboxGetExitSnapshotResponse, error)
 }
 
 type podServiceClient struct {
@@ -299,6 +301,15 @@ func (c *podServiceClient) SandboxListUrls(ctx context.Context, in *PodSandboxLi
 	return out, nil
 }
 
+func (c *podServiceClient) SandboxGetExitSnapshot(ctx context.Context, in *PodSandboxGetExitSnapshotRequest, opts ...grpc.CallOption) (*PodSandboxGetExitSnapshotResponse, error) {
+	out := new(PodSandboxGetExitSnapshotResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxGetExitSnapshot_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PodServiceServer is the server API for PodService service.
 // All implementations must embed UnimplementedPodServiceServer
 // for forward compatibility
@@ -327,6 +338,7 @@ type PodServiceServer interface {
 	SandboxSnapshotMemory(context.Context, *PodSandboxSnapshotMemoryRequest) (*PodSandboxSnapshotMemoryResponse, error)
 	SandboxSnapshotDisks(context.Context, *PodSandboxSnapshotDisksRequest) (*PodSandboxSnapshotDisksResponse, error)
 	SandboxListUrls(context.Context, *PodSandboxListUrlsRequest) (*PodSandboxListUrlsResponse, error)
+	SandboxGetExitSnapshot(context.Context, *PodSandboxGetExitSnapshotRequest) (*PodSandboxGetExitSnapshotResponse, error)
 	mustEmbedUnimplementedPodServiceServer()
 }
 
@@ -405,6 +417,9 @@ func (UnimplementedPodServiceServer) SandboxSnapshotDisks(context.Context, *PodS
 }
 func (UnimplementedPodServiceServer) SandboxListUrls(context.Context, *PodSandboxListUrlsRequest) (*PodSandboxListUrlsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SandboxListUrls not implemented")
+}
+func (UnimplementedPodServiceServer) SandboxGetExitSnapshot(context.Context, *PodSandboxGetExitSnapshotRequest) (*PodSandboxGetExitSnapshotResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxGetExitSnapshot not implemented")
 }
 func (UnimplementedPodServiceServer) mustEmbedUnimplementedPodServiceServer() {}
 
@@ -851,6 +866,24 @@ func _PodService_SandboxListUrls_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PodService_SandboxGetExitSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxGetExitSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SandboxGetExitSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SandboxGetExitSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SandboxGetExitSnapshot(ctx, req.(*PodSandboxGetExitSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PodService_ServiceDesc is the grpc.ServiceDesc for PodService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -953,6 +986,10 @@ var PodService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SandboxListUrls",
 			Handler:    _PodService_SandboxListUrls_Handler,
+		},
+		{
+			MethodName: "SandboxGetExitSnapshot",
+			Handler:    _PodService_SandboxGetExitSnapshot_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

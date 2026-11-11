@@ -237,6 +237,43 @@
         ]
       }
     },
+    "/pods/{containerId}/exit-snapshot": {
+      "get": {
+        "operationId": "PodService_SandboxGetExitSnapshot",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/podPodSandboxGetExitSnapshotResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "containerId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "timeoutSeconds",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int64"
+          }
+        ],
+        "tags": [
+          "PodService"
+        ]
+      }
+    },
     "/pods/{containerId}/files": {
       "get": {
         "operationId": "PodService_SandboxListFiles",
@@ -1296,6 +1333,23 @@
             "type": "object",
             "$ref": "#/definitions/typesFileSearchResult"
           }
+        }
+      }
+    },
+    "podPodSandboxGetExitSnapshotResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string"
+        },
+        "imageId": {
+          "type": "string"
+        },
+        "errorMsg": {
+          "type": "string"
         }
       }
     },

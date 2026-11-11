@@ -776,6 +776,8 @@ message GetOrCreateStubRequest {
   // Run the sandbox in its own virtual machine (microvm pools only).
   bool use_vm = 50;
   string cpu_tier = 51;
+  // Capture a filesystem snapshot automatically when the sandbox exits.
+  bool enable_exit_snapshot = 52;
 }
 
 message GetOrCreateStubResponse {

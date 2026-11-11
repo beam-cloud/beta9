@@ -272,6 +272,7 @@ class AuthTokenInterceptor(
                 "SandboxSnapshotMemory",
                 "SandboxSnapshotDisks",
                 "SandboxCreateImageFromFilesystem",
+                "SandboxGetExitSnapshot",
             )
         ) or method in (
             "ImageExists",

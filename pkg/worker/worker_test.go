@@ -1739,6 +1739,14 @@ func (f *fakeContainerRepoClient) SetWorkerAddress(ctx context.Context, in *pb.S
 	return &pb.SetWorkerAddressResponse{Ok: true}, nil
 }
 
+func (f *fakeContainerRepoClient) SetContainerExitSnapshot(ctx context.Context, in *pb.SetContainerExitSnapshotRequest, opts ...grpc.CallOption) (*pb.SetContainerExitSnapshotResponse, error) {
+	return &pb.SetContainerExitSnapshotResponse{Ok: true}, nil
+}
+
+func (f *fakeContainerRepoClient) GetContainerExitSnapshot(ctx context.Context, in *pb.GetContainerExitSnapshotRequest, opts ...grpc.CallOption) (*pb.GetContainerExitSnapshotResponse, error) {
+	return &pb.GetContainerExitSnapshotResponse{Ok: true}, nil
+}
+
 func TestStatusHeartbeatRepositoryDeadline(t *testing.T) {
 	for _, test := range []struct {
 		name    string

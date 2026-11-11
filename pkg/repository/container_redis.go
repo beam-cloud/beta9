@@ -366,6 +366,37 @@ func (cr *ContainerRedisRepository) GetContainerExitCode(containerId string) (in
 	return exitCode, nil
 }
 
+func (cr *ContainerRedisRepository) SetContainerExitSnapshot(containerId string, snapshot *types.ExitSnapshotState) error {
+	if snapshot == nil {
+		return nil
+	}
+	key := common.RedisKeys.SchedulerContainerExitSnapshot(containerId)
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		return fmt.Errorf("failed to marshal exit snapshot: %w", err)
+	}
+	if err := cr.rdb.SetEx(context.TODO(), key, data, types.ContainerExitSnapshotTTL).Err(); err != nil {
+		return fmt.Errorf("failed to set exit snapshot for container %s: %w", containerId, err)
+	}
+	return nil
+}
+
+func (cr *ContainerRedisRepository) GetContainerExitSnapshot(containerId string) (*types.ExitSnapshotState, error) {
+	key := common.RedisKeys.SchedulerContainerExitSnapshot(containerId)
+	data, err := cr.rdb.Get(context.TODO(), key).Bytes()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var state types.ExitSnapshotState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal exit snapshot: %w", err)
+	}
+	return &state, nil
+}
+
 // The scheduler commits eviction under the worker lock, not the container lock.
 // Compare the observed status atomically so a delayed heartbeat cannot overwrite
 // that STOPPING transition or any assignment/eviction metadata written with it.

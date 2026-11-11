@@ -19,14 +19,16 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	ContainerRepositoryService_GetContainerState_FullMethodName      = "/ContainerRepositoryService/GetContainerState"
-	ContainerRepositoryService_DeleteContainerState_FullMethodName   = "/ContainerRepositoryService/DeleteContainerState"
-	ContainerRepositoryService_UpdateContainerStatus_FullMethodName  = "/ContainerRepositoryService/UpdateContainerStatus"
-	ContainerRepositoryService_SetContainerExitCode_FullMethodName   = "/ContainerRepositoryService/SetContainerExitCode"
-	ContainerRepositoryService_SetContainerAddress_FullMethodName    = "/ContainerRepositoryService/SetContainerAddress"
-	ContainerRepositoryService_SetContainerAddressMap_FullMethodName = "/ContainerRepositoryService/SetContainerAddressMap"
-	ContainerRepositoryService_GetContainerAddressMap_FullMethodName = "/ContainerRepositoryService/GetContainerAddressMap"
-	ContainerRepositoryService_SetWorkerAddress_FullMethodName       = "/ContainerRepositoryService/SetWorkerAddress"
+	ContainerRepositoryService_GetContainerState_FullMethodName        = "/ContainerRepositoryService/GetContainerState"
+	ContainerRepositoryService_DeleteContainerState_FullMethodName     = "/ContainerRepositoryService/DeleteContainerState"
+	ContainerRepositoryService_UpdateContainerStatus_FullMethodName    = "/ContainerRepositoryService/UpdateContainerStatus"
+	ContainerRepositoryService_SetContainerExitCode_FullMethodName     = "/ContainerRepositoryService/SetContainerExitCode"
+	ContainerRepositoryService_SetContainerAddress_FullMethodName      = "/ContainerRepositoryService/SetContainerAddress"
+	ContainerRepositoryService_SetContainerAddressMap_FullMethodName   = "/ContainerRepositoryService/SetContainerAddressMap"
+	ContainerRepositoryService_GetContainerAddressMap_FullMethodName   = "/ContainerRepositoryService/GetContainerAddressMap"
+	ContainerRepositoryService_SetWorkerAddress_FullMethodName         = "/ContainerRepositoryService/SetWorkerAddress"
+	ContainerRepositoryService_SetContainerExitSnapshot_FullMethodName = "/ContainerRepositoryService/SetContainerExitSnapshot"
+	ContainerRepositoryService_GetContainerExitSnapshot_FullMethodName = "/ContainerRepositoryService/GetContainerExitSnapshot"
 )
 
 // ContainerRepositoryServiceClient is the client API for ContainerRepositoryService service.
@@ -41,6 +43,8 @@ type ContainerRepositoryServiceClient interface {
 	SetContainerAddressMap(ctx context.Context, in *SetContainerAddressMapRequest, opts ...grpc.CallOption) (*SetContainerAddressMapResponse, error)
 	GetContainerAddressMap(ctx context.Context, in *GetContainerAddressMapRequest, opts ...grpc.CallOption) (*GetContainerAddressMapResponse, error)
 	SetWorkerAddress(ctx context.Context, in *SetWorkerAddressRequest, opts ...grpc.CallOption) (*SetWorkerAddressResponse, error)
+	SetContainerExitSnapshot(ctx context.Context, in *SetContainerExitSnapshotRequest, opts ...grpc.CallOption) (*SetContainerExitSnapshotResponse, error)
+	GetContainerExitSnapshot(ctx context.Context, in *GetContainerExitSnapshotRequest, opts ...grpc.CallOption) (*GetContainerExitSnapshotResponse, error)
 }
 
 type containerRepositoryServiceClient struct {
@@ -123,6 +127,24 @@ func (c *containerRepositoryServiceClient) SetWorkerAddress(ctx context.Context,
 	return out, nil
 }
 
+func (c *containerRepositoryServiceClient) SetContainerExitSnapshot(ctx context.Context, in *SetContainerExitSnapshotRequest, opts ...grpc.CallOption) (*SetContainerExitSnapshotResponse, error) {
+	out := new(SetContainerExitSnapshotResponse)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_SetContainerExitSnapshot_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *containerRepositoryServiceClient) GetContainerExitSnapshot(ctx context.Context, in *GetContainerExitSnapshotRequest, opts ...grpc.CallOption) (*GetContainerExitSnapshotResponse, error) {
+	out := new(GetContainerExitSnapshotResponse)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_GetContainerExitSnapshot_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ContainerRepositoryServiceServer is the server API for ContainerRepositoryService service.
 // All implementations must embed UnimplementedContainerRepositoryServiceServer
 // for forward compatibility
@@ -135,6 +157,8 @@ type ContainerRepositoryServiceServer interface {
 	SetContainerAddressMap(context.Context, *SetContainerAddressMapRequest) (*SetContainerAddressMapResponse, error)
 	GetContainerAddressMap(context.Context, *GetContainerAddressMapRequest) (*GetContainerAddressMapResponse, error)
 	SetWorkerAddress(context.Context, *SetWorkerAddressRequest) (*SetWorkerAddressResponse, error)
+	SetContainerExitSnapshot(context.Context, *SetContainerExitSnapshotRequest) (*SetContainerExitSnapshotResponse, error)
+	GetContainerExitSnapshot(context.Context, *GetContainerExitSnapshotRequest) (*GetContainerExitSnapshotResponse, error)
 	mustEmbedUnimplementedContainerRepositoryServiceServer()
 }
 
@@ -165,6 +189,12 @@ func (UnimplementedContainerRepositoryServiceServer) GetContainerAddressMap(cont
 }
 func (UnimplementedContainerRepositoryServiceServer) SetWorkerAddress(context.Context, *SetWorkerAddressRequest) (*SetWorkerAddressResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetWorkerAddress not implemented")
+}
+func (UnimplementedContainerRepositoryServiceServer) SetContainerExitSnapshot(context.Context, *SetContainerExitSnapshotRequest) (*SetContainerExitSnapshotResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetContainerExitSnapshot not implemented")
+}
+func (UnimplementedContainerRepositoryServiceServer) GetContainerExitSnapshot(context.Context, *GetContainerExitSnapshotRequest) (*GetContainerExitSnapshotResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetContainerExitSnapshot not implemented")
 }
 func (UnimplementedContainerRepositoryServiceServer) mustEmbedUnimplementedContainerRepositoryServiceServer() {
 }
@@ -324,6 +354,42 @@ func _ContainerRepositoryService_SetWorkerAddress_Handler(srv interface{}, ctx c
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ContainerRepositoryService_SetContainerExitSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetContainerExitSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ContainerRepositoryServiceServer).SetContainerExitSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ContainerRepositoryService_SetContainerExitSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ContainerRepositoryServiceServer).SetContainerExitSnapshot(ctx, req.(*SetContainerExitSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ContainerRepositoryService_GetContainerExitSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetContainerExitSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ContainerRepositoryServiceServer).GetContainerExitSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ContainerRepositoryService_GetContainerExitSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ContainerRepositoryServiceServer).GetContainerExitSnapshot(ctx, req.(*GetContainerExitSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ContainerRepositoryService_ServiceDesc is the grpc.ServiceDesc for ContainerRepositoryService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -362,6 +428,14 @@ var ContainerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetWorkerAddress",
 			Handler:    _ContainerRepositoryService_SetWorkerAddress_Handler,
+		},
+		{
+			MethodName: "SetContainerExitSnapshot",
+			Handler:    _ContainerRepositoryService_SetContainerExitSnapshot_Handler,
+		},
+		{
+			MethodName: "GetContainerExitSnapshot",
+			Handler:    _ContainerRepositoryService_GetContainerExitSnapshot_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
