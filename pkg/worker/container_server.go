@@ -398,6 +398,14 @@ func (s *ContainerRuntimeServer) ContainerCheckpoint(ctx context.Context, in *pb
 		// that requested it. Keep its exact RAM/disk pairing for reconnects.
 		defer cancel()
 		result.response = s.captureContainerCheckpoint(operationCtx, containerID, instance, true)
+		// A checkpoint the runtime refused left the container running as it
+		// was. Whoever asks again is asking for another attempt, so the
+		// refusal is forgotten before anyone hears of it.
+		if !result.response.Ok && checkpointRuntimeStillRuns(operationCtx, instance.Runtime, containerID) {
+			s.terminalCheckpoints.CompareAndDelete(containerID, result)
+			close(result.done)
+			return
+		}
 		close(result.done)
 		time.AfterFunc(defaultCheckpointOperationTTL, func() {
 			s.terminalCheckpoints.CompareAndDelete(containerID, result)
@@ -822,6 +830,10 @@ func (s *ContainerRuntimeServer) ContainerSandboxExec(ctx context.Context, in *p
 		return &pb.ContainerSandboxExecResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
+	if err := waitForGuestDevices(ctx, in.ContainerId, instance); err != nil {
+		return &pb.ContainerSandboxExecResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
 	if instance.Spec == nil || instance.Spec.Process == nil {
 		return &pb.ContainerSandboxExecResponse{Ok: false, ErrorMsg: "Container spec not ready"}, nil
 	}
@@ -871,6 +883,19 @@ func (s *ContainerRuntimeServer) ContainerSandboxExec(ctx context.Context, in *p
 
 	log.Info().Str("container_id", in.ContainerId).Str("cmd", in.Cmd).Msg("running sandbox command")
 	return s.handleSandboxExec(ctx, in, instance, env, parsedCmd, in.Cwd)
+}
+
+// waitForGuestDevices holds a command back until the guest has its devices.
+// A GPU microVM's process manager answers about 0.4 s before its GPU is
+// plugged in, and a command given to it then would find none.
+func waitForGuestDevices(ctx context.Context, containerId string, instance *ContainerInstance) error {
+	guest, ok := instance.Runtime.(interface {
+		WaitForDevices(context.Context, string) error
+	})
+	if !ok {
+		return nil
+	}
+	return guest.WaitForDevices(ctx, containerId)
 }
 
 func (s *ContainerRuntimeServer) handleSandboxExec(ctx context.Context, in *pb.ContainerSandboxExecRequest, instance *ContainerInstance, env, cmd []string, cwd string) (*pb.ContainerSandboxExecResponse, error) {

@@ -40,6 +40,12 @@ type MicroVM struct {
 	cfg Config
 	mu  sync.Mutex
 	vms map[string]*microVMInstance
+
+	vfioMu sync.Mutex      // refillRAM briefly claims the next free GPU to learn its NUMA node
+	ram    *microVMRAMPool // nil on hosts without VFIO devices
+	// cudaCheckpoint is NVIDIA's tool for moving a process's GPU state into
+	// its memory and back; "" where the worker image has none.
+	cudaCheckpoint string
 }
 
 var (
@@ -59,12 +65,22 @@ type microVMInstance struct {
 	network    microvm.Network
 	diskMounts []string
 	vfio       *microVMVFIO
+	ram        *microVMRAM // huge page guest RAM, which a checkpoint saves
+	kernel     *os.File    // the image's kernel, until the hypervisor has inherited it
 
 	virtiofsd      *exec.Cmd
 	hypervisor     *exec.Cmd
 	ctrl           *microVMControl
 	console        *tailWriter
-	prepareTimings string // per-step durations of prepare, for the start log line
+	devices        chan struct{} // closed once the guest has every VFIO device
+	restored       bool          // booted from a snapshot: the guest has GPU state to take back
+	prepareTimings string        // per-step durations of prepare, for the start log line
+	spareRAM       int64         // bytes of guest RAM that were zeroed before the request
+
+	hotplugMu  sync.Mutex        // one attach or detach at a time
+	slots      []microVMVFIOSlot // where each of vfio.paths is
+	attachTook time.Duration     // by hotplugVFIO, set before it returns
+	plugTook   time.Duration     // the hypervisor's share of attachTook
 
 	mu          sync.Mutex
 	resourcesMu sync.Mutex // CPU updates must not race a paused snapshot's temporary quota.
@@ -122,7 +138,21 @@ func NewMicroVM(cfg Config) (Runtime, error) {
 		return nil, unavailable(fmt.Sprintf("create state root: %v", err))
 	}
 	sweepLeftoverVMs(cfg.MicroVMStateRoot)
-	return &MicroVM{cfg: cfg, vms: map[string]*microVMInstance{}}, nil
+	m := &MicroVM{cfg: cfg, vms: map[string]*microVMInstance{}}
+	if len(cfg.MicroVMVFIODevices) > 0 {
+		if err := allowSurplusHugePages(microVMSurplusHugePagesPath, microVMMeminfoPath); err != nil {
+			log.Warn().Err(err).Msg("cannot allow surplus huge pages; GPU microvms start slowly unless the host reserves them")
+		}
+		ramDir, err := mountMicroVMRAM()
+		if err != nil {
+			log.Warn().Err(err).Msg("cannot mount hugetlbfs; GPU microvm checkpoints write all of guest RAM")
+		}
+		m.ram = newMicroVMRAMPool(ramDir, microVMMeminfoPath)
+		if m.cudaCheckpoint, _ = exec.LookPath("cuda-checkpoint"); m.cudaCheckpoint == "" {
+			log.Warn().Msg("cuda-checkpoint not found; GPU microvms can only be checkpointed while the GPU is idle")
+		}
+	}
+	return m, nil
 }
 
 // sweepLeftoverVMs kills the hypervisors and virtiofsd daemons a previous
@@ -160,7 +190,7 @@ func (m *MicroVM) Name() string {
 
 func (m *MicroVM) Capabilities() Capabilities {
 	gpu := len(m.cfg.MicroVMVFIODevices) > 0
-	return Capabilities{GPU: gpu, JoinExistingNetNS: true, BlockRoot: true, CheckpointRestore: !gpu}
+	return Capabilities{GPU: gpu, JoinExistingNetNS: true, BlockRoot: true, CheckpointRestore: true}
 }
 
 // Prepare strips what only a shared-kernel runtime needs. The VM is the
@@ -197,11 +227,14 @@ func (m *MicroVM) Run(ctx context.Context, containerID, bundlePath string, opts 
 	if err != nil {
 		return int(types.ContainerExitCodeStartupFailed), err
 	}
-	args := microVMHypervisorArgs(inst.stateDir, kernel, microVMKernelCmdline(), microVMVCPUs(spec), microVMMemoryBytes(spec), network.MAC, root, extra, inst.vfio.placement, inst.vfio.paths...)
+	args := microVMHypervisorArgs(inst.stateDir, kernel, microVMKernelCmdline(), microVMVCPUs(spec), microVMMemoryBytes(spec), inst.inheritedPath(inst.ramFile()), network.MAC, root, extra, inst.vfio.placement, len(inst.vfio.paths) > 0)
 	return m.boot(ctx, inst, spec, args, opts.OutputWriter, opts.ErrorWriter, opts.Started)
 }
 
-// GPU images can retain the kernel their drivers were built against.
+// GPU images can retain the kernel their drivers were built against. The
+// hypervisor inherits the file checked here, so no boot waits for a copy of
+// it. The image path cannot be pointed elsewhere, and a guest that rewrites
+// the file changes only what its own reboot loads.
 func (m *MicroVM) kernelPath(inst *microVMInstance) (string, error) {
 	if inst.vfio == nil || len(inst.vfio.paths) == 0 {
 		return m.cfg.MicroVMKernelPath, nil
@@ -211,34 +244,287 @@ func (m *MicroVM) kernelPath(inst *microVMInstance) (string, error) {
 		return "", fmt.Errorf("open kernel image root: %w", err)
 	}
 	defer root.Close()
-	source, err := root.OpenFile(MicroVMImageKernelPath, os.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW, 0)
+	kernel, err := root.OpenFile(MicroVMImageKernelPath, os.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW, 0)
 	if os.IsNotExist(err) {
 		return m.cfg.MicroVMKernelPath, nil
 	}
 	if err != nil {
 		return "", fmt.Errorf("open image kernel: %w", err)
 	}
-	defer source.Close()
-	info, err := source.Stat()
+	info, err := kernel.Stat()
+	if err == nil && (!info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > microVMMaxKernelBytes) {
+		err = fmt.Errorf("must be a nonempty regular file no larger than %d MiB", microVMMaxKernelBytes>>20)
+	}
 	if err != nil {
-		return "", fmt.Errorf("stat image kernel: %w", err)
+		_ = kernel.Close()
+		return "", fmt.Errorf("image kernel: %w", err)
 	}
-	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > microVMMaxKernelBytes {
-		return "", fmt.Errorf("image kernel must be a nonempty regular file no larger than %d MiB", microVMMaxKernelBytes>>20)
+	inst.mu.Lock()
+	inst.kernel = kernel
+	inst.mu.Unlock()
+	return inst.inheritedPath(kernel), nil
+}
+
+// prepareRAM gives a GPU guest huge pages that are already zeroed, so VFIO
+// pins them in milliseconds. Without huge pages the hypervisor allocates
+// ordinary shared memory, which VFIO faults in a page at a time.
+func (m *MicroVM) prepareRAM(inst *microVMInstance, size int64) error {
+	node := -1
+	if placement := inst.vfio.placement; placement != nil {
+		node = placement.node
 	}
-	kernel, err := os.CreateTemp(inst.stateDir, "kernel-")
+	ram, spare, err := m.ram.take(node, size)
 	if err != nil {
-		return "", err
+		log.Warn().Err(err).Str("container_id", inst.id).Msg("no huge pages for microvm RAM; VFIO will pin ordinary pages")
+		return nil
 	}
-	defer kernel.Close()
-	n, err := io.Copy(kernel, io.LimitReader(source, microVMMaxKernelBytes+1))
+	inst.mu.Lock()
+	inst.ram = ram
+	inst.mu.Unlock()
+	inst.spareRAM = spare
+	if inst.cgroup == "" {
+		return nil
+	}
+	// The cgroup no longer pays for guest RAM, only for what serves it.
+	if err := os.WriteFile(filepath.Join(inst.cgroup, "memory.max"), []byte(strconv.FormatInt(microVMMemoryHeadroom, 10)), 0o644); err != nil {
+		return fmt.Errorf("set memory.max: %w", err)
+	}
+	return nil
+}
+
+// refillRAM prepares RAM near the GPU the next guest will be given.
+func (m *MicroVM) refillRAM() {
+	if m.ram == nil {
+		return
+	}
+	m.vfioMu.Lock()
+	next, err := (microVMVFIOHost{devices: m.cfg.MicroVMVFIODevices}).acquire("")
+	next.close()
+	m.vfioMu.Unlock()
 	if err != nil {
-		return "", fmt.Errorf("copy image kernel: %w", err)
+		return // every GPU is in use
 	}
-	if n != info.Size() {
-		return "", fmt.Errorf("image kernel changed while copying")
+	node := -1
+	if placement, err := (microVMTopology{}).placement(next.gpu, nil, ""); err == nil && placement != nil {
+		node = placement.node
 	}
-	return kernel.Name(), nil
+	m.ram.refill(node)
+}
+
+// hotplugVFIO gives a starting guest its devices once its init has started.
+// Opening and resetting a GPU and pinning guest RAM for DMA take about 0.4 s.
+// A device named on the command line spends that before the first guest
+// instruction; this guest spends it starting up, and answers before it ends.
+func (inst *microVMInstance) hotplugVFIO(ctx context.Context) error {
+	if !inst.restored {
+		// The hypervisor adds a device on the thread that also activates
+		// each virtio device, and a guest's driver waits for that. A GPU
+		// takes that thread a quarter of a second to open, which a guest
+		// still bringing up its boot devices spends stopped. One whose init
+		// has started has them all.
+		select {
+		case <-inst.ctrl.booted:
+		case <-inst.ctrl.ready:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-inst.exitDone:
+			return errors.New("microvm exited")
+		}
+	}
+	api := inst.api()
+	// A device added before the VM runs is plugged in before it boots.
+	for {
+		state, err := api.state(ctx)
+		if err == nil && state == microVMRunning {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-inst.exitDone:
+			return errors.New("microvm exited")
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
+	start := time.Now()
+	defer func() { inst.attachTook = time.Since(start) }()
+	return inst.attachVFIO(ctx, inst.restored, &inst.plugTook)
+}
+
+// microVMVFIOSlot is where one of the guest's devices is.
+type microVMVFIOSlot struct {
+	bdf     string // its PCI address in the guest; "" while the guest does not have it
+	leaving bool   // the guest was asked to give it up and has not been seen to
+}
+
+// attachVFIO adds the devices the guest does not have. resume is for a guest
+// that gave its devices up for a snapshot: it also returns the GPU state it
+// saved to the device. plugTook, when not nil, is told how long the
+// hypervisor took, which the guest spends waiting.
+func (inst *microVMInstance) attachVFIO(ctx context.Context, resume bool, plugTook *time.Duration) error {
+	inst.hotplugMu.Lock()
+	defer inst.hotplugMu.Unlock()
+	if inst.slots == nil {
+		inst.slots = make([]microVMVFIOSlot, len(inst.vfio.paths))
+	}
+	start := time.Now()
+	for i, path := range inst.vfio.paths {
+		slot := &inst.slots[i]
+		if slot.leaving {
+			return fmt.Errorf("%s: the guest is still releasing it", filepath.Base(path))
+		}
+		if slot.bdf != "" {
+			continue // a detach the guest refused
+		}
+		var added struct {
+			BDF string `json:"bdf"`
+		}
+		if err := inst.api().call(ctx, "vm.add-device", map[string]string{"id": microVMVFIODeviceID(i), "path": path}, &added); err != nil {
+			return fmt.Errorf("%s: %w", filepath.Base(path), err)
+		}
+		if added.BDF == "" {
+			return fmt.Errorf("%s: hypervisor did not say where the guest finds it", filepath.Base(path))
+		}
+		slot.bdf = added.BDF
+	}
+	if plugTook != nil {
+		*plugTook = time.Since(start)
+	}
+	// The hypervisor announces a device with an interrupt, which a guest
+	// that has not installed its handler yet never sees. How long the guest
+	// may take to report in is the boot timeout's to decide.
+	select {
+	case <-inst.ctrl.ready:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if !resume {
+		if _, err := inst.ctrl.request(ctx, microvm.Message{Type: microvm.MsgRescan}); err != nil {
+			return fmt.Errorf("guest PCI rescan: %w", err)
+		}
+		return nil
+	}
+	if _, err := inst.ctrl.requestWithin(ctx, microvm.Message{Type: microvm.MsgGPUResume}, microvm.GPUResumeLimit+microVMControlRequestTimeout); err != nil {
+		return fmt.Errorf("resume guest GPU state: %w", err)
+	}
+	return nil
+}
+
+// detachVFIO takes the guest's devices away so that a snapshot holds no
+// device state, which Cloud Hypervisor cannot save. The guest first moves
+// what its processes keep on the GPU into their memory, where the snapshot
+// finds it. attachVFIO with resume undoes both halves, in this VM or in one
+// restored from the snapshot.
+//
+// The hypervisor only asks the guest to give a device up; the guest ejects
+// it once its driver has let go. The guest says when that is. Asking the
+// hypervisor would end the VM: Cloud Hypervisor 53 answers vm.info with a
+// copy of its device tree that shares each device, and if the guest ejects
+// one while the API thread holds the copy, that thread is the one to close
+// the device, which its seccomp filter does not allow.
+func (inst *microVMInstance) detachVFIO(ctx context.Context) error {
+	inst.hotplugMu.Lock()
+	defer inst.hotplugMu.Unlock()
+	if _, err := inst.ctrl.requestWithin(ctx, microvm.Message{Type: microvm.MsgGPUSuspend}, microvm.GPUSuspendLimit+microVMControlRequestTimeout); err != nil {
+		return fmt.Errorf("suspend guest GPU state: %w", err)
+	}
+	var leaving []string
+	for i := len(inst.slots) - 1; i >= 0; i-- {
+		slot := &inst.slots[i]
+		if slot.bdf == "" {
+			continue
+		}
+		if err := inst.api().put(ctx, "vm.remove-device", map[string]string{"id": microVMVFIODeviceID(i)}); err != nil {
+			return fmt.Errorf("unplug %s: %w", filepath.Base(inst.vfio.paths[i]), err)
+		}
+		slot.leaving = true
+		leaving = append(leaving, slot.bdf)
+	}
+	if _, err := inst.ctrl.requestWithin(ctx, microvm.Message{Type: microvm.MsgUnplugged, Devices: leaving}, microvm.UnplugLimit+microVMControlRequestTimeout); err != nil {
+		return fmt.Errorf("guest did not release its VFIO devices: %w", err)
+	}
+	clear(inst.slots)
+	return nil
+}
+
+// vfioDetached asks the hypervisor whether the guest's devices are gone. It
+// is safe once the vCPUs are paused: no guest can be ejecting one.
+func (inst *microVMInstance) vfioDetached(ctx context.Context) error {
+	info, err := inst.api().info(ctx)
+	if err != nil {
+		return err
+	}
+	for i, path := range inst.vfio.paths {
+		if _, attached := info.DeviceTree[microVMVFIODeviceID(i)]; attached {
+			return fmt.Errorf("%s is still attached to the paused guest", filepath.Base(path))
+		}
+	}
+	return nil
+}
+
+// onceDetached is what to do with the paused guest: first of all, find its
+// devices gone.
+func (inst *microVMInstance) onceDetached(next func(context.Context) error) func(context.Context) error {
+	return func(ctx context.Context) error {
+		if err := inst.vfioDetached(ctx); err != nil || next == nil {
+			return err
+		}
+		return next(ctx)
+	}
+}
+
+// microVMVFIODeviceID is the hypervisor's name for the guest's i-th device.
+func microVMVFIODeviceID(i int) string { return "vfio" + strconv.Itoa(i) }
+
+// ramFile is the guest RAM the hypervisor is handed; nil when it allocates
+// its own.
+func (inst *microVMInstance) ramFile() *os.File {
+	if inst.ram == nil {
+		return nil
+	}
+	return inst.ram.file
+}
+
+// inherited lists the files the hypervisor receives as descriptors 3 onward.
+func (inst *microVMInstance) inherited() []*os.File {
+	files := slices.Clone(inst.vfio.locks)
+	for _, file := range []*os.File{inst.ramFile(), inst.kernel} {
+		if file != nil {
+			files = append(files, file)
+		}
+	}
+	return files
+}
+
+// inheritedPath is how the hypervisor opens a file it inherits.
+func (inst *microVMInstance) inheritedPath(file *os.File) string {
+	if file == nil {
+		return ""
+	}
+	return fmt.Sprintf("/proc/self/fd/%d", 3+slices.Index(inst.inherited(), file))
+}
+
+// releaseKernel closes the worker's copy of the kernel once the hypervisor
+// has its own.
+func (inst *microVMInstance) releaseKernel() {
+	inst.mu.Lock()
+	kernel := inst.kernel
+	inst.kernel = nil
+	inst.mu.Unlock()
+	if kernel != nil {
+		_ = kernel.Close()
+	}
+}
+
+// releaseRAM frees the guest's RAM once its hypervisor is gone.
+func (inst *microVMInstance) releaseRAM() {
+	inst.mu.Lock()
+	ram := inst.ram
+	inst.ram = nil
+	inst.mu.Unlock()
+	if ram != nil {
+		ram.close()
+	}
 }
 
 // Restore boots a VM from a Checkpoint and, like runsc's, returns once the
@@ -257,12 +543,18 @@ func (m *MicroVM) Restore(ctx context.Context, containerID string, opts *Restore
 		inst.stopProcesses()
 		return int(types.ContainerExitCodeStartupFailed), err
 	}
+	kernel, err := m.kernelPath(inst)
+	if err != nil {
+		inst.stopProcesses()
+		return int(types.ContainerExitCodeStartupFailed), err
+	}
 	networkApplied := inst.ctrl.configureRestore(&network, inst.diskMounts)
-	snapshotDir, err := m.stageSnapshot(inst, opts.ImagePath, network, root, extra)
+	snapshotDir, err := m.stageSnapshot(inst, opts.ImagePath, network, root, extra, kernel)
 	if err != nil {
 		inst.stopProcesses()
 		return int(types.ContainerExitCodeStartupFailed), fmt.Errorf("stage snapshot: %w", err)
 	}
+	inst.restored = true
 
 	booted := make(chan error, 1)
 	bootExitCode := -1
@@ -288,6 +580,18 @@ func (m *MicroVM) Restore(ctx context.Context, containerID string, opts *Restore
 	case <-ctx.Done():
 		return -1, ctx.Err()
 	}
+	// A process that was using the GPU stays blocked until its state is
+	// back on one.
+	select {
+	case <-inst.devices:
+	case err := <-booted:
+		if err == nil {
+			err = errors.New("microvm exited before the restored guest had its devices")
+		}
+		return bootExitCode, err
+	case <-ctx.Done():
+		return -1, ctx.Err()
+	}
 	if opts.Started != nil {
 		select {
 		case opts.Started <- inst.pid():
@@ -302,7 +606,11 @@ func (m *MicroVM) Restore(ctx context.Context, containerID string, opts *Restore
 // root disk under ImagePath. Snapshotting stops virtiofsd's queues for good,
 // so LeaveRunning restores in place. Errors after capture starts end the VM;
 // before capture, the original guest can be resumed and thawed.
-func (m *MicroVM) Checkpoint(ctx context.Context, containerID string, opts *CheckpointOpts) error {
+//
+// VFIO devices have no state the hypervisor can save, so they are unplugged
+// for the snapshot and plugged back into a guest that keeps running. Such a
+// guest ends if they cannot be: its processes would wait on a GPU forever.
+func (m *MicroVM) Checkpoint(ctx context.Context, containerID string, opts *CheckpointOpts) (err error) {
 	if opts == nil || opts.ImagePath == "" {
 		return fmt.Errorf("checkpoint requires an image path")
 	}
@@ -316,9 +624,6 @@ func (m *MicroVM) Checkpoint(ctx context.Context, containerID string, opts *Chec
 	inst.mu.Lock()
 	passthrough := inst.vfio != nil && len(inst.vfio.paths) > 0
 	inst.mu.Unlock()
-	if passthrough {
-		return fmt.Errorf("checkpointing a microvm with VFIO devices is unsupported; save project files and cold boot instead")
-	}
 	snapshotDir := filepath.Join(opts.ImagePath, checkpointVMDir)
 	if err := os.RemoveAll(snapshotDir); err != nil {
 		return err
@@ -331,22 +636,62 @@ func (m *MicroVM) Checkpoint(ctx context.Context, containerID string, opts *Chec
 	if err := copyFile(filepath.Join(inst.canvas, microvm.InitPath), filepath.Join(opts.ImagePath, checkpointInitFile), 0o755); err != nil {
 		return fmt.Errorf("checkpoint guest init: %w", err)
 	}
+	steps := microvm.StartSteps()
+	if passthrough {
+		// A booting guest answers before it has its devices.
+		select {
+		case <-inst.devices:
+		case <-inst.exitDone:
+			return fmt.Errorf("microvm %s is not running", containerID)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		defer func() {
+			if inst.stopping() || !inst.alive() || inst.isPaused() {
+				return
+			}
+			attach, cancel := context.WithTimeout(context.WithoutCancel(ctx), microvm.GPUResumeLimit+2*microVMControlRequestTimeout)
+			defer cancel()
+			if attachErr := inst.attachVFIO(attach, true, nil); attachErr != nil {
+				inst.killHypervisor()
+				err = errors.Join(err, fmt.Errorf("return VFIO devices to the guest: %w", attachErr))
+			}
+		}()
+		// Before the disks freeze: a process may be writing while it saves.
+		if err := inst.detachVFIO(ctx); err != nil {
+			return err
+		}
+		steps.Took("unplug")
+	}
 	thaw, err := m.freezeCheckpointDisks(ctx, inst)
 	if err != nil {
 		return err
 	}
+	steps.Took("freeze")
 	defer func() {
 		if inst.alive() && !inst.isPaused() {
 			thaw()
 		}
 	}()
-	mustStop, err := snapshotMicroVM(ctx, inst, snapshotDir, opts.WhilePaused)
+
+	whilePaused := opts.WhilePaused
+	if passthrough {
+		whilePaused = inst.onceDetached(whilePaused)
+	}
+	mustStop, err := snapshotMicroVM(ctx, inst, snapshotDir, whilePaused)
 	if err != nil {
 		if mustStop {
 			inst.killHypervisor()
 		}
 		return err
 	}
+	steps.Took("snapshot")
+	savedRAM, err := inst.saveRAM(snapshotDir)
+	if err != nil {
+		inst.killHypervisor()
+		return fmt.Errorf("save guest RAM: %w", err)
+	}
+	steps.Took("ram")
 	if err = microvm.ValidateSnapshotBlockQueues(snapshotDir); err != nil {
 		inst.killHypervisor()
 		return fmt.Errorf("validate checkpoint block queues: %w", err)
@@ -355,14 +700,46 @@ func (m *MicroVM) Checkpoint(ctx context.Context, containerID string, opts *Chec
 		if err = copySparse(inst.scratch, filepath.Join(opts.ImagePath, checkpointRootDisk)); err != nil {
 			err = fmt.Errorf("copy root disk: %w", err)
 		}
+		steps.Took("disk")
 	}
 	if err == nil && opts.LeaveRunning {
 		err = m.restoreInPlace(ctx, inst, snapshotDir)
+		steps.Took("restore")
 	}
 	if err != nil || !opts.LeaveRunning {
 		inst.killHypervisor()
 	}
+	if err == nil {
+		log.Info().Str("container_id", containerID).Str("steps", steps.String()).Int64("saved_ram_bytes", savedRAM).Bool("left_running", opts.LeaveRunning).Msg("microvm checkpointed")
+	}
 	return err
+}
+
+// saveRAM adds the guest RAM a snapshot lacks, and returns how much it wrote.
+// The hypervisor copies RAM it allocated itself, and an unlinked RAM file in
+// full. It leaves a linked file out, and that file's used pages are saved
+// here: saving takes as long as the guest has data, not as long as it has
+// RAM, and the used pages are all a restore then has to read.
+func (inst *microVMInstance) saveRAM(snapshotDir string) (int64, error) {
+	image := filepath.Join(snapshotDir, microvm.SnapshotMemoryFile)
+	if _, err := os.Stat(image); !os.IsNotExist(err) {
+		return 0, err
+	}
+	inst.mu.Lock()
+	ram := inst.ram
+	inst.mu.Unlock()
+	if ram == nil {
+		return 0, errors.New("the hypervisor saved no guest RAM")
+	}
+	kept, err := ram.save(image)
+	if err != nil {
+		return 0, err
+	}
+	var saved int64
+	for _, run := range kept {
+		saved += run.Length
+	}
+	return saved, microvm.ListSnapshotRAM(snapshotDir, ram.size, kept)
 }
 
 // Only failures before vm.snapshot can safely resume the original VM: snapshot
@@ -553,6 +930,7 @@ func (m *MicroVM) newInstance(containerID, bundlePath string) (*microVMInstance,
 		canvas:   canvas,
 		console:  newTailWriter(microVMConsoleTail),
 		exitDone: make(chan struct{}),
+		devices:  make(chan struct{}),
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -578,11 +956,10 @@ func (m *MicroVM) prepare(ctx context.Context, inst *microVMInstance, spec *spec
 	}
 	vfio := &microVMVFIO{}
 	if count == "1" || devices != "" {
-		if restoreFrom != "" {
-			return none, microVMDisk{}, nil, fmt.Errorf("VFIO devices require a cold boot; memory restore is unsupported")
-		}
 		var err error
+		m.vfioMu.Lock()
 		vfio, err = (microVMVFIOHost{devices: m.cfg.MicroVMVFIODevices}).acquire(devices)
+		m.vfioMu.Unlock()
 		if err != nil {
 			return none, microVMDisk{}, nil, err
 		}
@@ -596,12 +973,8 @@ func (m *MicroVM) prepare(ctx context.Context, inst *microVMInstance, spec *spec
 	if err := os.MkdirAll(inst.stateDir, 0o700); err != nil {
 		return none, microVMDisk{}, nil, err
 	}
-	var steps strings.Builder
-	step := time.Now()
-	took := func(name string) {
-		fmt.Fprintf(&steps, "%s=%dms ", name, time.Since(step).Milliseconds())
-		step = time.Now()
-	}
+	steps := microvm.StartSteps()
+	took := steps.Took
 	network, err := m.setupNetwork(inst, spec)
 	if err != nil {
 		return none, microVMDisk{}, nil, fmt.Errorf("setup microvm network: %w", err)
@@ -632,6 +1005,18 @@ func (m *MicroVM) prepare(ctx context.Context, inst *microVMInstance, spec *spec
 		return none, microVMDisk{}, nil, fmt.Errorf("place microvm near GPU: %w", err)
 	}
 	took("numa")
+	// A snapshot whose RAM was ordinary memory restores into ordinary memory.
+	hugePages := restoreFrom == ""
+	if !hugePages {
+		config, _ := os.ReadFile(filepath.Join(restoreFrom, checkpointVMDir, "config.json"))
+		hugePages = snapshotRAMInFile(config)
+	}
+	if m.ram != nil && inst.vfio.gpu != "" && hugePages {
+		if err := m.prepareRAM(inst, microVMMemoryBytes(spec)); err != nil {
+			return none, microVMDisk{}, nil, fmt.Errorf("prepare microvm RAM: %w", err)
+		}
+		took("ram")
+	}
 	if err := m.startVirtiofsd(ctx, inst); err != nil {
 		return none, microVMDisk{}, nil, fmt.Errorf("start virtiofsd: %w", err)
 	}
@@ -640,15 +1025,21 @@ func (m *MicroVM) prepare(ctx context.Context, inst *microVMInstance, spec *spec
 	if err != nil {
 		return none, microVMDisk{}, nil, fmt.Errorf("listen on vsock control socket: %w", err)
 	}
+	if restoreFrom == "" && len(inst.vfio.paths) > 0 {
+		if err := ctrl.listenBoot(filepath.Join(inst.stateDir, microVMVsockSocket)); err != nil {
+			ctrl.close()
+			return none, microVMDisk{}, nil, fmt.Errorf("listen on vsock boot socket: %w", err)
+		}
+	}
 	inst.ctrl = ctrl
-	inst.prepareTimings = strings.TrimSpace(steps.String())
+	inst.prepareTimings = steps.String()
 	return network, root, extra, nil
 }
 
 // stageSnapshot lays out the restore source: the checkpoint's memory and
 // state files (linked, not copied) next to a config.json rewritten for this
-// VM's sockets, disks and MAC.
-func (m *MicroVM) stageSnapshot(inst *microVMInstance, imagePath string, network microvm.Network, root microVMDisk, extra []microVMDisk) (string, error) {
+// VM's sockets, disks, MAC, kernel file, RAM and CPUs.
+func (m *MicroVM) stageSnapshot(inst *microVMInstance, imagePath string, network microvm.Network, root microVMDisk, extra []microVMDisk, kernel string) (string, error) {
 	src := filepath.Join(imagePath, checkpointVMDir)
 	if err := microvm.ValidateSnapshotBlockQueues(src); err != nil {
 		return "", fmt.Errorf("validate restore block queues: %w", err)
@@ -661,14 +1052,18 @@ func (m *MicroVM) stageSnapshot(inst *microVMInstance, imagePath string, network
 	if err != nil {
 		return "", err
 	}
-	config, err = rewriteSnapshotConfig(config, inst.stateDir, network, root, extra)
+	host := snapshotHost{kernel: kernel, placement: inst.vfio.placement}
+	if inst.ram != nil {
+		host.ram, host.ramBytes = inst.inheritedPath(inst.ram.file), inst.ram.size
+	}
+	config, err = rewriteSnapshotConfig(config, inst.stateDir, network, root, extra, host)
 	if err != nil {
 		return "", err
 	}
 	if err := os.WriteFile(filepath.Join(dst, "config.json"), config, 0o600); err != nil {
 		return "", err
 	}
-	for _, name := range []string{"state.json", "memory-ranges"} {
+	for _, name := range []string{"state.json", microvm.SnapshotMemoryFile} {
 		if err := os.Symlink(filepath.Join(src, name), filepath.Join(dst, name)); err != nil {
 			return "", err
 		}
@@ -680,9 +1075,16 @@ func (m *MicroVM) stageSnapshot(inst *microVMInstance, imagePath string, network
 // reports the container's exit or the VM dies.
 func (m *MicroVM) boot(ctx context.Context, inst *microVMInstance, spec *specs.Spec, args []string, outputWriter, errorWriter io.Writer, started chan<- int) (int, error) {
 	ctrl := inst.ctrl
-	cmd := exec.Command(m.cfg.MicroVMHypervisorPath, args...)
+	events, eventWriter, err := os.Pipe()
+	if err != nil {
+		return int(types.ContainerExitCodeStartupFailed), err
+	}
+	defer events.Close()
+	defer eventWriter.Close()
 	// Inherited lock descriptors keep a group reserved if the worker exits first.
-	cmd.ExtraFiles = inst.vfio.locks
+	inherited := inst.inherited()
+	cmd := exec.Command(m.cfg.MicroVMHypervisorPath, append(args, "--event-monitor", fmt.Sprintf("fd=%d", 3+len(inherited)))...)
+	cmd.ExtraFiles = append(inherited, eventWriter)
 	cgroupFD, err := inst.cgroupAttr(cmd)
 	if err != nil {
 		return int(types.ContainerExitCodeStartupFailed), err
@@ -717,8 +1119,27 @@ func (m *MicroVM) boot(ctx context.Context, inst *microVMInstance, spec *specs.S
 	inst.mu.Lock()
 	inst.hypervisor = cmd
 	inst.mu.Unlock()
+	inst.releaseKernel()
+	_ = eventWriter.Close()
+	reset := make(chan struct{})
+	go func() {
+		if guestReset(events) {
+			close(reset)
+		}
+	}()
+	hugePages := inst.ram != nil
+	if hugePages {
+		// Zeroing the next spare would compete with this guest's boot.
+		go func() {
+			select {
+			case <-ctrl.ready:
+				m.refillRAM()
+			case <-inst.exitDone:
+			}
+		}()
+	}
 	startedLog := log.Info().Str("container_id", inst.id).Int("pid", cmd.Process.Pid).
-		Int("vcpus", microVMVCPUs(spec)).Int64("memory_bytes", microVMMemoryBytes(spec))
+		Int("vcpus", microVMVCPUs(spec)).Int64("memory_bytes", microVMMemoryBytes(spec)).Bool("huge_pages", hugePages).Int64("spare_ram_bytes", inst.spareRAM)
 	if placement := inst.vfio.placement; placement != nil {
 		startedLog.Int("numa_node", placement.node).Ints("host_cpus", placement.cpus)
 	}
@@ -729,6 +1150,15 @@ func (m *MicroVM) boot(ctx context.Context, inst *microVMInstance, spec *specs.S
 		case started <- cmd.Process.Pid:
 		case <-ctx.Done():
 		}
+	}
+
+	attached := make(chan error, 1)
+	if len(inst.vfio.paths) == 0 {
+		close(inst.devices)
+	} else {
+		attachCtx, stopAttach := context.WithCancel(ctx)
+		defer stopAttach()
+		go func() { attached <- inst.hotplugVFIO(attachCtx) }()
 	}
 
 	waitDone := make(chan error, 1)
@@ -757,6 +1187,14 @@ func (m *MicroVM) boot(ctx context.Context, inst *microVMInstance, spec *specs.S
 				<-waitDone
 				return -1, fmt.Errorf("guest did not report in within %s: %s", microVMBootTimeout, inst.console.String())
 			}
+		case err := <-attached:
+			if err != nil {
+				inst.killHypervisor()
+				<-waitDone
+				return int(types.ContainerExitCodeStartupFailed), fmt.Errorf("attach VFIO devices: %w: %s", err, inst.console.String())
+			}
+			log.Info().Str("container_id", inst.id).Dur("since_spawn", time.Since(spawnStart)).Dur("took", inst.attachTook).Dur("hypervisor", inst.plugTook).Msg("microvm VFIO devices attached")
+			close(inst.devices)
 		case code := <-ctrl.exit:
 			exitCode, exitReported = code, true
 			// The guest powers off right after reporting; give the VMM a
@@ -765,6 +1203,13 @@ func (m *MicroVM) boot(ctx context.Context, inst *microVMInstance, spec *specs.S
 			defer timer.Stop()
 			powerOff = timer.C
 		case <-powerOff:
+			inst.killHypervisor()
+		case <-reset:
+			// The hypervisor cannot boot the guest again: its virtiofsd served
+			// the one connection it accepts and the worker plugs in the GPU.
+			// It would retry for a minute; the VM starts again from its disks.
+			reset = nil
+			log.Info().Str("container_id", inst.id).Bool("exit_reported", exitReported).Msg("microvm guest reset")
 			inst.killHypervisor()
 		case err := <-waitDone:
 			if !exitReported {
@@ -785,6 +1230,21 @@ func (m *MicroVM) boot(ctx context.Context, inst *microVMInstance, spec *specs.S
 				return 128 + int(syscall.SIGKILL), nil
 			}
 			return -1, fmt.Errorf("microvm exited before the container process reported: %w: %s", err, inst.console.String())
+		}
+	}
+}
+
+// guestReset reports whether the hypervisor's events, which end when it
+// does, say that its guest reset: a reboot, or a triple fault.
+func guestReset(events io.Reader) bool {
+	decoder := json.NewDecoder(events)
+	for {
+		var event struct{ Source, Event string }
+		if err := decoder.Decode(&event); err != nil {
+			return false
+		}
+		if event.Source == "vm" && event.Event == "rebooting" {
+			return true
 		}
 	}
 }
@@ -863,7 +1323,11 @@ func (m *MicroVM) Delete(ctx context.Context, containerID string, opts *DeleteOp
 	if !ok {
 		return ErrContainerNotFound{ContainerID: containerID}
 	}
-	return inst.teardown()
+	err := inst.teardown()
+	if inst.vfio != nil && inst.vfio.gpu != "" {
+		m.refillRAM() // the freed GPU may be the next one handed out
+	}
+	return err
 }
 
 func (m *MicroVM) State(ctx context.Context, containerID string) (State, error) {
@@ -914,6 +1378,12 @@ func (m *MicroVM) Close() error {
 	var errs []error
 	for _, inst := range instances {
 		errs = append(errs, inst.teardown())
+	}
+	if m.ram != nil {
+		m.ram.close()
+		if m.ram.dir != nil {
+			_ = m.ram.dir.Close()
+		}
 	}
 	return errors.Join(errs...)
 }
@@ -974,6 +1444,25 @@ func (m *MicroVM) WaitForGuestControl(ctx context.Context, containerID string) e
 		return fmt.Errorf("microvm %s exited before guest control connected", containerID)
 	case <-ctrl.ready:
 		return nil
+	}
+}
+
+// WaitForDevices returns once the guest has the devices it was given. A
+// booting guest answers about 0.4 s before its GPU is plugged in, and holds
+// back its workload and its services until then (microvm.Spec.LateDevices).
+// Commands the host starts in the guest are the caller's to hold back.
+func (m *MicroVM) WaitForDevices(ctx context.Context, containerID string) error {
+	inst, ok := m.instance(containerID)
+	if !ok {
+		return ErrContainerNotFound{ContainerID: containerID}
+	}
+	select {
+	case <-inst.devices:
+		return nil
+	case <-inst.exitDone:
+		return fmt.Errorf("microvm %s exited before it had its devices", containerID)
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -1519,8 +2008,14 @@ func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network
 	if restoreFrom != "" {
 		initPath = filepath.Join(restoreFrom, checkpointInitFile)
 	}
-	if err := inst.installGuestInit(initPath); err != nil {
+	if err := inst.installGuestBinary(initPath, microvm.InitPath); err != nil {
 		return fmt.Errorf("install guest init: %w", err)
+	}
+	passthrough := inst.vfio != nil && len(inst.vfio.paths) > 0
+	if passthrough && m.cudaCheckpoint != "" {
+		if err := inst.installGuestBinary(m.cudaCheckpoint, microvm.GPUCheckpointPath); err != nil {
+			return fmt.Errorf("install cuda-checkpoint: %w", err)
+		}
 	}
 
 	plan := microVMMountPlan(spec.Mounts)
@@ -1538,6 +2033,7 @@ func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network
 	}
 	guestSpec := microVMGuestSpec(spec, network, root, extra, mounts)
 	guestSpec.MountConcurrency = 4
+	guestSpec.LateDevices = passthrough
 	data, err := json.MarshalIndent(guestSpec, "", "  ")
 	if err != nil {
 		return err
@@ -1749,6 +2245,13 @@ func (m *MicroVM) setupCgroup(inst *microVMInstance, spec *specs.Spec, guestMemo
 	inst.cgroup = path
 	if err := os.WriteFile(filepath.Join(path, "memory.max"), []byte(strconv.FormatInt(guestMemory+microVMMemoryHeadroom, 10)), 0o644); err != nil {
 		return fmt.Errorf("set memory.max: %w", err)
+	}
+	// Huge pages are not charged to memory.max. The VMM maps the ones the
+	// worker allocated for it and may not allocate any of its own.
+	for _, limit := range []string{"hugetlb.2MB.max", "hugetlb.2MB.rsvd.max"} {
+		if err := os.WriteFile(filepath.Join(path, limit), []byte("0"), 0o644); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("set %s: %w", limit, err)
+		}
 	}
 	if spec.Linux != nil && spec.Linux.Resources != nil {
 		return applyMicroVMCPU(path, spec.Linux.Resources.CPU)
@@ -2158,6 +2661,10 @@ type microVMControl struct {
 	listener *net.UnixListener
 	exit     chan int
 	ready    chan struct{}
+	// boot is nil unless the guest was told to announce its init, which
+	// closes booted.
+	boot   *net.UnixListener
+	booted chan struct{}
 
 	applicationOOM chan Event
 	eventDone      chan struct{}
@@ -2190,6 +2697,7 @@ func listenMicroVMControl(vsockPath string) (*microVMControl, error) {
 		listener:       listener,
 		exit:           make(chan int, 1),
 		ready:          make(chan struct{}),
+		booted:         make(chan struct{}),
 		networkApplied: make(chan error, 1),
 		pending:        map[uint64]chan microvm.Message{},
 		applicationOOM: make(chan Event, 16),
@@ -2197,6 +2705,29 @@ func listenMicroVMControl(vsockPath string) (*microVMControl, error) {
 	}
 	go ctrl.accept()
 	return ctrl, nil
+}
+
+// listenBoot hears the guest's init start (microvm.BootPort), which is some
+// 70 ms before it has assembled its root and connects the control channel,
+// and answers that devices are on their way. It answers once, because one
+// rescan follows: a guest that boots again must not wait for another.
+func (c *microVMControl) listenBoot(vsockPath string) error {
+	path := fmt.Sprintf("%s_%d", vsockPath, microvm.BootPort)
+	_ = os.Remove(path)
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		return err
+	}
+	c.boot = listener
+	go func() {
+		defer listener.Close()
+		if conn, err := listener.Accept(); err == nil {
+			_, _ = conn.Write([]byte{1})
+			_ = conn.Close()
+			close(c.booted)
+		}
+	}()
+	return nil
 }
 
 // accept serves guest connections until the listener closes. The guest
@@ -2344,8 +2875,17 @@ func (c *microVMControl) request(ctx context.Context, msg microvm.Message) (micr
 	return c.requestOnConnection(ctx, msg, nil)
 }
 
+// requestWithin is request for a command the guest may take long over.
+func (c *microVMControl) requestWithin(ctx context.Context, msg microvm.Message, limit time.Duration) (microvm.Message, error) {
+	return c.exchange(ctx, msg, nil, limit)
+}
+
 func (c *microVMControl) requestOnConnection(ctx context.Context, msg microvm.Message, expected net.Conn) (microvm.Message, error) {
-	ctx, cancel := context.WithTimeout(ctx, microVMControlRequestTimeout)
+	return c.exchange(ctx, msg, expected, microVMControlRequestTimeout)
+}
+
+func (c *microVMControl) exchange(ctx context.Context, msg microvm.Message, expected net.Conn, limit time.Duration) (microvm.Message, error) {
+	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	select {
 	case <-c.ready:
@@ -2408,6 +2948,9 @@ func (c *microVMControl) close() {
 		}
 	})
 	_ = c.listener.Close()
+	if c.boot != nil {
+		_ = c.boot.Close()
+	}
 	c.mu.Lock()
 	if c.conn != nil {
 		_ = c.conn.Close()
@@ -2451,30 +2994,45 @@ func (a *hypervisorAPI) client() *http.Client {
 	}}}
 }
 
-func (a *hypervisorAPI) state(ctx context.Context) (microVMState, error) {
+// hypervisorInfo is what vm.info reports. DeviceTree is keyed by device id
+// and has a VFIO device from when it is added until the guest ejects it.
+type hypervisorInfo struct {
+	State      microVMState               `json:"state"`
+	DeviceTree map[string]json.RawMessage `json:"device_tree"`
+}
+
+// info must not be asked for while a guest may be ejecting a VFIO device;
+// see detachVFIO.
+func (a *hypervisorAPI) info(ctx context.Context) (hypervisorInfo, error) {
+	var info hypervisorInfo
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost/api/v1/vm.info", nil)
 	if err != nil {
-		return "", err
+		return info, err
 	}
 	resp, err := a.client().Do(req)
 	if err != nil {
-		return "", err
+		return info, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("vm.info: %s", resp.Status)
+		return info, fmt.Errorf("vm.info: %s", resp.Status)
 	}
-	var info struct {
-		State microVMState `json:"state"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&info); err != nil {
-		return "", err
-	}
-	return info.State, nil
+	err = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&info)
+	return info, err
+}
+
+func (a *hypervisorAPI) state(ctx context.Context) (microVMState, error) {
+	info, err := a.info(ctx)
+	return info.State, err
 }
 
 // put issues PUT /api/v1/<action>; body, when non-nil, is sent as JSON.
 func (a *hypervisorAPI) put(ctx context.Context, action string, body any) error {
+	return a.call(ctx, action, body, nil)
+}
+
+// call is put for an action that answers with JSON, decoded into result.
+func (a *hypervisorAPI) call(ctx context.Context, action string, body, result any) error {
 	var payload io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -2498,6 +3056,12 @@ func (a *hypervisorAPI) put(ctx context.Context, action string, body any) error 
 	if resp.StatusCode/100 != 2 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("%s: %s: %s", action, resp.Status, strings.TrimSpace(string(msg)))
+	}
+	if result == nil {
+		return nil
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(result); err != nil {
+		return fmt.Errorf("%s: decode response: %w", action, err)
 	}
 	return nil
 }
@@ -2530,6 +3094,14 @@ func (inst *microVMInstance) pid() int {
 	return inst.hypervisor.Process.Pid
 }
 
+// stopping reports whether the host has killed the hypervisor, which may not
+// have been reaped yet.
+func (inst *microVMInstance) stopping() bool {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+	return inst.killed
+}
+
 func (inst *microVMInstance) killHypervisor() {
 	inst.mu.Lock()
 	cmd, waited := inst.hypervisor, inst.waited
@@ -2552,6 +3124,8 @@ func (inst *microVMInstance) stopProcesses() {
 	virtiofsd := inst.virtiofsd
 	vfio := inst.vfio
 	inst.mu.Unlock()
+	inst.releaseKernel()
+	inst.releaseRAM()
 	if virtiofsd != nil && virtiofsd.Process != nil {
 		_ = virtiofsd.Process.Kill()
 	}

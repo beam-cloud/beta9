@@ -45,6 +45,11 @@ const (
 	VirtiofsTag = "beamfs"
 	// ControlPort is the vsock port the guest connects to on the host (CID 2).
 	ControlPort = 1024
+	// BootPort is the host's vsock port a guest with Spec.LateDevices
+	// connects to as its init starts. Every device the kernel booted with is
+	// up by then, so the host can plug in the others. It answers with one
+	// byte if it will, which it does once.
+	BootPort = 1027
 	// GuestCID is the CID assigned to every VM (one VM per vsock device).
 	GuestCID = 3
 
@@ -88,6 +93,11 @@ type Spec struct {
 	Mounts []Mount `json:"mounts,omitempty"`
 	// MountConcurrency bounds independent bind setup. Zero retains spec order.
 	MountConcurrency int `json:"mount_concurrency,omitempty"`
+	// LateDevices says the host plugs PCI devices in once a booting guest
+	// asks on BootPort, and sends MsgRescan when they are all there. The
+	// guest starts nothing that could look for one before then, except a
+	// process manager, whose commands the host holds back.
+	LateDevices bool `json:"late_devices,omitempty"`
 }
 
 // Network is the static configuration of the guest's single NIC. Addresses
@@ -141,6 +151,31 @@ const (
 	MsgFreeze  = "freeze"  // FIFREEZE the filesystem at Text (a guest mount path; empty means the root disk).
 	MsgThaw    = "thaw"    // FITHAW the same.
 	MsgNetwork = "network" // Payload: Network and TimeUnixNano; restore addresses and wall time.
+	MsgRescan  = "rescan"  // Find PCI devices the host attached; the hypervisor's hotplug interrupt can precede the guest's handler.
+
+	// A passed-through GPU cannot be saved with the VM. Before a snapshot the
+	// guest copies each CUDA process's device state into its own memory and
+	// lets go of the GPU, which the host then unplugs; afterwards the host
+	// plugs in the same or another GPU of that model and the guest copies
+	// the state back.
+	MsgGPUSuspend = "gpu_suspend"
+	MsgGPUResume  = "gpu_resume" // Also rescans the PCI bus.
+	// Payload: Devices. Answered once the guest has ejected the PCI devices
+	// the host asked the hypervisor to remove, which it does when their
+	// drivers have let go.
+	MsgUnplugged = "unplugged"
+)
+
+// GPUCheckpointPath is where the host puts NVIDIA's cuda-checkpoint in the
+// canvas of a VM that is given a GPU.
+const GPUCheckpointPath = CanvasDir + "/cuda-checkpoint"
+
+// A GPU's memory is copied at about 1 GiB/s in either direction. A driver
+// lets go of an idle device in under a second.
+const (
+	GPUSuspendLimit = 3 * time.Minute
+	GPUResumeLimit  = 5 * time.Minute
+	UnplugLimit     = 30 * time.Second
 )
 
 // FreezeLimit is how long the guest keeps a filesystem frozen without a thaw
@@ -234,6 +269,7 @@ type Message struct {
 	OK      bool     `json:"ok,omitempty"`
 	Error   string   `json:"error,omitempty"`
 	Text    string   `json:"text,omitempty"`
+	Devices []string `json:"devices,omitempty"` // guest PCI addresses, as 0000:00:06.0
 	Network *Network `json:"network,omitempty"`
 	// A restored kernel clock excludes the time spent paused. The host sends
 	// current wall time with the network configuration before exec is ready.

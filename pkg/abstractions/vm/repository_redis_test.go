@@ -147,3 +147,40 @@ func TestVMRedisRepositoryRedisFailuresAreNotMissingState(t *testing.T) {
 	require.Error(t, repo.RenewICELease(ctx, "fragment", "lease", time.Minute))
 	require.Error(t, repo.ReleaseICELease(ctx, "fragment", "lease"))
 }
+
+func TestVMRedisRepositoryReportsVMContainersAsTheirStateIsRemoved(t *testing.T) {
+	server, repo := redisRepositoryFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	exits := repo.ContainerExits(ctx)
+	removed := func(id, operation string) {
+		server.Publish("__keyspace@0__:"+common.RedisKeys.SchedulerContainerState(id), operation)
+	}
+
+	// Published until the subscription is in place, so perhaps more than once.
+	require.Eventually(t, func() bool {
+		removed("vm-stub-first", common.KeyOperationDel)
+		select {
+		case id := <-exits:
+			return id == "vm-stub-first"
+		default:
+			return false
+		}
+	}, 5*time.Second, 10*time.Millisecond)
+
+	removed("vm-stub-second", common.KeyOperationHSet)
+	removed("sandbox-stub-third", common.KeyOperationDel)
+	removed("vm-stub-fourth", common.KeyOperationExpired)
+	for {
+		select {
+		case id := <-exits:
+			if id == "vm-stub-first" {
+				continue
+			}
+			require.Equal(t, "vm-stub-fourth", id, "only VM containers, and only once their state is gone")
+			return
+		case <-time.After(5 * time.Second):
+			t.Fatal("an expired VM container was not reported")
+		}
+	}
+}

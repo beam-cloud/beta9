@@ -12,6 +12,7 @@ import (
 	"archive/tar"
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -94,6 +96,12 @@ func run() (int, error) {
 	if err != nil {
 		return -1, err
 	}
+	lateDevices := make(chan bool, 1)
+	if vm.LateDevices {
+		go func() { lateDevices <- announceBoot() }()
+	} else {
+		lateDevices <- false
+	}
 	spec, err := readOCISpec()
 	if err != nil {
 		return -1, err
@@ -124,13 +132,15 @@ func run() (int, error) {
 		if err := installEgressCA(); err != nil {
 			return -1, err
 		}
-		return -1, bootSystemd(spec, workload)
+		return -1, bootSystemd(spec, workload, <-lateDevices)
 	}
 
-	return runAgent(spec.Process, false, workload)
+	return runAgent(spec.Process, false, <-lateDevices, workload)
 }
 
-func runAgent(process *specs.Process, systemd bool, workload *workloadMemory) (int, error) {
+// lateDevices is what announceBoot learned: the workload waits for them here.
+// A systemd guest's units wait for them in adoptSystemdAgent instead.
+func runAgent(process *specs.Process, systemd, lateDevices bool, workload *workloadMemory) (int, error) {
 	if err := serveVsock(microvm.FSPort, handleFSConn); err != nil {
 		return -1, err
 	}
@@ -146,7 +156,33 @@ func runAgent(process *specs.Process, systemd bool, workload *workloadMemory) (i
 	defer ctrl.close()
 	go workload.watchOOM(ctrl)
 	ctrl.systemd = systemd
+	if lateDevices {
+		ctrl.devices = make(chan struct{})
+	}
 	return runProcess(process, ctrl, workload)
+}
+
+// announceBoot tells the host that the kernel has brought up the devices it
+// booted with, so it can plug in the others while init assembles the root.
+// It reports whether the host answered that it will, and so will send
+// MsgRescan. The host answers the first boot only.
+func announceBoot() bool {
+	fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		logf("announce boot: %v", err)
+		return false
+	}
+	defer unix.Close(fd)
+	if err := unix.Connect(fd, &unix.SockaddrVM{CID: unix.VMADDR_CID_HOST, Port: microvm.BootPort}); err != nil {
+		return false
+	}
+	var answer [1]byte
+	for {
+		n, err := unix.Read(fd, answer[:])
+		if err != unix.EINTR {
+			return n == 1
+		}
+	}
 }
 
 // --- early boot ------------------------------------------------------------------
@@ -698,6 +734,15 @@ type control struct {
 	networkAliases  map[string]bool
 	networkMu       sync.Mutex
 	restoredNetwork *restoredSocketNetwork
+	// What the host had connected when the guest was last frozen; those of
+	// them that a restored guest still holds; and whether rules reset them.
+	hostConnections  []tcpConnection
+	staleConnections []tcpConnection
+	resetting        map[string]bool
+	// devices is closed when the devices the host plugs in after boot have
+	// arrived; nil unless this agent's workload waits for them.
+	devices     chan struct{}
+	devicesOnce sync.Once
 }
 
 // controlReconnectTimeout bounds how long init keeps trying to reach the
@@ -785,6 +830,7 @@ func (c *control) heartbeat(interval time.Duration) {
 // which makes the new host push the container's network config.
 func (c *control) serve(childPid func() int) {
 	fr := &freezer{frozen: map[string]*frozenFS{}}
+	gpu := newGPUCheckpointer()
 	dec := microvm.NewDecoder(c.current())
 	for {
 		msg, err := dec.Decode()
@@ -835,6 +881,8 @@ func (c *control) serve(childPid func() int) {
 			}
 			c.ack(msg.ID, unix.Kill(pid, syscall.Signal(msg.Signal)))
 		case microvm.MsgFreeze:
+			// The host freezes the guest to save it.
+			c.noteHostConnections()
 			// Off the loop: FIFREEZE flushes the filesystem first, and
 			// signals must not queue behind it.
 			path := firstNonEmpty(msg.Text, microvm.DiskMount)
@@ -842,10 +890,60 @@ func (c *control) serve(childPid func() int) {
 		case microvm.MsgThaw:
 			path := firstNonEmpty(msg.Text, microvm.DiskMount)
 			go func(id uint64) { c.ack(id, fr.thaw(path)) }(msg.ID)
+		case microvm.MsgRescan:
+			// Off the loop: a loaded driver probes the new device here.
+			go func(id uint64) {
+				err := os.WriteFile("/sys/bus/pci/rescan", []byte("1"), 0)
+				if err == nil {
+					c.devicesArrived()
+					go gpu.keep(gpuDriverWait)
+				}
+				c.ack(id, err)
+			}(msg.ID)
+		case microvm.MsgGPUSuspend:
+			go func(id uint64) {
+				ctx, cancel := context.WithTimeout(context.Background(), microvm.GPUSuspendLimit)
+				defer cancel()
+				c.ack(id, gpu.suspend(ctx))
+			}(msg.ID)
+		case microvm.MsgGPUResume:
+			go func(id uint64) {
+				ctx, cancel := context.WithTimeout(context.Background(), microvm.GPUResumeLimit)
+				defer cancel()
+				c.ack(id, gpu.resume(ctx))
+			}(msg.ID)
+		case microvm.MsgUnplugged:
+			go func(id uint64, devices []string) {
+				ctx, cancel := context.WithTimeout(context.Background(), microvm.UnplugLimit)
+				defer cancel()
+				c.ack(id, waitUnplugged(ctx, pciDevicesPath, devices))
+			}(msg.ID, msg.Devices)
 		default:
 			c.ack(msg.ID, fmt.Errorf("unknown command %q", msg.Type))
 		}
 	}
+}
+
+// awaitDevices holds a workload back until the devices the host plugs in
+// after boot have arrived: it may look for its GPU as it starts. A process
+// manager does not, and the host holds back the commands it is given.
+func (c *control) awaitDevices(binary string) {
+	if c.devices != nil && filepath.Base(binary) != "goproc" {
+		<-c.devices
+	}
+}
+
+// devicesArrived lets go of what waited for those devices: this agent's
+// workload, or the units systemd orders after it.
+func (c *control) devicesArrived() {
+	c.devicesOnce.Do(func() {
+		if err := os.Remove(lateDevicesFile); err != nil && !os.IsNotExist(err) {
+			logf("remove %s: %v", lateDevicesFile, err)
+		}
+		if c.devices != nil {
+			close(c.devices)
+		}
+	})
 }
 
 // freezer holds the filesystems the host has frozen. A freeze the host never
@@ -1318,6 +1416,27 @@ func searchFile(r io.Reader, regex *regexp.Regexp) ([]microvm.FSMatch, error) {
 
 // --- container process --------------------------------------------------------------------
 
+// helpers is held by whoever waits for a process it started. The agent
+// reaps every process that exits where it is PID 1, and a helper it reaped
+// first would seem to have failed: "wait: no child processes".
+var helpers sync.RWMutex
+
+// helperOutput runs a helper to its end and returns what it wrote.
+func helperOutput(helper *exec.Cmd) ([]byte, error) {
+	helpers.RLock()
+	defer helpers.RUnlock()
+	return helper.CombinedOutput()
+}
+
+// reap collects pid, or with -1 any child, if it has exited.
+func reap(pid int) (int, unix.WaitStatus, error) {
+	helpers.Lock()
+	defer helpers.Unlock()
+	var status unix.WaitStatus
+	reaped, err := unix.Wait4(pid, &status, unix.WNOHANG, nil)
+	return reaped, status, err
+}
+
 func runProcess(proc *specs.Process, ctrl *control, workload *workloadMemory) (int, error) {
 	env := append([]string(nil), proc.Env...)
 	path, found := "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", false
@@ -1356,10 +1475,14 @@ func runProcess(proc *specs.Process, ctrl *control, workload *workloadMemory) (i
 	sigchld := make(chan os.Signal, 16)
 	signal.Notify(sigchld, unix.SIGCHLD)
 
+	var started atomic.Int64
+	go ctrl.serve(func() int { return int(started.Load()) })
+	ctrl.awaitDevices(binary)
 	if err := cmd.Start(); err != nil {
 		return -1, fmt.Errorf("start %v: %w", proc.Args, err)
 	}
 	pid := cmd.Process.Pid
+	started.Store(int64(pid))
 	if ctrl.systemd {
 		// systemd sends TERM to the agent after ordinary units have stopped.
 		// Reap the workload and report its exit only at that shutdown barrier.
@@ -1369,7 +1492,6 @@ func runProcess(proc *specs.Process, ctrl *control, workload *workloadMemory) (i
 		go func() { <-stopping; _ = unix.Kill(pid, unix.SIGTERM) }()
 	}
 	ctrl.send(microvm.Message{Type: microvm.MsgStarted, Pid: pid})
-	go ctrl.serve(func() int { return pid })
 	go ctrl.heartbeat(controlHeartbeat)
 
 	waitPID := -1
@@ -1381,8 +1503,7 @@ func runProcess(proc *specs.Process, ctrl *control, workload *workloadMemory) (i
 	for {
 		<-sigchld
 		for {
-			var status unix.WaitStatus
-			reaped, err := unix.Wait4(waitPID, &status, unix.WNOHANG, nil)
+			reaped, status, err := reap(waitPID)
 			if err != nil || reaped <= 0 {
 				break
 			}

@@ -31,6 +31,37 @@ func TestNativeCheckpointTarEncoderFailureCannotHangProducer(t *testing.T) {
 	err := writeCheckpointTarNative(ctx, producer, &bytes.Buffer{}, binary)
 	require.ErrorContains(t, err, "compress checkpoint")
 	require.NoError(t, ctx.Err(), "encoder exit must close the pipe rather than wait for cancellation")
+	require.Zero(t, checkpointEncoders.Load())
+}
+
+func TestCheckpointEncoderThreadsFollowConcurrency(t *testing.T) {
+	require.Equal(t, "-T2", checkpointEncoderThreads(1))
+	require.Equal(t, "-T2", checkpointEncoderThreads(checkpointEncoderBurst))
+	require.Equal(t, "--single-thread", checkpointEncoderThreads(checkpointEncoderBurst+1))
+}
+
+func TestHashBehindCoversEverythingWritten(t *testing.T) {
+	data := make([]byte, 3<<20+17)
+	for i := range data {
+		data[i] = byte(i*31 + i>>9)
+	}
+	hasher := sha256.New()
+	hashing := hashBehind(hasher)
+	// The writer reuses its buffer, as io.Copy does.
+	buffer := make([]byte, 64<<10)
+	for rest, size := data, 1; len(rest) > 0; size = size*3%len(buffer) + 1 {
+		n := copy(buffer[:size], rest)
+		written, err := hashing.Write(buffer[:n])
+		require.NoError(t, err)
+		require.Equal(t, n, written)
+		clear(buffer)
+		rest = rest[n:]
+	}
+	hashing.Close()
+	hashing.Close()
+
+	want := sha256.Sum256(data)
+	require.Equal(t, want[:], hasher.Sum(nil))
 }
 
 func TestNativeCheckpointTarProducerFailureIsNotPublishedAsSuccess(t *testing.T) {
@@ -352,6 +383,7 @@ func TestCreateTarWithSHA256ReportsProgress(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, updates)
+	require.Zero(t, updates[0], "an archive starts from nothing, each time it is started")
 	require.Equal(t, size, updates[len(updates)-1])
 }
 

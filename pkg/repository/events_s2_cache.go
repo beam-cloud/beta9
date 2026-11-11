@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -114,22 +112,53 @@ func mergeStubCacheRequiredContentRecord(merged map[string]types.CacheRequiredCo
 		return
 	}
 	for _, item := range schema.Items {
-		if item.Hash == "" {
-			continue
-		}
 		if item.Kind == "" {
 			item.Kind = schema.Kind
+		}
+		if item.Retired {
+			retireStubCacheRequiredContentItem(merged, item)
+			continue
+		}
+		if item.Hash == "" {
+			continue
 		}
 		mergeStubCacheRequiredContentItem(merged, item)
 	}
 }
 
+// retireStubCacheRequiredContentItem withdraws a stub's checkpoint if it is
+// still the one named. A checkpoint reported since stays: the record of a
+// restore can be published after the next pause's. What was retired is
+// remembered in its place, so that a report of it that is published late is
+// not taken for a new checkpoint.
+func retireStubCacheRequiredContentItem(merged map[string]types.CacheRequiredContentItem, item types.CacheRequiredContentItem) {
+	if item.Kind != types.CacheContentKindCheckpoint || item.CheckpointID == "" {
+		return
+	}
+	key := stubCacheRequiredContentItemKey(item)
+	if current, ok := merged[key]; ok && !current.Retired && current.CheckpointID != item.CheckpointID {
+		return
+	}
+	merged[key] = item
+}
+
 func stubCacheRequiredContentItems(merged map[string]types.CacheRequiredContentItem) []types.CacheRequiredContentItem {
-	return slices.AppendSeq(make([]types.CacheRequiredContentItem, 0, len(merged)), maps.Values(merged))
+	items := make([]types.CacheRequiredContentItem, 0, len(merged))
+	for _, item := range merged {
+		if !item.Retired {
+			items = append(items, item)
+		}
+	}
+	return items
 }
 
 func mergeStubCacheRequiredContentItem(merged map[string]types.CacheRequiredContentItem, item types.CacheRequiredContentItem) {
 	item = normalizeStubCacheRequiredContentItem(item)
+	if item.Kind == types.CacheContentKindCheckpoint {
+		if current, ok := merged[stubCacheRequiredContentItemKey(item)]; ok && current.Retired && current.CheckpointID == item.CheckpointID {
+			return
+		}
+	}
 	if item.Kind == types.CacheContentKindDiskSnapshot && item.DiskName != "" {
 		latest := latestDiskSnapshotContentGeneration(merged, item.DiskName)
 		if item.SnapshotGeneration < latest {

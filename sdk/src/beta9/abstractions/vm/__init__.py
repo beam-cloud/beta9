@@ -49,6 +49,9 @@ DEFAULT_VM_BASE_IMAGE = (
 )
 DEFAULT_VM_GPU_BASE_IMAGE = "public.ecr.aws/n4e0e1y0/beta9-microvm:1bcfe3a671c9-nvidia"
 
+# How long wait() asks one container for exec before it reads the VM again.
+CONTAINER_WAIT = 5.0
+
 
 def default_base_image(gpu: Optional[GpuTypeAlias] = None) -> str:
     selected = GpuType(normalize_gpu_type(gpu)) if gpu is not None else GpuType.NoGPU
@@ -187,6 +190,10 @@ class VM:
     kernel, driver modules, userspace and GSP firmware. Host VFIO passthrough
     does not require matching host NVIDIA drivers. Custom GPU images should
     include /boot/beam/vmlinux built for their installed GPU modules.
+    A GPU VM pauses with what its CUDA programs keep on the GPU, given free
+    guest memory to hold it, and resumes on any GPU of the same model. Pause
+    is refused, and the VM keeps running, while another kind of program has
+    the GPU open.
     create() waits for exec readiness; wait(services=True) also waits for
     enabled SSH/terminal/desktop services. Docker helpers wait separately.
 
@@ -516,12 +523,17 @@ class VM:
             if self.info["status"] in ("starting", "running"):
                 # SandboxConnect waits on the worker's readiness event, so
                 # neither lifecycle reconciliation nor fixed polling delays
-                # are part of the normal startup path.
+                # are part of the normal startup path. A VM whose worker is
+                # lost starts in another container: one that does not answer
+                # is asked for a while, and then the VM is read again.
                 try:
-                    with rpc_timeout(max(0.001, deadline - time.monotonic())):
+                    with rpc_timeout(min(CONTAINER_WAIT, max(0.001, deadline - time.monotonic()))):
                         sandbox = self._sandbox(refresh=False, allow_starting=True)
                 except SandboxConnectionError:
                     pass
+                except Exception as error:
+                    if not transient_error(error):
+                        raise
                 else:
                     self.info["status"] = "running"
                     if not services:

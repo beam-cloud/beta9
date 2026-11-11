@@ -54,6 +54,11 @@ func apiError(err error) error {
 		return echo.NewHTTPError(http.StatusNotFound, "VM not found")
 	}
 
+	var refused errPauseRefused
+	if errors.As(err, &refused) {
+		return echo.NewHTTPError(http.StatusConflict, refused.Error())
+	}
+
 	var pg *pq.Error
 	if errors.As(err, &pg) && pg.Code == "23505" {
 		return echo.NewHTTPError(http.StatusConflict, "name already exists")

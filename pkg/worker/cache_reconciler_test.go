@@ -67,15 +67,26 @@ func (f *fakeEventRepo) PushStubCacheRequiredContent(schema types.EventStubCache
 		f.itemsByStub[stubKey] = bucket
 	}
 	for _, item := range schema.Items {
-		if item.Hash == "" {
-			continue
-		}
 		if item.Kind == "" {
 			item.Kind = schema.Kind
 		}
+		// Checkpoints are merged as the stream's reader merges them.
+		checkpoint := string(types.CacheContentKindCheckpoint)
+		if item.Retired {
+			if current, ok := bucket[checkpoint]; item.Kind == types.CacheContentKindCheckpoint && (!ok || current.Retired || current.CheckpointID == item.CheckpointID) {
+				bucket[checkpoint] = item
+			}
+			continue
+		}
+		if item.Hash == "" {
+			continue
+		}
 		key := item.Hash + "\x00" + item.RoutingKey
 		if item.Kind == types.CacheContentKindCheckpoint {
-			key = string(types.CacheContentKindCheckpoint)
+			key = checkpoint
+			if current := bucket[key]; current.Retired && current.CheckpointID == item.CheckpointID {
+				continue
+			}
 		}
 		bucket[key] = item
 	}
@@ -100,7 +111,9 @@ func (f *fakeEventRepo) ReadStubCacheRequiredContent(ctx context.Context, worksp
 		if bucket := f.itemsByStub[workspaceID+"|"+stubID]; len(bucket) > 0 {
 			items := make([]types.CacheRequiredContentItem, 0, len(bucket))
 			for _, item := range bucket {
-				items = append(items, item)
+				if !item.Retired {
+					items = append(items, item)
+				}
 			}
 			return items, nil
 		}
@@ -152,6 +165,58 @@ func TestReporterRetryCannotReplaceNewerRequirement(t *testing.T) {
 		r.requeue(map[reporterKey]map[string]types.CacheRequiredContentItem{key: {old.CoalescingKey(): old}}, nil)
 		require.Equal(t, "new", r.pending[key][old.CoalescingKey()].Hash)
 	}
+}
+
+func TestReporterRetiresRestoredCheckpoint(t *testing.T) {
+	events := &fakeEventRepo{}
+	metadata := &claimedMetadataStore{}
+	r := newTestReporter(events)
+	r.metadata = metadata
+	report := func(id string) {
+		r.reportItems("ws", "stub", types.CacheContentKindCheckpoint, []types.CacheRequiredContentItem{{Hash: id + "-hash", CheckpointID: id}})
+	}
+	pending := func() types.CacheRequiredContentItem {
+		key := reporterKey{workspaceID: "ws", stubID: "stub", kind: types.CacheContentKindCheckpoint}
+		return r.pending[key][string(types.CacheContentKindCheckpoint)]
+	}
+	required := func() []types.CacheRequiredContentItem {
+		items, err := events.ReadStubCacheRequiredContent(context.Background(), "ws", "stub")
+		require.NoError(t, err)
+		return items
+	}
+
+	report("first")
+	r.flush()
+	require.Len(t, required(), 1)
+	r.retireCheckpoint("ws", "stub", "first")
+	r.flush()
+	require.Empty(t, required())
+	require.Len(t, events.pushed, 2)
+	require.Equal(t, []types.CacheRequiredContentItem{{
+		Kind:         types.CacheContentKindCheckpoint,
+		CheckpointID: "first",
+		Retired:      true,
+	}}, events.pushed[1].Items)
+	// Hosts read a stub's requirements again when the stub is seen again.
+	require.Equal(t, 2, metadata.recent)
+
+	// A checkpoint restored before its report is published is never
+	// published as required, however late that report is made.
+	report("second")
+	r.retireCheckpoint("ws", "stub", "second")
+	report("second")
+	require.True(t, pending().Retired)
+
+	// The next checkpoint takes the place of the restore before it, and
+	// keeps it from the record of a restore that is made late.
+	report("third")
+	r.retireCheckpoint("ws", "stub", "second")
+	r.retireCheckpoint("ws", "stub", "")
+	require.Equal(t, "third", pending().CheckpointID)
+	require.False(t, pending().Retired)
+	r.flush()
+	require.Len(t, required(), 1)
+	require.Equal(t, "third", required()[0].CheckpointID)
 }
 
 func TestAuditCacheChurnEventIncludesMachineFields(t *testing.T) {
@@ -1386,6 +1451,32 @@ func TestEnsureCheckpointMaterializedReportsMissingCheckpointDemand(t *testing.T
 	require.Equal(t, checkpoint.Accelerator, fake.pushed[0].Items[0].Accelerator)
 }
 
+// A persistent VM's restore uses its checkpoint up: no other host has a use
+// for a copy of it.
+func TestEnsureCheckpointMaterializedReportsNoDemandForPersistentVM(t *testing.T) {
+	fake := &fakeEventRepo{}
+	reporter := newTestReporter(fake)
+	reporter.metadata = &claimedMetadataStore{}
+	worker := &Worker{
+		cacheManager: &WorkerCacheManager{
+			checkpointRoot: t.TempDir(),
+			reporter:       reporter,
+			reconcileNow:   make(chan struct{}, 1),
+		},
+	}
+
+	_, err := worker.ensureCheckpointMaterialized(context.Background(), persistentVMRequest(), &types.Checkpoint{
+		CheckpointId:   "checkpoint-a",
+		CacheHash:      strings.Repeat("a", 64),
+		CacheSizeBytes: 1,
+		OriginKey:      "checkpoints/checkpoint-a.tar",
+	})
+	require.Error(t, err)
+	reporter.flush()
+
+	require.Empty(t, fake.pushed)
+}
+
 func TestCheckpointMaterializationLockSerializesSameCheckpoint(t *testing.T) {
 	manager := &WorkerCacheManager{}
 	release, err := manager.acquireCheckpointMaterialization(context.Background(), "checkpoint-a")
@@ -1976,7 +2067,7 @@ func TestPruneLocalCheckpointsKeepsActiveAndFresh(t *testing.T) {
 	require.NoError(t, os.Chtimes(filepath.Join(root, "drop"), old, old))
 	require.NoError(t, os.Chtimes(filepath.Join(root, "drop"+checkpointArchiveExtension), old, old))
 
-	manager.pruneLocalCheckpoints(map[string]struct{}{"keep": struct{}{}}, 0)
+	manager.pruneLocalCheckpoints(map[string]struct{}{"keep": struct{}{}}, 0, 0)
 
 	require.DirExists(t, filepath.Join(root, "keep"))
 	require.FileExists(t, filepath.Join(root, "keep"+checkpointArchiveExtension))
@@ -2003,7 +2094,7 @@ func TestCheckpointPressureEvictsOldestWarmCopy(t *testing.T) {
 	require.NoError(t, err)
 	defer release()
 
-	manager.pruneLocalCheckpoints(map[string]struct{}{"old": {}, "new": {}}, 1)
+	manager.pruneLocalCheckpoints(map[string]struct{}{"old": {}, "new": {}}, 1, 1)
 
 	require.NoDirExists(t, filepath.Join(root, "old"))
 	for _, id := range []string{"extracting", "running", "new"} {
@@ -2011,9 +2102,57 @@ func TestCheckpointPressureEvictsOldestWarmCopy(t *testing.T) {
 	}
 
 	instances.Delete("running")
-	manager.pruneLocalCheckpoints(map[string]struct{}{"new": {}}, 1)
+	manager.pruneLocalCheckpoints(map[string]struct{}{"new": {}}, 1, 1)
 	require.NoDirExists(t, filepath.Join(root, "running"))
 	require.DirExists(t, filepath.Join(root, "new"))
+}
+
+func TestCheckpointPressureEvictsCopiesNoStubNeedsFirst(t *testing.T) {
+	root := t.TempDir()
+	manager := &WorkerCacheManager{checkpointRoot: root}
+	copies := func(ids ...string) {
+		for i, id := range ids {
+			path := filepath.Join(root, id)
+			createMaterializedCheckpointForTest(t, path)
+			modified := time.Now().Add(time.Duration(i-len(ids))*time.Minute - time.Hour)
+			require.NoError(t, os.Chtimes(path, modified, modified))
+		}
+	}
+	warm := map[string]struct{}{"warm-old": {}, "warm-new": {}}
+
+	// The oldest copy is one a paused VM waits on. The newer ones have been
+	// restored from, and are what the room is taken from.
+	copies("warm-old", "used-old", "used-new", "warm-new")
+	manager.pruneLocalCheckpoints(warm, 1, 1)
+	require.NoDirExists(t, filepath.Join(root, "used-old"))
+	for _, id := range []string{"warm-old", "used-new", "warm-new"} {
+		require.DirExists(t, filepath.Join(root, id))
+	}
+
+	// Below the watermark that evicts and above the one that reconciliation
+	// resumes at, only the copies nothing needs are given up.
+	copies("warm-old", "used-old", "used-new", "warm-new")
+	manager.pruneLocalCheckpoints(warm, 0, math.MaxInt64)
+	for _, id := range []string{"used-old", "used-new"} {
+		require.NoDirExists(t, filepath.Join(root, id))
+	}
+	for _, id := range []string{"warm-old", "warm-new"} {
+		require.DirExists(t, filepath.Join(root, id))
+	}
+
+	// A copy this host has only just made is not yet known to be needed. It
+	// is kept as one that is.
+	createMaterializedCheckpointForTest(t, filepath.Join(root, "just-made"))
+	manager.pruneLocalCheckpoints(warm, 0, math.MaxInt64)
+	require.DirExists(t, filepath.Join(root, "just-made"))
+
+	// With nothing else to take, the oldest of the copies that are needed
+	// goes.
+	manager.pruneLocalCheckpoints(warm, 1, 1)
+	require.NoDirExists(t, filepath.Join(root, "warm-old"))
+	for _, id := range []string{"warm-new", "just-made"} {
+		require.DirExists(t, filepath.Join(root, id))
+	}
 }
 
 func testClipV1Metadata(t *testing.T) *clipCommon.ClipArchiveMetadata {

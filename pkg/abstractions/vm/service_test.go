@@ -328,6 +328,89 @@ func TestVMProofAcknowledgementFollowsDurableAttemptRetirement(t *testing.T) {
 	}
 }
 
+func TestExitedContainerRelaunchesTheVMStillToRunInIt(t *testing.T) {
+	for name, test := range map[string]struct {
+		since    func(stored *types.VM)
+		relaunch bool
+	}{
+		"a VM that is to be running":        {func(*types.VM) {}, true},
+		"a VM that was stopped":             {func(v *types.VM) { v.DesiredState, v.Status, v.ContainerID = "stopped", "stopped", "" }, false},
+		"a VM that is being paused":         {func(v *types.VM) { v.DesiredState = "paused" }, false},
+		"a VM already in another container": {func(v *types.VM) { v.ContainerID = "vm-" + v.StubID + "-87654321" }, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, v, info, runtime, gateway := fixture()
+			v.TokenID = info.Token.ExternalId
+			exited := v.ContainerID
+			s.watch([]*types.VM{v})
+			delete(s.containers.(*vmContainers).states, exited)
+			stored := *v
+			test.since(&stored)
+			s.repo.(*vmStore).rows[v.ID] = &stored
+
+			record := s.exitedVM(exited)
+			require.NotNil(t, record)
+			s.reconcileUnlessBusy(context.Background(), record, exited)
+			require.Nil(t, s.exitedVM(exited), "an exit is acted on once")
+			require.Zero(t, gateway.stops)
+			if !test.relaunch {
+				require.Empty(t, runtime.requests)
+				require.Equal(t, stored, *s.repo.(*vmStore).rows[v.ID])
+				return
+			}
+			require.Len(t, runtime.requests, 1)
+			require.Equal(t, runtime.requests[0], s.repo.(*vmStore).rows[v.ID].ContainerID)
+			require.NotEqual(t, exited, runtime.requests[0])
+		})
+	}
+}
+
+func TestOnlyVMsToBeRunningAreWatched(t *testing.T) {
+	s, v, _, _, _ := fixture()
+	stopped, unplaced := *v, *v
+	stopped.DesiredState, stopped.ContainerID = "stopped", "vm-stopped"
+	unplaced.ContainerID = ""
+	s.watch([]*types.VM{&stopped, &unplaced})
+	require.Empty(t, s.running)
+	s.watch([]*types.VM{v})
+	s.watch(nil)
+	require.Nil(t, s.exitedVM(v.ContainerID), "a pass replaces what the one before it found")
+}
+
+type announcingRuntime struct {
+	*vmRuntime
+	launched chan string
+}
+
+func (r *announcingRuntime) RunVM(ctx context.Context, info *auth.AuthInfo, stub, cid string, spec types.VMSpec, checkpoint string, disks map[string]string) error {
+	err := r.vmRuntime.RunVM(ctx, info, stub, cid, spec, checkpoint, disks)
+	r.launched <- cid
+	return err
+}
+
+func TestRelaunchExitedFollowsContainerExits(t *testing.T) {
+	s, v, info, runtime, _ := fixture()
+	v.TokenID = info.Token.ExternalId
+	launched := make(chan string, 1)
+	s.runtime = &announcingRuntime{vmRuntime: runtime, launched: launched}
+	exited := v.ContainerID
+	s.watch([]*types.VM{v})
+	delete(s.containers.(*vmContainers).states, exited)
+
+	exits := make(chan string, 2)
+	exits <- "vm-" + uuid.NewString() + "-12345678"
+	exits <- exited
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.relaunchExited(ctx, exits)
+	select {
+	case containerID := <-launched:
+		require.NotEqual(t, exited, containerID)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the VM was not launched again")
+	}
+}
+
 func TestFinalizationErrorPreservesRuntimeForRecovery(t *testing.T) {
 	for _, reconcile := range []bool{false, true} {
 		s, v, info, runtime, _ := fixture()
@@ -387,6 +470,7 @@ type vmRuntime struct {
 	launchToken     string
 	checkpointDisks map[string]string
 	memoryResponse  *pb.PodSandboxSnapshotMemoryResponse
+	guestAnswers    bool // the guest outlived a pause the worker refused
 	snapshotError   bool
 	snapshots       int
 	forwarded       string
@@ -624,6 +708,18 @@ func TestStopSnapshotFailureKeepsRuntimeAlive(t *testing.T) {
 	require.NotEmpty(t, v.ContainerID)
 }
 
+func TestRemoveEndsAVMWhoseRootCannotBeSnapshotted(t *testing.T) {
+	s, v, info, runtime, gateway := fixture()
+	runtime.snapshotError = true
+	v.DesiredState = types.VMStateDeleted
+	require.NoError(t, s.stopOrDelete(auth.ContextWithAuthInfo(context.Background(), info), v))
+	require.Zero(t, runtime.snapshots)
+	require.Equal(t, 1, gateway.stops)
+	require.Empty(t, v.ContainerID)
+	require.Equal(t, types.VMStateDeleted, v.Status)
+	require.Equal(t, 1, s.backend.(*vmBackend).deletedDisks)
+}
+
 func TestStopRejectsFinalSyncFailure(t *testing.T) {
 	s, v, info, _, _ := fixture()
 	s.containers.(*vmContainers).exitCode = int(types.ContainerExitCodeUnknownError)
@@ -791,14 +887,22 @@ func TestGPUVMUsesOneDeviceAndNormalPlacement(t *testing.T) {
 	}
 }
 
-func TestGPUVMPausePreservesRunningState(t *testing.T) {
-	s, v, info, _, _ := fixture()
-	v.Spec.GPU = string(types.GPU_RTX4090)
-	before := *v
-	require.ErrorContains(t, s.pause(auth.ContextWithAuthInfo(context.Background(), info), v), "GPU VMs cannot pause")
-	require.Equal(t, before, *v)
-	v.Spec.IdleAction = "pause"
-	require.ErrorContains(t, validate(&v.Spec), "idle_action=stop")
+func TestGPUVMPausesMemory(t *testing.T) {
+	s, v, info, runtime, _ := fixture()
+	v.TokenID = info.Token.ExternalId
+	v.Spec.GPU, v.Spec.IdleAction = "rtx4090", "pause"
+	require.NoError(t, validate(&v.Spec))
+	require.Equal(t, string(types.GPU_RTX4090), v.Spec.GPU)
+	require.Equal(t, "pause", v.Spec.IdleAction)
+
+	runtime.memoryResponse = &pb.PodSandboxSnapshotMemoryResponse{Ok: true, Runtime: "microvm", CheckpointId: "memory", DiskSnapshots: []*pb.PodSandboxDiskSnapshot{{DiskName: rootDisk(v), SnapshotId: "root-after-shutdown"}}}
+	ctx := auth.ContextWithAuthInfo(context.Background(), info)
+	require.NoError(t, s.pause(ctx, v))
+	require.Equal(t, "paused", v.Status)
+	require.Equal(t, "memory", v.MemoryCheckpointID)
+	require.NoError(t, s.activate(ctx, info, v))
+	require.Equal(t, "memory", runtime.checkpoint, "a GPU VM resumes from its saved memory")
+
 	v.Spec.IdleAction, v.Spec.GPU = "stop", "NO_GPU"
 	require.NoError(t, validate(&v.Spec))
 	require.Empty(t, v.Spec.GPU)

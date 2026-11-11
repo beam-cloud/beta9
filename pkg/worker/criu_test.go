@@ -3,6 +3,9 @@ package worker
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +26,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/beam-cloud/beta9/pkg/runtime"
@@ -2320,6 +2324,7 @@ func TestCheckpointUploadDoesNotHoldCaptureAdmissionOrPublishEarly(t *testing.T)
 	case <-ctx.Done():
 		t.Fatal("upload did not start")
 	}
+	require.NoFileExists(t, worker.checkpointArchivePath("saved"), "the cache is offered the archive while it uploads; this one declines it")
 	admissionCtx, cancelAdmission := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancelAdmission()
 	release, err := acquireMicroVMCheckpointSlot(admissionCtx)
@@ -2339,6 +2344,214 @@ func TestCheckpointUploadDoesNotHoldCaptureAdmissionOrPublishEarly(t *testing.T)
 	require.NotNil(t, persisted.metadata)
 	require.NotEmpty(t, persisted.metadata.hash)
 	require.Positive(t, persisted.metadata.sizeBytes)
+}
+
+// checkpointOrigin is as much of an object store as a checkpoint archive is
+// uploaded to.
+type checkpointOrigin struct {
+	refuse int // the part of a multipart upload that it does not take
+
+	mu       sync.Mutex
+	uploads  map[string]map[int][]byte
+	parts    map[int]int // the size of each part of the object, when it has parts
+	object   []byte
+	aborted  int
+	requests []string
+	arrived  chan int
+}
+
+func newCheckpointOrigin(t *testing.T) (*checkpointOrigin, *types.ContainerRequest) {
+	origin := &checkpointOrigin{uploads: map[string]map[int][]byte{}, arrived: make(chan int, 64)}
+	server := httptest.NewServer(origin)
+	t.Cleanup(server.Close)
+	id, endpoint, region, credential, bucket := uint(1), server.URL, "us-east-1", "test", "test"
+	return origin, &types.ContainerRequest{Workspace: types.Workspace{Name: "test", Storage: &types.WorkspaceStorage{
+		Id: &id, EndpointUrl: &endpoint, Region: &region, AccessKey: &credential, SecretKey: &credential, BucketName: &bucket,
+	}}}
+}
+
+func (o *checkpointOrigin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	query := r.URL.Query()
+	id := query.Get("uploadId")
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	switch {
+	case err != nil:
+		// The request was given up while it was sent.
+		w.WriteHeader(http.StatusBadRequest)
+	case r.Method == http.MethodPost && query.Has("uploads"):
+		o.requests = append(o.requests, "create")
+		id = fmt.Sprintf("upload-%d", len(o.requests))
+		o.uploads[id] = map[int][]byte{}
+		fmt.Fprintf(w, "<InitiateMultipartUploadResult><UploadId>%s</UploadId></InitiateMultipartUploadResult>", id)
+	case r.Method == http.MethodPut && id != "":
+		number, _ := strconv.Atoi(query.Get("partNumber"))
+		if number == o.refuse {
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, "<Error><Code>AccessDenied</Code><Message>refused</Message></Error>")
+			return
+		}
+		if o.uploads[id] == nil {
+			// The part was on its way when its upload was aborted.
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, "<Error><Code>NoSuchUpload</Code><Message>no such upload</Message></Error>")
+			return
+		}
+		o.uploads[id][number] = body
+		w.Header().Set("ETag", fmt.Sprintf(`"part-%d"`, number))
+		select {
+		case o.arrived <- number:
+		default:
+		}
+	case r.Method == http.MethodPost && id != "":
+		o.requests = append(o.requests, "complete")
+		o.object, o.parts = nil, map[int]int{}
+		for number := 1; number <= len(o.uploads[id]); number++ {
+			o.object = append(o.object, o.uploads[id][number]...)
+			o.parts[number] = len(o.uploads[id][number])
+		}
+		fmt.Fprint(w, "<CompleteMultipartUploadResult><ETag>&quot;object&quot;</ETag></CompleteMultipartUploadResult>")
+	case r.Method == http.MethodDelete && id != "":
+		o.requests = append(o.requests, "abort")
+		o.aborted++
+		delete(o.uploads, id)
+		w.WriteHeader(http.StatusNoContent)
+	case r.Method == http.MethodPut:
+		o.requests = append(o.requests, "put")
+		o.object, o.parts = body, nil
+		w.Header().Set("ETag", `"object"`)
+	}
+}
+
+// persistTestCheckpoint persists a checkpoint whose archive is a little over
+// 5 MiB, and requires the origin to have that archive.
+func persistTestCheckpoint(t *testing.T, origin *checkpointOrigin, request *types.ContainerRequest, archiveReady func()) {
+	t.Helper()
+	cacheCtx, cancelCache := context.WithCancel(context.Background())
+	cancelCache() // the cache declines the archive, and its file is gone while it uploads
+	root := t.TempDir()
+	checkpointPath := filepath.Join(root, "saved")
+	require.NoError(t, os.MkdirAll(checkpointPath, 0700))
+	memory := make([]byte, 5<<20)
+	_, err := rand.Read(memory)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(checkpointPath, "memory"), memory, 0600))
+	worker := &Worker{cacheManager: &WorkerCacheManager{ctx: cacheCtx, checkpointRoot: root, client: &cache.Client{}}}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	metadata, err := worker.persistCheckpoint(ctx, request, "saved", checkpointPath, nil, archiveReady)
+
+	require.NoError(t, err)
+	origin.mu.Lock()
+	defer origin.mu.Unlock()
+	hash := sha256.Sum256(origin.object)
+	require.Equal(t, metadata.hash, hex.EncodeToString(hash[:]), "the origin's object is not the archive")
+	require.EqualValues(t, metadata.sizeBytes, len(origin.object))
+	require.Greater(t, metadata.sizeBytes, int64(5<<20))
+}
+
+func setCheckpointArchivePart(t *testing.T, size int64) {
+	previous := checkpointArchivePart
+	checkpointArchivePart = size
+	t.Cleanup(func() { checkpointArchivePart = previous })
+}
+
+func TestCheckpointArchiveIsUploadedInPartsAsItIsWritten(t *testing.T) {
+	setCheckpointArchivePart(t, 1<<20)
+	origin, request := newCheckpointOrigin(t)
+
+	persistTestCheckpoint(t, origin, request, nil)
+
+	// An archive of this size that is whole before it is uploaded goes in one
+	// request. These are the parts of one that was sent as it grew.
+	require.Equal(t, []string{"create", "complete"}, origin.requests)
+	require.Len(t, origin.parts, 6)
+	for number := 1; number <= 5; number++ {
+		require.Equal(t, 1<<20, origin.parts[number])
+	}
+	require.Less(t, origin.parts[6], 1<<20)
+	require.Len(t, checkpointOriginUploadSlots, 0)
+}
+
+func TestCheckpointArchiveIsUploadedWholeWhenThePartsAreNotTaken(t *testing.T) {
+	setCheckpointArchivePart(t, 1<<20)
+	origin, request := newCheckpointOrigin(t)
+	origin.refuse = 3
+
+	persistTestCheckpoint(t, origin, request, nil)
+
+	require.Equal(t, []string{"create", "abort", "put"}, origin.requests)
+	require.Empty(t, origin.uploads)
+	require.Len(t, checkpointOriginUploadSlots, 0)
+}
+
+func TestCheckpointArchiveIsUploadedWholeWhenUploadsHaveToWait(t *testing.T) {
+	setCheckpointArchivePart(t, 1<<20)
+	origin, request := newCheckpointOrigin(t)
+	var releases []func()
+	for range cap(checkpointOriginUploadSlots) {
+		release, err := acquireCheckpointSlot(context.Background(), checkpointOriginUploadSlots)
+		require.NoError(t, err)
+		t.Cleanup(release)
+		releases = append(releases, release)
+	}
+
+	// The archive is written while every upload slot is taken.
+	persistTestCheckpoint(t, origin, request, releases[0])
+
+	require.Equal(t, []string{"put"}, origin.requests)
+}
+
+func TestArchiveUploadGivesUpOnAnArchiveThatIsStartedAgain(t *testing.T) {
+	origin, request := newCheckpointOrigin(t)
+	client, err := clients.NewWorkspaceStorageClient(context.Background(), request.Workspace.Name, request.Workspace.Storage)
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "archive")
+	require.NoError(t, os.WriteFile(path, make([]byte, 2500), 0600))
+	sending := &archiveUpload{ctx: context.Background(), client: client, key: "archive", path: path, partSize: 1000}
+
+	// An attempt that the store has nothing of can be started again.
+	sending.wrote(0)
+	sending.wrote(999)
+	sending.wrote(0)
+	require.Empty(t, origin.requests)
+	require.True(t, sending.began().IsZero())
+
+	sending.wrote(2500)
+	for range 2 {
+		select {
+		case <-origin.arrived:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the origin was not sent the archive's parts")
+		}
+	}
+	require.False(t, sending.began().IsZero())
+
+	// One that it has parts of cannot: they are of another archive.
+	sending.wrote(0)
+	require.Equal(t, []string{"create", "abort"}, origin.requests)
+	sending.wrote(2500)
+	require.ErrorIs(t, sending.finish(2500), errArchiveNotSent)
+	sending.abandon()
+	require.Equal(t, []string{"create", "abort"}, origin.requests)
+	require.Nil(t, origin.object)
+	require.ErrorIs(t, (*archiveUpload)(nil).finish(1), errArchiveNotSent)
+}
+
+func TestCheckpointArchivePartSize(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "vm"), 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "state"), make([]byte, 4096), 0600))
+	require.Equal(t, checkpointArchivePart, checkpointArchivePartSize(dir))
+
+	// Guest RAM that no object of the least parts would hold.
+	memory, err := os.Create(filepath.Join(dir, "vm", "memory"))
+	require.NoError(t, err)
+	defer memory.Close()
+	require.NoError(t, memory.Truncate(4*checkpointArchiveParts*checkpointArchivePart))
+	require.Equal(t, 4*checkpointArchivePart, checkpointArchivePartSize(dir))
 }
 
 func TestCreateFilesystemCheckpointFallbackStopsAndCapturesOverlay(t *testing.T) {
@@ -2805,7 +3018,7 @@ func TestCheckpointOriginRetriesTruncationWithoutPublishingCorruption(t *testing
 				return io.NopCloser(bytes.NewReader(body)), nil
 			}
 			path := filepath.Join(t.TempDir(), "retry")
-			err := (&Worker{}).materializeCheckpointOrigin(context.Background(), path, checkpoint, open, nil, time.Second)
+			err := (&Worker{}).materializeCheckpointOrigin(context.Background(), path, checkpoint, open, nil, time.Second, true)
 			require.Equal(t, 2, calls, "a complete corrupt archive must not be retried")
 			if corrupt {
 				require.ErrorContains(t, err, "hash mismatch")

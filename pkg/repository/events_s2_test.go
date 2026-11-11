@@ -363,6 +363,68 @@ func TestMergeStubCacheRequiredContentRecordKeepsMostRecentlyReportedCheckpoint(
 	}
 }
 
+func TestMergeStubCacheRequiredContentRecordRetiresRestoredCheckpoint(t *testing.T) {
+	merged := map[string]types.CacheRequiredContentItem{}
+	writeRecord := func(kind types.CacheContentKind, item types.CacheRequiredContentItem) {
+		body, err := json.Marshal(struct {
+			Type string                                    `json:"type"`
+			Data types.EventStubCacheRequiredContentSchema `json:"data"`
+		}{
+			Type: types.EventStubCacheRequiredContent,
+			Data: types.EventStubCacheRequiredContentSchema{Kind: kind, Items: []types.CacheRequiredContentItem{item}},
+		})
+		require.NoError(t, err)
+		mergeStubCacheRequiredContentRecord(merged, body)
+	}
+	checkpoints := func() []string {
+		var ids []string
+		for _, item := range stubCacheRequiredContentItems(merged) {
+			if item.Kind == types.CacheContentKindCheckpoint {
+				ids = append(ids, item.CheckpointID)
+			}
+		}
+		return ids
+	}
+	paused := func(id string) {
+		writeRecord(types.CacheContentKindCheckpoint, types.CacheRequiredContentItem{Hash: id + "-hash", RoutingKey: id + "-hash", CheckpointID: id})
+	}
+	restored := func(id string) {
+		writeRecord(types.CacheContentKindCheckpoint, types.CacheRequiredContentItem{CheckpointID: id, Retired: true})
+	}
+	writeRecord(types.CacheContentKindClipV2, types.CacheRequiredContentItem{Hash: "layer-hash", RoutingKey: "layer"})
+
+	paused("first")
+	restored("first")
+	require.Empty(t, checkpoints())
+
+	// A report of a checkpoint can be published after the record of its
+	// restore. It is not a new checkpoint.
+	paused("first")
+	require.Empty(t, checkpoints())
+
+	// The record of a restore can follow the record of the pause after it.
+	paused("second")
+	restored("first")
+	require.Equal(t, []string{"second"}, checkpoints())
+
+	// Only a checkpoint is retired, and only one that is named.
+	writeRecord(types.CacheContentKindClipV2, types.CacheRequiredContentItem{Hash: "layer-hash", RoutingKey: "layer", Retired: true})
+	restored("")
+	require.Equal(t, []string{"second"}, checkpoints())
+	require.Len(t, stubCacheRequiredContentItems(merged), 2)
+
+	restored("second")
+	require.Empty(t, checkpoints())
+	require.Len(t, stubCacheRequiredContentItems(merged), 1)
+
+	// A restore whose pause was never reported here is remembered too.
+	restored("third")
+	paused("third")
+	require.Empty(t, checkpoints())
+	paused("fourth")
+	require.Equal(t, []string{"fourth"}, checkpoints())
+}
+
 func TestMutableVolumeRequirementsReplaceObsoleteHashes(t *testing.T) {
 	merged := map[string]types.CacheRequiredContentItem{}
 	for _, item := range []types.CacheRequiredContentItem{

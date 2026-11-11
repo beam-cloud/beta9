@@ -235,10 +235,9 @@ func TestContainerCheckpointReturnsNoIDWhenPersistenceFails(t *testing.T) {
 			return errors.New("checkpoint persistence failed")
 		},
 	}
-	server.containerInstances.Set(request.ContainerId, &ContainerInstance{
-		Id: request.ContainerId, Request: request,
-		Runtime: NewMockRuntime(types.ContainerRuntimeRunc.String(), betaruntime.Capabilities{CheckpointRestore: true}),
-	})
+	rt := NewMockRuntime(types.ContainerRuntimeRunc.String(), betaruntime.Capabilities{CheckpointRestore: true})
+	rt.state.Status = types.RuncContainerStatusStopped // the terminal capture ended it before persistence failed
+	server.containerInstances.Set(request.ContainerId, &ContainerInstance{Id: request.ContainerId, Request: request, Runtime: rt})
 	for _, call := range []struct {
 		terminal bool
 		captures int32
@@ -252,6 +251,50 @@ func TestContainerCheckpointReturnsNoIDWhenPersistenceFails(t *testing.T) {
 		require.Equal(t, "checkpoint persistence failed", response.ErrorMsg)
 		require.Equal(t, call.captures, calls.Load(), "only terminal calls may replay their failed result")
 	}
+}
+
+// A runtime may refuse a terminal checkpoint and leave the container running:
+// a GPU guest whose GPU is held by a process that cannot be suspended, say.
+// Asking again once that process is gone is a new attempt.
+func TestRefusedTerminalCheckpointCanBeRetried(t *testing.T) {
+	request := &types.ContainerRequest{ContainerId: "container-id"}
+	refuse := true
+	var calls atomic.Int32
+	server := &ContainerRuntimeServer{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		createCheckpoint: func(context.Context, *CreateCheckpointOpts) error {
+			calls.Add(1)
+			if refuse {
+				return errors.New("the GPU is in use by nvtop (pid 7)")
+			}
+			return nil
+		},
+	}
+	// The runtime takes a moment to say that the container still runs. Asked
+	// again in that moment, the worker must not answer with the refusal.
+	rt := slowStateRuntime{NewMockRuntime(types.ContainerRuntimeMicroVM.String(), betaruntime.Capabilities{CheckpointRestore: true})}
+	rt.state.Status = types.RuncContainerStatusRunning
+	server.containerInstances.Set(request.ContainerId, &ContainerInstance{Id: request.ContainerId, Request: request, Runtime: rt})
+	checkpoint := func() *pb.ContainerCheckpointResponse {
+		response, err := server.ContainerCheckpoint(context.Background(), &pb.ContainerCheckpointRequest{ContainerId: request.ContainerId, TerminateAfterCheckpoint: true})
+		require.NoError(t, err)
+		return response
+	}
+	require.Equal(t, "the GPU is in use by nvtop (pid 7)", checkpoint().ErrorMsg)
+	require.Equal(t, "the GPU is in use by nvtop (pid 7)", checkpoint().ErrorMsg)
+	require.Equal(t, int32(2), calls.Load(), "a refusal is not replayed")
+	refuse = false
+	accepted := checkpoint()
+	require.True(t, accepted.Ok)
+	require.Equal(t, accepted.CheckpointId, checkpoint().CheckpointId, "a taken terminal checkpoint is")
+	require.Equal(t, int32(3), calls.Load())
+}
+
+type slowStateRuntime struct{ *MockRuntime }
+
+func (r slowStateRuntime) State(ctx context.Context, containerID string) (betaruntime.State, error) {
+	time.Sleep(50 * time.Millisecond)
+	return r.MockRuntime.State(ctx, containerID)
 }
 
 func TestTerminalCheckpointJoinsAcrossLostResponseAndContainerRemoval(t *testing.T) {
@@ -768,6 +811,45 @@ func TestContainerSandboxExecDoesNotPollRuntimeStateBeforeProcessManagerReady(t 
 	require.False(t, resp.Ok)
 	require.Contains(t, resp.ErrorMsg, "Process manager failed")
 	require.Equal(t, int32(0), rt.stateCalls.Load())
+}
+
+type lateDeviceRuntime struct {
+	betaruntime.Runtime
+	devices chan struct{}
+}
+
+func (r lateDeviceRuntime) WaitForDevices(ctx context.Context, _ string) error {
+	select {
+	case <-r.devices:
+		return nil
+	case <-ctx.Done():
+		return errors.New("guest has no devices yet")
+	}
+}
+
+// A GPU microVM's process manager answers before its GPU is plugged in.
+func TestContainerSandboxExecWaitsForGuestDevices(t *testing.T) {
+	containerId := "sandbox-test"
+	rt := lateDeviceRuntime{devices: make(chan struct{})}
+	server := &ContainerRuntimeServer{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	server.containerInstances.Set(containerId, &ContainerInstance{
+		Id:                         containerId,
+		Runtime:                    rt,
+		SandboxProcessManagerReady: true,
+	})
+	exec := func() string {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		resp, err := server.ContainerSandboxExec(ctx, &pb.ContainerSandboxExecRequest{ContainerId: containerId, Cmd: "nvidia-smi"})
+		require.NoError(t, err)
+		require.False(t, resp.Ok)
+		return resp.ErrorMsg
+	}
+
+	require.Equal(t, "guest has no devices yet", exec())
+
+	close(rt.devices)
+	require.Equal(t, "Container spec not ready", exec())
 }
 
 func TestContainerSandboxStatusReportsPendingBeforeProcessManagerReady(t *testing.T) {
