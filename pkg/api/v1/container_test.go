@@ -189,6 +189,34 @@ func TestListContainersCompressesForClientsThatAcceptIt(t *testing.T) {
 	require.Equal(t, plain.Body.String(), string(received))
 }
 
+func TestListContainersCompressesOnlyForClientsThatAcceptGzip(t *testing.T) {
+	group, _ := newListGroup(runningContainers(100))
+	for header, compressed := range map[string]bool{
+		"":                  false,
+		"identity":          false,
+		"br, deflate":       false,
+		"gzip":              true,
+		"GZIP":              true,
+		"br, gzip;q=0.5":    true,
+		"gzip;q=0":          false,
+		"gzip; q=0.0, br":   false,
+		"gzip;q=nonsense":   false,
+		"*":                 true,
+		"*;q=0":             false,
+		"gzip;q=0, *":       false,
+		"*;q=0, gzip;q=0.1": true,
+	} {
+		request := listRequest()
+		request.Header.Set(echo.HeaderAcceptEncoding, header)
+		recorder, err := listContainers(group, request)
+		require.NoError(t, err)
+		require.Equal(t, compressed, recorder.Header().Get(echo.HeaderContentEncoding) == "gzip", "Accept-Encoding: %q", header)
+		if !compressed {
+			require.True(t, json.Valid(recorder.Body.Bytes()), "Accept-Encoding: %q", header)
+		}
+	}
+}
+
 func TestListContainersSharesOneReadOfALargeWorkspace(t *testing.T) {
 	group, containers := newListGroup(runningContainers(sharedContainerListMinContainers))
 
@@ -255,6 +283,86 @@ func TestListContainersSharesOneReadOfALargeWorkspace(t *testing.T) {
 		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &listed))
 		require.Len(t, listed, 10)
 	}
+}
+
+// listedCount is how many containers a response lists.
+func listedCount(t *testing.T, body []byte) int {
+	t.Helper()
+	var listed []ContainerStateWithAppId
+	require.NoError(t, json.Unmarshal(body, &listed))
+	return len(listed)
+}
+
+func TestListContainersAfterAStopDoesNotShareAListReadBeforeIt(t *testing.T) {
+	const large = sharedContainerListMinContainers
+	group, containers := newListGroup(runningContainers(large + 1))
+	_, err := listContainers(group, listRequest())
+	require.NoError(t, err)
+
+	// A list is being built from the containers as they were.
+	expireSharedList(t, group)
+	reading, release := make(chan struct{}, 2), make(chan struct{})
+	containers.set(func(r *listContainerRepo) { r.reading, r.release = reading, release })
+	list := func(listed chan<- int) {
+		recorder, err := listContainers(group, listRequest())
+		if err != nil {
+			listed <- -1
+			return
+		}
+		listed <- listedCount(t, recorder.Body.Bytes())
+	}
+	before, after := make(chan int, 1), make(chan int, 1)
+	go list(before)
+	<-reading
+
+	// One of them is stopped. A request made after that reads again, instead
+	// of waiting on the list that was read before it.
+	containers.set(func(r *listContainerRepo) { r.states = runningContainers(large) })
+	group.lists.forget(listWorkspaceID)
+	go list(after)
+	select {
+	case <-reading:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a request made after the stop waited on a list read before it")
+	}
+	close(release)
+	require.Equal(t, large+1, <-before)
+	require.Equal(t, large, <-after)
+
+	// Whichever of the two ended last, the earlier one is not served as fresh.
+	containers.set(func(r *listContainerRepo) { r.reading, r.release = nil, nil })
+	recorder, err := listContainers(group, listRequest())
+	require.NoError(t, err)
+	require.Equal(t, large, listedCount(t, recorder.Body.Bytes()))
+}
+
+func TestListContainersDoesNotKeepAListReadDuringAStop(t *testing.T) {
+	const large = sharedContainerListMinContainers
+	group, containers := newListGroup(runningContainers(large + 1))
+	reading, release := make(chan struct{}, 1), make(chan struct{})
+	containers.set(func(r *listContainerRepo) { r.reading, r.release = reading, release })
+
+	// The first list of the workspace is being built when a container stops.
+	before := make(chan error, 1)
+	go func() {
+		_, err := listContainers(group, listRequest())
+		before <- err
+	}()
+	<-reading
+	containers.set(func(r *listContainerRepo) {
+		r.states = runningContainers(large)
+		r.reading, r.release = nil, nil
+	})
+	group.lists.forget(listWorkspaceID)
+	close(release)
+	require.NoError(t, <-before)
+
+	// It is shared from now on, but that list is not what the next request gets.
+	recorder, err := listContainers(group, listRequest())
+	require.NoError(t, err)
+	require.Equal(t, large, listedCount(t, recorder.Body.Bytes()))
+	require.Equal(t, 2, containers.readCount())
+	require.Empty(t, group.lists.builds, "nothing is kept for a workspace once its builds are over")
 }
 
 func TestListContainersDoesNotKeepAFailedRead(t *testing.T) {
