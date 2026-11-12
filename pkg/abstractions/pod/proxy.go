@@ -1,6 +1,7 @@
 package pod
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -45,6 +47,14 @@ const (
 	// pass over a large stub dials this many of them at once, where it
 	// dialled all of them.
 	discoveryProbes = 64
+	// How long a discovery pass goes on starting those checks. A container
+	// that does not answer holds its check for containerAvailableTimeout,
+	// and discoveryProbes of them hold every check of the pass. A pass that
+	// waited to dial them all would take that long for each discoveryProbes
+	// of them, and offer nothing it found until the end. Past the window
+	// the pass dials no more: see readyContainers. A pass then takes the
+	// window and one check at most, however many containers do not answer.
+	discoveryProbeWindow = time.Second
 	// Long enough for a dropped SYN (retransmitted at 1s) and relayed dials
 	// queued under concurrency; any slower and the container is gone.
 	containerDialTimeoutDurationS time.Duration = time.Second * 5
@@ -1283,6 +1293,12 @@ func (pb *PodProxyBuffer) discoverContainers() {
 // A container whose addresses cannot be read is left out, as it was then.
 // So was one whose connections could not be read; they are now read
 // together, so when that read fails the pass offers no container.
+//
+// The pass dials for discoveryProbeWindow. A container it has not got to by
+// then is not dialled: it is offered on what the proxy already knows of it,
+// as knownAddressMap has it, and the pass asks for another to follow it.
+// Containers are checked in the order of discoveryOrder, so the next pass
+// starts with the ones this pass left undialled.
 func (pb *PodProxyBuffer) readyContainers(containerIDs []string) []container {
 	ready := make([]container, 0, len(containerIDs))
 	if len(containerIDs) == 0 {
@@ -1295,6 +1311,10 @@ func (pb *PodProxyBuffer) readyContainers(containerIDs []string) []container {
 	// Readiness is remembered between passes, so the containers that are
 	// dialled are the new ones, discoveryProbes of them at a time.
 	checked := make([]container, len(containerIDs))
+	order := pb.discoveryOrder(containerIDs, addressMaps)
+	routed := sync.OnceValue(pb.routedAddressMaps)
+	dialling := time.Now()
+	var undialled atomic.Bool
 	var next atomic.Int64
 	var wg sync.WaitGroup
 	for range min(len(containerIDs), discoveryProbes) {
@@ -1303,25 +1323,35 @@ func (pb *PodProxyBuffer) readyContainers(containerIDs []string) []container {
 			defer wg.Done()
 			for {
 				n := int(next.Add(1)) - 1
-				if n >= len(containerIDs) {
+				if n >= len(order) {
 					return
 				}
 
+				n = order[n]
 				containerID := containerIDs[n]
 				addressMap, read := addressMaps[containerID]
 				if !read && !allRead {
 					// Its addresses may be the ones that could not be read.
 					continue
 				}
-				checked[n] = container{
-					id:              containerID,
-					addressMap:      addressMap,
-					readyAddressMap: pb.readyAddressMap(containerID, addressMap),
+				c := container{id: containerID, addressMap: addressMap}
+				if time.Since(dialling) < discoveryProbeWindow {
+					c.readyAddressMap = pb.readyAddressMap(containerID, addressMap)
+				} else {
+					var dialled bool
+					c.readyAddressMap, dialled = pb.knownAddressMap(containerID, addressMap, routed()[containerID])
+					if !dialled {
+						undialled.Store(true)
+					}
 				}
+				checked[n] = c
 			}
 		}()
 	}
 	wg.Wait()
+	if undialled.Load() {
+		pb.signalDiscovery()
+	}
 
 	readyContainerIDs := make([]string, 0, len(checked))
 	for _, c := range checked {
@@ -1343,6 +1373,64 @@ func (pb *PodProxyBuffer) readyContainers(containerIDs []string) []container {
 		ready[n].remoteConnections = max(int(shared[ready[n].id])-int(pb.containerConnectionCount(ready[n].id)), 0)
 	}
 	return ready
+}
+
+// discoveryOrder is the order in which a pass checks the stub's containers,
+// as indexes into containerIDs: first the ones the proxy has yet to dial,
+// then the rest from the one it dialled longest ago. A pass that runs out of
+// its window has then dialled what it knew least about. A container that
+// has just started is not kept waiting by ones that did not answer before,
+// which a pass dials again while a request is waiting, and those are each
+// dialled again in their turn.
+func (pb *PodProxyBuffer) discoveryOrder(containerIDs []string, addressMaps map[string]map[int32]string) []int {
+	order := make([]int, len(containerIDs))
+	probed := make([]time.Time, len(containerIDs))
+	for n, containerID := range containerIDs {
+		order[n] = n
+		probed[n] = pb.readiness.lastProbed(containerID, pb.configuredAddressMap(addressMaps[containerID]))
+	}
+	slices.SortFunc(order, func(a, b int) int {
+		return cmp.Or(probed[a].Compare(probed[b]), cmp.Compare(a, b))
+	})
+	return order
+}
+
+// routedAddressMaps is the ready addresses of each container that requests
+// are routed to now.
+func (pb *PodProxyBuffer) routedAddressMaps() map[string]map[int32]string {
+	pb.availableContainersLock.RLock()
+	defer pb.availableContainersLock.RUnlock()
+
+	routed := make(map[string]map[int32]string, len(pb.availableContainers))
+	for _, c := range pb.availableContainers {
+		routed[c.id] = c.readyAddressMap
+	}
+	return routed
+}
+
+// knownAddressMap is readyAddressMap without the dialling: the addresses of
+// a container that answered when the proxy last probed them. An address that
+// requests are routed to but that was never probed counts too. It is one
+// that primeContainerPort made routable, or that a request has just failed
+// to reach, and the pass that dials it decides. The second result is false
+// when an address has still to be dialled.
+func (pb *PodProxyBuffer) knownAddressMap(containerID string, addressMap, routed map[int32]string) (map[int32]string, bool) {
+	addressMap = pb.configuredAddressMap(addressMap)
+	pb.readiness.prunePorts(containerID, addressMap)
+
+	known := map[int32]string{}
+	dialled := true
+	for port, address := range addressMap {
+		ready, probed := pb.readiness.recall(readinessTarget{containerID, port, address})
+		if !probed {
+			dialled = false
+			ready = routed[port] == address
+		}
+		if ready {
+			known[port] = address
+		}
+	}
+	return known, dialled
 }
 
 // discoveryRest is how long after a pass over this many containers a signal

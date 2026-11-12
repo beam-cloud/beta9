@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -222,6 +223,174 @@ func TestAPassThatCannotReadAddressesKeepsWhatIsKnownOfEachContainersReadiness(t
 	repo.failing.Store(false)
 	require.Len(t, stub.proxy.readyContainers(containerIDs), 5)
 	require.Never(t, func() bool { return stub.dials.Load() > 5 }, 200*time.Millisecond, 10*time.Millisecond)
+}
+
+// start records a running container of the stub with one address.
+func (s *discoveredStub) start(t *testing.T, containerID string, port int32, address string) {
+	t.Helper()
+	require.NoError(t, s.repo.SetContainerState(containerID, &types.ContainerState{
+		ContainerId: containerID,
+		StubId:      "stub",
+		WorkspaceId: "workspace",
+		Status:      types.ContainerStatusRunning,
+	}))
+	require.NoError(t, s.repo.SetContainerAddressMap(containerID, map[int32]string{port: address}))
+}
+
+// silentAddress is an address that takes connections and never answers, and
+// the number of connections it has taken.
+func silentAddress(t *testing.T) (string, *atomic.Int64) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	var mu sync.Mutex
+	var conns []net.Conn
+	t.Cleanup(func() {
+		listener.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, conn := range conns {
+			conn.Close()
+		}
+	})
+
+	dials := &atomic.Int64{}
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, conn)
+			mu.Unlock()
+			dials.Add(1)
+		}
+	}()
+	return listener.Addr().String(), dials
+}
+
+// A check of a container that does not answer lasts
+// containerAvailableTimeout, and a pass makes discoveryProbes checks at a
+// time. A pass that waited for all of them took that long for every
+// discoveryProbes such containers: six seconds for the 150 here and a minute
+// for 2,000. Nothing it found was offered until it ended, and with a request
+// waiting the next pass dialled them all again.
+func TestAPassOverContainersThatDoNotAnswerDoesNotWaitToDialThemAll(t *testing.T) {
+	stub := newDiscoveredStub(t)
+	// The stub is a database: its port is ready when it answers, and a
+	// check of one that takes the connection and says nothing times out.
+	const databasePort = 5432
+	stub.proxy.stubConfig = &types.StubConfigV1{Serving: &types.ServingConfig{
+		Database: &types.DatabaseServingConfig{Kind: types.DatabaseKindPostgres, Port: databasePort},
+	}}
+
+	// Three containers answer, and a pass has found them.
+	answering := []string{"sandbox-stub-answers-0", "sandbox-stub-answers-1", "sandbox-stub-answers-2"}
+	for n, containerID := range answering {
+		stub.start(t, containerID, 8080, stub.addresses[n])
+	}
+	require.Len(t, stub.proxy.readyContainers(answering), len(answering))
+
+	// 150 more start and do not answer: as many as a pass checks at a time,
+	// and then the rest. Another answers. It was made routable when its
+	// port was exposed and no pass has dialled it.
+	firstAddress, firstDials := silentAddress(t)
+	restAddress, restDials := silentAddress(t)
+	var containerIDs []string
+	for n := range 150 {
+		containerID := fmt.Sprintf("sandbox-stub-silent-%03d", n)
+		address := firstAddress
+		if n >= discoveryProbes {
+			address = restAddress
+		}
+		stub.start(t, containerID, databasePort, address)
+		containerIDs = append(containerIDs, containerID)
+	}
+	const primed = "sandbox-stub-primed"
+	stub.start(t, primed, 8080, stub.addresses[3])
+	require.True(t, stub.proxy.primeContainerPort(primed, 8080, time.Second))
+	containerIDs = append(append(containerIDs, primed), answering...)
+
+	ids := func(containers []container) []string {
+		containerIDs := []string{}
+		for _, c := range containers {
+			containerIDs = append(containerIDs, c.id)
+		}
+		return containerIDs
+	}
+
+	// The pass dials for discoveryProbeWindow and waits for the checks it
+	// started, and no longer.
+	started := time.Now()
+	ready := stub.proxy.readyContainers(containerIDs)
+	require.Less(t, time.Since(started), discoveryProbeWindow+2*containerAvailableTimeout)
+	require.ElementsMatch(t, append([]string{primed}, answering...), ids(ready), "the containers the proxy knew to answer")
+	require.EqualValues(t, discoveryProbes, firstDials.Load())
+	require.Zero(t, restDials.Load())
+	require.Len(t, stub.proxy.discoverReady, 1, "the pass left containers undialled and asked for no other")
+
+	// The next pass dials the ones the last did not get to. A request is
+	// waiting, for which a pass dials again what did not answer before, but
+	// not ahead of what it has yet to dial.
+	stub.proxy.buffer.PushWithOverwrite(&connection{}, false)
+	ready = stub.proxy.readyContainers(containerIDs)
+	require.ElementsMatch(t, append([]string{primed}, answering...), ids(ready))
+	require.EqualValues(t, discoveryProbes, firstDials.Load(), "dialled again ahead of containers not dialled yet")
+	require.EqualValues(t, discoveryProbes, restDials.Load())
+}
+
+func TestAPassChecksFirstTheContainersItKnowsLeastAbout(t *testing.T) {
+	pb := &PodProxyBuffer{}
+	addressMaps := map[string]map[int32]string{}
+	containerIDs := []string{"dialled-first", "never-dialled", "dialled-last", "half-dialled", "without-addresses"}
+	for _, containerID := range containerIDs {
+		addressMaps[containerID] = map[int32]string{8080: "10.0.0.1:8080"}
+	}
+	addressMaps["half-dialled"][9090] = "10.0.0.1:9090"
+	addressMaps["without-addresses"] = map[int32]string{}
+
+	// Whether a container answered makes no difference to its turn.
+	dial := func(containerID string, answers bool) {
+		pb.readiness.check(readinessTarget{containerID, 8080, "10.0.0.1:8080"}, true, func() bool { return answers })
+		time.Sleep(2 * time.Millisecond)
+	}
+	dial("dialled-first", false)
+	dial("half-dialled", true)
+	dial("dialled-last", true)
+
+	order := []string{}
+	for _, n := range pb.discoveryOrder(containerIDs, addressMaps) {
+		order = append(order, containerIDs[n])
+	}
+	// A container with nothing to dial is checked in no time, wherever it is.
+	require.Equal(t, []string{"never-dialled", "half-dialled", "without-addresses", "dialled-first", "dialled-last"}, order)
+}
+
+func TestAContainerAPassDoesNotDialIsOfferedAsTheProxyLastKnewIt(t *testing.T) {
+	pb := &PodProxyBuffer{}
+	addressMap := map[int32]string{
+		8001: "10.0.0.1:8001", // answered when it was last dialled
+		8002: "10.0.0.1:8002", // did not, though requests are still routed to it
+		8003: "10.0.0.1:8003", // never dialled: made routable by priming it
+		8004: "10.0.0.1:8004", // never dialled, and not routed to
+		8005: "10.0.0.2:8005", // never dialled at this address, the old one routed to
+	}
+	routed := map[int32]string{8002: "10.0.0.1:8002", 8003: "10.0.0.1:8003", 8005: "10.0.0.1:8005"}
+	pb.readiness.check(readinessTarget{"container", 8001, addressMap[8001]}, true, func() bool { return true })
+	pb.readiness.check(readinessTarget{"container", 8002, addressMap[8002]}, true, func() bool { return false })
+
+	known, dialled := pb.knownAddressMap("container", addressMap, routed)
+	require.Equal(t, map[int32]string{8001: addressMap[8001], 8003: addressMap[8003]}, known)
+	require.False(t, dialled, "addresses are left to dial")
+
+	delete(addressMap, 8003)
+	delete(addressMap, 8004)
+	delete(addressMap, 8005)
+	known, dialled = pb.knownAddressMap("container", addressMap, routed)
+	require.Equal(t, map[int32]string{8001: addressMap[8001]}, known)
+	require.True(t, dialled, "every address has been dialled")
 }
 
 // Each container of a stub that goes signals discovery, and each signal
