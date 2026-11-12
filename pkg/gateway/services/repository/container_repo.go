@@ -2,6 +2,7 @@ package repository_services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -35,6 +36,10 @@ func (s *ContainerRepositoryService) AuthorizeRequest(ctx context.Context, req i
 	worker, err := auth.WorkerFromContext(ctx)
 	if err != nil {
 		return err
+	}
+	if _, ok := req.(*pb.RenewContainerLeasesRequest); ok {
+		// The repository checks each container's assignment as it renews it.
+		return nil
 	}
 	request, ok := req.(containerRepositoryRequest)
 	if !ok {
@@ -166,6 +171,58 @@ func (s *ContainerRepositoryService) UpdateContainerStatus(ctx context.Context, 
 		return &pb.UpdateContainerStatusResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 	return &pb.UpdateContainerStatusResponse{Ok: true, Status: string(state.Status)}, nil
+}
+
+// maxContainerLeasesPerCall bounds the Redis pipeline one RenewContainerLeases
+// call sends. Workers send fewer containers than this in a call.
+const maxContainerLeasesPerCall = 1000
+
+// RenewContainerLeases is the routine status heartbeat for many of the calling
+// worker's containers. It does for each what GetContainerState followed by
+// UpdateContainerStatus does for one, without a call or a lock per container.
+func (s *ContainerRepositoryService) RenewContainerLeases(ctx context.Context, req *pb.RenewContainerLeasesRequest) (*pb.RenewContainerLeasesResponse, error) {
+	worker, err := auth.WorkerFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(req.Containers) > maxContainerLeasesPerCall {
+		return &pb.RenewContainerLeasesResponse{Ok: false, ErrorMsg: fmt.Sprintf("at most %d containers per call, got %d", maxContainerLeasesPerCall, len(req.Containers))}, nil
+	}
+
+	// A cluster worker serves every workspace. Any other worker renews only
+	// containers of its own workspace, which is never empty.
+	workspaceId := ""
+	if !worker.Trusted {
+		workspaceId = worker.Workspace.ExternalId
+	}
+	renewals := make([]types.ContainerLeaseRenewal, len(req.Containers))
+	for i, container := range req.Containers {
+		renewals[i] = types.ContainerLeaseRenewal{ContainerId: container.GetContainerId(), RuntimeStarted: container.GetRuntimeStarted()}
+	}
+
+	response := &pb.RenewContainerLeasesResponse{Ok: true, Leases: make([]*pb.ContainerLease, len(renewals))}
+	for i, lease := range s.containerRepo.RenewContainerLeases(ctx, worker.ID, workspaceId, renewals) {
+		err := lease.Err
+		var notFound *types.ErrContainerStateNotFound
+		if errors.As(err, &notFound) && !worker.Trusted {
+			// Only a cluster worker is told that a container's state is
+			// gone, as with GetContainerState.
+			err = &types.ErrContainerNotAssigned{}
+		}
+		if err != nil {
+			response.Leases[i] = &pb.ContainerLease{ContainerId: lease.ContainerId, ErrorMsg: err.Error()}
+			continue
+		}
+		response.Leases[i] = &pb.ContainerLease{
+			ContainerId:  lease.ContainerId,
+			Ok:           true,
+			Status:       string(lease.Status),
+			Started:      lease.Started,
+			Evicting:     lease.Evicting,
+			DrainSeconds: lease.DrainSeconds,
+		}
+	}
+	return response, nil
 }
 
 func (s *ContainerRepositoryService) SetContainerExitCode(ctx context.Context, req *pb.SetContainerExitCodeRequest) (*pb.SetContainerExitCodeResponse, error) {

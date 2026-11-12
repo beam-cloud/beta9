@@ -26,11 +26,31 @@ func (s *Worker) borrowedContainers() (ids []string, onlyBorrowed bool) {
 	return
 }
 
+// mayReclaimBorrowed reports whether reclaimBorrowedCapacity could do anything
+// for some set of containers. It is false for a worker that is not draining,
+// holds no pool headroom and either never spins down or has just been sent a
+// request, which is every pass of the request loop on a busy worker. Finding
+// the borrowed containers parses the stub config of every container the worker
+// holds, so the loop asks this first: on a worker holding thousands, that
+// search for each request received is the rate it can take requests at.
+func (s *Worker) mayReclaimBorrowed(lastContainerRequest, now time.Time) bool {
+	if s.reclaiming.Load() {
+		return false
+	}
+	if s.draining || s.poolHeadroom.Load() {
+		return true
+	}
+	return !s.persistent && now.Sub(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS
+}
+
 // reclaimBorrowedCapacity evicts borrowed containers when the worker is
 // draining, when it holds its pool's minimum free capacity, or when borrowed
 // work alone has kept it up past the idle spindown timeout (it starts draining
 // first).
 func (s *Worker) reclaimBorrowedCapacity(lastContainerRequest, now time.Time) {
+	if !s.mayReclaimBorrowed(lastContainerRequest, now) {
+		return
+	}
 	ids, onlyBorrowed := s.borrowedContainers()
 	if len(ids) == 0 || s.reclaiming.Load() {
 		return

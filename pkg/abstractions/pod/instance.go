@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"math/rand"
+	"sync"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -26,10 +27,41 @@ type podInstance struct {
 	buffer                    *PodProxyBuffer
 	durableDiskPlacementRepos abstractions.DurableDiskPlacementRepos
 	readyChecks               singleflight.Group
+	statusChecks              containerStatusChecks
+	lockDeletes               keepWarmLockDeletes
 }
 
+const (
+	// containerStatusCheckWindow is how long the containers that had an
+	// event are collected before their statuses are read together.
+	containerStatusCheckWindow = 50 * time.Millisecond
+
+	// containerStatusesPerRead bounds one read of those statuses.
+	containerStatusesPerRead = 1000
+)
+
+// containerStatusChecks is the set of containers whose status is about to be
+// read because their state changed.
+type containerStatusChecks struct {
+	mu      sync.Mutex
+	pending map[string]struct{}
+	running bool
+}
+
+// ConsumeContainerEvent hears of every write to the state of one of the
+// stub's containers, and takes a container that is stopping out of the
+// proxy's rotation. A container the proxy routes to is checked at once. The
+// others only have to be kept from being discovered while they stop, and
+// they are checked together a moment later: every sandbox being created or
+// renewing its lease writes its state several times, and reading the state
+// back once for each write, one round trip at a time, was most of what the
+// gateway asked of Redis while a burst was being placed.
 func (i *podInstance) ConsumeContainerEvent(event types.ContainerEvent) {
 	i.AutoscaledInstance.ConsumeContainerEvent(event)
+	// The container's state was deleted or expired, so its lock has no use.
+	if event.Change < 0 {
+		i.deleteKeepWarmLock(event.ContainerId)
+	}
 	if i.buffer == nil || i.ContainerRepo == nil || event.ContainerId == "" {
 		return
 	}
@@ -38,13 +70,106 @@ func (i *podInstance) ConsumeContainerEvent(event types.ContainerEvent) {
 		return
 	}
 
-	state, err := i.ContainerRepo.GetContainerState(event.ContainerId)
+	if i.buffer.routesTo(event.ContainerId) || i.Ctx == nil {
+		i.retireContainerIfStopping(event.ContainerId)
+		return
+	}
+	i.checkContainerStatusSoon(event.ContainerId)
+}
+
+func (i *podInstance) retireContainerIfStopping(containerId string) {
+	state, err := i.ContainerRepo.GetContainerState(containerId)
 	if err != nil {
 		i.buffer.signalDiscovery()
 		return
 	}
 	if state.Status == types.ContainerStatusStopping {
-		i.buffer.retireAvailableContainer(event.ContainerId)
+		i.buffer.retireAvailableContainer(containerId)
+	}
+}
+
+func (i *podInstance) checkContainerStatusSoon(containerId string) {
+	checks := &i.statusChecks
+	checks.mu.Lock()
+	if checks.pending == nil {
+		checks.pending = make(map[string]struct{})
+	}
+	checks.pending[containerId] = struct{}{}
+	start := !checks.running
+	checks.running = true
+	checks.mu.Unlock()
+
+	if start {
+		go i.checkContainerStatuses()
+	}
+}
+
+// checkContainerStatuses reads the statuses of the containers that had an
+// event, a window at a time, until a window passes with none.
+func (i *podInstance) checkContainerStatuses() {
+	checks := &i.statusChecks
+	for {
+		select {
+		case <-i.Ctx.Done():
+			checks.mu.Lock()
+			checks.pending = nil
+			checks.running = false
+			checks.mu.Unlock()
+			return
+		case <-time.After(containerStatusCheckWindow):
+		}
+
+		checks.mu.Lock()
+		if len(checks.pending) == 0 {
+			checks.running = false
+			checks.mu.Unlock()
+			return
+		}
+		containerIds := make([]string, 0, len(checks.pending))
+		for containerId := range checks.pending {
+			containerIds = append(containerIds, containerId)
+		}
+		checks.pending = make(map[string]struct{})
+		checks.mu.Unlock()
+
+		for len(containerIds) > 0 {
+			read := containerIds[:min(len(containerIds), containerStatusesPerRead)]
+			containerIds = containerIds[len(read):]
+			i.retireStoppingContainers(read)
+		}
+	}
+}
+
+// retireStoppingContainers is retireContainerIfStopping for many containers
+// in one round trip.
+func (i *podInstance) retireStoppingContainers(containerIds []string) {
+	reader, ok := i.ContainerRepo.(interface {
+		GetContainerStatuses(containerIds []string) (map[string]types.ContainerStatus, error)
+	})
+	if !ok {
+		for _, containerId := range containerIds {
+			i.retireContainerIfStopping(containerId)
+		}
+		return
+	}
+
+	statuses, err := reader.GetContainerStatuses(containerIds)
+	if err != nil {
+		i.buffer.signalDiscovery()
+		return
+	}
+	gone := false
+	for _, containerId := range containerIds {
+		status, found := statuses[containerId]
+		switch {
+		case !found:
+			gone = true
+		case status == types.ContainerStatusStopping:
+			i.buffer.retireAvailableContainer(containerId)
+		}
+	}
+	if gone {
+		i.buffer.signalDiscovery()
 	}
 }
 
@@ -289,21 +414,54 @@ func (i *podInstance) retireContainerForStop(containerId string) bool {
 	return true
 }
 
+// stoppableNow lists the containers stopContainers would choose from, for a
+// scaling event to learn that there are none before it takes the instance
+// lock. A sandbox stub is asked every tick to stop its sandboxes, and until
+// one outlives its keep-warm time there is nothing to stop.
+func (i *podInstance) stoppableNow() ([]string, error) {
+	if i.StubConfig.IsPersistentVM() {
+		return nil, fmt.Errorf("persistent VM runtimes must be stopped by the VM service")
+	}
+	stoppable, read, err := i.readStoppableContainers()
+	if err == nil && !read {
+		err = fmt.Errorf("unable to read the keep warm locks or connections of stub %s", i.Stub.ExternalId)
+	}
+	return stoppable, err
+}
+
 func (i *podInstance) stoppableContainers() ([]string, error) {
-	containers, err := i.ContainerRepo.GetActiveContainersByStubId(i.Stub.ExternalId)
-	if err != nil {
-		return nil, err
+	stoppable, _, err := i.readStoppableContainers()
+	return stoppable, err
+}
+
+// readStoppableContainers also reports whether it read all it chooses by. A
+// keep-warm lock or a connection count that cannot be read stops nothing,
+// which is not the same as finding nothing to stop.
+func (i *podInstance) readStoppableContainers() ([]string, bool, error) {
+	// The scaling event that asks for this has just read the stub's
+	// containers, and that read serves here too.
+	containers, failedContainers, justRead := i.ContainersJustRead()
+	if !justRead {
+		var err error
+		containers, err = i.ContainerRepo.GetActiveContainersByStubId(i.Stub.ExternalId)
+		if err != nil {
+			return nil, false, err
+		}
 	}
 	stopAll := !i.IsActive
 	if !stopAll && i.FailedContainerThreshold > 0 {
-		failedContainers, err := i.ContainerRepo.GetFailedContainersByStubId(i.Stub.ExternalId)
-		if err != nil {
-			return nil, err
+		if !justRead {
+			var err error
+			failedContainers, err = i.ContainerRepo.GetFailedContainersByStubId(i.Stub.ExternalId)
+			if err != nil {
+				return nil, false, err
+			}
 		}
 		stopAll = len(failedContainers) >= i.FailedContainerThreshold
 	}
 
 	keys := make([]string, 0, len(containers))
+	candidates := make([]string, 0, len(containers))
 	for _, container := range containers {
 		if container.Status == types.ContainerStatusStopping {
 			continue
@@ -318,17 +476,6 @@ func (i *podInstance) stoppableContainers() ([]string, error) {
 			continue
 		}
 
-		// Skip containers with keep warm locks
-		keepWarm, err := i.ContainerRepo.PodKeepWarmLockExists(context.TODO(), i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)
-		if err != nil {
-			log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting keep warm lock for container")
-			continue
-		}
-
-		if keepWarm {
-			continue
-		}
-
 		if i.buffer != nil && i.buffer.pendingKeepWarmLockExists(container.ContainerId) {
 			continue
 		}
@@ -337,19 +484,42 @@ func (i *podInstance) stoppableContainers() ([]string, error) {
 			continue
 		}
 
-		connectionsVal, err := sharedPodContainerConnections(context.TODO(), i.Rdb, i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)
-		if err != nil {
-			log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting connections for container")
-			continue
-		}
-		if connectionsVal > 0 {
-			continue
-		}
-
-		keys = append(keys, container.ContainerId)
+		candidates = append(candidates, container.ContainerId)
+	}
+	if len(candidates) == 0 {
+		return keys, true, nil
 	}
 
-	return keys, nil
+	// The autoscaler asks this every second for a stub it wants smaller, which
+	// a sandbox stub always is, so the locks and the connection counts of all
+	// its containers are read together instead of one container at a time.
+	// A read that fails stops nothing, as it did for the one container.
+	keepWarm, err := i.ContainerRepo.PodKeepWarmLocksExist(context.TODO(), i.Workspace.Name, i.Stub.ExternalId, candidates)
+	if err != nil {
+		log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting keep warm locks for containers")
+		return keys, false, nil
+	}
+	unlocked := candidates[:0]
+	for _, containerId := range candidates {
+		// Skip containers with keep warm locks
+		if !keepWarm[containerId] {
+			unlocked = append(unlocked, containerId)
+		}
+	}
+
+	connections, err := sharedPodContainersConnections(context.TODO(), i.Rdb, i.Workspace.Name, i.Stub.ExternalId, unlocked)
+	if err != nil {
+		log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting connections for containers")
+		return keys, false, nil
+	}
+	for _, containerId := range unlocked {
+		if connections[containerId] > 0 {
+			continue
+		}
+		keys = append(keys, containerId)
+	}
+
+	return keys, true, nil
 }
 
 func (i *podInstance) genContainerId() string {

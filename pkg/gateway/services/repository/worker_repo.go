@@ -433,6 +433,7 @@ func (s *WorkerRepositoryService) SetWorkerKeepAlive(ctx context.Context, req *p
 		MachineId:                  req.MachineId,
 		CheckpointCompatibilityKey: req.CheckpointCompatibilityKey,
 		CPUTierProtocol:            req.CpuTierProtocol,
+		RequestStreamOpen:          s.workerEvents != nil && s.workerEvents.hasRequestStream(req.WorkerId),
 	})
 	if err != nil {
 		return &pb.SetWorkerKeepAliveResponse{Ok: false, ErrorMsg: err.Error()}, nil

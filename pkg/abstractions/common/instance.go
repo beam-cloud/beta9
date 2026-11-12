@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math/rand"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -52,6 +55,9 @@ type AutoscaledInstanceConfig struct {
 	UsageMetricsRepo    repository.UsageMetricsRepository
 	StartContainersFunc func(containersToRun int) error
 	StopContainersFunc  func(containersToStop int) error
+
+	// Optional: see AutoscaledInstance.StoppableContainersFunc.
+	StoppableContainersFunc func() ([]string, error)
 }
 
 type AutoscaledInstance struct {
@@ -92,7 +98,65 @@ type AutoscaledInstance struct {
 	// Callbacks
 	StartContainersFunc func(containersToRun int) error
 	StopContainersFunc  func(containersToStop int) error
+
+	// StoppableContainersFunc lists the containers StopContainersFunc would
+	// choose from right now. It is optional. With it, a scaling event that
+	// asks for fewer containers while none may be stopped ends without the
+	// instance lock; without it, such an event takes the lock to find out.
+	StoppableContainersFunc func() ([]string, error)
+
+	// Only Monitor reads and writes this.
+	scaleStateLoggedAt time.Time
+
+	// What State last read, and when the autoscaler last sampled.
+	containersMu       sync.Mutex
+	containers         stubContainers
+	autoscalerTickedAt time.Time
+
+	// How many of gatewayContainers are this instance's, and whether it has
+	// arranged to take them back when it is cancelled.
+	containersCounted     int
+	uncountsWhenCancelled bool
+
+	// settled is set by the scaling event of a sampled tick that changed
+	// nothing, and cleared by the next sampled tick, by a scaling event that
+	// may act, and by a container that comes or goes.
+	settled bool
+
+	// The part of the gateway's interval, from 0 to 1, by which this
+	// instance takes its next sample early. Drawn at each sampled tick.
+	autoscalerEarly float64
 }
+
+// stubContainers is one read of a stub's containers.
+type stubContainers struct {
+	active []types.ContainerState
+	failed []string
+	state  AutoscaledInstanceState
+	readAt time.Time
+}
+
+// gatewayContainers is how many containers the instances of this process
+// hold between them: for each one that has not been cancelled, the number
+// its last read found. It paces the autoscalers of stubs that are holding
+// still; see AutoscalerTickDue.
+var gatewayContainers atomic.Int64
+
+const (
+	// containersJustReadFor is how long a read of the stub's containers
+	// serves the step that follows it.
+	containersJustReadFor = 250 * time.Millisecond
+
+	// autoscalerContainersPerSecond is how many containers of one stub an
+	// autoscaler samples a second before it samples less often, and how
+	// many the autoscalers of the gateway's sandbox stubs that are holding
+	// still sample a second between them.
+	autoscalerContainersPerSecond = 2000
+
+	// maxAutoscalerInterval bounds how seldom a stub is sampled, however
+	// large it is and however much the gateway holds.
+	maxAutoscalerInterval = 30 * time.Second
+)
 
 func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (*AutoscaledInstance, error) {
 	ctx, cancelFunc := context.WithCancel(ctx)
@@ -131,6 +195,7 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 		ScaleEventChan:           make(chan int, scaleEventChannelBufferSize),
 		StartContainersFunc:      cfg.StartContainersFunc,
 		StopContainersFunc:       cfg.StopContainersFunc,
+		StoppableContainersFunc:  cfg.StoppableContainersFunc,
 		FailedContainerThreshold: failedContainerThreshold,
 	}
 
@@ -249,6 +314,9 @@ func (i *AutoscaledInstance) Monitor() error {
 			}
 
 			if initialContainerCount != len(i.Containers) {
+				// A container came or went, so the stub is sampled at its
+				// own rate again until a tick finds nothing to do.
+				i.markSettled(false)
 				i.logScaleEvent(initialContainerCount, len(i.Containers))
 			}
 
@@ -283,6 +351,18 @@ func (i *AutoscaledInstance) logScaleEvent(initialTrackedCount, currentTrackedCo
 		Int("initial_tracked_count", initialTrackedCount).
 		Int("current_tracked_count", currentTrackedCount)
 
+	// The state is every container of the stub, read again. A stub that
+	// gains or loses N containers together gets N of these lines, so reading
+	// it for each one costs N²/2 container reads and holds up the events
+	// behind it. The lines in between carry the tracked counts only, and
+	// the read is as seldom as the autoscaler's sample.
+	now := time.Now()
+	if now.Sub(i.scaleStateLoggedAt) < autoscalerInterval(currentTrackedCount) {
+		event.Msg("scaled")
+		return
+	}
+	i.scaleStateLoggedAt = now
+
 	state, err := i.State()
 	if err != nil {
 		event.Err(err).Msg("scaled")
@@ -299,6 +379,18 @@ func (i *AutoscaledInstance) logScaleEvent(initialTrackedCount, currentTrackedCo
 }
 
 func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
+	// An event that starts nothing, stops nothing and keeps the instance
+	// needs neither the lock nor a second read of the stub. One that may
+	// act takes the lock and decides from the read it takes under it.
+	failedContainers, unchanged := i.nothingToScale(desiredContainers)
+	i.markSettled(unchanged)
+	if unchanged {
+		if len(failedContainers) > 0 {
+			go i.handleStubEvents(failedContainers)
+		}
+		return nil
+	}
+
 	err := i.Lock.Acquire(context.Background(), i.InstanceLockKey, common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
 		return err
@@ -352,6 +444,64 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 	}
 
 	return err
+}
+
+// nothingToScale reports whether a scaling event for desiredContainers would
+// start no container, stop none and keep the instance, going by the read of
+// the stub's containers taken a moment ago: the autoscaler's sample, when
+// the event comes from its tick. It also returns the failed containers of
+// that read, which such an event still reports.
+//
+// Nearly every tick of a stub that is holding still leads to such an event.
+// A sandbox stub is always asked for fewer containers than it has, and all
+// the event finds is that each sandbox is still within its keep-warm time.
+// Taking the instance lock and reading every container a second time to
+// find that cost more Redis commands than the sample did.
+//
+// The answer is no whenever the event may act or this cannot tell: without
+// a read from a moment ago, when the instance is inactive, when it has no
+// containers left, when it is asked for more than it has, and when it is
+// asked for fewer and one may be stopped. It is also no when a container
+// has failed and failures count towards stopping the stub. They do not for
+// sandboxes, whose threshold is zero: there a failed container is only
+// reported, and it stays among the stub's failed containers for an hour.
+func (i *AutoscaledInstance) nothingToScale(desiredContainers int) ([]string, bool) {
+	i.containersMu.Lock()
+	read := i.containers
+	i.containersMu.Unlock()
+	if read.readAt.IsZero() || time.Since(read.readAt) > containersJustReadFor {
+		return nil, false
+	}
+
+	state := read.state
+	if !i.IsActive || (i.FailedContainerThreshold > 0 && len(state.FailedContainers) > 0) {
+		return nil, false
+	}
+	if state.RunningContainers+state.PendingContainers+state.StoppingContainers == 0 {
+		return nil, false
+	}
+
+	containerDelta := desiredContainers - (state.RunningContainers + state.PendingContainers)
+	if containerDelta > 0 {
+		return nil, false
+	}
+	if containerDelta < 0 {
+		if i.StoppableContainersFunc == nil {
+			return nil, false
+		}
+		stoppable, err := i.StoppableContainersFunc()
+		if err != nil || len(stoppable) > 0 {
+			return nil, false
+		}
+	}
+	return state.FailedContainers, true
+}
+
+// markSettled records whether the stub is holding still: see settled.
+func (i *AutoscaledInstance) markSettled(settled bool) {
+	i.containersMu.Lock()
+	i.settled = settled
+	i.containersMu.Unlock()
 }
 
 func (i *AutoscaledInstance) CheckConcurrencyLimit() error {
@@ -417,12 +567,7 @@ func (i *AutoscaledInstance) Sync() error {
 }
 
 func (i *AutoscaledInstance) State() (*AutoscaledInstanceState, error) {
-	containers, err := i.ContainerRepo.GetActiveContainersByStubId(i.Stub.ExternalId)
-	if err != nil {
-		return nil, err
-	}
-
-	failedContainers, err := i.ContainerRepo.GetFailedContainersByStubId(i.Stub.ExternalId)
+	containers, failedContainers, err := i.ContainerRepo.GetContainersByStubId(i.Stub.ExternalId)
 	if err != nil {
 		return nil, err
 	}
@@ -440,7 +585,130 @@ func (i *AutoscaledInstance) State() (*AutoscaledInstanceState, error) {
 	}
 
 	state.FailedContainers = failedContainers
+
+	i.containersMu.Lock()
+	i.containers = stubContainers{active: containers, failed: failedContainers, state: state, readAt: time.Now()}
+	i.countContainers(len(containers))
+	i.containersMu.Unlock()
+
 	return &state, nil
+}
+
+// countContainers keeps gatewayContainers in step with what this instance
+// last read. An instance that is cancelled holds no containers, and the
+// first count arranges for it to give them back when that happens. The
+// caller holds containersMu.
+func (i *AutoscaledInstance) countContainers(containers int) {
+	if i.Ctx == nil || i.Ctx.Err() != nil {
+		containers = 0
+	}
+	gatewayContainers.Add(int64(containers - i.containersCounted))
+	i.containersCounted = containers
+
+	if containers > 0 && !i.uncountsWhenCancelled {
+		i.uncountsWhenCancelled = true
+		context.AfterFunc(i.Ctx, func() {
+			i.containersMu.Lock()
+			defer i.containersMu.Unlock()
+			i.countContainers(0)
+		})
+	}
+}
+
+// ContainersJustRead returns the stub's containers and its failed ones as
+// State read them a moment ago, if it did. A scaling event reads the state
+// and then picks the containers to stop from the same list, and reading it
+// a second time costs a command for every container of the stub. The caller
+// must not change what it is given.
+func (i *AutoscaledInstance) ContainersJustRead() ([]types.ContainerState, []string, bool) {
+	i.containersMu.Lock()
+	defer i.containersMu.Unlock()
+
+	if i.containers.readAt.IsZero() || time.Since(i.containers.readAt) > containersJustReadFor {
+		return nil, nil, false
+	}
+	return i.containers.active, i.containers.failed, true
+}
+
+// AutoscalerTickDue reports whether the autoscaler should sample on this
+// tick. A sample, and the scaling event it leads to, read every container of
+// the stub, so sampling a large stub on every tick costs Redis several
+// commands for each of its containers every second. A stub of up to
+// autoscalerContainersPerSecond containers is sampled on every tick, as
+// before; a larger one in proportion less often. A trigger is never held
+// back, so a request still scales its stub at once.
+//
+// Many small stubs cost the same as one large one. So a sandbox stub that
+// is holding still is sampled at the rate of a stub as large as everything
+// this gateway holds: the same interval, with the same bound, from the
+// containers of all its instances together. See holdingStill.
+func (i *AutoscaledInstance) AutoscalerTickDue() bool {
+	return i.autoscalerTickDue(time.Now())
+}
+
+func (i *AutoscaledInstance) autoscalerTickDue(now time.Time) bool {
+	i.containersMu.Lock()
+	defer i.containersMu.Unlock()
+
+	interval := autoscalerInterval(len(i.containers.active))
+	holdingStill := i.holdingStill()
+	if holdingStill {
+		shared := autoscalerInterval(int(gatewayContainers.Load()))
+		shared -= time.Duration(i.autoscalerEarly * float64(shared))
+		interval = max(interval, shared)
+	}
+	// Half a tick of slack, so the sample lands on the tick nearest the interval.
+	if interval > sampleRate && now.Sub(i.autoscalerTickedAt) < interval-sampleRate/2 {
+		return false
+	}
+	i.autoscalerTickedAt = now
+	// The scaling event this sample leads to says whether the stub still
+	// holds still. A sample that fails is tried again on the next tick.
+	i.settled = false
+	// Stubs that came due together would sample together from then on, and
+	// they do come due together: all of them when the gateway starts, and
+	// all those waiting when half its sandboxes are deleted. So a stub
+	// that starts to hold still takes its first turn anywhere in the
+	// gateway's interval, and one that already does takes each turn up to
+	// a fifth early. Never late: the interval stays the longest wait.
+	i.autoscalerEarly = rand.Float64()
+	if holdingStill {
+		i.autoscalerEarly /= 5
+	}
+	return true
+}
+
+// holdingStill reports whether nothing waits on this instance's next sample
+// but a sandbox that outlives its keep-warm time, so that the sample can
+// wait for its turn among all the stubs of the gateway. The caller holds
+// containersMu.
+//
+// That is so for a stub of sandboxes or pod runs, whose containers their
+// users start and the autoscaler only ever stops (desiredPodContainers
+// never asks for more than there are), once a sampled tick has found
+// nothing to do and while no container of it is starting or stopping. An
+// endpoint, a task queue and a pod deployment start containers when a
+// sample finds requests waiting, so they are sampled as before. So is a
+// stub with failed containers that count towards stopping it: each of its
+// scaling events goes to the lock, and none finds nothing to do.
+func (i *AutoscaledInstance) holdingStill() bool {
+	if !i.settled || i.Stub == nil {
+		return false
+	}
+	if !i.Stub.Type.IsSandbox() && i.Stub.Type != types.StubType(types.StubTypePodRun) {
+		return false
+	}
+	return i.containers.state.PendingContainers == 0 && i.containers.state.StoppingContainers == 0
+}
+
+// autoscalerInterval is the time between two samples of a stub with this
+// many containers.
+func autoscalerInterval(containers int) time.Duration {
+	if containers <= autoscalerContainersPerSecond {
+		return sampleRate
+	}
+	interval := time.Duration(float64(sampleRate) * float64(containers) / autoscalerContainersPerSecond)
+	return min(interval, maxAutoscalerInterval)
 }
 
 func (i *AutoscaledInstance) handleStubEvents(failedContainers []string) {

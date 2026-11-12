@@ -348,6 +348,10 @@ func (completionContainerRepository) GetFailedContainersByStubId(string) ([]stri
 	return nil, nil
 }
 
+func (completionContainerRepository) GetContainersByStubId(string) ([]types.ContainerState, []string, error) {
+	return []types.ContainerState{{ContainerId: "container", Status: types.ContainerStatusRunning}}, nil, nil
+}
+
 func (completionContainerRepository) GetActiveContainersByStubId(string) ([]types.ContainerState, error) {
 	return []types.ContainerState{{ContainerId: "container", Status: types.ContainerStatusRunning}}, nil
 }

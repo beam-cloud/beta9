@@ -177,6 +177,8 @@ type Worker struct {
 	ctx              context.Context
 	cancel           func()
 	config           types.AppConfig
+	// statusHeartbeats are the containers whose status this worker reports.
+	statusHeartbeats containerStatusHeartbeats
 }
 
 func (w *Worker) gpuVirtualizedForRequest(request *types.ContainerRequest) bool {
@@ -1089,18 +1091,11 @@ func (s *Worker) runContainerRequestWithRunner(
 		return
 	}
 
-	heartbeatCtx, cancelHeartbeat := context.WithCancel(s.ctx)
-	heartbeatDone := make(chan struct{})
-	go func() {
-		defer close(heartbeatDone)
-		defer cancelHeartbeat()
-		s.updateContainerStatusLoop(heartbeatCtx, request)
-	}()
+	s.startContainerStatusHeartbeat(request)
 	heartbeatHandedOff := false
 	defer func() {
 		if !heartbeatHandedOff {
-			cancelHeartbeat()
-			<-heartbeatDone
+			s.stopContainerStatusHeartbeat(request)
 		}
 	}()
 
@@ -1406,31 +1401,9 @@ func jitteredWorkerAge(base time.Duration, workerId string) time.Duration {
 	return base + jitter
 }
 
-// updateContainerStatusLoop is the container's lifetime status heartbeat. It
-// renews the persisted lease, reconciles pending->running from the runtime
-// start signal, and stops containers whose state disappeared or turned
-// STOPPING. The claim already refreshed the lease, so the first update runs a
-// full interval later. It returns when the instance exits or ctx ends.
-func (s *Worker) updateContainerStatusLoop(ctx context.Context, request *types.ContainerRequest) {
-	ticker := time.NewTicker(containerStatusUpdateInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-		done, err := s.updateContainerStatusOnce(ctx, request)
-		if err != nil {
-			log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to update container state")
-		}
-		if done {
-			return
-		}
-	}
-}
-
+// updateContainerStatusOnce is the status heartbeat of one container, for a
+// container updateContainerStatuses does not renew together with the others.
+// It reports whether the container's heartbeat is over.
 func (s *Worker) updateContainerStatusOnce(ctx context.Context, request *types.ContainerRequest) (bool, error) {
 	instance, exists := s.containerInstances.Get(request.ContainerId)
 	if !exists {

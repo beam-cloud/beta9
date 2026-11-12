@@ -56,6 +56,9 @@ func (as *Autoscaler[I, S]) Start(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if paced, ok := any(as.instance).(interface{ AutoscalerTickDue() bool }); ok && !paced.AutoscalerTickDue() {
+				continue
+			}
 		case <-as.trigger:
 		}
 

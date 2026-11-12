@@ -113,9 +113,9 @@ end
 redis.call("HINCRBY", KEYS[1], "gpu_count", request_gpu)
 redis.call("HINCRBY", KEYS[1], "cpu", request_cpu)
 redis.call("HSET", KEYS[1], "initialized", "1", "updated_at", ARGV[7])
+-- The key already names the workspace and the container, so they are not
+-- stored again.
 redis.call("HSET", KEYS[2],
-	"workspace_id", ARGV[5],
-	"container_id", ARGV[6],
 	"gpu_count", request_gpu,
 	"cpu", request_cpu,
 	"created_at", ARGV[7])
@@ -162,9 +162,13 @@ return 1
 type ContainerRedisRepository struct {
 	rdb  *common.RedisClient
 	lock *common.RedisLock
+
+	workerAddresses workerAddressWaits
 }
 
 type concurrencyReservation struct {
+	// Only reservations written by older gateways have these two. Without
+	// them the container is the reservation's id in the reservation index.
 	WorkspaceId string `redis:"workspace_id"`
 	ContainerId string `redis:"container_id"`
 	GpuCount    int64  `redis:"gpu_count"`
@@ -994,6 +998,51 @@ func (cr *ContainerRedisRepository) GetContainerAddressMap(containerId string) (
 	return addressMap, nil
 }
 
+// GetContainerAddressMaps is GetContainerAddressMap for many containers in
+// one round trip. A container without an address map is absent from the
+// result. When some cannot be read, the others are returned with the error
+// of one of them, so that one bad address map does not hide the rest.
+func (cr *ContainerRedisRepository) GetContainerAddressMaps(containerIds []string) (map[string]map[int32]string, error) {
+	addressMaps := make(map[string]map[int32]string, len(containerIds))
+	if len(containerIds) == 0 {
+		return addressMaps, nil
+	}
+
+	ctx := context.TODO()
+	pipe := cr.rdb.Pipeline()
+	reads := make(map[string]*redis.StringCmd, len(containerIds))
+	for _, containerId := range containerIds {
+		if _, queued := reads[containerId]; containerId == "" || queued {
+			continue
+		}
+		reads[containerId] = pipe.Get(ctx, common.RedisKeys.SchedulerContainerAddressMap(containerId))
+	}
+	// Exec reports the first command that failed, and a container without an
+	// address map is one of those, so each result is checked on its own.
+	_, _ = pipe.Exec(ctx)
+
+	var firstErr error
+	for containerId, read := range reads {
+		data, err := read.Bytes()
+		if err == redis.Nil {
+			continue
+		}
+
+		addressMap := make(map[int32]string)
+		if err == nil {
+			err = json.Unmarshal(data, &addressMap)
+		}
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("failed to read addressMap for container %s: %w", containerId, err)
+			}
+			continue
+		}
+		addressMaps[containerId] = addressMap
+	}
+	return addressMaps, firstErr
+}
+
 func (cr *ContainerRedisRepository) SetWorkerAddress(containerId string, addr string) error {
 	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerWorkerAddress(containerId), addr, 0).Err()
 }
@@ -1029,24 +1078,19 @@ func (cr *ContainerRedisRepository) GetWorkerAddress(ctx context.Context, contai
 		return hostname, err
 	}
 
-	ticker := time.NewTicker(workerAddressPollInterval)
-	defer ticker.Stop()
+	// The container has no worker yet. Everyone in that position is waited
+	// for together, in one read per interval, instead of polling here.
+	placed, stopWaiting := cr.workerAddresses.wait(cr.rdb, containerId)
+	defer stopWaiting()
 
-	for {
-		select {
-		case <-ctx.Done():
-			if time.Now().Before(internalDeadline) {
-				return "", fmt.Errorf("context cancelled while trying to get worker addr, container id: %s", containerId)
-			}
-			if schedulingFailed() {
-				return "", fmt.Errorf("failed to schedule container, container id: %s", containerId)
-			}
-			return "", fmt.Errorf("failed to schedule container, container id: %s", containerId)
-		case <-ticker.C:
-			if hostname, found, err := tryGetWorkerAddress(); found || err != nil {
-				return hostname, err
-			}
+	select {
+	case <-ctx.Done():
+		if time.Now().Before(internalDeadline) {
+			return "", fmt.Errorf("context cancelled while trying to get worker addr, container id: %s", containerId)
 		}
+		return "", fmt.Errorf("failed to schedule container, container id: %s", containerId)
+	case result := <-placed:
+		return result.address, result.err
 	}
 }
 
@@ -1244,6 +1288,78 @@ func (cr *ContainerRedisRepository) GetActiveContainersByWorkerId(workerId strin
 	return cr.listContainerStateByIndex(indexKey, keys)
 }
 
+// GetContainersByStubId returns what GetActiveContainersByStubId and
+// GetFailedContainersByStubId return, from one read of the stub's index and
+// one round trip for every state and exit code, where the two together read
+// the index twice and make four round trips. A stub's instance asks for both
+// each time its autoscaler samples it, and for a stub of one sandbox the
+// round trips are what the sample costs Redis.
+func (cr *ContainerRedisRepository) GetContainersByStubId(stubId string) ([]types.ContainerState, []string, error) {
+	ctx := context.TODO()
+	indexKey := common.RedisKeys.SchedulerContainerIndex(stubId)
+	keys, err := cr.rdb.SMembers(ctx, indexKey).Result()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to retrieve container state keys: %v", err)
+	}
+
+	containerStates := make([]types.ContainerState, 0, len(keys))
+	failedContainerIds := make([]string, 0)
+	if len(keys) == 0 {
+		return containerStates, failedContainerIds, nil
+	}
+
+	pipe := cr.rdb.Pipeline()
+	containerIds := make([]string, len(keys))
+	states := make([]*redis.MapStringStringCmd, len(keys))
+	exitCodes := make([]*redis.StringCmd, len(keys))
+	for i, key := range keys {
+		parts := strings.Split(key, ":")
+		containerIds[i] = parts[len(parts)-1]
+		states[i] = pipe.HGetAll(ctx, key)
+		exitCodes[i] = pipe.Get(ctx, common.RedisKeys.SchedulerContainerExitCode(containerIds[i]))
+	}
+	// Exec reports the first command that failed, and a container that is
+	// still running has no exit code, so each result is checked on its own.
+	_, _ = pipe.Exec(ctx)
+
+	stale := make([]interface{}, 0)
+	for i, key := range keys {
+		exitCode, err := exitCodes[i].Int()
+		exited := err == nil
+		if err != nil && err != redis.Nil {
+			return nil, nil, fmt.Errorf("failed to get value for key <%v>: %w", key, err)
+		}
+		if exited && types.ContainerExitCode(exitCode).IsFailed() {
+			failedContainerIds = append(failedContainerIds, containerIds[i])
+		}
+
+		fields, err := states[i].Result()
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to read container states: %v", err)
+		}
+		if len(fields) == 0 {
+			// A state that is gone but whose exit code is still around belongs
+			// to a container that just finished; its index entry is left for
+			// the reaper. Anything else is a dangling member and is pruned.
+			if !exited {
+				stale = append(stale, key)
+			}
+			continue
+		}
+
+		var state types.ContainerState
+		if err := common.ToStruct(fields, &state); err != nil || state.ContainerId == "" {
+			continue
+		}
+		containerStates = append(containerStates, state)
+	}
+	if len(stale) > 0 {
+		cr.rdb.SRem(ctx, indexKey, stale...)
+	}
+
+	return containerStates, failedContainerIds, nil
+}
+
 func (cr *ContainerRedisRepository) GetFailedContainersByStubId(stubId string) ([]string, error) {
 	indexKey := common.RedisKeys.SchedulerContainerIndex(stubId)
 	keys, err := cr.rdb.SMembers(context.TODO(), indexKey).Result()
@@ -1251,22 +1367,39 @@ func (cr *ContainerRedisRepository) GetFailedContainersByStubId(stubId string) (
 		return nil, fmt.Errorf("failed to retrieve container state keys: %v", err)
 	}
 
-	// Retrieve the value (exit code) for each key
 	failedContainerIds := make([]string, 0)
-	for _, key := range keys {
-		containerId := strings.Split(key, ":")[len(strings.Split(key, ":"))-1]
-		exitCodeKey := common.RedisKeys.SchedulerContainerExitCode(containerId)
+	if len(keys) == 0 {
+		return failedContainerIds, nil
+	}
 
-		exitCode, err := cr.rdb.Get(context.Background(), exitCodeKey).Int()
-		if err != nil && err != redis.Nil {
-			return nil, fmt.Errorf("failed to get value for key <%v>: %w", key, err)
-		} else if err == redis.Nil {
+	// Every exit code in one round trip. An instance reads this each time it
+	// reads its state, which its autoscaler does every second, so one read
+	// per container made a stub's cost in round trips grow with its size.
+	ctx := context.Background()
+	pipe := cr.rdb.Pipeline()
+	containerIds := make([]string, len(keys))
+	exitCodes := make([]*redis.StringCmd, len(keys))
+	for i, key := range keys {
+		parts := strings.Split(key, ":")
+		containerIds[i] = parts[len(parts)-1]
+		exitCodes[i] = pipe.Get(ctx, common.RedisKeys.SchedulerContainerExitCode(containerIds[i]))
+	}
+	// Exec reports the first command that failed, and a container that is
+	// still running has no exit code, so each result is checked on its own.
+	_, _ = pipe.Exec(ctx)
+
+	for i, cmd := range exitCodes {
+		exitCode, err := cmd.Int()
+		if err == redis.Nil {
 			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to get value for key <%v>: %w", keys[i], err)
 		}
 
 		// Check if the exit code is non-zero
 		if types.ContainerExitCode(exitCode).IsFailed() {
-			failedContainerIds = append(failedContainerIds, containerId)
+			failedContainerIds = append(failedContainerIds, containerIds[i])
 		}
 	}
 
@@ -1587,8 +1720,6 @@ func (c *ContainerRedisRepository) rebuildWorkspaceConcurrencyCounter(ctx contex
 		totalGpuCount += int64(container.GpuCount)
 		totalCpu += container.Cpu
 		pipe.HSet(ctx, common.RedisKeys.WorkspaceConcurrencyLimitReservation(workspaceId, container.ContainerId),
-			"workspace_id", workspaceId,
-			"container_id", container.ContainerId,
 			"gpu_count", container.GpuCount,
 			"cpu", container.Cpu,
 			"created_at", now,
@@ -1812,6 +1943,41 @@ func (c *ContainerRedisRepository) SetPodKeepWarmLock(ctx context.Context, works
 
 func (c *ContainerRedisRepository) PodKeepWarmLockExists(ctx context.Context, workspaceName, stubId, containerId string) (bool, error) {
 	return c.keepWarmLockExists(ctx, podKeepWarmLockKey(workspaceName, stubId, containerId))
+}
+
+// PodKeepWarmLocksExist is PodKeepWarmLockExists for every container of a stub
+// in one round trip. Containers without a lock are absent from the result.
+func (c *ContainerRedisRepository) PodKeepWarmLocksExist(ctx context.Context, workspaceName, stubId string, containerIds []string) (map[string]bool, error) {
+	locked := make(map[string]bool, len(containerIds))
+	if workspaceName == "" || stubId == "" || len(containerIds) == 0 {
+		return locked, nil
+	}
+
+	pipe := c.rdb.Pipeline()
+	locks := make(map[string]*redis.StringCmd, len(containerIds))
+	for _, containerId := range containerIds {
+		if _, queued := locks[containerId]; containerId == "" || queued {
+			continue
+		}
+		locks[containerId] = pipe.Get(ctx, podKeepWarmLockKey(workspaceName, stubId, containerId))
+	}
+	// Exec reports the first command that failed, and a container without a
+	// lock is one of those, so each result is checked on its own.
+	_, _ = pipe.Exec(ctx)
+
+	for containerId, cmd := range locks {
+		keepWarm, err := cmd.Int()
+		if err == redis.Nil {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if keepWarm > 0 {
+			locked[containerId] = true
+		}
+	}
+	return locked, nil
 }
 
 func (c *ContainerRedisRepository) setKeepWarmLock(ctx context.Context, key string, keepWarmSeconds int) error {

@@ -125,6 +125,44 @@ func (c *readinessCache) probe(target readinessTarget, probe func() bool, entry 
 	return ready
 }
 
+// recall reports what the last probe of a target found and whether it has
+// been probed at all. It starts no probe and waits for none.
+func (c *readinessCache) recall(target readinessTarget) (ready, probed bool) {
+	if target.address == "" {
+		// check answers for an empty address without a probe.
+		return false, true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry := c.entries[target.containerID][target.port]
+	if entry == nil || entry.address != target.address {
+		return false, false
+	}
+	return entry.ready, !entry.refreshAt.IsZero()
+}
+
+// lastProbed is when the probes of a container's addresses last finished:
+// the earliest of those times, and the zero time if one of the addresses has
+// not been probed yet.
+func (c *readinessCache) lastProbed(containerID string, addresses map[int32]string) time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var earliest time.Time
+	for port, address := range addresses {
+		if address == "" {
+			continue
+		}
+		entry := c.entries[containerID][port]
+		if entry == nil || entry.address != address || entry.refreshAt.IsZero() {
+			return time.Time{}
+		}
+		if probed := entry.refreshAt.Add(-containerReadinessRefresh); earliest.IsZero() || probed.Before(earliest) {
+			earliest = probed
+		}
+	}
+	return earliest
+}
+
 func (c *readinessCache) invalidate(containerID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

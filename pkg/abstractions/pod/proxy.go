@@ -1,6 +1,7 @@
 package pod
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,6 +33,28 @@ import (
 const (
 	containerDiscoveryInterval       time.Duration = time.Millisecond * 250
 	queuedContainerDiscoveryInterval time.Duration = time.Millisecond * 50
+	// A stub that has routed no request for this long is discovered this
+	// often. A pass reads every container of the stub and each running one's
+	// addresses and connections, and a stub's sandboxes are reached by
+	// container id, which uses none of it. The next request the stub routes
+	// starts a pass at once and brings the shorter interval back.
+	idleContainerDiscoveryInterval time.Duration = time.Second * 30
+	// How many of a stub's containers the signals for discovery have it
+	// read a second, at most: see discoveryRest.
+	discoveredContainersPerSecond = 2000
+	// How many containers a discovery pass checks for readiness at a time.
+	// A check dials a container the proxy has not seen before, so the first
+	// pass over a large stub dials this many of them at once, where it
+	// dialled all of them.
+	discoveryProbes = 64
+	// How long a discovery pass goes on starting those checks. A container
+	// that does not answer holds its check for containerAvailableTimeout,
+	// and discoveryProbes of them hold every check of the pass. A pass that
+	// waited to dial them all would take that long for each discoveryProbes
+	// of them, and offer nothing it found until the end. Past the window
+	// the pass dials no more: see readyContainers. A pass then takes the
+	// window and one check at most, however many containers do not answer.
+	discoveryProbeWindow = time.Second
 	// Long enough for a dropped SYN (retransmitted at 1s) and relayed dials
 	// queued under concurrency; any slower and the container is gone.
 	containerDialTimeoutDurationS time.Duration = time.Second * 5
@@ -108,6 +132,7 @@ type PodProxyBuffer struct {
 	containerConnections    sync.Map
 	pendingKeepWarmLocks    sync.Map
 	idleSnapshotUntil       atomic.Int64
+	lastRoutedRequest       atomic.Int64
 	proxyIndexRefreshAfter  atomic.Int64
 	buffer                  *abstractions.RingBuffer[*connection]
 	workReady               chan struct{}
@@ -190,6 +215,7 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 		return nil
 	}
 
+	pb.markRoutedRequest()
 	container, ok, hasContainers, hasPort := pb.reserveContainerForPort(int32(port))
 	if ok {
 		conn.claim()
@@ -302,6 +328,7 @@ func (pb *PodProxyBuffer) ForwardTCPRequest(tc *tcpConnection) error {
 		enqueuedAt: time.Now(),
 	}
 
+	pb.markRoutedRequest()
 	pb.enqueueConnection(conn, false)
 	pb.signalDiscovery()
 	pb.signalWork()
@@ -403,6 +430,30 @@ func (pb *PodProxyBuffer) signalDiscovery() {
 	case pb.discoverReady <- struct{}{}:
 	default:
 	}
+}
+
+// markRoutedRequest records a request that is routed to one of the stub's
+// discovered containers. The first one after the stub went idle starts a
+// discovery pass, since the containers it is about to choose from were found
+// up to idleContainerDiscoveryInterval ago.
+func (pb *PodProxyBuffer) markRoutedRequest() {
+	now := time.Now().UnixNano()
+	last := pb.lastRoutedRequest.Swap(now)
+	if time.Duration(now-last) >= idleContainerDiscoveryInterval {
+		pb.signalDiscovery()
+	}
+}
+
+// discoveryInterval is how long discovery waits after a pass, unless it is
+// signalled sooner.
+func (pb *PodProxyBuffer) discoveryInterval() time.Duration {
+	if pb.buffer != nil && pb.buffer.Len() > 0 {
+		return queuedContainerDiscoveryInterval
+	}
+	if time.Duration(time.Now().UnixNano()-pb.lastRoutedRequest.Load()) >= idleContainerDiscoveryInterval {
+		return idleContainerDiscoveryInterval
+	}
+	return containerDiscoveryInterval
 }
 
 func (pb *PodProxyBuffer) enqueueConnection(conn *connection, priority bool) {
@@ -886,6 +937,19 @@ func (pb *PodProxyBuffer) removeAvailableContainer(containerID string) {
 	}
 }
 
+// routesTo reports whether requests can be sent to the container now.
+func (pb *PodProxyBuffer) routesTo(containerID string) bool {
+	pb.availableContainersLock.RLock()
+	defer pb.availableContainersLock.RUnlock()
+
+	for _, candidate := range pb.availableContainers {
+		if candidate.id == containerID {
+			return true
+		}
+	}
+	return false
+}
+
 func (pb *PodProxyBuffer) retireAvailableContainer(containerID string) {
 	if containerID == "" {
 		return
@@ -1194,8 +1258,7 @@ func (pb *PodProxyBuffer) discoverContainers() {
 		if err == nil {
 
 			activeContainerIDs := make(map[string]struct{}, len(containerStates))
-			var wg sync.WaitGroup
-			availableContainersChan := make(chan container, len(containerStates))
+			runningContainerIDs := make([]string, 0, len(containerStates))
 
 			for _, containerState := range containerStates {
 				activeContainerIDs[containerState.ContainerId] = struct{}{}
@@ -1203,66 +1266,213 @@ func (pb *PodProxyBuffer) discoverContainers() {
 					pb.readiness.invalidate(containerState.ContainerId)
 					continue
 				}
-				wg.Add(1)
-
-				go func(cs types.ContainerState) {
-					defer wg.Done()
-					addressMap, err := pb.containerRepo.GetContainerAddressMap(cs.ContainerId)
-					if err != nil {
-						return
-					}
-
-					readyAddressMap := pb.readyAddressMap(cs.ContainerId, addressMap)
-					if len(readyAddressMap) == 0 {
-						return
-					}
-
-					remoteConnections, err := pb.remoteConnections(cs.ContainerId)
-					if err != nil {
-						return
-					}
-
-					availableContainersChan <- container{
-						id:                cs.ContainerId,
-						addressMap:        addressMap,
-						readyAddressMap:   readyAddressMap,
-						remoteConnections: remoteConnections,
-					}
-				}(containerState)
+				runningContainerIDs = append(runningContainerIDs, containerState.ContainerId)
 			}
 
-			wg.Wait()
-			close(availableContainersChan)
-
-			// Collect available containers
-			availableContainers := make([]container, 0)
-			for c := range availableContainersChan {
-				availableContainers = append(availableContainers, c)
-			}
+			availableContainers := pb.readyContainers(runningContainerIDs)
 
 			sortContainersByID(availableContainers)
 
 			pb.updateDiscoveredContainers(availableContainers, activeContainerIDs)
 		}
 
-		interval := containerDiscoveryInterval
-		if pb.buffer != nil && pb.buffer.Len() > 0 {
-			interval = queuedContainerDiscoveryInterval
+		if !pb.awaitDiscovery(discoveryRest(len(containerStates))) {
+			return
 		}
+	}
+}
 
-		timer := time.NewTimer(interval)
+// readyContainers returns those of the stub's running containers that
+// accept connections, each with the connections other proxies hold on it.
+//
+// It reads Redis the same few times for a stub of any size: every address
+// map in one round trip, then every connection count in another. Reading
+// them one container at a time, each from a goroutine of its own, made a
+// pass two round trips for each container, all at once.
+//
+// A container whose addresses cannot be read is left out, as it was then.
+// So was one whose connections could not be read; they are now read
+// together, so when that read fails the pass offers no container.
+//
+// The pass dials for discoveryProbeWindow. A container it has not got to by
+// then is not dialled: it is offered on what the proxy already knows of it,
+// as knownAddressMap has it, and the pass asks for another to follow it.
+// Containers are checked in the order of discoveryOrder, so the next pass
+// starts with the ones this pass left undialled.
+func (pb *PodProxyBuffer) readyContainers(containerIDs []string) []container {
+	ready := make([]container, 0, len(containerIDs))
+	if len(containerIDs) == 0 {
+		return ready
+	}
+
+	addressMaps, err := pb.containerRepo.GetContainerAddressMaps(containerIDs)
+	allRead := err == nil
+
+	// Readiness is remembered between passes, so the containers that are
+	// dialled are the new ones, discoveryProbes of them at a time.
+	checked := make([]container, len(containerIDs))
+	order := pb.discoveryOrder(containerIDs, addressMaps)
+	routed := sync.OnceValue(pb.routedAddressMaps)
+	dialling := time.Now()
+	var undialled atomic.Bool
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	for range min(len(containerIDs), discoveryProbes) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				n := int(next.Add(1)) - 1
+				if n >= len(order) {
+					return
+				}
+
+				n = order[n]
+				containerID := containerIDs[n]
+				addressMap, read := addressMaps[containerID]
+				if !read && !allRead {
+					// Its addresses may be the ones that could not be read.
+					continue
+				}
+				c := container{id: containerID, addressMap: addressMap}
+				if time.Since(dialling) < discoveryProbeWindow {
+					c.readyAddressMap = pb.readyAddressMap(containerID, addressMap)
+				} else {
+					var dialled bool
+					c.readyAddressMap, dialled = pb.knownAddressMap(containerID, addressMap, routed()[containerID])
+					if !dialled {
+						undialled.Store(true)
+					}
+				}
+				checked[n] = c
+			}
+		}()
+	}
+	wg.Wait()
+	if undialled.Load() {
+		pb.signalDiscovery()
+	}
+
+	readyContainerIDs := make([]string, 0, len(checked))
+	for _, c := range checked {
+		if len(c.readyAddressMap) > 0 {
+			ready = append(ready, c)
+			readyContainerIDs = append(readyContainerIDs, c.id)
+		}
+	}
+	if len(ready) == 0 || pb.workspace == nil {
+		return ready
+	}
+
+	shared, err := sharedPodContainersConnections(pb.ctx, pb.rdb, pb.workspace.Name, pb.stubId, readyContainerIDs)
+	if err != nil {
+		return ready[:0]
+	}
+	for n := range ready {
+		// The shared count less this proxy's own, as remoteConnections has it.
+		ready[n].remoteConnections = max(int(shared[ready[n].id])-int(pb.containerConnectionCount(ready[n].id)), 0)
+	}
+	return ready
+}
+
+// discoveryOrder is the order in which a pass checks the stub's containers,
+// as indexes into containerIDs: first the ones the proxy has yet to dial,
+// then the rest from the one it dialled longest ago. A pass that runs out of
+// its window has then dialled what it knew least about. A container that
+// has just started is not kept waiting by ones that did not answer before,
+// which a pass dials again while a request is waiting, and those are each
+// dialled again in their turn.
+func (pb *PodProxyBuffer) discoveryOrder(containerIDs []string, addressMaps map[string]map[int32]string) []int {
+	order := make([]int, len(containerIDs))
+	probed := make([]time.Time, len(containerIDs))
+	for n, containerID := range containerIDs {
+		order[n] = n
+		probed[n] = pb.readiness.lastProbed(containerID, pb.configuredAddressMap(addressMaps[containerID]))
+	}
+	slices.SortFunc(order, func(a, b int) int {
+		return cmp.Or(probed[a].Compare(probed[b]), cmp.Compare(a, b))
+	})
+	return order
+}
+
+// routedAddressMaps is the ready addresses of each container that requests
+// are routed to now.
+func (pb *PodProxyBuffer) routedAddressMaps() map[string]map[int32]string {
+	pb.availableContainersLock.RLock()
+	defer pb.availableContainersLock.RUnlock()
+
+	routed := make(map[string]map[int32]string, len(pb.availableContainers))
+	for _, c := range pb.availableContainers {
+		routed[c.id] = c.readyAddressMap
+	}
+	return routed
+}
+
+// knownAddressMap is readyAddressMap without the dialling: the addresses of
+// a container that answered when the proxy last probed them. An address that
+// requests are routed to but that was never probed counts too. It is one
+// that primeContainerPort made routable, or that a request has just failed
+// to reach, and the pass that dials it decides. The second result is false
+// when an address has still to be dialled.
+func (pb *PodProxyBuffer) knownAddressMap(containerID string, addressMap, routed map[int32]string) (map[int32]string, bool) {
+	addressMap = pb.configuredAddressMap(addressMap)
+	pb.readiness.prunePorts(containerID, addressMap)
+
+	known := map[int32]string{}
+	dialled := true
+	for port, address := range addressMap {
+		ready, probed := pb.readiness.recall(readinessTarget{containerID, port, address})
+		if !probed {
+			dialled = false
+			ready = routed[port] == address
+		}
+		if ready {
+			known[port] = address
+		}
+	}
+	return known, dialled
+}
+
+// discoveryRest is how long after a pass over this many containers a signal
+// waits for the next one. A pass reads every container of the stub, so a
+// stub that signals for each of its containers, as one does while they are
+// all deleted, would otherwise read them all once for every one of them.
+// With the rest, signals have a stub read discoveredContainersPerSecond of
+// its containers a second at most. A stub of ten rests five milliseconds.
+func discoveryRest(containers int) time.Duration {
+	return min(time.Duration(containers)*time.Second/discoveredContainersPerSecond, idleContainerDiscoveryInterval)
+}
+
+// awaitDiscovery waits until the next pass is due and reports whether there
+// is to be one. A pass is due when the discovery interval has passed, as
+// before, and when it is signalled: at once if a request is waiting for a
+// container or the rest is over, else when the rest ends. All the signals
+// that arrive during the rest lead to that one pass.
+func (pb *PodProxyBuffer) awaitDiscovery(rest time.Duration) bool {
+	interval := time.NewTimer(pb.discoveryInterval())
+	defer interval.Stop()
+	rested := time.NewTimer(rest)
+	defer rested.Stop()
+
+	resting, signalled := true, false
+	for {
 		select {
 		case <-pb.ctx.Done():
-			timer.Stop()
-			return
+			return false
 		case <-pb.drainDone():
-			timer.Stop()
-			return
-		case <-pb.discoverReady:
-			if !timer.Stop() {
-				<-timer.C
+			return false
+		case <-interval.C:
+			return true
+		case <-rested.C:
+			if signalled {
+				return true
 			}
-		case <-timer.C:
+			resting = false
+		case <-pb.discoverReady:
+			if !resting || (pb.buffer != nil && pb.buffer.Len() > 0) {
+				return true
+			}
+			signalled = true
 		}
 	}
 }

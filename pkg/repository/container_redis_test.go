@@ -2095,3 +2095,206 @@ func TestSandboxActivityCountersBucketByHour(t *testing.T) {
 		t.Fatalf("expected stale bucket to be trimmed, got fields %v", fields)
 	}
 }
+
+func TestGetFailedContainersByStubIdReadsEveryExitCodeTogether(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	repo := NewContainerRedisRepositoryForTest(rdb)
+
+	// Most containers of a stub are running and have no exit code; a few
+	// exited cleanly and a few failed.
+	want := []string{}
+	for n := range 60 {
+		containerID := fmt.Sprintf("sandbox-stub-%02d", n)
+		require.NoError(t, repo.SetContainerState(containerID, &types.ContainerState{
+			ContainerId: containerID,
+			StubId:      "stub",
+			WorkspaceId: "workspace",
+			Status:      types.ContainerStatusRunning,
+		}))
+		switch {
+		case n%10 == 3:
+			require.NoError(t, repo.SetContainerExitCode(containerID, int(types.ContainerExitCodeUnknownError)))
+			want = append(want, containerID)
+		case n%10 == 7:
+			require.NoError(t, repo.SetContainerExitCode(containerID, int(types.ContainerExitCodeSuccess)))
+		}
+	}
+
+	trips := &redisRoundTrips{}
+	trips.enabled.Store(true)
+	rdb.AddHook(trips)
+	failed, err := repo.GetFailedContainersByStubId("stub")
+	require.NoError(t, err)
+	require.ElementsMatch(t, want, failed)
+	// The stub's index, then every exit code.
+	require.EqualValues(t, 2, trips.calls.Load(), "round trips for a stub of 60 containers")
+
+	failed, err = repo.GetFailedContainersByStubId("a-stub-without-containers")
+	require.NoError(t, err)
+	require.Empty(t, failed)
+}
+
+func TestGetContainersByStubIdReadsStatesAndExitCodesTogether(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	ctx := context.Background()
+
+	for n := range 60 {
+		containerID := fmt.Sprintf("sandbox-stub-%02d", n)
+		require.NoError(t, repo.SetContainerState(containerID, &types.ContainerState{
+			ContainerId: containerID,
+			StubId:      "stub",
+			WorkspaceId: "workspace",
+			Status:      types.ContainerStatusRunning,
+		}))
+		switch {
+		case n%10 == 3:
+			require.NoError(t, repo.SetContainerExitCode(containerID, int(types.ContainerExitCodeUnknownError)))
+		case n%10 == 7:
+			require.NoError(t, repo.SetContainerExitCode(containerID, int(types.ContainerExitCodeSuccess)))
+		}
+	}
+	// One container has just finished: its state is gone and its exit code
+	// is not. Another left nothing but its entry in the stub's index.
+	indexKey := common.RedisKeys.SchedulerContainerIndex("stub")
+	finished, dangling := common.RedisKeys.SchedulerContainerState("sandbox-stub-finished"), common.RedisKeys.SchedulerContainerState("sandbox-stub-dangling")
+	require.NoError(t, rdb.SAdd(ctx, indexKey, finished, dangling).Err())
+	require.NoError(t, repo.SetContainerExitCode("sandbox-stub-finished", int(types.ContainerExitCodeUnknownError)))
+
+	trips := &redisRoundTrips{}
+	rdb.AddHook(trips)
+	read := func() ([]types.ContainerState, []string, int64) {
+		trips.calls.Store(0)
+		trips.enabled.Store(true)
+		active, failed, err := repo.GetContainersByStubId("stub")
+		trips.enabled.Store(false)
+		require.NoError(t, err)
+		return active, failed, trips.calls.Load()
+	}
+
+	// The first read also removes the dangling entry from the index.
+	active, failed, roundTrips := read()
+	require.EqualValues(t, 3, roundTrips)
+	members, err := rdb.SMembers(ctx, indexKey).Result()
+	require.NoError(t, err)
+	require.Contains(t, members, finished)
+	require.NotContains(t, members, dangling)
+
+	// It returns what the two reads it stands in for return.
+	wantActive, err := repo.GetActiveContainersByStubId("stub")
+	require.NoError(t, err)
+	wantFailed, err := repo.GetFailedContainersByStubId("stub")
+	require.NoError(t, err)
+	require.Len(t, wantActive, 60)
+	require.Len(t, wantFailed, 7)
+	require.ElementsMatch(t, wantActive, active)
+	require.ElementsMatch(t, wantFailed, failed)
+
+	// The stub's index, then every state and exit code: two round trips,
+	// where the two reads make four.
+	active, failed, roundTrips = read()
+	require.EqualValues(t, 2, roundTrips, "round trips for a stub of 60 containers")
+	require.ElementsMatch(t, wantActive, active)
+	require.ElementsMatch(t, wantFailed, failed)
+
+	active, failed, err = repo.GetContainersByStubId("a-stub-without-containers")
+	require.NoError(t, err)
+	require.Empty(t, active)
+	require.Empty(t, failed)
+}
+
+func TestPodKeepWarmLocksExistReadsEveryLockTogether(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	ctx := context.Background()
+
+	containerIDs := []string{}
+	want := map[string]bool{}
+	for n := range 40 {
+		containerID := fmt.Sprintf("sandbox-stub-%02d", n)
+		containerIDs = append(containerIDs, containerID)
+		switch n % 4 {
+		case 0: // kept warm for a while
+			require.NoError(t, repo.SetPodKeepWarmLock(ctx, "workspace", "stub", containerID, 600))
+			want[containerID] = true
+		case 1: // kept warm until it is stopped
+			require.NoError(t, repo.SetPodKeepWarmLock(ctx, "workspace", "stub", containerID, -1))
+			want[containerID] = true
+		}
+	}
+	// Another stub's lock on the same container id is not this stub's.
+	require.NoError(t, repo.SetPodKeepWarmLock(ctx, "workspace", "another-stub", "sandbox-stub-02", 600))
+
+	trips := &redisRoundTrips{}
+	trips.enabled.Store(true)
+	rdb.AddHook(trips)
+	locked, err := repo.PodKeepWarmLocksExist(ctx, "workspace", "stub", containerIDs)
+	require.NoError(t, err)
+	require.Equal(t, want, locked)
+	require.EqualValues(t, 1, trips.calls.Load(), "round trips for 40 containers")
+
+	// Each answer is the one the single read gives.
+	for _, containerID := range containerIDs {
+		exists, err := repo.PodKeepWarmLockExists(ctx, "workspace", "stub", containerID)
+		require.NoError(t, err)
+		require.Equal(t, exists, locked[containerID], containerID)
+	}
+
+	locked, err = repo.PodKeepWarmLocksExist(ctx, "workspace", "stub", nil)
+	require.NoError(t, err)
+	require.Empty(t, locked)
+}
+
+func TestGetContainerAddressMapsReadsEveryAddressMapTogether(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	repo := NewContainerRedisRepositoryForTest(rdb)
+
+	// Every other container has its addresses; the rest are still starting.
+	containerIDs := []string{}
+	want := map[string]map[int32]string{}
+	for n := range 40 {
+		containerID := fmt.Sprintf("sandbox-stub-%02d", n)
+		containerIDs = append(containerIDs, containerID)
+		if n%2 == 0 {
+			want[containerID] = map[int32]string{8080: fmt.Sprintf("10.0.0.%d:8080", n), 9090: fmt.Sprintf("10.0.0.%d:9090", n)}
+			require.NoError(t, repo.SetContainerAddressMap(containerID, want[containerID]))
+		}
+	}
+
+	trips := &redisRoundTrips{}
+	trips.enabled.Store(true)
+	rdb.AddHook(trips)
+	addressMaps, err := repo.GetContainerAddressMaps(containerIDs)
+	require.NoError(t, err)
+	require.Equal(t, want, addressMaps)
+	require.EqualValues(t, 1, trips.calls.Load(), "round trips for 40 containers")
+
+	// Each answer is the one the single read gives.
+	for _, containerID := range containerIDs {
+		addressMap, err := repo.GetContainerAddressMap(containerID)
+		require.NoError(t, err)
+		require.Equal(t, addressMap, addressMaps[containerID], containerID)
+	}
+
+	addressMaps, err = repo.GetContainerAddressMaps(nil)
+	require.NoError(t, err)
+	require.Empty(t, addressMaps)
+}
+
+func TestGetContainerAddressMapsReturnsTheOnesItCouldReadBesideAnError(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	repo := NewContainerRedisRepositoryForTest(rdb)
+
+	good := map[int32]string{8080: "10.0.0.1:8080"}
+	require.NoError(t, repo.SetContainerAddressMap("good", good))
+	require.NoError(t, rdb.Set(context.Background(), common.RedisKeys.SchedulerContainerAddressMap("bad"), "not an address map", 0).Err())
+
+	addressMaps, err := repo.GetContainerAddressMaps([]string{"good", "bad", "starting"})
+	require.ErrorContains(t, err, "bad")
+	require.Equal(t, map[string]map[int32]string{"good": good}, addressMaps)
+}

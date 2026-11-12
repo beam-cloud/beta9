@@ -959,6 +959,23 @@ func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive ty
 		return err
 	}
 
+	// A worker opens its request stream only after it has started, and opening
+	// the stream makes a pending worker available. A record that is pending
+	// while the stream is open was therefore written later: the pool controller
+	// recreates a machine's worker as pending when Redis evicted or expired its
+	// record, or after disabling it for a transient health reason. No stream
+	// will open to make that record available, so the keepalive does. Disabled
+	// workers and rollouts are left alone, and a cordon is kept.
+	recovered := keepAlive.RequestStreamOpen && worker.Status == types.WorkerStatusPending && worker.RolloutGeneration == ""
+	if recovered {
+		worker.Status = types.WorkerStatusAvailable
+		if worker.CordonRequested {
+			worker.Status = types.WorkerStatusDisabled
+		} else if err := r.reconcileWorkerCapacity(ctx, worker); err != nil {
+			return err
+		}
+	}
+
 	oldMachineID := worker.MachineId
 	machineID := strings.TrimSpace(keepAlive.MachineId)
 	if machineID != "" {
@@ -966,6 +983,17 @@ func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive ty
 	}
 	pipe := r.rdb.TxPipeline()
 	pipe.HSet(ctx, stateKey, "cpu_tier_protocol", keepAlive.CPUTierProtocol)
+	if recovered {
+		pipe.HSet(ctx, stateKey,
+			"status", string(worker.Status),
+			"free_cpu", worker.FreeCpu,
+			"free_memory", worker.FreeMemory,
+			"gpu_count", worker.FreeGpuCount,
+			"evictable_cpu", worker.EvictableCpu,
+			"evictable_memory", worker.EvictableMemory,
+			"evictable_gpu_count", worker.EvictableGpuCount,
+		)
+	}
 	if worker.MachineId != oldMachineID {
 		pipe.HSet(ctx, stateKey, "machine_id", worker.MachineId)
 	}
@@ -974,7 +1002,7 @@ func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive ty
 	if keyChanged {
 		pipe.HSet(ctx, stateKey, "checkpoint_compatibility_key", keepAlive.CheckpointCompatibilityKey)
 	}
-	if worker.MachineId != oldMachineID || keyChanged {
+	if worker.MachineId != oldMachineID || keyChanged || recovered {
 		pipe.HIncrBy(ctx, stateKey, "resource_version", 1)
 	}
 	pipe.Expire(ctx, stateKey, time.Duration(types.WorkerStateTtlS)*time.Second)
@@ -984,6 +1012,9 @@ func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive ty
 
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("failed to set worker keepalive <%v>: %w", stateKey, err)
+	}
+	if recovered {
+		log.Info().Str("worker_id", workerId).Str("status", string(worker.Status)).Msg("worker was pending with its request stream open; keepalive set its status")
 	}
 	return nil
 }

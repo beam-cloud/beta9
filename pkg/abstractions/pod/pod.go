@@ -353,6 +353,8 @@ func (ps *GenericPodService) createPodInstance(stubId string, options ...func(*p
 		InstanceLockKey:     Keys.podInstanceLock(stub.Workspace.Name, stubId),
 		StartContainersFunc: instance.startContainers,
 		StopContainersFunc:  instance.stopContainers,
+
+		StoppableContainersFunc: instance.stoppableNow,
 	})
 	if err != nil {
 		return nil, err

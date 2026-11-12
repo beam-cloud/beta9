@@ -20,6 +20,10 @@ service ContainerRepositoryService {
       returns (GetContainerAddressMapResponse);
   rpc SetWorkerAddress(SetWorkerAddressRequest)
       returns (SetWorkerAddressResponse);
+  // RenewContainerLeases is the routine status heartbeat for many of one
+  // worker's containers in a single call.
+  rpc RenewContainerLeases(RenewContainerLeasesRequest)
+      returns (RenewContainerLeasesResponse);
 }
 
 message GetContainerStateRequest { string container_id = 1; }
@@ -120,4 +124,38 @@ message BackendRoute {
   string state = 13;
   string error = 14;
   int64 updated_at = 15;
+}
+
+message ContainerLeaseRenewal {
+  string container_id = 1;
+  // runtime_started says the worker has seen the container's process start,
+  // so a state that is still PENDING becomes RUNNING.
+  bool runtime_started = 2;
+}
+
+message RenewContainerLeasesRequest {
+  repeated ContainerLeaseRenewal containers = 1;
+}
+
+// ContainerLease is what the heartbeat found for one container.
+message ContainerLease {
+  string container_id = 1;
+  // ok is false, with the reason in error_msg, when nothing could be renewed:
+  // the container has no state, or its state is not this worker's.
+  bool ok = 2;
+  string error_msg = 3;
+  // status is the persisted status after the call. A PENDING or RUNNING
+  // container was renewed; a STOPPING one was left as it is.
+  string status = 4;
+  // started is set when this call moved the container from PENDING to RUNNING.
+  bool started = 5;
+  bool evicting = 6;
+  uint32 drain_seconds = 7;
+}
+
+message RenewContainerLeasesResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  // leases has one entry for each container in the request, in the same order.
+  repeated ContainerLease leases = 3;
 }

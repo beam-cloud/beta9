@@ -27,6 +27,7 @@ const (
 	ContainerRepositoryService_SetContainerAddressMap_FullMethodName = "/ContainerRepositoryService/SetContainerAddressMap"
 	ContainerRepositoryService_GetContainerAddressMap_FullMethodName = "/ContainerRepositoryService/GetContainerAddressMap"
 	ContainerRepositoryService_SetWorkerAddress_FullMethodName       = "/ContainerRepositoryService/SetWorkerAddress"
+	ContainerRepositoryService_RenewContainerLeases_FullMethodName   = "/ContainerRepositoryService/RenewContainerLeases"
 )
 
 // ContainerRepositoryServiceClient is the client API for ContainerRepositoryService service.
@@ -41,6 +42,9 @@ type ContainerRepositoryServiceClient interface {
 	SetContainerAddressMap(ctx context.Context, in *SetContainerAddressMapRequest, opts ...grpc.CallOption) (*SetContainerAddressMapResponse, error)
 	GetContainerAddressMap(ctx context.Context, in *GetContainerAddressMapRequest, opts ...grpc.CallOption) (*GetContainerAddressMapResponse, error)
 	SetWorkerAddress(ctx context.Context, in *SetWorkerAddressRequest, opts ...grpc.CallOption) (*SetWorkerAddressResponse, error)
+	// RenewContainerLeases is the routine status heartbeat for many of one
+	// worker's containers in a single call.
+	RenewContainerLeases(ctx context.Context, in *RenewContainerLeasesRequest, opts ...grpc.CallOption) (*RenewContainerLeasesResponse, error)
 }
 
 type containerRepositoryServiceClient struct {
@@ -123,6 +127,15 @@ func (c *containerRepositoryServiceClient) SetWorkerAddress(ctx context.Context,
 	return out, nil
 }
 
+func (c *containerRepositoryServiceClient) RenewContainerLeases(ctx context.Context, in *RenewContainerLeasesRequest, opts ...grpc.CallOption) (*RenewContainerLeasesResponse, error) {
+	out := new(RenewContainerLeasesResponse)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_RenewContainerLeases_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ContainerRepositoryServiceServer is the server API for ContainerRepositoryService service.
 // All implementations must embed UnimplementedContainerRepositoryServiceServer
 // for forward compatibility
@@ -135,6 +148,9 @@ type ContainerRepositoryServiceServer interface {
 	SetContainerAddressMap(context.Context, *SetContainerAddressMapRequest) (*SetContainerAddressMapResponse, error)
 	GetContainerAddressMap(context.Context, *GetContainerAddressMapRequest) (*GetContainerAddressMapResponse, error)
 	SetWorkerAddress(context.Context, *SetWorkerAddressRequest) (*SetWorkerAddressResponse, error)
+	// RenewContainerLeases is the routine status heartbeat for many of one
+	// worker's containers in a single call.
+	RenewContainerLeases(context.Context, *RenewContainerLeasesRequest) (*RenewContainerLeasesResponse, error)
 	mustEmbedUnimplementedContainerRepositoryServiceServer()
 }
 
@@ -165,6 +181,9 @@ func (UnimplementedContainerRepositoryServiceServer) GetContainerAddressMap(cont
 }
 func (UnimplementedContainerRepositoryServiceServer) SetWorkerAddress(context.Context, *SetWorkerAddressRequest) (*SetWorkerAddressResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetWorkerAddress not implemented")
+}
+func (UnimplementedContainerRepositoryServiceServer) RenewContainerLeases(context.Context, *RenewContainerLeasesRequest) (*RenewContainerLeasesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RenewContainerLeases not implemented")
 }
 func (UnimplementedContainerRepositoryServiceServer) mustEmbedUnimplementedContainerRepositoryServiceServer() {
 }
@@ -324,6 +343,24 @@ func _ContainerRepositoryService_SetWorkerAddress_Handler(srv interface{}, ctx c
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ContainerRepositoryService_RenewContainerLeases_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenewContainerLeasesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ContainerRepositoryServiceServer).RenewContainerLeases(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ContainerRepositoryService_RenewContainerLeases_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ContainerRepositoryServiceServer).RenewContainerLeases(ctx, req.(*RenewContainerLeasesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ContainerRepositoryService_ServiceDesc is the grpc.ServiceDesc for ContainerRepositoryService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -362,6 +399,10 @@ var ContainerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetWorkerAddress",
 			Handler:    _ContainerRepositoryService_SetWorkerAddress_Handler,
+		},
+		{
+			MethodName: "RenewContainerLeases",
+			Handler:    _ContainerRepositoryService_RenewContainerLeases_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
