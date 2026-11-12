@@ -1,0 +1,33 @@
+# Local copy of benchmarks/controlplane/overlay.example.yaml (git-ignored).
+debug:
+  controlPlaneBench:
+    enabled: true
+    pool: bench-sim
+    workspaceId: "d4214707-ac58-4999-b875-39245968f8b8"
+    maxSandboxes: 20000
+    maxWorkers: 10
+    maxDuration: 1h
+
+# config.local.yaml sends cost-quote lookups to a billing service that has
+# never heard of the local benchmark workspace, and stub creation fails on
+# that. With no endpoint the gateway treats the cluster as unbilled.
+monitoring:
+  containerCostHook:
+    endpoint: ""
+
+worker:
+  pools:
+    bench-sim:
+      mode: local
+      requiresPoolSelector: true
+      containerRuntime: simulated
+      networkPreallocation: false
+      criuEnabled: false
+      simulated:
+        advertisedCPU: "5000"
+        advertisedMemory: 6400Gi
+        podCPU: "4"
+        podMemory: 4Gi
+        workerBinaryFromGateway: true
+        keepStartupWork: false
+        startDelay: 0s
