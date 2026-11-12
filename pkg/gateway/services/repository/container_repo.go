@@ -159,18 +159,31 @@ func (s *ContainerRepositoryService) UpdateContainerStatus(ctx context.Context, 
 		return &pb.UpdateContainerStatusResponse{Ok: false, ErrorMsg: fmt.Sprintf("expiry_seconds must be positive, got %d", req.ExpirySeconds)}, nil
 	}
 
-	err := s.containerRepo.UpdateContainerStatus(req.ContainerId, types.ContainerStatus(req.Status), req.ExpirySeconds)
-	if err != nil {
-		return &pb.UpdateContainerStatusResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-
-	// A refused transition (STOPPING is terminal) returns nil above; report the
+	// A refused transition (STOPPING is terminal) is not an error; report the
 	// persisted status so the worker can react without a second round trip.
-	state, err := s.containerRepo.GetContainerState(req.ContainerId)
+	state, err := updateContainerStatus(s.containerRepo, req.ContainerId, types.ContainerStatus(req.Status), req.ExpirySeconds)
 	if err != nil {
 		return &pb.UpdateContainerStatusResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 	return &pb.UpdateContainerStatusResponse{Ok: true, Status: string(state.Status)}, nil
+}
+
+// containerStatusStateUpdater is a repository whose status update returns
+// the state it left, which spares reading it.
+type containerStatusStateUpdater interface {
+	UpdateContainerStatusAndGetState(containerId string, status types.ContainerStatus, expirySeconds int64) (*types.ContainerState, error)
+}
+
+// updateContainerStatus updates a container's status and returns its state as
+// the update left it.
+func updateContainerStatus(repo repository.ContainerRepository, containerId string, status types.ContainerStatus, expirySeconds int64) (*types.ContainerState, error) {
+	if updater, ok := repo.(containerStatusStateUpdater); ok {
+		return updater.UpdateContainerStatusAndGetState(containerId, status, expirySeconds)
+	}
+	if err := repo.UpdateContainerStatus(containerId, status, expirySeconds); err != nil {
+		return nil, err
+	}
+	return repo.GetContainerState(containerId)
 }
 
 // maxContainerLeasesPerCall bounds the Redis pipeline one RenewContainerLeases
@@ -280,17 +293,32 @@ func (s *ContainerRepositoryService) SetContainerAddressMap(ctx context.Context,
 		return &pb.SetContainerAddressMapResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	err := s.containerRepo.SetContainerAddressMap(req.ContainerId, addressMap)
-	if err != nil {
+	if err := setContainerAddresses(s.containerRepo, req.ContainerId, addressMap, primaryAddress); err != nil {
 		return &pb.SetContainerAddressMapResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-	if primaryAddress != "" {
-		if err := s.containerRepo.SetContainerAddress(req.ContainerId, primaryAddress); err != nil {
-			return &pb.SetContainerAddressMapResponse{Ok: false, ErrorMsg: err.Error()}, nil
-		}
 	}
 
 	return &pb.SetContainerAddressMapResponse{Ok: true}, nil
+}
+
+// containerAddressesSetter is a repository that writes a container's address
+// map and its address in one round trip.
+type containerAddressesSetter interface {
+	SetContainerAddresses(containerId string, addressMap map[int32]string, addr string) error
+}
+
+// setContainerAddresses writes a container's address map and then, when it
+// has one, its primary address.
+func setContainerAddresses(repo repository.ContainerRepository, containerId string, addressMap map[int32]string, primaryAddress string) error {
+	if primaryAddress == "" {
+		return repo.SetContainerAddressMap(containerId, addressMap)
+	}
+	if setter, ok := repo.(containerAddressesSetter); ok {
+		return setter.SetContainerAddresses(containerId, addressMap, primaryAddress)
+	}
+	if err := repo.SetContainerAddressMap(containerId, addressMap); err != nil {
+		return err
+	}
+	return repo.SetContainerAddress(containerId, primaryAddress)
 }
 
 func (s *ContainerRepositoryService) GetContainerAddressMap(ctx context.Context, req *pb.GetContainerAddressMapRequest) (*pb.GetContainerAddressMapResponse, error) {
