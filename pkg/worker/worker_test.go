@@ -1263,6 +1263,50 @@ func TestStopEventKillFailureHandsOffToLifecycleReconciliation(t *testing.T) {
 	}
 }
 
+func TestObservedStopSignalsRuntimeStartedDuringGrace(t *testing.T) {
+	const containerID = "container-stop-during-startup"
+	workerCtx, cancelWorker := context.WithCancel(context.Background())
+	defer cancelWorker()
+	worker := &Worker{
+		ctx:                workerCtx,
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		config: types.AppConfig{Worker: types.WorkerConfig{
+			TerminationGracePeriod: 30,
+		}},
+	}
+	var runtimeExists atomic.Bool
+	rt := &retryStoppingRuntime{
+		worker:      worker,
+		containerID: containerID,
+		killError: func(syscall.Signal) error {
+			if !runtimeExists.Load() {
+				return runtime.ErrContainerNotFound{ContainerID: containerID}
+			}
+			return nil
+		},
+	}
+	instance := &ContainerInstance{
+		Id:       containerID,
+		ExitCode: -1,
+		Request:  &types.ContainerRequest{ContainerId: containerID},
+		Runtime:  rt,
+	}
+	worker.containerInstances.Set(containerID, instance)
+
+	worker.handleObservedStoppingContainer(containerID, types.EventSourceWorkerEventBus)
+	require.Eventually(t, func() bool {
+		return len(rt.observedSignals()) == 1
+	}, time.Second, time.Millisecond)
+
+	runtimeExists.Store(true)
+	instance.markRuntimeStarted(1234)
+
+	require.Eventually(t, func() bool {
+		return len(rt.observedSignals()) == 2
+	}, 2*time.Second, 5*time.Millisecond, "a runtime that starts after the stop must be signalled within the grace period")
+	require.Equal(t, []syscall.Signal{syscall.SIGTERM, syscall.SIGTERM}, rt.observedSignals())
+}
+
 func TestStatusHeartbeatRetriesStopObservedBeforeRuntimeExists(t *testing.T) {
 	const containerID = "container-stop-before-runtime"
 	workerCtx, cancelWorker := context.WithCancel(context.Background())
