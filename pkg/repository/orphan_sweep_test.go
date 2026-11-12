@@ -258,6 +258,62 @@ func TestSweepRemovesTheRequestQueueOfAWorkerGoneForADay(t *testing.T) {
 	require.True(t, st.exists(pending), "pending requests were removed")
 }
 
+// A machine can come back under the worker id it had. The sweep finds the
+// worker without state first and removes its queue a few round trips later,
+// and in between the worker can register and be given a request.
+func TestSweepLeavesTheQueueOfAWorkerThatCameBackWhileItSwept(t *testing.T) {
+	st := newOrphanSweepTest(t)
+
+	queue := common.RedisKeys.SchedulerWorkerRequests("worker-back")
+	require.NoError(t, st.rdb.RPush(st.ctx, queue, "old request").Err())
+
+	// Redis vouches for the day the queue went unused. The sweep asks it
+	// after looking for the worker's state, which is when the worker returns.
+	st.sweeper.idleTimes = func(_ context.Context, keys []string) ([]time.Duration, bool) {
+		require.NoError(t, st.rdb.HSet(st.ctx, common.RedisKeys.SchedulerWorkerState("worker-back"), "id", "worker-back").Err())
+		require.NoError(t, st.rdb.RPush(st.ctx, queue, "new request").Err())
+
+		idle := make([]time.Duration, len(keys))
+		for i := range idle {
+			idle[i] = orphanWorkerRequestsMinAge
+		}
+		return idle, true
+	}
+
+	st.sweep()
+	stats := st.sweepAfter(orphanSweepInterval)
+
+	requireNothingRemoved(t, stats)
+	requests, err := st.rdb.LRange(st.ctx, queue, 0, -1)
+	require.NoError(t, err)
+	require.Equal(t, []string{"old request", "new request"}, requests, "a worker that came back lost its requests")
+	require.Zero(t, stats.Waiting, "the queue of a registered worker is still taken for an orphan")
+}
+
+// Adding a worker and queueing requests for it hold the worker's lock, so a
+// lock that is held belongs to a worker that is in use.
+func TestSweepLeavesAQueueWhileItsWorkersLockIsHeld(t *testing.T) {
+	st := newOrphanSweepTest(t)
+
+	queue := common.RedisKeys.SchedulerWorkerRequests("worker-gone")
+	require.NoError(t, st.rdb.RPush(st.ctx, queue, "request").Err())
+	workerLock := common.RedisKeys.SchedulerWorkerLock("worker-gone")
+	registering := common.NewRedisLock(st.rdb)
+
+	st.sweep()
+	require.NoError(t, registering.Acquire(st.ctx, workerLock, schedulerWorkerLockOptions))
+	stats := st.sweepAfter(orphanWorkerRequestsMinAge)
+	requireNothingRemoved(t, stats)
+	require.True(t, st.exists(queue), "a queue was removed while its worker's lock was held")
+
+	// Nothing came of it: the worker is still gone at the next sweep, which
+	// does not start counting its day again.
+	require.NoError(t, registering.Release(workerLock))
+	stats = st.sweepAfter(orphanSweepInterval)
+	require.Equal(t, 1, stats.Removed[orphanRuleWorkerRequests])
+	require.False(t, st.exists(queue), "the queue of a worker gone for a day was left behind")
+}
+
 func TestSweepPrunesIndexMembersOfContainersThatAreGone(t *testing.T) {
 	st := newOrphanSweepTest(t)
 

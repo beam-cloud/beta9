@@ -51,6 +51,10 @@ const (
 	orphanStateIndexMinAge = time.Hour
 )
 
+// The sweep does not wait for a worker's lock: one that is held belongs to a
+// worker that is being added or given requests.
+var orphanWorkerLockOptions = common.RedisLockOptions{TtlS: schedulerWorkerLockTTL}
+
 // The rules of the sweep. Each is a counter in the sweep's summary.
 const (
 	orphanRuleWorkerAddress        = "worker_addr"
@@ -120,6 +124,9 @@ type orphanCandidate struct {
 	// Set for a quota reservation, which is released rather than deleted.
 	workspaceId string
 	containerId string
+	// Set for a worker's request queue, which is removed under the worker's
+	// lock.
+	workerId string
 }
 
 func (c orphanCandidate) isIndex() bool {
@@ -156,6 +163,7 @@ func classifyOrphanKey(key string) (orphanCandidate, bool) {
 			rule:     orphanRuleWorkerRequests,
 			ownerKey: common.RedisKeys.SchedulerWorkerState(workerId),
 			minAge:   orphanWorkerRequestsMinAge,
+			workerId: workerId,
 		}, true
 
 	case strings.HasPrefix(key, orphanPodPrefix):
@@ -539,10 +547,11 @@ func (s *OrphanSweeper) removeOrphanedKeys(ctx context.Context, run *orphanSweep
 	}
 
 	// One UNLINK per key, so a cluster can send each to the node that has it.
+	// A reservation and a worker's queue are each removed on their own.
 	pipe = s.rdb.Pipeline()
 	unlinks := make([]*redis.IntCmd, len(remove))
 	for i, orphan := range remove {
-		if orphan.rule == orphanRuleReservation {
+		if orphan.rule == orphanRuleReservation || orphan.rule == orphanRuleWorkerRequests {
 			continue
 		}
 		unlinks[i] = pipe.Unlink(ctx, orphan.key)
@@ -551,17 +560,55 @@ func (s *OrphanSweeper) removeOrphanedKeys(ctx context.Context, run *orphanSweep
 		return err
 	}
 	for i, orphan := range remove {
-		if orphan.rule == orphanRuleReservation {
+		switch orphan.rule {
+		case orphanRuleReservation:
 			if s.releaseOrphanedReservation(ctx, orphan) {
 				run.stats.Removed[orphan.rule]++
 			}
-			continue
-		}
-		if removed, err := unlinks[i].Result(); err == nil {
-			run.stats.Removed[orphan.rule] += int(removed)
+		case orphanRuleWorkerRequests:
+			s.removeOrphanedWorkerRequests(ctx, run, orphan)
+		default:
+			if removed, err := unlinks[i].Result(); err == nil {
+				run.stats.Removed[orphan.rule] += int(removed)
+			}
 		}
 	}
 	return nil
+}
+
+// removeOrphanedWorkerRequests removes the request queue of a worker that is
+// still gone. The checks above looked for the worker's state a few round
+// trips ago, and a machine can come back under the worker id it had: were
+// the worker added and given requests since, removing its queue would lose
+// them, with their containers still assigned to it. Adding a worker and
+// queueing requests for it both hold the worker's lock, so the sweep takes
+// the lock, looks for the state again, and removes the queue only if there
+// is still none.
+//
+// A queue the sweep could not decide about, because the lock is held or
+// Redis did not answer, is left for the next sweep, which counts the time it
+// has been orphaned from where this one did. A queue whose worker is back is
+// forgotten.
+func (s *OrphanSweeper) removeOrphanedWorkerRequests(ctx context.Context, run *orphanSweepRun, queue orphanCandidate) {
+	decided := false
+	_ = s.lock.WithLease(ctx, common.RedisKeys.SchedulerWorkerLock(queue.workerId), orphanWorkerLockOptions, func(ctx context.Context) error {
+		registered, err := s.rdb.Exists(ctx, queue.ownerKey).Result()
+		if err != nil {
+			return err
+		}
+		if registered == 0 {
+			removed, err := s.rdb.Unlink(ctx, queue.key).Result()
+			if err != nil {
+				return err
+			}
+			run.stats.Removed[queue.rule] += int(removed)
+		}
+		decided = true
+		return nil
+	})
+	if !decided {
+		run.remember(queue.key, s.firstSeen[queue.key])
+	}
 }
 
 // idleTimesOf returns how long each candidate has gone unread and unwritten,
