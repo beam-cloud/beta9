@@ -3637,18 +3637,20 @@ def test_full_desktop_readiness_uses_the_native_session_manager(monkeypatch, cod
 
 
 @pytest.mark.parametrize(
-    "configured,classes,expected",
+    "kiosk,configured,classes,expected",
     [
-        (False, [], "Xvfb"),
-        (False, ["0x030000"], "Xvfb"),
-        (True, [], "Xvfb"),
-        (True, ["0x020000", "0x040300"], "Xvfb"),
-        (True, ["0x030000", "0x040300"], "Xorg"),
-        (True, ["0x030200"], "Xorg"),
+        (True, False, [], "Xvfb"),
+        (True, False, ["0x030000"], "Xvfb"),
+        (True, True, [], "Xvfb"),
+        (True, True, ["0x020000", "0x040300"], "Xvfb"),
+        (True, True, ["0x030000", "0x040300"], "Xorg"),
+        (True, True, ["0x030200"], "Xorg"),
+        (False, True, ["0x030000", "0x040300"], "Xvfb"),
+        (False, True, ["0x030200"], "Xvfb"),
     ],
 )
 def test_kiosk_native_display_requires_attached_display_gpu(
-    tmp_path, monkeypatch, configured, classes, expected
+    tmp_path, monkeypatch, kiosk, configured, classes, expected
 ):
     module = guest_module("kiosk")
     pci = tmp_path / "pci"
@@ -3663,7 +3665,7 @@ def test_kiosk_native_display_requires_attached_display_gpu(
     monkeypatch.setattr(
         module, "run_command", MagicMock(return_value=SimpleNamespace(returncode=0))
     )
-    session = module.Session({"command": ["editor"]})
+    session = module.Session({"command": ["editor"]} if kiosk else None)
     session.env["HOME"] = str(tmp_path)
     session.env["BEAM_KIOSK_XORG_CONFIG"] = "/etc/X11/custom.conf" if configured else ""
     session.env.update(

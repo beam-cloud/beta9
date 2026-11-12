@@ -366,7 +366,8 @@ class Session:
             ["xauth", "-f", self.env["XAUTHORITY"], "add", ":1", ".", secrets.token_hex(16)]
         )
         config = self.env.get("BEAM_KIOSK_XORG_CONFIG")
-        if config and any(
+        # Xorg needs root and gives a desktop session no monitor, so only a kiosk uses it.
+        if config and not self.desktop and any(
             int(path.read_text(), 16) >> 16 == 3
             for path in Path("/sys/bus/pci/devices").glob("*/class")
         ):
