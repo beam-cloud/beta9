@@ -14,6 +14,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/redislock"
+	"github.com/google/uuid"
 	redis "github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 )
@@ -42,7 +43,6 @@ const (
 	concurrencyCounterRepairInterval   = 5 * time.Second
 	concurrencyReservationInFlightTTL  = 2 * time.Minute
 	workerAddressWaitTimeout           = 5 * time.Minute
-	workerAddressPollInterval          = 25 * time.Millisecond
 )
 
 var errConcurrencyCounterRepairing = errors.New("concurrency counter repair in progress")
@@ -85,7 +85,9 @@ return 1
 // for each request. Instead, the first quota-bearing request rebuilds an
 // aggregate counter from active container state, and each subsequent request
 // atomically creates one reservation record while incrementing the aggregate.
-var reserveConcurrencyReservationScript = redis.NewScript(`
+var reserveConcurrencyReservationScript = redis.NewScript(reserveConcurrencyReservationSource)
+
+const reserveConcurrencyReservationSource = `
 local used_gpu = tonumber(redis.call("HGET", KEYS[1], "gpu_count") or "0")
 local used_cpu = tonumber(redis.call("HGET", KEYS[1], "cpu") or "0")
 local gpu_limit = tonumber(ARGV[1])
@@ -121,7 +123,7 @@ redis.call("HSET", KEYS[2],
 	"created_at", ARGV[7])
 redis.call("SADD", KEYS[3], ARGV[6])
 return "ok"
-`)
+`
 
 var releaseConcurrencyReservationScript = redis.NewScript(`
 if redis.call("EXISTS", KEYS[2]) == 0 then
@@ -246,8 +248,25 @@ func (cr *ContainerRedisRepository) setContainerState(containerId string, state 
 	// Commit state and indexes together so stop/list callers cannot miss a
 	// newly-created container between the hash write and index writes.
 	pipe := cr.rdb.TxPipeline()
-	pipe.HSet(
-		ctx, stateKey,
+	pipe.HSet(ctx, stateKey, containerStateFields(containerId, state)...)
+	pipe.Expire(ctx, stateKey, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
+	pipe.SAdd(ctx, stubIndexKey, stateKey)
+	pipe.SAdd(ctx, workspaceIndexKey, stateKey)
+	pipe.ZAdd(ctx, common.RedisKeys.SchedulerContainerStateIndex(), redis.Z{
+		Score:  float64(time.Now().Add(time.Duration(types.ContainerStateTtlSWhilePending) * time.Second).Unix()),
+		Member: stateKey,
+	})
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("failed to set container state and indexes <%v>: %w", stateKey, err)
+	}
+
+	return nil
+}
+
+// containerStateFields is what setContainerState writes to the state's hash,
+// for the script that admits a container to write the same.
+func containerStateFields(containerId string, state *types.ContainerState) []interface{} {
+	return []interface{}{
 		"container_id", containerId,
 		"status", string(state.Status),
 		"scheduled_at", state.ScheduledAt,
@@ -262,19 +281,7 @@ func (cr *ContainerRedisRepository) setContainerState(containerId string, state 
 		"evictable", state.Evictable,
 		"drain_seconds", state.DrainSeconds,
 		"evict_order", state.EvictOrder,
-	)
-	pipe.Expire(ctx, stateKey, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
-	pipe.SAdd(ctx, stubIndexKey, stateKey)
-	pipe.SAdd(ctx, workspaceIndexKey, stateKey)
-	pipe.ZAdd(ctx, common.RedisKeys.SchedulerContainerStateIndex(), redis.Z{
-		Score:  float64(time.Now().Add(time.Duration(types.ContainerStateTtlSWhilePending) * time.Second).Unix()),
-		Member: stateKey,
-	})
-	if _, err := pipe.Exec(ctx); err != nil {
-		return fmt.Errorf("failed to set container state and indexes <%v>: %w", stateKey, err)
 	}
-
-	return nil
 }
 
 func (cr *ContainerRedisRepository) SetContainerExitCode(containerId string, exitCode int) error {
@@ -383,14 +390,132 @@ redis.call("ZADD", KEYS[2], ARGV[5], KEYS[1])
 return 1
 `)
 
+// updateUnlockedContainerStatusScript is UpdateContainerStatus for a PENDING
+// or RUNNING request, in one step: it reads the state, applies the same
+// transition rules and writes the same fields, lease and index entry.
+//
+// The container's lock is not taken. Whoever holds it is part way through
+// something this must not run inside of, and a gateway from before this
+// script takes it for every update, so the script does nothing while it is
+// held and the caller takes the lock as before. Run with the lock free, the
+// script is over before anyone can take it, which is all that holding the
+// lock around it would add.
+//
+// It returns the state it leaves, changed or not. Sent twice, as a client
+// that lost the reply does, it leaves and returns the same state.
+var updateUnlockedContainerStatusScript = redis.NewScript(`
+local requested, pending, running = ARGV[1], ARGV[5], ARGV[6]
+
+if redis.call("EXISTS", KEYS[3]) == 1 then
+	return {-2}
+end
+local state = redis.call("HGETALL", KEYS[1])
+if #state == 0 then
+	return {-1}
+end
+local status_at, started_at
+for i = 1, #state, 2 do
+	if state[i] == "status" then
+		status_at = i + 1
+	elseif state[i] == "started_at" then
+		started_at = i + 1
+	end
+end
+local status = status_at and state[status_at]
+if status ~= pending and not (status == running and requested == running) then
+	return {0, state}
+end
+
+if not started_at then
+	state[#state + 1] = "started_at"
+	state[#state + 1] = "0"
+	started_at = #state
+end
+if requested == running and status ~= running then
+	state[started_at] = ARGV[3]
+end
+state[status_at] = requested
+redis.call("HSET", KEYS[1], "status", requested, "started_at", state[started_at])
+redis.call("EXPIRE", KEYS[1], ARGV[2])
+redis.call("ZADD", KEYS[2], ARGV[4], KEYS[1])
+return {1, state}
+`)
+
 func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, requestedStatus types.ContainerStatus, expirySeconds int64) error {
+	_, err := cr.updateContainerStatus(containerId, requestedStatus, expirySeconds)
+	return err
+}
+
+// UpdateContainerStatusAndGetState is UpdateContainerStatus followed by
+// GetContainerState, for a caller that acts on what the update left. A
+// refused transition is not an error, so the state may not have the
+// requested status.
+func (cr *ContainerRedisRepository) UpdateContainerStatusAndGetState(containerId string, requestedStatus types.ContainerStatus, expirySeconds int64) (*types.ContainerState, error) {
+	state, err := cr.updateContainerStatus(containerId, requestedStatus, expirySeconds)
+	if err != nil || state != nil {
+		return state, err
+	}
+	return cr.GetContainerState(containerId)
+}
+
+// updateContainerStatus returns the state it left when it has it at hand,
+// which is when it did not take the container's lock.
+func (cr *ContainerRedisRepository) updateContainerStatus(containerId string, requestedStatus types.ContainerStatus, expirySeconds int64) (*types.ContainerState, error) {
 	switch requestedStatus {
 	case types.ContainerStatusPending, types.ContainerStatusRunning, types.ContainerStatusStopping:
 		// continue
 	default:
-		return fmt.Errorf("invalid status: %s", requestedStatus)
+		return nil, fmt.Errorf("invalid status: %s", requestedStatus)
 	}
 
+	// STOPPING releases the container's reservation and a managed endpoint
+	// looks up its replica, each while the lock is held, so they keep it.
+	managedLease := requestedStatus == types.ContainerStatusRunning && strings.HasPrefix(containerId, "managed-")
+	if requestedStatus != types.ContainerStatusStopping && !managedLease {
+		state, lockHeld, err := cr.updateUnlockedContainerStatus(containerId, requestedStatus, expirySeconds)
+		if !lockHeld {
+			return state, err
+		}
+	}
+	return nil, cr.updateLockedContainerStatus(containerId, requestedStatus, expirySeconds)
+}
+
+// updateUnlockedContainerStatus runs updateUnlockedContainerStatusScript.
+// lockHeld means it did nothing because someone holds the container's lock.
+func (cr *ContainerRedisRepository) updateUnlockedContainerStatus(containerId string, requestedStatus types.ContainerStatus, expirySeconds int64) (state *types.ContainerState, lockHeld bool, err error) {
+	stateKey := common.RedisKeys.SchedulerContainerState(containerId)
+	now := time.Now()
+	reply, err := updateUnlockedContainerStatusScript.Run(context.TODO(), cr.rdb, []string{
+		stateKey, common.RedisKeys.SchedulerContainerStateIndex(), common.RedisKeys.SchedulerContainerLock(containerId),
+	}, string(requestedStatus), expirySeconds, now.Unix(), now.Add(time.Duration(expirySeconds)*time.Second).Unix(),
+		string(types.ContainerStatusPending), string(types.ContainerStatusRunning)).Slice()
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to set container state ttl <%v>: %w", stateKey, err)
+	}
+
+	switch {
+	case len(reply) == 1 && reply[0] == int64(-2):
+		return nil, true, nil
+	case len(reply) == 1 && reply[0] == int64(-1):
+		return nil, false, &types.ErrContainerStateNotFound{ContainerId: containerId}
+	case len(reply) != 2:
+		return nil, false, fmt.Errorf("failed to set container state ttl <%v>: unexpected reply %v", stateKey, reply)
+	}
+	fields, _ := reply[1].([]interface{})
+	stored := make(map[string]string, len(fields)/2)
+	for i := 0; i+1 < len(fields); i += 2 {
+		field, _ := fields[i].(string)
+		value, _ := fields[i+1].(string)
+		stored[field] = value
+	}
+	state = &types.ContainerState{}
+	if err := common.ToStruct(stored, state); err != nil {
+		return nil, false, fmt.Errorf("failed to deserialize container state: %v", err)
+	}
+	return state, false, nil
+}
+
+func (cr *ContainerRedisRepository) updateLockedContainerStatus(containerId string, requestedStatus types.ContainerStatus, expirySeconds int64) error {
 	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), containerStateLockOptions)
 	if err != nil {
 		return err
@@ -980,6 +1105,25 @@ func (cr *ContainerRedisRepository) SetContainerAddressMap(containerId string, a
 	return nil
 }
 
+// SetContainerAddresses is SetContainerAddressMap followed by
+// SetContainerAddress, sent together.
+func (cr *ContainerRedisRepository) SetContainerAddresses(containerId string, addressMap map[int32]string, addr string) error {
+	data, err := json.Marshal(addressMap)
+	if err != nil {
+		return fmt.Errorf("failed to marshal addressMap for container %s: %w", containerId, err)
+	}
+
+	ctx := context.TODO()
+	pipe := cr.rdb.Pipeline()
+	setAddressMap := pipe.Set(ctx, common.RedisKeys.SchedulerContainerAddressMap(containerId), data, 0)
+	setAddress := pipe.Set(ctx, common.RedisKeys.SchedulerContainerAddress(containerId), addr, 0)
+	_, _ = pipe.Exec(ctx)
+	if err := setAddressMap.Err(); err != nil {
+		return fmt.Errorf("failed to set container addressMap for container %s: %w", containerId, err)
+	}
+	return setAddress.Err()
+}
+
 func (cr *ContainerRedisRepository) GetContainerAddressMap(containerId string) (map[int32]string, error) {
 	data, err := cr.rdb.Get(context.TODO(), common.RedisKeys.SchedulerContainerAddressMap(containerId)).Bytes()
 	if err != nil {
@@ -1052,37 +1196,18 @@ func (cr *ContainerRedisRepository) GetWorkerAddress(ctx context.Context, contai
 	ctx, cancel := context.WithDeadline(ctx, internalDeadline)
 	defer cancel()
 
-	schedulingFailed := func() bool {
-		requestStatus, err := cr.GetContainerRequestStatus(containerId)
-		return err == nil && requestStatus == types.ContainerRequestStatusFailed
-	}
+	// The wait starts before the read, so that an address set between the
+	// two is not missed.
+	placed, stopWaiting := cr.workerAddresses.wait(containerId)
+	defer stopWaiting()
 
-	tryGetWorkerAddress := func() (addr string, found bool, err error) {
-		hostname, err := cr.rdb.Get(ctx, common.RedisKeys.SchedulerWorkerAddress(containerId)).Result()
-		if err == nil {
-			return hostname, true, nil
-		}
-
-		if err != redis.Nil {
-			return "", false, fmt.Errorf("failed to get worker addr for container %s: %w", containerId, err)
-		}
-
-		if schedulingFailed() {
-			return "", false, fmt.Errorf("failed to schedule container, container id: %s", containerId)
-		}
-
-		return "", false, nil
-	}
-
-	if hostname, found, err := tryGetWorkerAddress(); found || err != nil {
-		return hostname, err
+	if result, ok := readWorkerAddresses(ctx, cr.rdb, []string{containerId})[containerId]; ok {
+		return result.address, result.err
 	}
 
 	// The container has no worker yet. Everyone in that position is waited
-	// for together, in one read per interval, instead of polling here.
-	placed, stopWaiting := cr.workerAddresses.wait(cr.rdb, containerId)
-	defer stopWaiting()
-
+	// for together, instead of polling here.
+	cr.workerAddresses.listen(cr.rdb)
 	select {
 	case <-ctx.Done():
 		if time.Now().Before(internalDeadline) {
@@ -1182,18 +1307,26 @@ func (cr *ContainerRedisRepository) RecordSandboxCreated(workspaceId, appId stri
 	hour := at.UTC().Truncate(time.Hour).Unix()
 
 	pipe := cr.rdb.Pipeline()
-	pipe.HIncrBy(ctx, key, strconv.FormatInt(hour, 10), 1)
+	created := pipe.HIncrBy(ctx, key, strconv.FormatInt(hour, 10), 1)
 	pipe.Expire(ctx, key, sandboxActivityRetention)
-	fields := pipe.HKeys(ctx, key)
 	if _, err := pipe.Exec(ctx); err != nil {
+		return err
+	}
+	// Buckets only go stale when one is added, which is this write starting
+	// its hour's count. Any other write leaves the hash as the last trim did.
+	if created.Val() != 1 {
+		return nil
+	}
+	fields, err := cr.rdb.HKeys(ctx, key).Result()
+	if err != nil {
 		return err
 	}
 
 	// Trim relative to the newest bucket present, not this write's timestamp,
 	// so a late/out-of-order write can never resurrect old buckets.
-	epochs := make(map[string]int64, len(fields.Val()))
+	epochs := make(map[string]int64, len(fields))
 	newest := hour
-	for _, field := range fields.Val() {
+	for _, field := range fields {
 		epoch, err := strconv.ParseInt(field, 10, 64)
 		if err != nil {
 			continue
@@ -1454,7 +1587,183 @@ func (c *ContainerRedisRepository) CreateContainerStateWithConcurrencyLimit(quot
 	return c.createContainerState(quota, request)
 }
 
+var errContainerLockHeld = errors.New("container lock is held")
+
+// createContainerStateScript admits a container in one step: it checks that
+// the id is free, reserves the workspace's concurrency when there is a quota
+// (the reservation script itself, run as a function) and writes the state
+// and its indexes. It does what createLockedContainerState does while it
+// holds the container's lock, in the same order.
+//
+// The lock is not taken. As with updateUnlockedContainerStatusScript, the
+// script does nothing while someone holds it and the caller then takes it,
+// which is how two gateways, either of them from before this script, still
+// admit only one of two creates of the same id.
+//
+// A client that lost the reply sends the script again, and would then find
+// the container it had just created. The state keeps the admission token of
+// the call that created it, so that call is told "ok" a second time and not
+// that the id is taken.
+//
+// A counter that is not initialized is reported before the reservation is
+// looked at, so that the caller initializes it before anything is written.
+var createContainerStateScript = redis.NewScript(`
+local function reserve(KEYS, ARGV)
+` + reserveConcurrencyReservationSource + `
+end
+
+local status = redis.call("HGET", KEYS[1], "status")
+local active = status == ARGV[2] or status == ARGV[3] or status == ARGV[4]
+if active and redis.call("HGET", KEYS[1], "admission") == ARGV[1] then
+	return {"ok"}
+end
+if redis.call("EXISTS", KEYS[2]) == 1 then
+	return {"locked"}
+end
+if active then
+	return {"active"}
+end
+
+if ARGV[7] == "1" then
+	if redis.call("HGET", KEYS[6], "initialized") ~= "1" then
+		return {"repairing"}
+	end
+	local reserved = reserve({KEYS[6], KEYS[7], KEYS[8]}, {ARGV[8], ARGV[9], ARGV[10], ARGV[11], ARGV[12], ARGV[13], ARGV[14]})
+	if reserved ~= "ok" then
+		return {reserved}
+	end
+end
+
+-- As in the transaction this replaces, a write that fails does not stop the
+-- ones after it, and the caller gives the reservation back.
+local failed
+for _, write in ipairs({
+	{"HSET", KEYS[1], "admission", ARGV[1], unpack(ARGV, 15)},
+	{"EXPIRE", KEYS[1], ARGV[5]},
+	{"SADD", KEYS[3], KEYS[1]},
+	{"SADD", KEYS[4], KEYS[1]},
+	{"ZADD", KEYS[5], ARGV[6], KEYS[1]},
+}) do
+	local written, err = pcall(redis.call, unpack(write))
+	if not written and not failed then
+		failed = type(err) == "table" and err.err or tostring(err)
+	end
+end
+if failed then
+	return {"unwritten", failed}
+end
+return {"ok"}
+`)
+
 func (c *ContainerRedisRepository) createContainerState(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {
+	admission := uuid.NewString()
+	create := func() (string, error) {
+		return c.tryCreateContainerState(quota, request, admission)
+	}
+
+	_, err := create()
+	var throttled *types.ThrottledByConcurrencyLimitError
+	if quota != nil && (errors.Is(err, errConcurrencyCounterRepairing) || errors.As(err, &throttled)) {
+		// The counter needs initializing, or repairing before the limit is
+		// believed. Reserving does both, around further attempts.
+		err = c.reserveContainerConcurrencyWithAttempt(quota, request, create)
+	}
+	if errors.Is(err, errContainerLockHeld) {
+		return c.createLockedContainerState(quota, request)
+	}
+	return err
+}
+
+// tryCreateContainerState runs createContainerStateScript. It answers as
+// tryReserveContainerConcurrency does, and with errContainerLockHeld when it
+// did nothing because someone holds the container's lock.
+func (c *ContainerRedisRepository) tryCreateContainerState(quota *types.ConcurrencyLimit, request *types.ContainerRequest, admission string) (string, error) {
+	stateKey := common.RedisKeys.SchedulerContainerState(request.ContainerId)
+	now := time.Now()
+	state := pendingContainerState(request)
+
+	reserve, gpuLimit, cpuLimit := 0, int64(0), int64(0)
+	if quota != nil {
+		reserve, gpuLimit, cpuLimit = 1, int64(quota.GPULimit), int64(quota.CPUMillicoreLimit)
+	}
+	args := []interface{}{
+		admission,
+		string(types.ContainerStatusPending), string(types.ContainerStatusRunning), string(types.ContainerStatusStopping),
+		types.ContainerStateTtlSWhilePending,
+		now.Add(time.Duration(types.ContainerStateTtlSWhilePending) * time.Second).Unix(),
+		reserve, gpuLimit, cpuLimit, int64(request.GpuCount), request.Cpu, request.WorkspaceId, request.ContainerId, now.Unix(),
+	}
+	reply, err := createContainerStateScript.Run(context.TODO(), c.rdb, []string{
+		stateKey,
+		common.RedisKeys.SchedulerContainerLock(request.ContainerId),
+		common.RedisKeys.SchedulerContainerIndex(state.StubId),
+		common.RedisKeys.SchedulerContainerWorkspaceIndex(state.WorkspaceId),
+		common.RedisKeys.SchedulerContainerStateIndex(),
+		common.RedisKeys.WorkspaceConcurrencyLimitUsage(request.WorkspaceId),
+		common.RedisKeys.WorkspaceConcurrencyLimitReservation(request.WorkspaceId, request.ContainerId),
+		common.RedisKeys.WorkspaceConcurrencyLimitReservationIndex(request.WorkspaceId),
+	}, append(args, containerStateFields(request.ContainerId, state)...)...).StringSlice()
+	if err != nil {
+		return "", fmt.Errorf("failed to set container state and indexes <%v>: %w", stateKey, err)
+	}
+
+	if len(reply) == 0 {
+		return "", fmt.Errorf("unexpected container state creation result: none")
+	}
+
+	switch reply[0] {
+	case concurrencyReservationOK:
+		return "", nil
+	case "locked":
+		return "", errContainerLockHeld
+	case "active":
+		return "", &types.ContainerAlreadyScheduledError{Msg: "a container with this id is still active"}
+	case "unwritten":
+		err := fmt.Errorf("failed to set container state and indexes <%v>: %s", stateKey, strings.Join(reply[1:], ": "))
+		return "", c.releaseContainerConcurrencyAfterStateError(quota, request, err)
+	case concurrencyReservationRepairing:
+		return "repairing", errConcurrencyCounterRepairing
+	case concurrencyReservationGPUExceeded:
+		return "gpu", &types.ThrottledByConcurrencyLimitError{Reason: "gpu quota exceeded"}
+	case concurrencyReservationCPUExceeded:
+		return "cpu", &types.ThrottledByConcurrencyLimitError{Reason: "cpu quota exceeded"}
+	default:
+		return "", fmt.Errorf("unexpected container state creation result: %s", reply[0])
+	}
+}
+
+// releaseContainerConcurrencyAfterStateError gives back the reservation of a
+// container whose state could not be written, and returns the error to
+// report.
+func (c *ContainerRedisRepository) releaseContainerConcurrencyAfterStateError(quota *types.ConcurrencyLimit, request *types.ContainerRequest, err error) error {
+	if quota != nil {
+		if releaseErr := c.releaseContainerConcurrencyReservation(context.TODO(), request.WorkspaceId, request.ContainerId); releaseErr != nil {
+			return errors.Join(err, fmt.Errorf("failed to release concurrency reservation after container state error: %w", releaseErr))
+		}
+	}
+	return err
+}
+
+// pendingContainerState is the state a container is admitted with.
+func pendingContainerState(request *types.ContainerRequest) *types.ContainerState {
+	return &types.ContainerState{
+		ContainerId:  request.ContainerId,
+		StubId:       request.StubId,
+		WorkspaceId:  request.WorkspaceId,
+		Status:       types.ContainerStatusPending,
+		ScheduledAt:  time.Now().Unix(),
+		Gpu:          request.Gpu,
+		GpuCount:     request.GpuCount,
+		Cpu:          request.Cpu,
+		Memory:       request.Memory,
+		MachineId:    request.MachineId,
+		Evictable:    request.Evictable,
+		DrainSeconds: request.DrainSeconds,
+		EvictOrder:   request.EvictOrder,
+	}
+}
+
+func (c *ContainerRedisRepository) createLockedContainerState(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {
 	lockKey := common.RedisKeys.SchedulerContainerLock(request.ContainerId)
 	if err := c.lock.Acquire(context.TODO(), lockKey, containerStateLockOptions); err != nil {
 		return err
@@ -1474,30 +1783,11 @@ func (c *ContainerRedisRepository) createContainerState(quota *types.Concurrency
 			return err
 		}
 	}
-	err = c.setContainerState(request.ContainerId, &types.ContainerState{
-		ContainerId:  request.ContainerId,
-		StubId:       request.StubId,
-		WorkspaceId:  request.WorkspaceId,
-		Status:       types.ContainerStatusPending,
-		ScheduledAt:  time.Now().Unix(),
-		Gpu:          request.Gpu,
-		GpuCount:     request.GpuCount,
-		Cpu:          request.Cpu,
-		Memory:       request.Memory,
-		MachineId:    request.MachineId,
-		Evictable:    request.Evictable,
-		DrainSeconds: request.DrainSeconds,
-		EvictOrder:   request.EvictOrder,
-	})
+	err = c.setContainerState(request.ContainerId, pendingContainerState(request))
 	if err == nil {
 		return nil
 	}
-	if quota != nil {
-		if releaseErr := c.releaseContainerConcurrencyReservation(context.TODO(), request.WorkspaceId, request.ContainerId); releaseErr != nil {
-			return errors.Join(err, fmt.Errorf("failed to release concurrency reservation after container state error: %w", releaseErr))
-		}
-	}
-	return err
+	return c.releaseContainerConcurrencyAfterStateError(quota, request, err)
 }
 
 func (c *ContainerRedisRepository) CheckContainerConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {

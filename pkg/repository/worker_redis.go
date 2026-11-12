@@ -230,8 +230,13 @@ local requests = redis.call("LRANGE", KEYS[1], 0, tonumber(ARGV[1]) - 1)
 local pending = {}
 local deliveries = {}
 for i, raw in ipairs(requests) do
-	local request = cjson.decode(raw)
-	local container_id = request.container_id
+	-- A request is encoded with its container id first. Reading it from there
+	-- spares parsing the whole request, which is several kilobytes, only to
+	-- find where its state is kept.
+	local container_id = string.match(raw, '^{"container_id":"([^"\\]*)"')
+	if not container_id then
+		container_id = cjson.decode(raw).container_id
+	end
 	if not container_id or container_id == "" then
 		return redis.error_reply("container request is missing container_id")
 	end
@@ -313,12 +318,14 @@ if not assignment then
 	end
 	return -2
 end
-local encoded = redis.call("HGET", KEYS[3], assignment)
-if not encoded then
+if redis.call("HEXISTS", KEYS[3], assignment) == 0 then
 	return -2
 end
-local pending = cjson.decode(encoded)
-if pending.delivery_token ~= ARGV[4] then
+-- A delivery's token is its assignment and the attempt the state counts,
+-- which changes only when the delivery is written. Comparing with those
+-- spares reading and parsing the pending request to find the token in it.
+local attempt = redis.call("HGET", KEYS[1], ARGV[6])
+if not attempt or assignment .. ":" .. attempt ~= ARGV[4] then
 	return -2
 end
 local status = redis.call("HGET", KEYS[1], "status")
@@ -2075,7 +2082,8 @@ func (r *WorkerRedisRepository) AddContainerToWorker(workerId, containerId, deli
 		common.RedisKeys.SchedulerContainerWorkerIndex(workerId),
 		common.RedisKeys.SchedulerWorkerPendingRequests(workerId),
 		common.RedisKeys.SchedulerWorkerState(workerId),
-	}, workerId, schedulerAssignmentIDField, schedulerDeliveryTokenField, deliveryToken, string(types.ContainerStatusStopping)).Int()
+	}, workerId, schedulerAssignmentIDField, schedulerDeliveryTokenField, deliveryToken, string(types.ContainerStatusStopping),
+		schedulerDeliveryAttemptField).Int()
 	if err != nil {
 		return fmt.Errorf("failed to add container to worker container index: %w", err)
 	}

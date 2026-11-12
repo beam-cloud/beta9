@@ -2,12 +2,15 @@ package repository_services
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -216,4 +219,64 @@ func TestPrivateWorkerAddsPortWithRetainedRoutes(t *testing.T) {
 			require.Equal(t, want, status.Code(err))
 		})
 	}
+}
+
+// separateAddressesContainerRepo is a repository that can only write a
+// container's address map and its address one after the other.
+type separateAddressesContainerRepo struct {
+	repository.ContainerRepository
+	writes     []string
+	failingMap error
+}
+
+func (r *separateAddressesContainerRepo) SetBackendRoutes(context.Context, []types.BackendRoute) error {
+	return nil
+}
+
+func (r *separateAddressesContainerRepo) SetContainerAddressMap(containerID string, addressMap map[int32]string) error {
+	if r.failingMap != nil {
+		return r.failingMap
+	}
+	r.writes = append(r.writes, fmt.Sprintf("map %s %v", containerID, addressMap))
+	return nil
+}
+
+func (r *separateAddressesContainerRepo) SetContainerAddress(containerID, address string) error {
+	r.writes = append(r.writes, fmt.Sprintf("address %s %s", containerID, address))
+	return nil
+}
+
+func TestContainerAddressMapAndPrimaryAddressAreWrittenInThatOrder(t *testing.T) {
+	ctx := context.Background()
+	request := &pb.SetContainerAddressMapRequest{ContainerId: "container", AddressMap: map[int32]string{80: "10.0.0.1:30080"}, PrimaryPort: 80}
+
+	repo := &separateAddressesContainerRepo{}
+	response, err := (&ContainerRepositoryService{containerRepo: repo}).SetContainerAddressMap(ctx, request)
+	require.NoError(t, err)
+	require.True(t, response.Ok, response.ErrorMsg)
+	require.Equal(t, []string{"map container map[80:10.0.0.1:30080]", "address container 10.0.0.1:30080"}, repo.writes)
+
+	// A map that cannot be written is reported, and the address not written.
+	repo = &separateAddressesContainerRepo{failingMap: errors.New("redis is away")}
+	response, err = (&ContainerRepositoryService{containerRepo: repo}).SetContainerAddressMap(ctx, request)
+	require.NoError(t, err)
+	require.False(t, response.Ok)
+	require.Equal(t, "redis is away", response.ErrorMsg)
+	require.Empty(t, repo.writes)
+}
+
+func TestContainerWithoutAPrimaryPortGetsOnlyItsAddressMap(t *testing.T) {
+	rdb, err := repository.NewRedisClientForTest()
+	require.NoError(t, err)
+	containers := repository.NewContainerRedisRepositoryForTest(rdb)
+
+	response, err := (&ContainerRepositoryService{containerRepo: containers}).SetContainerAddressMap(context.Background(),
+		&pb.SetContainerAddressMapRequest{ContainerId: "container", AddressMap: map[int32]string{80: "10.0.0.1:30080"}})
+	require.NoError(t, err)
+	require.True(t, response.Ok, response.ErrorMsg)
+	addressMap, err := containers.GetContainerAddressMap("container")
+	require.NoError(t, err)
+	require.Equal(t, map[int32]string{80: "10.0.0.1:30080"}, addressMap)
+	_, err = containers.GetContainerAddress("container")
+	require.ErrorIs(t, err, redis.Nil)
 }

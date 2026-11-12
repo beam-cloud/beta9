@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
@@ -41,8 +42,8 @@ func TestCallersWaitingForWorkerAddressesShareTheirReads(t *testing.T) {
 	}
 	require.Eventually(t, func() bool { return repo.workerAddresses.waiting() == callers }, 5*time.Second, time.Millisecond)
 
-	// Polling on their own, they made 200 x 2 round trips every interval.
-	const intervals = 10
+	// Polling on their own, they made 200 x 2 round trips every 25 ms.
+	const intervals = 4
 	trips.enabled.Store(true)
 	time.Sleep(intervals * workerAddressPollInterval)
 	trips.enabled.Store(false)
@@ -85,6 +86,79 @@ func TestCallerWaitingForAWorkerAddressLearnsThatSchedulingFailed(t *testing.T) 
 	select {
 	case err := <-failed:
 		require.ErrorContains(t, err, "failed to schedule")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the caller kept waiting for a container the scheduler gave up on")
+	}
+}
+
+// Redis announces an address as it is set, and the caller is told then, not
+// at the next read of everything being waited for.
+func TestCallerWaitingForAWorkerAddressIsToldWhenItIsSet(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	repo := NewContainerRedisRepositoryForTest(rdb).(*ContainerRedisRepository)
+	trips := &redisRoundTrips{}
+	rdb.AddHook(trips)
+
+	told := make(chan string, 1)
+	go func() {
+		address, _ := repo.GetWorkerAddress(context.Background(), "sandbox-stub-placed")
+		told <- address
+	}()
+	require.Eventually(t, func() bool { return repo.workerAddresses.waiting() == 1 }, 5*time.Second, time.Millisecond)
+
+	// Right after a read of everything, the next is an interval away.
+	trips.enabled.Store(true)
+	read := trips.calls.Load()
+	require.Eventually(t, func() bool { return trips.calls.Load() > read }, 5*time.Second, time.Millisecond)
+
+	set := time.Now()
+	require.NoError(t, repo.SetWorkerAddress("sandbox-stub-placed", "10.0.0.1:20000"))
+	// The test Redis does not announce keys; this is what a real one sends.
+	key := common.RedisKeys.SchedulerWorkerAddress("sandbox-stub-placed")
+	require.NoError(t, rdb.Publish(context.Background(), "__keyspace@0__:"+key, common.KeyOperationSet).Err())
+
+	select {
+	case address := <-told:
+		require.Equal(t, "10.0.0.1:20000", address)
+		require.Less(t, time.Since(set), workerAddressPollInterval/2)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the caller was not given the worker address")
+	}
+}
+
+func TestReadingWorkerAddressesTellsPlacedFromFailedFromWaiting(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	require.NoError(t, repo.SetWorkerAddress("sandbox-stub-placed", "10.0.0.1:20000"))
+	require.NoError(t, repo.SetContainerRequestStatus("sandbox-stub-unplaceable", types.ContainerRequestStatusFailed))
+
+	results := readWorkerAddresses(context.Background(), rdb, []string{"sandbox-stub-placed", "sandbox-stub-unplaceable", "sandbox-stub-waiting"})
+
+	require.Len(t, results, 2)
+	require.Equal(t, workerAddressResult{address: "10.0.0.1:20000"}, results["sandbox-stub-placed"])
+	require.ErrorContains(t, results["sandbox-stub-unplaceable"].err, "failed to schedule")
+}
+
+// A caller must hear that scheduling failed about as soon as it did before.
+func TestCallerWaitingForAWorkerAddressLearnsSoonThatSchedulingFailed(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	repo := NewContainerRedisRepositoryForTest(rdb).(*ContainerRedisRepository)
+
+	failed := make(chan time.Time, 1)
+	go func() {
+		_, _ = repo.GetWorkerAddress(context.Background(), "sandbox-stub-unplaceable")
+		failed <- time.Now()
+	}()
+	require.Eventually(t, func() bool { return repo.workerAddresses.waiting() == 1 }, 5*time.Second, time.Millisecond)
+
+	require.NoError(t, repo.SetContainerRequestStatus("sandbox-stub-unplaceable", types.ContainerRequestStatusFailed))
+	set := time.Now()
+	select {
+	case at := <-failed:
+		require.Less(t, at.Sub(set), time.Second)
 	case <-time.After(5 * time.Second):
 		t.Fatal("the caller kept waiting for a container the scheduler gave up on")
 	}

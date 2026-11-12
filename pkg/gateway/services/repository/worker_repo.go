@@ -247,16 +247,9 @@ func (s *WorkerRepositoryService) ClaimContainer(ctx context.Context, req *pb.Cl
 	// it now so a long backlog wait cannot expire the state mid-startup. The
 	// worker's status heartbeat takes over from here. The renewal is a no-op
 	// when the container has already moved on (a STOPPING that raced the
-	// claim is refused, not overwritten), so the state is read after it: the
+	// claim is refused, not overwritten), so the state is the one it left: the
 	// worker acts on the persisted status, never on a stale snapshot.
-	if err := s.containerRepo.UpdateContainerStatus(req.ContainerId, types.ContainerStatusPending, int64(types.ContainerStateTtlSWhilePending)); err != nil {
-		if (&types.ErrContainerStateNotFound{}).From(err) {
-			resp.ErrorMsg = err.Error()
-			return resp, nil
-		}
-		return nil, status.Error(codes.Unavailable, err.Error())
-	}
-	state, err := s.containerRepo.GetContainerState(req.ContainerId)
+	state, err := updateContainerStatus(s.containerRepo, req.ContainerId, types.ContainerStatusPending, int64(types.ContainerStateTtlSWhilePending))
 	if err != nil {
 		if (&types.ErrContainerStateNotFound{}).From(err) {
 			resp.ErrorMsg = err.Error()
