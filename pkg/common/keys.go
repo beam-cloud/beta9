@@ -41,6 +41,9 @@ var (
 	// Hash of hour-epoch -> sandboxes created, per app. Cheap source for the
 	// dashboard's 24h activity strip; bumped on every sandbox creation.
 	schedulerAppSandboxActivity string = "scheduler:app:sandbox_activity:%s:%s"
+	// Hash of second-epoch -> sandboxes created, per app and hour: how many
+	// an app created in a recent window, exactly.
+	schedulerAppSandboxesCreated string = "scheduler:app:sandboxes_created:%s:%s:%d"
 )
 
 var (
@@ -247,6 +250,10 @@ func (rk *redisKeys) SchedulerContainerWorkspaceIndex(workspaceId string) string
 
 func (rk *redisKeys) SchedulerAppSandboxActivity(workspaceId, appId string) string {
 	return fmt.Sprintf(schedulerAppSandboxActivity, workspaceId, appId)
+}
+
+func (rk *redisKeys) SchedulerAppSandboxesCreated(workspaceId, appId string, hour time.Time) string {
+	return fmt.Sprintf(schedulerAppSandboxesCreated, workspaceId, appId, hour.Truncate(time.Hour).Unix())
 }
 
 func (rk *redisKeys) SchedulerContainerAddress(containerId string) string {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -2093,6 +2094,52 @@ func TestSandboxActivityCountersBucketByHour(t *testing.T) {
 	fields, _ := rdb.HKeys(context.Background(), common.RedisKeys.SchedulerAppSandboxActivity("ws", "app-a")).Result()
 	if len(fields) != 2 {
 		t.Fatalf("expected stale bucket to be trimmed, got fields %v", fields)
+	}
+}
+
+func TestSandboxesCreatedAreCountedBySecond(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := NewContainerRedisRepositoryForTest(rdb)
+
+	// The window spans two hours, each of which is its own hash.
+	from := time.Date(2026, 9, 7, 14, 50, 0, 0, time.UTC)
+	to := from.Add(15 * time.Minute)
+	created := []time.Time{
+		from.Add(-time.Second),
+		from,
+		from.Add(500 * time.Millisecond),
+		from.Add(12 * time.Minute),
+		to.Add(-time.Second),
+		to,
+	}
+	for _, at := range created {
+		if err := repo.RecordSandboxCreated("ws", "app-a", at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repo.RecordSandboxCreated("ws", "app-b", from); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := repo.GetSandboxesCreated("ws", "app-a", from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []types.AppActivityBucket{
+		{Time: from, Total: 2},
+		{Time: from.Add(12 * time.Minute), Total: 1},
+		{Time: to.Add(-time.Second), Total: 1},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("sandboxes created = %+v, want %+v", got, want)
+	}
+
+	key := common.RedisKeys.SchedulerAppSandboxesCreated("ws", "app-a", from)
+	if ttl := rdb.TTL(context.Background(), key).Val(); ttl != SandboxesCreatedRetention {
+		t.Fatalf("an hour's counts expire in %v, want %v", ttl, SandboxesCreatedRetention)
 	}
 }
 

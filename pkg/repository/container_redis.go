@@ -1298,6 +1298,11 @@ func (cr *ContainerRedisRepository) listContainerStateByIndex(indexKey string, k
 // most ~25 fields and reads are a single HGETALL per app.
 const sandboxActivityRetention = 26 * time.Hour
 
+// Sandboxes created are also counted by the second, in one hash per app per
+// hour, so that how many an app created in a recent window is known exactly.
+// A second's count is kept at least this long.
+const SandboxesCreatedRetention = 2 * time.Hour
+
 func (cr *ContainerRedisRepository) RecordSandboxCreated(workspaceId, appId string, at time.Time) error {
 	if workspaceId == "" || appId == "" {
 		return nil
@@ -1305,10 +1310,13 @@ func (cr *ContainerRedisRepository) RecordSandboxCreated(workspaceId, appId stri
 	ctx := context.TODO()
 	key := common.RedisKeys.SchedulerAppSandboxActivity(workspaceId, appId)
 	hour := at.UTC().Truncate(time.Hour).Unix()
+	secondsKey := common.RedisKeys.SchedulerAppSandboxesCreated(workspaceId, appId, at)
 
 	pipe := cr.rdb.Pipeline()
 	created := pipe.HIncrBy(ctx, key, strconv.FormatInt(hour, 10), 1)
 	pipe.Expire(ctx, key, sandboxActivityRetention)
+	pipe.HIncrBy(ctx, secondsKey, strconv.FormatInt(at.Unix(), 10), 1)
+	pipe.Expire(ctx, secondsKey, SandboxesCreatedRetention)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return err
 	}
@@ -1387,6 +1395,43 @@ func (cr *ContainerRedisRepository) GetSandboxActivity(workspaceId string, appId
 		result[appId] = buckets
 	}
 	return result, nil
+}
+
+// GetSandboxesCreated returns how many sandboxes an app created in each
+// second of [from, to) that had any, oldest first. Seconds from longer ago
+// than SandboxesCreatedRetention may be missing.
+func (cr *ContainerRedisRepository) GetSandboxesCreated(workspaceId, appId string, from, to time.Time) ([]types.AppActivityBucket, error) {
+	ctx := context.TODO()
+
+	pipe := cr.rdb.Pipeline()
+	hours := []*redis.MapStringStringCmd{}
+	for hour := from.Truncate(time.Hour); hour.Before(to); hour = hour.Add(time.Hour) {
+		hours = append(hours, pipe.HGetAll(ctx, common.RedisKeys.SchedulerAppSandboxesCreated(workspaceId, appId, hour)))
+	}
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		return nil, err
+	}
+
+	created := []types.AppActivityBucket{}
+	for _, hour := range hours {
+		for field, raw := range hour.Val() {
+			epoch, err := strconv.ParseInt(field, 10, 64)
+			if err != nil {
+				continue
+			}
+			second := time.Unix(epoch, 0).UTC()
+			if second.Before(from) || !second.Before(to) {
+				continue
+			}
+			count, err := strconv.Atoi(raw)
+			if err != nil {
+				continue
+			}
+			created = append(created, types.AppActivityBucket{Time: second, Total: count})
+		}
+	}
+	sort.Slice(created, func(a, b int) bool { return created[a].Time.Before(created[b].Time) })
+	return created, nil
 }
 
 func (cr *ContainerRedisRepository) GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error) {

@@ -146,11 +146,12 @@ func TestRecordingASandboxReadsItsActivityOnlyWhenAnHourStarts(t *testing.T) {
 
 	// The first sandbox of an hour adds a bucket, so stale ones are looked for.
 	commands, _ := record(hour.Add(time.Minute))
-	require.Equal(t, map[string]int{"HINCRBY": 1, "EXPIRE": 1, "HKEYS": 1}, commands)
+	require.Equal(t, map[string]int{"HINCRBY": 2, "EXPIRE": 2, "HKEYS": 1}, commands)
 
-	// Every other one only counts. It used to list the buckets as well.
+	// Every other one only counts, by the hour and by the second. It used to
+	// list the buckets as well.
 	commands, roundTrips := record(hour.Add(2 * time.Minute))
-	require.Equal(t, map[string]int{"HINCRBY": 1, "EXPIRE": 1}, commands)
+	require.Equal(t, map[string]int{"HINCRBY": 2, "EXPIRE": 2}, commands)
 	require.Equal(t, 1, roundTrips)
 	require.Equal(t, map[string]string{fmt.Sprint(hour.Unix()): "2"}, rdb.HGetAll(ctx, key).Val())
 	require.Equal(t, sandboxActivityRetention, rdb.TTL(ctx, key).Val())
@@ -158,7 +159,7 @@ func TestRecordingASandboxReadsItsActivityOnlyWhenAnHourStarts(t *testing.T) {
 	// A new hour past the retention window trims the bucket that fell out of it.
 	later := hour.Add(sandboxActivityRetention + time.Hour)
 	commands, _ = record(later.Add(time.Minute))
-	require.Equal(t, map[string]int{"HINCRBY": 1, "EXPIRE": 1, "HKEYS": 1, "HDEL": 1}, commands)
+	require.Equal(t, map[string]int{"HINCRBY": 2, "EXPIRE": 2, "HKEYS": 1, "HDEL": 1}, commands)
 	require.Equal(t, map[string]string{fmt.Sprint(later.Unix()): "1"}, rdb.HGetAll(ctx, key).Val())
 
 	// A late write to an hour already out of the window is trimmed at once.

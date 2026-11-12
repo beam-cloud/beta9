@@ -258,6 +258,91 @@ func TestSandboxHistoryCapacityReturnsRetryableError(t *testing.T) {
 	}
 }
 
+type sandboxesCreatedRepo struct {
+	repository.ContainerRepository
+	created []types.AppActivityBucket
+}
+
+func (r sandboxesCreatedRepo) GetActiveContainersByWorkspaceId(string) ([]types.ContainerState, error) {
+	return nil, nil
+}
+
+func (r sandboxesCreatedRepo) GetSandboxesCreated(_, _ string, from, to time.Time) ([]types.AppActivityBucket, error) {
+	created := []types.AppActivityBucket{}
+	for _, second := range r.created {
+		if !second.Time.Before(from) && second.Time.Before(to) {
+			created = append(created, second)
+		}
+	}
+	return created, nil
+}
+
+func TestSandboxStatsCountEverySandboxCreated(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	stub := types.StubWithRelated{Stub: types.Stub{ExternalId: "sandbox-stub", CreatedAt: types.Time{Time: now.Add(-time.Minute)}}}
+	stats := func(t *testing.T, url string, created ...types.AppActivityBucket) SandboxStatsResponse {
+		t.Helper()
+		group := &StubGroup{
+			backendRepo:   sandboxHistoryBackendRepo{stubs: []types.StubWithRelated{stub}},
+			eventRepo:     &sandboxRowsEventRepo{history: &types.EventHistoryResponse{}},
+			containerRepo: sandboxesCreatedRepo{created: created},
+		}
+		recorder := httptest.NewRecorder()
+		ctx := echo.New().NewContext(httptest.NewRequest(http.MethodGet, url, nil), recorder)
+		ctx.SetParamNames("workspaceId")
+		ctx.SetParamValues("workspace")
+		if err := group.GetSandboxStats(ctx); err != nil {
+			t.Fatalf("handler returned error: %v", err)
+		}
+		var response SandboxStatsResponse
+		if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		return response
+	}
+	charted := func(response SandboxStatsResponse) int {
+		total := 0
+		for _, bucket := range response.CreatedBuckets {
+			total += bucket.Count
+		}
+		return total
+	}
+	window := fmt.Sprintf("start=%d&end=%d", now.Add(-15*time.Minute).UnixMilli(), now.UnixMilli())
+	lastQuarterHour := "/?app_id=app-1&" + window
+	counted := []types.AppActivityBucket{
+		{Time: now.Add(-20 * time.Minute), Total: 9},
+		{Time: now.Add(-2 * time.Minute), Total: 3000},
+		{Time: now.Add(-time.Second), Total: 4000},
+	}
+
+	// The one row the history gives is far fewer than the app created.
+	response := stats(t, lastQuarterHour, counted...)
+	if response.TotalCreated != 7000 || charted(response) != 7000 {
+		t.Fatalf("created = %d, charted = %d; want 7000 for both", response.TotalCreated, charted(response))
+	}
+	if !response.WindowStart.Equal(now.Add(-15*time.Minute)) || len(response.CreatedBuckets) != 60 {
+		t.Fatalf("window starts %v with %d buckets; want the one asked for, in 60", response.WindowStart, len(response.CreatedBuckets))
+	}
+	if early, last := response.CreatedBuckets[52].Count, response.CreatedBuckets[59].Count; early != 3000 || last != 4000 {
+		t.Fatalf("buckets of two minutes ago and of the last second = %d and %d, want 3000 and 4000", early, last)
+	}
+
+	// A count that knows of fewer than the rows, as one that has only just
+	// begun does, is not used. Neither is one for a range it does not cover.
+	rows := stats(t, lastQuarterHour).TotalCreated
+	if rows == 0 {
+		t.Fatal("the stub's own row was not counted")
+	}
+	for name, url := range map[string]string{
+		"all apps": "/?" + window,
+		"last day": "/?app_id=app-1&chart_range=last_day",
+	} {
+		if response := stats(t, url, counted...); response.TotalCreated != rows || charted(response) != rows {
+			t.Fatalf("%s: created = %d, charted = %d; want the %d from rows", name, response.TotalCreated, charted(response), rows)
+		}
+	}
+}
+
 func TestEmptySandboxHandlersSkipRealtimeRepositories(t *testing.T) {
 	run := func(t *testing.T, url string, handler func(*StubGroup, echo.Context) error) *httptest.ResponseRecorder {
 		t.Helper()

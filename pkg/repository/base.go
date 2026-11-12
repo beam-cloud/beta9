@@ -87,6 +87,7 @@ type ContainerRepository interface {
 	GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error)
 	RecordSandboxCreated(workspaceId, appId string, at time.Time) error
 	GetSandboxActivity(workspaceId string, appIds []string, since time.Time) (map[string][]types.AppActivityBucket, error)
+	GetSandboxesCreated(workspaceId, appId string, from, to time.Time) ([]types.AppActivityBucket, error)
 	GetActiveContainersByWorkerId(workerId string) ([]types.ContainerState, error)
 	GetFailedContainersByStubId(stubId string) ([]string, error)
 	GetContainersByStubId(stubId string) (active []types.ContainerState, failed []string, err error)

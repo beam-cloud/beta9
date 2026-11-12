@@ -733,6 +733,28 @@ type SandboxStatsResponse struct {
 	WindowEnd   time.Time `json:"window_end"`
 }
 
+// sandboxesCounted returns the app's sandboxes created in each bucket of the
+// range, and in all of it, from the count kept as they are created. It is
+// empty for a range that count does not cover: one without an app, or one
+// that starts longer ago than the count is kept.
+func (g *StubGroup) sandboxesCounted(workspaceID, appID string, r sandboxChartRange) ([]SandboxCreatedBucket, int) {
+	if appID == "" || g.containerRepo == nil || time.Since(r.start) > repository.SandboxesCreatedRetention {
+		return nil, 0
+	}
+	created, err := g.containerRepo.GetSandboxesCreated(workspaceID, appID, r.start, r.end())
+	if err != nil {
+		return nil, 0
+	}
+
+	buckets := buildSandboxRowCreatedBucketsForRange(nil, r)
+	total := 0
+	for _, second := range created {
+		buckets[second.Time.Sub(r.start)/r.bucketSize].Count += second.Total
+		total += second.Total
+	}
+	return buckets, total
+}
+
 func sandboxListLimit(ctx echo.Context) (int, error) {
 	raw := ctx.QueryParam("limit")
 	if raw == "" {
@@ -873,6 +895,14 @@ func (g *StubGroup) GetSandboxStats(ctx echo.Context) error {
 		}
 	}
 
+	// The rows come from a bounded stretch of history, so once many sandboxes
+	// have come and gone they are fewer than were created. The count kept as
+	// sandboxes are created is exact; it is used once it knows of more.
+	createdBuckets := buildSandboxRowCreatedBucketsForRange(sandboxRows, chartRange)
+	if counted, countedTotal := g.sandboxesCounted(workspaceID, appID, chartRange); countedTotal > total {
+		createdBuckets, total = counted, countedTotal
+	}
+
 	ratePerSecond := 0.0
 	if total > 0 {
 		windowEnd := chartRange.end()
@@ -889,9 +919,9 @@ func (g *StubGroup) GetSandboxStats(ctx echo.Context) error {
 		TotalCreated:  total,
 		RatePerSecond: ratePerSecond,
 		StatusCounts:  statusCounts,
-		// Bucket the same rows the counters and the table are built from so
-		// the chart, "created" total and list never disagree.
-		CreatedBuckets: buildSandboxRowCreatedBucketsForRange(sandboxRows, chartRange),
+		// The chart and the "created" total are built from the same source,
+		// so they never disagree.
+		CreatedBuckets: createdBuckets,
 		WindowStart:    chartRange.start,
 		WindowEnd:      chartRange.end(),
 	})
@@ -2129,7 +2159,9 @@ func parseSandboxChartWindow(ctx echo.Context, now time.Time) sandboxChartWindow
 			end = now.UTC()
 		}
 	}
-	start := time.UnixMilli(startMs).UTC()
+	// A window starts on a whole second, which is how finely the sandboxes
+	// created in it are counted.
+	start := time.UnixMilli(startMs).UTC().Truncate(time.Second)
 	if !end.After(start) {
 		return sandboxChartWindow{}
 	}
