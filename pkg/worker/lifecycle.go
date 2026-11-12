@@ -46,6 +46,7 @@ const (
 	containerRepositoryRetryInterval         = 100 * time.Millisecond
 	containerRuntimeStateTimeout             = 2 * time.Second
 	observedStoppingSignalTimeout            = 5 * time.Second
+	stopSignalRetryInterval                  = 250 * time.Millisecond
 	cpuQuotaApplyTimeout                     = 2 * time.Second
 	sandboxCPUQuotaGrace                     = 10 * time.Second
 	sandboxCPUQuotaRetryWindow               = 30 * time.Second
@@ -229,24 +230,30 @@ func (s *Worker) stopObservedContainer(containerID string, request *types.Contai
 	needsStop := forceImmediately
 	var stopSignalErr error
 	if !forceImmediately {
-		graceStarted := time.Now()
-		stopCtx, cancelStop := context.WithTimeout(context.Background(), observedStoppingSignalTimeout)
-		stopSignalErr = s.stopContainerWithContext(stopCtx, containerID, false)
-		cancelStop()
+		grace := s.containerTerminationGrace(request)
+		graceEnded := time.NewTimer(grace)
+		defer graceEnded.Stop()
+		stopSignalErr = s.stopContainer(containerID, false)
 		if stopSignalErr != nil && !runtimeContainerNotFound(stopSignalErr) {
 			log.Warn().Str("container_id", containerID).Err(stopSignalErr).Msg("failed to send graceful stop for persisted STOPPING container")
 		}
 
-		grace := s.containerTerminationGrace(request)
-		if remaining := grace - time.Since(graceStarted); remaining > 0 {
-			timer := time.NewTimer(remaining)
-			defer timer.Stop()
-			workerCtx := s.ctx
-			if workerCtx == nil {
-				workerCtx = context.Background()
-			}
+		// A stop can be observed before the runtime can be signalled. Signal
+		// it once it has started, rather than when the grace period ends.
+		retry := time.NewTicker(stopSignalRetryInterval)
+		defer retry.Stop()
+		workerCtx := s.ctx
+		if workerCtx == nil {
+			workerCtx = context.Background()
+		}
+		for waiting := true; waiting; {
 			select {
-			case <-timer.C:
+			case <-graceEnded.C:
+				waiting = false
+			case <-retry.C:
+				if stopSignalErr != nil && s.runtimeAwaitsStop(containerID) {
+					stopSignalErr = s.stopContainer(containerID, false)
+				}
 			case <-workerCtx.Done():
 				return
 			}
@@ -362,6 +369,18 @@ func (s *Worker) scheduleStuckWorkspaceMountRecovery(instance *ContainerInstance
 		case <-workerCtx.Done():
 		}
 	}()
+}
+
+// runtimeAwaitsStop reports whether the container's runtime has started and
+// has not exited.
+func (s *Worker) runtimeAwaitsStop(containerID string) bool {
+	instance, exists := s.containerInstances.Get(containerID)
+	if !exists || instance == nil {
+		return false
+	}
+	started, _ := instance.runtimeStartState()
+	exitCode, _ := instance.lifecycleState()
+	return started && exitCode < 0
 }
 
 func (s *Worker) observedContainerRuntime(containerID string) (*ContainerInstance, runtime.Runtime, bool) {

@@ -635,23 +635,14 @@ func NewWorker() (_ *Worker, err error) {
 			log.Info().Msg("enabled shmem transparent huge pages for gVisor")
 		}
 
-		// Get gVisor configuration from pool config
-		gvisorRoot := poolConfig.ContainerRuntimeConfig.GVisorRoot
-		if gvisorRoot == "" {
-			gvisorRoot = "/run/gvisor"
-		}
-
-		gvisorPlatform := poolConfig.ContainerRuntimeConfig.GVisorPlatform
-		if gvisorPlatform == "" {
-			gvisorPlatform = "systrap"
-		}
-
+		// A pool that sets no gVisor options runs with the shared defaults.
+		gvisorConfig := poolConfig.ContainerRuntimeConfig.WithDefaults(types.ContainerRuntimeGvisor.String())
 		gvisorRuntime, err = runtime.New(runtime.Config{
 			Type:           types.ContainerRuntimeGvisor.String(),
 			RunscPath:      "runsc",
-			RunscRoot:      gvisorRoot,
-			RunscPlatform:  gvisorPlatform,
-			RunscExtraArgs: poolConfig.ContainerRuntimeConfig.GVisorExtraArgs,
+			RunscRoot:      gvisorConfig.GVisorRoot,
+			RunscPlatform:  gvisorConfig.GVisorPlatform,
+			RunscExtraArgs: gvisorConfig.GVisorExtraArgs,
 			Debug:          config.DebugMode,
 		})
 		if err != nil {
@@ -660,8 +651,8 @@ func NewWorker() (_ *Worker, err error) {
 		} else {
 			defaultRuntime = gvisorRuntime
 			log.Info().
-				Str("platform", gvisorPlatform).
-				Str("root", gvisorRoot).
+				Str("platform", gvisorConfig.GVisorPlatform).
+				Str("root", gvisorConfig.GVisorRoot).
 				Msg("gVisor runtime initialized successfully")
 		}
 	case types.ContainerRuntimeMicroVM.String():
