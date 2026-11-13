@@ -19,6 +19,7 @@ type WorkerRepository interface {
 	GetAllWorkers() ([]*types.Worker, error)
 	GetAllWorkersInPool(poolName string) ([]*types.Worker, error)
 	AddWorker(w *types.Worker) error
+	AddWorkerWithSetup(ctx context.Context, w *types.Worker, setup func(context.Context) error) error
 	ToggleWorkerAvailable(workerId, generation string) error
 	SetWorkerCordon(workerId string, cordoned bool) error
 	PrepareWorkerRollout(workerId, generation string) (bool, error)
