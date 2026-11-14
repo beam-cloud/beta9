@@ -275,7 +275,7 @@ def setup_mirror(context: Optional[str]):
     try:
         with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
             connect_workspace(selected)
-            with steps.step("Installing the mirror utility", "Mirror utility is up to date"):
+            with steps.step("Installing the mirror utility", "Mirror utility installed"):
                 path, updated = mirror.install()
             with steps.step("Starting the mirror utility", "Mirror utility started"):
                 status = mirror.start(selected)
