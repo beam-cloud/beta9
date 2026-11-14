@@ -19,8 +19,9 @@ store tells them apart:
 
 - **Content objects** hold file bytes. A manifest refers to byte ranges of
   them. They are at most 64 MiB.
-- **Manifests** describe one generation each. The gateway commits stored
-  manifests of up to 256 MiB.
+- **Manifests** describe one generation each. The gateway commits a manifest
+  whose stored bytes and decoded body are each at most 256 MiB, which is
+  about three million files.
 
 Objects are never modified. A generation is the set of objects its manifest
 names plus the manifest itself, so two generations share every object they
