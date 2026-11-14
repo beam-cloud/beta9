@@ -25,6 +25,7 @@ import (
 	bot "github.com/beam-cloud/beta9/pkg/abstractions/experimental/bot"
 	_signal "github.com/beam-cloud/beta9/pkg/abstractions/experimental/signal"
 	"github.com/beam-cloud/beta9/pkg/abstractions/managedendpoint"
+	"github.com/beam-cloud/beta9/pkg/abstractions/mirror"
 	pod "github.com/beam-cloud/beta9/pkg/abstractions/pod"
 	_shell "github.com/beam-cloud/beta9/pkg/abstractions/shell"
 	vm "github.com/beam-cloud/beta9/pkg/abstractions/vm"
@@ -728,6 +729,20 @@ func (g *Gateway) registerServices() error {
 	if vmConfig.BaseURL == "" {
 		vmConfig.BaseURL = g.Config.GatewayService.HTTP.GetExternalURL()
 	}
+	mirrorConfig := g.Config.Abstractions.Mirror
+	mirrors, err := mirror.New(g.ctx, mirror.ServiceOpts{
+		Config: mirror.Config{
+			KeepGenerations: mirrorConfig.KeepGenerations,
+			SweepGrace:      mirrorConfig.SweepGrace,
+			SweepInterval:   mirrorConfig.SweepInterval,
+		},
+		BackendRepo: g.BackendRepo,
+		Storage:     g.Config.Storage.WorkspaceStorage,
+		RouteGroup:  g.baseRouteGroup.Group("/mirror", g.authMiddleware),
+	})
+	if err != nil {
+		return err
+	}
 	if err := vm.New(g.ctx, vm.ServiceOpts{
 		StateRepo:     vm.NewVMRedisRepository(g.RedisClient),
 		Config:        vmConfig,
@@ -737,6 +752,7 @@ func (g *Gateway) registerServices() error {
 		Runtime:       vmRuntime,
 		Gateway:       gws,
 		Images:        is,
+		Mirrors:       mirrors,
 		RouteGroup:    g.baseRouteGroup.Group("/vm", g.authMiddleware),
 		Server:        g.echo,
 		BackendDialer: network.NewBackendDialer(g.Tailscale, g.Config.Tailscale, g.ContainerRepo, 10*time.Second),
