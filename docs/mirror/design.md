@@ -19,15 +19,22 @@ store format has its own specification in [format.md](format.md).
    generation. The pin is part of the VM's spec for its whole life. A fork,
    and a VM made from a snapshot or template of a pinned VM, keeps the pin;
    a published template drops it.
-4. The worker mounts the pinned generation as a read-only FUSE filesystem and
-   puts it between the image and everything writable:
-   `lowerdir=<mirror>:<image>`. The tree appears as `/root`, owned by root,
-   and in a desktop VM also as the desktop user's home, owned by that user.
-   The worker reads that account from the image (`/opt/beam-vm/desktop-user`
-   and `/etc/passwd`), because its uid is whatever the image had free: 1001
-   on Ubuntu 24.04, where `ubuntu` holds 1000. VMs on a worker pinned to the
-   same generation share one mount when their images have the same homes.
-5. A purge deletes the mirror's objects. Workers notice within a minute, stop
+4. The worker mounts the pinned generation as a FUSE filesystem and puts it
+   above the image and below the VM's own disk: `lowerdir=<mirror>:<image>`.
+   The tree appears as `/root`, owned by root, and in a desktop VM also as
+   the desktop user's home, owned by that user. The worker reads that account
+   from the image (`/opt/beam-vm/desktop-user` and `/etc/passwd`), because
+   its uid is whatever the image had free: 1001 on Ubuntu 24.04, where
+   `ubuntu` holds 1000. VMs on a worker pinned to the same generation share
+   one mount when their images have the same homes.
+5. In the VM the mirrored files are ordinary files. Root and the desktop user
+   can edit, move, delete and add to them. A change is written to the VM's
+   disk, as a change to a file of the image is: it survives a stop and
+   start and goes into a fork. The first change to a file copies the whole
+   file to that disk. No change reaches the mirror, the laptop or another
+   VM; what the worker mounts never changes, and only in that sense is the
+   layer read-only.
+6. A purge deletes the mirror's objects. Workers notice within a minute, stop
    returning file contents from the layer and drop what the kernel cached.
    A VM restarted after a purge starts without the layer and keeps its own
    writes.
@@ -205,6 +212,18 @@ utility leaves out.
   second push took 2.5 s and uploaded 4 objects, 1.4 MiB. A new VM was ready
   in 1.7 s on generation 2 and matched the edited home. The first VM still
   matched the original.
+- In a desktop VM, 29 checks of changing mirrored files passed as root in
+  `/root` and as the desktop user in its home: overwriting, appending,
+  writing in the middle and through a shared mapping, truncating, creating,
+  deleting a file and a tree of 2,997 files, `rename(2)` of a file and of a
+  directory, `chmod`, setting a time, a hard link, retargeting a symlink, an
+  insert into a 196 MiB SQLite database added for the check, followed by
+  its integrity check, and `git commit` and `git switch -c` in a mirrored
+  checkout. GIO, which the desktop's applications ask, reported the files
+  writable. The first write to a 402 MiB file took 4.0 to 4.9 s, the time
+  to copy it to the VM's disk. The changes were there after a stop and
+  start and in a fork, a second VM on the same mirror had none of them, and
+  the next push found nothing changed on the laptop.
 - `beam-mirror restore` of either generation into an empty directory
   matched its source in content and metadata, in 5.3 s.
 - A gateway restart during a push (three seconds of refused connections)

@@ -188,7 +188,8 @@ class VM:
     mirror utility (`setup mirror`). The VM starts with the mirror's latest
     generation in /root and, with a desktop, in the desktop user's home,
     read on demand, and keeps that generation for life; so do its forks,
-    snapshots and templates.
+    snapshots and templates. The files can be changed like any others;
+    changes stay on the VM's disk and are not sent back to the mirror.
 
     Fresh VMs default to digest-pinned Ubuntu 24.04, 4 CPUs, 8192 MiB RAM
     and a 50 GiB root. Desktop is opt-in and needs at least 1024 MiB RAM.
