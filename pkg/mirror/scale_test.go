@@ -90,7 +90,8 @@ func TestScale(t *testing.T) {
 		t.Log("not root or no /dev/fuse: skipping the mounted walk")
 		return
 	}
-	fsys, err := NewFS(manifest, zeroSource{}, FSOptions{})
+	// A desktop VM: a purge visits every file once for each home.
+	fsys, err := NewFS(manifest, zeroSource{}, FSOptions{Placements: desktopPlacements})
 	require.NoError(t, err)
 	mountPoint := t.TempDir()
 	server, err := Mount(mountPoint, fsys)

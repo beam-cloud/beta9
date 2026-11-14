@@ -173,7 +173,7 @@ func TestMirrorLayersShareOneMountPerGeneration(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			var err error
-			paths[i], releases[i], err = h.layers.acquire(ctx, mirrorRequest(7), first)
+			paths[i], releases[i], err = h.layers.acquire(ctx, mirrorRequest(7), first, nil)
 			require.NoError(t, err)
 		}()
 	}
@@ -190,10 +190,10 @@ func TestMirrorLayersShareOneMountPerGeneration(t *testing.T) {
 
 	// Another generation, and the same generation for another workspace,
 	// are separate mounts.
-	other, releaseOther, err := h.layers.acquire(ctx, mirrorRequest(7), second)
+	other, releaseOther, err := h.layers.acquire(ctx, mirrorRequest(7), second, nil)
 	require.NoError(t, err)
 	require.NotEqual(t, paths[0], other)
-	foreign, releaseForeign, err := h.layers.acquire(ctx, mirrorRequest(8), first)
+	foreign, releaseForeign, err := h.layers.acquire(ctx, mirrorRequest(8), first, nil)
 	require.NoError(t, err)
 	require.NotEqual(t, paths[0], foreign)
 	require.Len(t, h.mounts, 3)
@@ -208,7 +208,7 @@ func TestMirrorLayersShareOneMountPerGeneration(t *testing.T) {
 	releaseOther()
 	releaseForeign()
 	require.Zero(t, h.layers.pruneIdle(time.Now().Add(-time.Minute)))
-	again, release, err := h.layers.acquire(ctx, mirrorRequest(7), first)
+	again, release, err := h.layers.acquire(ctx, mirrorRequest(7), first, nil)
 	require.NoError(t, err)
 	require.Equal(t, paths[0], again, "a restart inside the timeout finds the mount")
 	require.Equal(t, int32(3), h.opened.Load())
@@ -220,13 +220,105 @@ func TestMirrorLayersShareOneMountPerGeneration(t *testing.T) {
 	require.NoDirExists(t, paths[0])
 }
 
+// The homes are the image's, so VMs of images whose desktop users differ
+// cannot share a mount: ownership belongs to the mount.
+func TestMirrorLayersMountPerSetOfHomes(t *testing.T) {
+	h := newMirrorLayerHarness(t)
+	pin := h.generation(t, 1, map[string]string{"notes.txt": "one"})
+	ctx := context.Background()
+	desktop := func(uid uint32) []mirror.Placement {
+		return []mirror.Placement{mirror.RootHome, {Path: "/home/beam", UID: uid, GID: uid, Mode: 0o750}}
+	}
+
+	headless, release, err := h.layers.acquire(ctx, mirrorRequest(7), pin, nil)
+	require.NoError(t, err)
+	defer release()
+	same, release, err := h.layers.acquire(ctx, mirrorRequest(7), pin, []mirror.Placement{mirror.RootHome})
+	require.NoError(t, err)
+	defer release()
+	require.Equal(t, headless, same)
+	require.Equal(t, []mirror.Placement{mirror.RootHome}, h.mounts[headless].Placements())
+
+	paths := map[string]bool{headless: true}
+	for _, uid := range []uint32{1000, 1001, 1001} {
+		path, release, err := h.layers.acquire(ctx, mirrorRequest(7), pin, desktop(uid))
+		require.NoError(t, err)
+		defer release()
+		paths[path] = true
+		require.Equal(t, desktop(uid), h.mounts[path].Placements())
+	}
+	require.Len(t, paths, 3)
+	require.Len(t, h.mounts, 3)
+}
+
+func TestMirrorPlacementsAreTheImagesHomes(t *testing.T) {
+	// What a host file would say if a symlink in an image could reach it.
+	outside := filepath.Join(t.TempDir(), "passwd")
+	require.NoError(t, os.WriteFile(outside, []byte("beam:x:4242:4242::/home/host:/bin/bash\n"), 0o644))
+
+	image := func(files map[string]string, dirs map[string]os.FileMode) string {
+		rootfs := t.TempDir()
+		for name, mode := range dirs {
+			require.NoError(t, os.MkdirAll(filepath.Join(rootfs, name), 0o755))
+			require.NoError(t, os.Chmod(filepath.Join(rootfs, name), mode))
+		}
+		for name, content := range files {
+			require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(rootfs, name)), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(rootfs, name), []byte(content), 0o644))
+		}
+		return rootfs
+	}
+	// Ubuntu's image has an account at 1000 before the desktop's is added.
+	passwd := "root:x:0:0:root:/root:/bin/bash\nubuntu:x:1000:1000:Ubuntu:/home/ubuntu:/bin/bash\nbeam:x:1001:1002::/home/beam:/bin/bash\n"
+	root := mirror.RootHome
+	beam := mirror.Placement{Path: "/home/beam", UID: 1001, GID: 1002, Mode: 0o750}
+
+	linked := image(map[string]string{imageDesktopUserFile: "beam\n"}, nil)
+	require.NoError(t, os.Mkdir(filepath.Join(linked, "etc"), 0o755))
+	require.NoError(t, os.Symlink(outside, filepath.Join(linked, "etc/passwd")))
+	notAFile := image(map[string]string{"etc/passwd": passwd}, map[string]os.FileMode{imageDesktopUserFile: 0o755})
+
+	for _, test := range []struct {
+		name    string
+		rootfs  string
+		want    []mirror.Placement
+		wantErr string
+	}{
+		{name: "no desktop", rootfs: image(map[string]string{"etc/passwd": passwd}, nil), want: []mirror.Placement{root}},
+		{name: "desktop user", rootfs: image(map[string]string{"etc/passwd": passwd, imageDesktopUserFile: "beam\n"}, nil), want: []mirror.Placement{root, beam}},
+		{
+			name:   "homes keep the image's modes",
+			rootfs: image(map[string]string{"etc/passwd": passwd, imageDesktopUserFile: "beam\n"}, map[string]os.FileMode{"root": 0o710, "home/beam": 0o755}),
+			want:   []mirror.Placement{{Path: "/root", Mode: 0o710}, {Path: "/home/beam", UID: 1001, GID: 1002, Mode: 0o755}},
+		},
+		{name: "desktop runs as root", rootfs: image(map[string]string{"etc/passwd": passwd, imageDesktopUserFile: "root\n"}, nil), want: []mirror.Placement{root}},
+		{name: "no such account", rootfs: image(map[string]string{"etc/passwd": passwd, imageDesktopUserFile: "kiosk\n"}, nil), want: []mirror.Placement{root}},
+		{name: "no accounts", rootfs: image(map[string]string{imageDesktopUserFile: "beam\n"}, nil), want: []mirror.Placement{root}},
+		{name: "accounts linked out of the image", rootfs: linked, want: []mirror.Placement{root}},
+		{name: "oversized uid", rootfs: image(map[string]string{"etc/passwd": "beam:x:4294967296:1::/home/beam:\n", imageDesktopUserFile: "beam\n"}, nil), wantErr: "out of range"},
+		{name: "negative gid", rootfs: image(map[string]string{"etc/passwd": "beam:x:1:-1::/home/beam:\n", imageDesktopUserFile: "beam\n"}, nil), wantErr: "out of range"},
+		{name: "desktop user is not a file", rootfs: notAFile, wantErr: "not a regular file"},
+		{name: "no image", rootfs: filepath.Join(t.TempDir(), "missing"), wantErr: "no such file"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			placements, err := mirrorPlacements(test.rootfs)
+			if test.wantErr != "" {
+				require.ErrorContains(t, err, test.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.want, placements)
+		})
+	}
+}
+
 func TestMirrorLayerReadsThroughTheNodeCacheAndVerifies(t *testing.T) {
 	h := newMirrorLayerHarness(t)
 	pin := h.generation(t, 1, map[string]string{"a.txt": "alpha", "b.txt": "beta"})
 	ctx := context.Background()
 	manifestKey := types.MirrorObjectKey(h.mirrorID, pin.ManifestDigest)
 
-	path, release, err := h.layers.acquire(ctx, mirrorRequest(7), pin)
+	path, release, err := h.layers.acquire(ctx, mirrorRequest(7), pin, nil)
 	require.NoError(t, err)
 	content, err := readMirrorFile(t, h.mounts[path], "a.txt")
 	require.NoError(t, err)
@@ -244,7 +336,7 @@ func TestMirrorLayerReadsThroughTheNodeCacheAndVerifies(t *testing.T) {
 		return total
 	}
 	before := downloads()
-	path, release, err = h.layers.acquire(ctx, mirrorRequest(7), pin)
+	path, release, err = h.layers.acquire(ctx, mirrorRequest(7), pin, nil)
 	require.NoError(t, err)
 	content, err = readMirrorFile(t, h.mounts[path], "b.txt")
 	require.NoError(t, err)
@@ -257,11 +349,11 @@ func TestMirrorLayerReadsThroughTheNodeCacheAndVerifies(t *testing.T) {
 	// mount is retried by the next VM.
 	h.cache.objects = map[string][]byte{}
 	h.bucket.corrupt[manifestKey] = true
-	_, _, err = h.layers.acquire(ctx, mirrorRequest(7), pin)
+	_, _, err = h.layers.acquire(ctx, mirrorRequest(7), pin, nil)
 	require.ErrorIs(t, err, mirror.ErrObjectMismatch)
 	require.Empty(t, h.cache.objects)
 	h.bucket.corrupt[manifestKey] = false
-	_, release, err = h.layers.acquire(ctx, mirrorRequest(7), pin)
+	_, release, err = h.layers.acquire(ctx, mirrorRequest(7), pin, nil)
 	require.NoError(t, err)
 	release()
 
@@ -276,7 +368,7 @@ func TestMirrorLayerReadsThroughTheNodeCacheAndVerifies(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, damaged)
-	_, _, err = h.layers.acquire(ctx, mirrorRequest(7), pin)
+	_, _, err = h.layers.acquire(ctx, mirrorRequest(7), pin, nil)
 	require.ErrorIs(t, err, mirror.ErrObjectMismatch)
 
 	for _, invalid := range []types.VMMirror{
@@ -285,7 +377,7 @@ func TestMirrorLayerReadsThroughTheNodeCacheAndVerifies(t *testing.T) {
 		{ID: h.mirrorID, ManifestDigest: pin.ManifestDigest, ManifestSize: 0},
 		{ID: h.mirrorID, ManifestDigest: pin.ManifestDigest, ManifestSize: mirror.MaxManifestSize + 1},
 	} {
-		_, _, err = h.layers.acquire(ctx, mirrorRequest(7), &invalid)
+		_, _, err = h.layers.acquire(ctx, mirrorRequest(7), &invalid, nil)
 		require.Error(t, err, invalid)
 	}
 }
@@ -305,7 +397,7 @@ func TestMirrorLayersDoNotShareCachedObjects(t *testing.T) {
 	}
 
 	theirs := h.generation(t, 1, files)
-	path, release, err := h.layers.acquire(ctx, mirrorRequest(7), theirs)
+	path, release, err := h.layers.acquire(ctx, mirrorRequest(7), theirs, nil)
 	require.NoError(t, err)
 	defer release()
 	content, err := readMirrorFile(t, h.mounts[path], "secret.txt")
@@ -331,7 +423,7 @@ func TestMirrorLayersDoNotShareCachedObjects(t *testing.T) {
 		}
 	}
 	require.Len(t, held, 1)
-	path, releaseOurs, err := h.layers.acquire(ctx, mirrorRequest(8), ours)
+	path, releaseOurs, err := h.layers.acquire(ctx, mirrorRequest(8), ours, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, downloads(ours.ID), "the manifest came from this mirror's store, not the cache")
 	_, err = readMirrorFile(t, h.mounts[path], "secret.txt")
@@ -350,7 +442,7 @@ func TestMirrorLayersDoNotShareCachedObjects(t *testing.T) {
 	// One mirror pinned by two workspaces, which the gateway never does,
 	// shares nothing either.
 	before := downloads(theirs.ID)
-	path, releaseForeign, err := h.layers.acquire(ctx, mirrorRequest(9), theirs)
+	path, releaseForeign, err := h.layers.acquire(ctx, mirrorRequest(9), theirs, nil)
 	require.NoError(t, err)
 	defer releaseForeign()
 	_, err = readMirrorFile(t, h.mounts[path], "secret.txt")
@@ -362,7 +454,7 @@ func TestPurgedMirrorLayerStopsServing(t *testing.T) {
 	h := newMirrorLayerHarness(t)
 	pin := h.generation(t, 1, map[string]string{"secret.txt": "do not keep"})
 	ctx := context.Background()
-	path, release, err := h.layers.acquire(ctx, mirrorRequest(7), pin)
+	path, release, err := h.layers.acquire(ctx, mirrorRequest(7), pin, nil)
 	require.NoError(t, err)
 	fsys := h.mounts[path]
 	content, err := readMirrorFile(t, fsys, "secret.txt")
@@ -389,7 +481,7 @@ func TestPurgedMirrorLayerStopsServing(t *testing.T) {
 
 	// A new VM cannot mount the purged generation from the cache.
 	require.NotEmpty(t, h.cache.objects)
-	_, _, err = h.layers.acquire(ctx, mirrorRequest(7), pin)
+	_, _, err = h.layers.acquire(ctx, mirrorRequest(7), pin, nil)
 	require.ErrorContains(t, err, "no longer in the store")
 	release()
 	require.Equal(t, int32(1), h.unmounted.Load(), "unmounted when its last VM stops")

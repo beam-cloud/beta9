@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,7 +20,9 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/mirror"
 	"github.com/beam-cloud/beta9/pkg/types"
+	securejoin "github.com/cyphar/filepath-securejoin"
 	"github.com/google/uuid"
+	"github.com/moby/sys/user"
 	"github.com/rs/zerolog/log"
 )
 
@@ -42,7 +47,8 @@ type mirrorMount interface {
 }
 
 // mirrorLayers serves the mirror generations this worker's VMs are pinned
-// to. A generation never changes, so every VM pinned to one shares a mount.
+// to. A generation never changes, so the VMs pinned to one share a mount
+// when their images have the same homes.
 type mirrorLayers struct {
 	ctx   context.Context
 	root  string
@@ -107,7 +113,7 @@ func (c mirrorNodeCache) StoreContent(ctx context.Context, key string, content [
 // acquire mounts the pinned generation, or joins its mount, and returns the
 // directory to use as an overlay layer. The caller releases it once nothing
 // is mounted over it.
-func (m *mirrorLayers) acquire(ctx context.Context, request *types.ContainerRequest, pin *types.VMMirror) (string, func(), error) {
+func (m *mirrorLayers) acquire(ctx context.Context, request *types.ContainerRequest, pin *types.VMMirror, placements []mirror.Placement) (string, func(), error) {
 	// The pin becomes a bucket key and a path; take nothing in it on trust.
 	if _, err := uuid.Parse(pin.ID); err != nil {
 		return "", nil, errors.New("invalid mirror id")
@@ -119,7 +125,14 @@ func (m *mirrorLayers) acquire(ctx context.Context, request *types.ContainerRequ
 	if pin.ManifestSize <= 0 || pin.ManifestSize > mirror.MaxManifestSize {
 		return "", nil, errors.New("invalid mirror manifest size")
 	}
+	if len(placements) == 0 {
+		placements = []mirror.Placement{mirror.RootHome}
+	}
 	key := fmt.Sprintf("%d/%s/%s", request.Workspace.Id, pin.ID, digest)
+	for _, placement := range placements {
+		// Ownership is the mount's, not the overlay's.
+		key += fmt.Sprintf(" %q %d:%d %o", placement.Path, placement.UID, placement.GID, placement.Mode)
+	}
 
 	m.mu.Lock()
 	layer := m.layers[key]
@@ -134,7 +147,7 @@ func (m *mirrorLayers) acquire(ctx context.Context, request *types.ContainerRequ
 		m.layers[key] = layer
 		// The mount is shared, so it must not fail because the first VM to
 		// ask for it was cancelled.
-		go m.start(layer, request, pin.ID, mirror.Object{Digest: digest, Size: uint64(pin.ManifestSize)})
+		go m.start(layer, request, pin.ID, mirror.Object{Digest: digest, Size: uint64(pin.ManifestSize)}, placements)
 	}
 	layer.refs++
 	m.mu.Unlock()
@@ -153,10 +166,10 @@ func (m *mirrorLayers) acquire(ctx context.Context, request *types.ContainerRequ
 	return layer.path, func() { once.Do(func() { m.release(layer) }) }, nil
 }
 
-func (m *mirrorLayers) start(layer *mirrorLayer, request *types.ContainerRequest, mirrorID string, manifest mirror.Object) {
+func (m *mirrorLayers) start(layer *mirrorLayer, request *types.ContainerRequest, mirrorID string, manifest mirror.Object, placements []mirror.Placement) {
 	ctx, cancel := context.WithTimeout(m.ctx, mirrorLayerMountTimeout)
 	defer cancel()
-	err := m.serve(ctx, layer, request, mirrorID, manifest)
+	err := m.serve(ctx, layer, request, mirrorID, manifest, placements)
 	m.mu.Lock()
 	layer.err = err
 	if err != nil && m.layers[layer.key] == layer {
@@ -167,7 +180,7 @@ func (m *mirrorLayers) start(layer *mirrorLayer, request *types.ContainerRequest
 	close(layer.ready)
 }
 
-func (m *mirrorLayers) serve(ctx context.Context, layer *mirrorLayer, request *types.ContainerRequest, mirrorID string, manifest mirror.Object) error {
+func (m *mirrorLayers) serve(ctx context.Context, layer *mirrorLayer, request *types.ContainerRequest, mirrorID string, manifest mirror.Object, placements []mirror.Placement) error {
 	bucket, err := m.open(ctx, request)
 	if err != nil {
 		return fmt.Errorf("open mirror store: %w", err)
@@ -206,7 +219,7 @@ func (m *mirrorLayers) serve(ctx context.Context, layer *mirrorLayer, request *t
 	if err != nil {
 		return err
 	}
-	fsys, err := mirror.NewFS(parsed, source, mirror.FSOptions{})
+	fsys, err := mirror.NewFS(parsed, source, mirror.FSOptions{Placements: placements})
 	if err != nil {
 		return err
 	}
@@ -332,6 +345,73 @@ func (m *mirrorLayers) run() {
 	}
 }
 
+// imageDesktopUserFile is where a desktop image names the account its session
+// runs as.
+const imageDesktopUserFile = "opt/beam-vm/desktop-user"
+
+// mirrorPlacements are the homes a mirror appears as in a VM of the image at
+// rootfs: root's, and the desktop user's when the image has one. That account
+// is the image's own, so its IDs and its home are read from the image, and
+// each home keeps the mode the image gave it.
+func mirrorPlacements(rootfs string) ([]mirror.Placement, error) {
+	root, err := os.OpenRoot(rootfs)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+
+	placements := []mirror.Placement{mirror.RootHome}
+	desktop, err := imageDesktopUser(root)
+	if err != nil {
+		return nil, err
+	}
+	// A desktop that runs as root has its home already.
+	if desktop != nil && path.Clean(desktop.Home) != mirror.RootHome.Path {
+		placements = append(placements, mirror.Placement{Path: desktop.Home, UID: uint32(desktop.Uid), GID: uint32(desktop.Gid), Mode: 0o750})
+	}
+	for i := range placements {
+		home, err := securejoin.SecureJoinVFS(".", placements[i].Path, root)
+		if err != nil {
+			return nil, fmt.Errorf("resolve image %s: %w", placements[i].Path, err)
+		}
+		if info, err := root.Stat(home); err == nil && info.IsDir() {
+			placements[i].Mode = uint32(info.Mode().Perm())
+		}
+	}
+	return placements, nil
+}
+
+// imageDesktopUser is the account an image's desktop session runs as, or nil
+// for an image without one.
+func imageDesktopUser(root *os.Root) (*user.User, error) {
+	named, err := openImageFile(root, imageDesktopUserFile)
+	if err != nil || named == nil {
+		return nil, err
+	}
+	defer named.Close()
+	content, err := io.ReadAll(io.LimitReader(named, 256))
+	if err != nil {
+		return nil, fmt.Errorf("read image %s: %w", imageDesktopUserFile, err)
+	}
+	name := strings.TrimSpace(string(content))
+	passwd, err := openImageFile(root, "etc/passwd")
+	if err != nil || passwd == nil || name == "" {
+		return nil, err
+	}
+	defer passwd.Close()
+	accounts, err := user.ParsePasswdFilter(passwd, func(account user.User) bool { return account.Name == name })
+	if err != nil {
+		return nil, fmt.Errorf("read image etc/passwd: %w", err)
+	}
+	if len(accounts) == 0 {
+		return nil, nil
+	}
+	if uint64(accounts[0].Uid) > math.MaxUint32 || uint64(accounts[0].Gid) > math.MaxUint32 {
+		return nil, fmt.Errorf("image account %q has an ID out of range", name)
+	}
+	return &accounts[0], nil
+}
+
 // attachMirrorLayer puts the mirror generation a VM is pinned to between
 // its image and everything writable. The returned release must run after
 // the overlay is unmounted.
@@ -346,7 +426,11 @@ func (s *Worker) attachMirrorLayer(ctx context.Context, request *types.Container
 	if err := s.ensureDurableDiskSnapshotStorage(ctx, request); err != nil {
 		return nil, fmt.Errorf("mirror store credentials: %w", err)
 	}
-	path, release, err := s.mirrorLayers.acquire(ctx, request, config.Mirror)
+	placements, err := mirrorPlacements(overlay.RootPath())
+	if err != nil {
+		return nil, fmt.Errorf("find the image's home directories: %w", err)
+	}
+	path, release, err := s.mirrorLayers.acquire(ctx, request, config.Mirror, placements)
 	if err != nil {
 		return nil, err
 	}

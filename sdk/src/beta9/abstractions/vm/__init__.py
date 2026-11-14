@@ -186,8 +186,9 @@ class VM:
 
     mirror names a mirror of this workspace: local files uploaded by the
     mirror utility (`setup mirror`). The VM starts with the mirror's latest
-    generation in /root and /home/beam, read on demand, and keeps that
-    generation for life; so do its forks, snapshots and templates.
+    generation in /root and, with a desktop, in the desktop user's home,
+    read on demand, and keeps that generation for life; so do its forks,
+    snapshots and templates.
 
     Fresh VMs default to digest-pinned Ubuntu 24.04, 4 CPUs, 8192 MiB RAM
     and a 50 GiB root. Desktop is opt-in and needs at least 1024 MiB RAM.

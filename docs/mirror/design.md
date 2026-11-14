@@ -21,9 +21,12 @@ store format has its own specification in [format.md](format.md).
    a published template drops it.
 4. The worker mounts the pinned generation as a read-only FUSE filesystem and
    puts it between the image and everything writable:
-   `lowerdir=<mirror>:<image>`. The tree appears as `/root` (owned by root)
-   and as `/home/beam` (owned by uid 1000). Every VM on a worker pinned to
-   the same generation shares one mount.
+   `lowerdir=<mirror>:<image>`. The tree appears as `/root`, owned by root,
+   and in a desktop VM also as the desktop user's home, owned by that user.
+   The worker reads that account from the image (`/opt/beam-vm/desktop-user`
+   and `/etc/passwd`), because its uid is whatever the image had free: 1001
+   on Ubuntu 24.04, where `ubuntu` holds 1000. VMs on a worker pinned to the
+   same generation share one mount when their images have the same homes.
 5. A purge deletes the mirror's objects. Workers notice within a minute, stop
    returning file contents from the layer and drop what the kernel cached.
    A VM restarted after a purge starts without the layer and keeps its own

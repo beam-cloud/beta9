@@ -245,7 +245,9 @@ func (l *mirrorLayers) mount() {
 	require.NoError(l.t, start())
 	l.image = image
 
-	fsys, err := mirror.NewFS(l.manifest, l.objects, mirror.FSOptions{})
+	fsys, err := mirror.NewFS(l.manifest, l.objects, mirror.FSOptions{Placements: []mirror.Placement{
+		mirror.RootHome, {Path: "/home/beam", UID: 1001, GID: 1001, Mode: 0o750},
+	}})
 	require.NoError(l.t, err)
 	l.mirror, err = mirror.Mount(l.mirrorMount(), fsys)
 	require.NoError(l.t, err)
@@ -339,7 +341,7 @@ echo first-done
 	require.Contains(t, output, "release=3.20")
 	require.Contains(t, output, "file=0:0:600")
 	require.Contains(t, output, "home=0:0:700", "the mirror layer's home directory replaces the image's")
-	require.Contains(t, output, "beam=1000:1000:600", "the second placement belongs to the desktop user")
+	require.Contains(t, output, "beam=1001:1001:600", "the second placement belongs to the desktop user")
 	require.Contains(t, output, "beamsum="+layers.sums["/root/.zshrc"])
 	require.Contains(t, output, "notes="+layers.sums["/root/projects/notes.txt"])
 	require.Contains(t, output, "link=app:"+layers.sums["/root/projects/app/main.go"])

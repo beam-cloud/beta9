@@ -25,25 +25,14 @@ func resolveImageUser(rootfs string, identity *specs.User) error {
 
 	var accounts [2]io.Reader
 	for i, name := range []string{"etc/passwd", "etc/group"} {
-		path, err := securejoin.SecureJoinVFS(".", name, root)
-		if err != nil {
-			return fmt.Errorf("resolve image %s: %w", name, err)
-		}
-		file, err := root.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("open image %s: %w", name, err)
-		}
-		defer file.Close()
-		info, err := file.Stat()
+		file, err := openImageFile(root, name)
 		if err != nil {
 			return err
 		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("image %s is not a regular file", name)
+		if file == nil {
+			continue
 		}
+		defer file.Close()
 		accounts[i] = file
 	}
 
@@ -62,4 +51,31 @@ func resolveImageUser(rootfs string, identity *specs.User) error {
 	}
 	identity.Username = ""
 	return nil
+}
+
+// openImageFile opens a regular file of an image by its path inside the
+// image, following the image's symlinks no further than its root. It returns
+// nil for a file the image does not have.
+func openImageFile(root *os.Root, name string) (*os.File, error) {
+	path, err := securejoin.SecureJoinVFS(".", name, root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve image %s: %w", name, err)
+	}
+	file, err := root.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open image %s: %w", name, err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		file.Close()
+		return nil, fmt.Errorf("image %s is not a regular file", name)
+	}
+	return file, nil
 }

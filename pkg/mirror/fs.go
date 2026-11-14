@@ -33,16 +33,12 @@ type Placement struct {
 	Mode uint32 // of the home directory itself; 0700 when zero
 }
 
-// DefaultPlacements are the homes of the two users a VM is used as: root
-// over SSH and beam on the desktop.
-func DefaultPlacements() []Placement {
-	return []Placement{
-		{Path: "/root", UID: 0, GID: 0, Mode: 0o700},
-		{Path: "/home/beam", UID: 1000, GID: 1000, Mode: 0o750},
-	}
-}
+// RootHome is where a VM is used over SSH and exec. Any other account is the
+// image's own, so whoever mounts the filesystem names its home.
+var RootHome = Placement{Path: "/root", Mode: 0o700}
 
 type FSOptions struct {
+	// Placements are the homes the tree appears as; RootHome when empty.
 	Placements []Placement
 	// DecodedCacheBytes bounds the decompressed extents kept for reuse.
 	DecodedCacheBytes int
@@ -105,7 +101,7 @@ type decodedExtent struct {
 func NewFS(manifest *Manifest, source Source, opts FSOptions) (*FS, error) {
 	placements := opts.Placements
 	if len(placements) == 0 {
-		placements = DefaultPlacements()
+		placements = []Placement{RootHome}
 	}
 	f := &FS{
 		RawFileSystem: fuse.NewDefaultRawFileSystem(),
@@ -240,6 +236,9 @@ func (f *FS) Revoked() bool { return f.revoked.Load() }
 
 // Manifest is the generation the filesystem serves.
 func (f *FS) Manifest() *Manifest { return f.manifest }
+
+// Placements are the homes the tree appears as.
+func (f *FS) Placements() []Placement { return append([]Placement(nil), f.placements...) }
 
 func (f *FS) nodeID(view int, entry uint32) uint64 {
 	return uint64(len(f.scaffold)) + 1 + uint64(view)*f.entries + uint64(entry)

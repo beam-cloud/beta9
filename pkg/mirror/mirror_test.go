@@ -628,6 +628,9 @@ func TestPlacements(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// A desktop VM's two homes.
+var desktopPlacements = []Placement{RootHome, {Path: "/home/beam", UID: 1001, GID: 1002, Mode: 0o750}}
+
 // The mounted filesystem, read through the kernel: the tree appears under
 // both homes with each user's ownership, contents match, nothing can be
 // written, and nothing outside the homes exists.
@@ -640,7 +643,7 @@ func TestMountedFilesystem(t *testing.T) {
 	}
 	tree := testTree()
 	manifest, _, store := writeTree(t, tree, DefaultWriterOptions())
-	fsys, err := NewFS(manifest, store, FSOptions{})
+	fsys, err := NewFS(manifest, store, FSOptions{Placements: desktopPlacements})
 	require.NoError(t, err)
 	mountPoint := t.TempDir()
 	server, err := Mount(mountPoint, fsys)
@@ -653,14 +656,15 @@ func TestMountedFilesystem(t *testing.T) {
 	require.Equal(t, "home", top[0].Name())
 	require.Equal(t, "root", top[1].Name())
 
-	for home, owner := range map[string]uint32{"root": 0, "home/beam": 1000} {
+	for home, owner := range map[string][2]uint32{"root": {0, 0}, "home/beam": {1001, 1002}} {
 		base := filepath.Join(mountPoint, home)
 		files := 0
 		require.NoError(t, filepath.WalkDir(base, func(path string, entry os.DirEntry, err error) error {
 			require.NoError(t, err)
 			info, err := entry.Info()
 			require.NoError(t, err)
-			require.Equal(t, owner, info.Sys().(*syscall.Stat_t).Uid, path)
+			stat := info.Sys().(*syscall.Stat_t)
+			require.Equal(t, owner, [2]uint32{stat.Uid, stat.Gid}, path)
 			if entry.Type().IsRegular() {
 				files++
 				relative, _ := filepath.Rel(base, path)
@@ -688,15 +692,17 @@ func TestMountedFilesystem(t *testing.T) {
 		_, err = os.Stat(filepath.Join(base, "projects/missing"))
 		require.ErrorIs(t, err, os.ErrNotExist)
 	}
-	info, err := os.Stat(filepath.Join(mountPoint, "root"))
-	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o700), info.Mode().Perm())
+	for home, mode := range map[string]os.FileMode{"root": 0o700, "home/beam": 0o750} {
+		info, err := os.Stat(filepath.Join(mountPoint, home))
+		require.NoError(t, err)
+		require.Equal(t, mode, info.Mode().Perm(), home)
+	}
 
 	// The same file has the same inode number on a second mount of the
 	// generation, which is what lets a guest overlay survive a remount.
 	first, err := os.Stat(filepath.Join(mountPoint, "root/projects/app/main.go"))
 	require.NoError(t, err)
-	again, err := NewFS(manifest, store, FSOptions{})
+	again, err := NewFS(manifest, store, FSOptions{Placements: desktopPlacements})
 	require.NoError(t, err)
 	second := t.TempDir()
 	server2, err := Mount(second, again)
