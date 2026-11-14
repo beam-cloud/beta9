@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -22,8 +23,8 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/disk"
+	"github.com/beam-cloud/beta9/pkg/mirror"
 	"github.com/beam-cloud/clip/pkg/clip"
-	gofs "github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/stretchr/testify/require"
 	"github.com/vishvananda/netlink"
@@ -137,15 +138,27 @@ func prepareBridgedTap(rt *MicroVM, nsPath string) error {
 
 // mirrorLayers is the pair of read-only FUSE mounts a mirrored VM's host
 // overlay stacks: the image as the worker mounts it (a stateless CLIP mount)
-// and, above it, a second FUSE filesystem holding the mirrored tree under
-// the guest home.
+// and, above it, the mirror filesystem serving one generation under the
+// guest homes.
 type mirrorLayers struct {
-	t      *testing.T
-	base   string
-	source string // backing tree of the mirror layer
-	image  *fuse.Server
-	mirror *fuse.Server
-	sums   map[string]string // guest path -> sha256
+	t        *testing.T
+	base     string
+	manifest *mirror.Manifest
+	objects  mirrorObjects
+	image    *fuse.Server
+	mirror   *fuse.Server
+	sums     map[string]string // guest path -> sha256
+}
+
+type mirrorObjects map[mirror.Digest][]byte
+
+func (o mirrorObjects) ReadObject(_ context.Context, object mirror.Object, offset int64, dest []byte) error {
+	data, ok := o[object.Digest]
+	if !ok {
+		return fmt.Errorf("object %s missing", object.Digest)
+	}
+	copy(dest, data[offset:])
+	return nil
 }
 
 func (l *mirrorLayers) imageMount() string  { return filepath.Join(l.base, "image") }
@@ -156,18 +169,29 @@ func newMirrorLayers(t *testing.T, rootfs string) *mirrorLayers {
 	t.Helper()
 	base, err := os.MkdirTemp(testWorkRoot, "mirror-layers-")
 	require.NoError(t, err)
-	layers := &mirrorLayers{t: t, base: base, source: filepath.Join(base, "source"), sums: map[string]string{}}
+	layers := &mirrorLayers{t: t, base: base, objects: mirrorObjects{}, sums: map[string]string{}}
 	t.Cleanup(func() {
 		layers.unmount()
 		_ = os.RemoveAll(base)
 	})
 
-	write := func(guestPath string, data []byte, mode os.FileMode) {
-		path := filepath.Join(layers.source, guestPath)
-		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-		require.NoError(t, os.WriteFile(path, data, mode))
+	writer, err := mirror.NewWriter(mirror.DefaultWriterOptions(), func(object mirror.Object, data []byte) error {
+		layers.objects[object.Digest] = bytes.Clone(data)
+		return nil
+	})
+	require.NoError(t, err)
+	dirs := map[string]bool{}
+	write := func(path string, data []byte, mode uint32) {
+		parts := strings.Split(path, "/")
+		for i := 1; i < len(parts); i++ {
+			if dir := strings.Join(parts[:i], "/"); !dirs[dir] {
+				dirs[dir] = true
+				require.NoError(t, writer.AddDir(dir, 0o755, 0))
+			}
+		}
+		require.NoError(t, writer.AddFile(path, mode, 1_700_000_000_000_000_000, bytes.NewReader(data)))
 		sum := sha256.Sum256(data)
-		layers.sums[guestPath] = hex.EncodeToString(sum[:])
+		layers.sums["/root/"+path] = hex.EncodeToString(sum[:])
 	}
 	random := func(size int) []byte {
 		data := make([]byte, size)
@@ -175,18 +199,21 @@ func newMirrorLayers(t *testing.T, rootfs string) *mirrorLayers {
 		require.NoError(t, err)
 		return data
 	}
-	write("/root/.zshrc", []byte("export EDITOR=vim\n"), 0o644)
-	write("/root/.ssh/config", []byte("Host *\n  ServerAliveInterval 60\n"), 0o600)
-	write("/root/projects/app/main.go", []byte("package main\n\nfunc main() {}\n"), 0o644)
-	write("/root/projects/app/internal/lib/lib.go", []byte("package lib\n"), 0o644)
-	write("/root/big.bin", random(32<<20), 0o644)
+	write(".zshrc", []byte("export EDITOR=vim\n"), 0o644)
+	write(".ssh/config", []byte("Host *\n  ServerAliveInterval 60\n"), 0o600)
+	write("projects/app/main.go", []byte("package main\n\nfunc main() {}\n"), 0o644)
+	write("projects/app/internal/lib/lib.go", []byte("package lib\n"), 0o644)
+	write("projects/notes.txt", bytes.Repeat([]byte("compressible line of text\n"), 100_000), 0o644)
+	write("big.bin", random(32<<20), 0o644)
 	for i := range 2000 {
-		write(fmt.Sprintf("/root/small/%04d.txt", i), random(4096), 0o644)
+		write(fmt.Sprintf("small/%04d.txt", i), random(4096), 0o644)
 	}
 	for i := range 400 {
-		write(fmt.Sprintf("/root/later/%04d.txt", i), random(4096), 0o644)
+		write(fmt.Sprintf("later/%04d.txt", i), random(4096), 0o644)
 	}
-	require.NoError(t, os.Chmod(filepath.Join(layers.source, "root"), 0o700))
+	require.NoError(t, writer.AddSymlink("projects/current", "app", 0))
+	_, layers.manifest, err = writer.Finish(nil)
+	require.NoError(t, err)
 
 	// The image carries the same small files so the guest can compare a read
 	// through the mirror layer with one through the image layer.
@@ -218,23 +245,10 @@ func (l *mirrorLayers) mount() {
 	require.NoError(l.t, start())
 	l.image = image
 
-	root, err := gofs.NewLoopbackRoot(l.source)
+	fsys, err := mirror.NewFS(l.manifest, l.objects, mirror.FSOptions{})
 	require.NoError(l.t, err)
-	timeout := 24 * time.Hour
-	mirror, err := gofs.Mount(l.mirrorMount(), root, &gofs.Options{
-		AttrTimeout: &timeout, EntryTimeout: &timeout, NegativeTimeout: &timeout,
-		MountOptions: fuse.MountOptions{
-			FsName: "mirror-spike", Name: "mirror",
-			Options:       []string{"ro", "default_permissions"},
-			AllowOther:    true,
-			DisableXAttrs: true,
-			MaxBackground: 512,
-			MaxWrite:      1 << 20,
-			MaxReadAhead:  1 << 20,
-		},
-	})
+	l.mirror, err = mirror.Mount(l.mirrorMount(), fsys)
 	require.NoError(l.t, err)
-	l.mirror = mirror
 }
 
 func (l *mirrorLayers) unmount() {
@@ -292,6 +306,10 @@ echo "big=$(sha256sum /root/big.bin | cut -d' ' -f1)"
 echo "release=$(cat /etc/alpine-release)"
 echo "file=$(stat -c '%u:%g:%a' /root/.ssh/config)"
 echo "home=$(stat -c '%u:%g:%a' /root)"
+echo "beam=$(stat -c '%u:%g:%a' /home/beam/.ssh/config)"
+echo "beamsum=$(sha256sum /home/beam/.zshrc | cut -d' ' -f1)"
+echo "notes=$(sha256sum /root/projects/notes.txt | cut -d' ' -f1)"
+echo "link=$(readlink /root/projects/current):$(sha256sum /root/projects/current/main.go | cut -d' ' -f1)"
 echo "entries=$(ls /root/small | wc -l)"
 t0=$(cut -d' ' -f1 /proc/uptime)
 cat /root/small/* > /dev/null
@@ -321,16 +339,20 @@ echo first-done
 	require.Contains(t, output, "release=3.20")
 	require.Contains(t, output, "file=0:0:600")
 	require.Contains(t, output, "home=0:0:700", "the mirror layer's home directory replaces the image's")
+	require.Contains(t, output, "beam=1000:1000:600", "the second placement belongs to the desktop user")
+	require.Contains(t, output, "beamsum="+layers.sums["/root/.zshrc"])
+	require.Contains(t, output, "notes="+layers.sums["/root/projects/notes.txt"])
+	require.Contains(t, output, "link=app:"+layers.sums["/root/projects/app/main.go"])
 	require.Contains(t, output, "entries=2000")
 	for _, label := range []string{"mirrorsmall", "imagesmall", "mirrorwarm"} {
 		each, files := perFile(output, label)
 		t.Logf("guest small-file read (%s): %s per file over %d files", label, each, files)
 	}
 	// Nothing the guest did reached the mirror layer.
-	data, err := os.ReadFile(filepath.Join(layers.source, "root/.zshrc"))
+	data, err := os.ReadFile(filepath.Join(layers.mirrorMount(), "root/.zshrc"))
 	require.NoError(t, err)
 	require.Equal(t, "export EDITOR=vim\n", string(data))
-	require.FileExists(t, filepath.Join(layers.source, "root/.ssh/config"))
+	require.FileExists(t, filepath.Join(layers.mirrorMount(), "root/.ssh/config"))
 
 	require.NoError(t, rt.Delete(ctx, first.id, &DeleteOpts{Force: true}))
 	require.NoError(t, manager.Detach(ctx, key))
