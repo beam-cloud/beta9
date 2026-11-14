@@ -72,6 +72,14 @@ func (s *CachedSource) ReadObject(ctx context.Context, object Object, offset int
 	}
 }
 
+// Forget drops the downloaded objects held in memory.
+func (s *CachedSource) Forget() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recent, s.held = nil, 0
+	s.order.Init()
+}
+
 func (s *CachedSource) remembered(digest Digest) []byte {
 	s.mu.Lock()
 	defer s.mu.Unlock()

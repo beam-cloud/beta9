@@ -513,6 +513,11 @@ func (s *ContainerRuntimeServer) ContainerArchive(req *pb.ContainerArchiveReques
 	// merged root, which carries the runtime spec inside the filesystem.
 	_, layered := s.imageClient.GetSourceImageRef(instance.Request.ImageId)
 	if !layered {
+		// The merged root includes the mirror layer: archiving it would read
+		// the whole mirror and copy its files into the image.
+		if config := requestStubConfig(instance.Request); config != nil && config.Mirror != nil {
+			return stream.Send(&pb.ContainerArchiveResponse{Done: true, Success: false, ErrorMsg: "A VM with a mirror cannot be archived as an image of its whole root"})
+		}
 		if err := s.writeArchiveSpecs(ctx, instance); err != nil {
 			return stream.Send(&pb.ContainerArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
 		}

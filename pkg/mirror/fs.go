@@ -3,11 +3,13 @@ package mirror
 import (
 	"container/list"
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -75,6 +77,7 @@ type FS struct {
 	placements []Placement
 	scaffold   []scaffoldNode // node ID - 1
 	entries    uint64
+	revoked    atomic.Bool
 
 	flights singleflight.Group
 	mu      sync.Mutex
@@ -167,6 +170,26 @@ func NewFS(manifest *Manifest, source Source, opts FSOptions) (*FS, error) {
 }
 
 func (f *FS) String() string { return "beam-mirror" }
+
+// ErrRevoked is what reading a file returns once its mirror is purged.
+var ErrRevoked = errors.New("mirror was purged")
+
+// Revoke stops the filesystem from returning file contents, for a mirror
+// that has been purged while mounted. Names and attributes stay, so that the
+// overlay above keeps working for everything the guest wrote itself. Pages
+// the kernel or the guest already cached are beyond its reach.
+func (f *FS) Revoke() {
+	f.revoked.Store(true)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.decoded, f.held = map[uint32]*list.Element{}, 0
+	f.lru.Init()
+}
+
+func (f *FS) Revoked() bool { return f.revoked.Load() }
+
+// Manifest is the generation the filesystem serves.
+func (f *FS) Manifest() *Manifest { return f.manifest }
 
 func (f *FS) nodeID(view int, entry uint32) uint64 {
 	return uint64(len(f.scaffold)) + 1 + uint64(view)*f.entries + uint64(entry)
@@ -412,6 +435,9 @@ func (f *FS) ReadFile(ctx context.Context, index uint32, offset uint64, dest []b
 	if entry.Kind != KindFile {
 		return 0, syscall.EISDIR
 	}
+	if f.revoked.Load() {
+		return 0, ErrRevoked
+	}
 	if offset >= entry.Size {
 		return 0, nil
 	}
@@ -475,7 +501,7 @@ func (f *FS) decodedExtent(ctx context.Context, number uint32, extent Extent) ([
 			return nil, fmt.Errorf("extent of object %s decoded to %d bytes, want %d", object.Digest, len(raw), extent.RawLen)
 		}
 		f.mu.Lock()
-		if _, ok := f.decoded[number]; !ok {
+		if _, ok := f.decoded[number]; !ok && !f.revoked.Load() {
 			f.decoded[number] = f.lru.PushFront(&decodedExtent{extent: number, data: raw})
 			f.held += len(raw)
 			for f.held > f.budget && f.lru.Len() > 1 {

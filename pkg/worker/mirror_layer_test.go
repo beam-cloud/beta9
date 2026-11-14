@@ -1,0 +1,372 @@
+package worker
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/mirror"
+	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
+)
+
+type fakeMirrorBucket struct {
+	mu        sync.Mutex
+	objects   map[string][]byte
+	downloads map[string]int
+	outage    bool
+	corrupt   map[string]bool
+}
+
+func (b *fakeMirrorBucket) Exists(_ context.Context, key string) (bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.outage {
+		return false, errors.New("store unreachable")
+	}
+	_, ok := b.objects[key]
+	return ok, nil
+}
+
+func (b *fakeMirrorBucket) DownloadWithReader(_ context.Context, key string) (io.ReadCloser, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	data, ok := b.objects[key]
+	if !ok || b.outage {
+		return nil, errors.New("no such object")
+	}
+	b.downloads[key]++
+	if b.corrupt[key] {
+		data = append([]byte("x"), data[1:]...)
+	}
+	return io.NopCloser(bytes.NewReader(data)), nil
+}
+
+type memoryMirrorCache struct {
+	mu      sync.Mutex
+	objects map[mirror.Digest][]byte
+}
+
+func (c *memoryMirrorCache) ReadObject(_ context.Context, digest mirror.Digest, offset int64, dest []byte) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	data, ok := c.objects[digest]
+	if !ok || offset+int64(len(dest)) > int64(len(data)) {
+		return false
+	}
+	copy(dest, data[offset:])
+	return true
+}
+
+func (c *memoryMirrorCache) StoreObject(_ context.Context, digest mirror.Digest, data []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.objects[digest] = bytes.Clone(data)
+	return nil
+}
+
+type fakeMirrorMount struct{ unmounted *atomic.Int32 }
+
+func (m fakeMirrorMount) Unmount() error {
+	m.unmounted.Add(1)
+	return nil
+}
+
+type mirrorLayerHarness struct {
+	layers    *mirrorLayers
+	bucket    *fakeMirrorBucket
+	cache     *memoryMirrorCache
+	mounts    map[string]*mirror.FS
+	unmounted atomic.Int32
+	opened    atomic.Int32
+	mirrorID  string
+}
+
+func newMirrorLayerHarness(t *testing.T) *mirrorLayerHarness {
+	t.Helper()
+	h := &mirrorLayerHarness{
+		bucket:   &fakeMirrorBucket{objects: map[string][]byte{}, downloads: map[string]int{}, corrupt: map[string]bool{}},
+		cache:    &memoryMirrorCache{objects: map[mirror.Digest][]byte{}},
+		mounts:   map[string]*mirror.FS{},
+		mirrorID: uuid.NewString(),
+	}
+	var mu sync.Mutex
+	h.layers = &mirrorLayers{
+		ctx:    context.Background(),
+		root:   t.TempDir(),
+		cache:  h.cache,
+		idle:   time.Minute,
+		layers: map[string]*mirrorLayer{},
+		open: func(context.Context, *types.ContainerRequest) (mirrorBucket, error) {
+			h.opened.Add(1)
+			return h.bucket, nil
+		},
+		mount: func(path string, fsys *mirror.FS) (mirrorMount, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			h.mounts[path] = fsys
+			return fakeMirrorMount{&h.unmounted}, nil
+		},
+	}
+	return h
+}
+
+// generation uploads a generation holding files and returns its pin.
+func (h *mirrorLayerHarness) generation(t *testing.T, number int64, files map[string]string) *types.VMMirror {
+	t.Helper()
+	writer, err := mirror.NewWriter(mirror.DefaultWriterOptions(), func(object mirror.Object, data []byte) error {
+		h.bucket.objects[types.MirrorObjectKey(h.mirrorID, object.Digest.String())] = bytes.Clone(data)
+		return nil
+	})
+	require.NoError(t, err)
+	for name, content := range files {
+		require.NoError(t, writer.AddFile(name, 0o644, 0, strings.NewReader(content)))
+	}
+	stored, manifest, err := writer.Finish(nil)
+	require.NoError(t, err)
+	h.bucket.objects[types.MirrorObjectKey(h.mirrorID, manifest.Digest().String())] = stored
+	return &types.VMMirror{Name: "laptop", ID: h.mirrorID, Generation: number, ManifestDigest: manifest.Digest().String(), ManifestSize: int64(len(stored))}
+}
+
+func mirrorRequest(workspace uint) *types.ContainerRequest {
+	return &types.ContainerRequest{ContainerId: uuid.NewString(), Workspace: types.Workspace{Id: workspace, Name: "ws"}}
+}
+
+func readMirrorFile(t *testing.T, fsys *mirror.FS, name string) (string, error) {
+	t.Helper()
+	parsed := fsys.Manifest()
+	index, ok := parsed.Find(name)
+	require.True(t, ok, name)
+	buffer := make([]byte, parsed.Entry(index).Size)
+	n, err := fsys.ReadFile(context.Background(), index, 0, buffer)
+	return string(buffer[:n]), err
+}
+
+func TestMirrorLayersShareOneMountPerGeneration(t *testing.T) {
+	h := newMirrorLayerHarness(t)
+	first := h.generation(t, 1, map[string]string{"notes.txt": "one"})
+	second := h.generation(t, 2, map[string]string{"notes.txt": "two"})
+	ctx := context.Background()
+
+	// Many VMs starting at once on one generation mount it once.
+	var wg sync.WaitGroup
+	paths := make([]string, 8)
+	releases := make([]func(), 8)
+	for i := range paths {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var err error
+			paths[i], releases[i], err = h.layers.acquire(ctx, mirrorRequest(7), first)
+			require.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+	for _, path := range paths {
+		require.Equal(t, paths[0], path)
+	}
+	require.Len(t, h.mounts, 1)
+	require.Equal(t, int32(1), h.opened.Load())
+	require.DirExists(t, paths[0])
+	content, err := readMirrorFile(t, h.mounts[paths[0]], "notes.txt")
+	require.NoError(t, err)
+	require.Equal(t, "one", content)
+
+	// Another generation, and the same generation for another workspace,
+	// are separate mounts.
+	other, releaseOther, err := h.layers.acquire(ctx, mirrorRequest(7), second)
+	require.NoError(t, err)
+	require.NotEqual(t, paths[0], other)
+	foreign, releaseForeign, err := h.layers.acquire(ctx, mirrorRequest(8), first)
+	require.NoError(t, err)
+	require.NotEqual(t, paths[0], foreign)
+	require.Len(t, h.mounts, 3)
+
+	// A mount outlives its VMs by the idle timeout and no longer.
+	for _, release := range releases[1:] {
+		release()
+		release()
+	}
+	require.Zero(t, h.layers.pruneIdle(time.Now().Add(time.Hour)), "one VM still uses it")
+	releases[0]()
+	releaseOther()
+	releaseForeign()
+	require.Zero(t, h.layers.pruneIdle(time.Now().Add(-time.Minute)))
+	again, release, err := h.layers.acquire(ctx, mirrorRequest(7), first)
+	require.NoError(t, err)
+	require.Equal(t, paths[0], again, "a restart inside the timeout finds the mount")
+	require.Equal(t, int32(3), h.opened.Load())
+	require.Equal(t, 2, h.layers.pruneIdle(time.Now().Add(time.Hour)))
+	require.Equal(t, int32(2), h.unmounted.Load())
+	release()
+	require.Equal(t, 1, h.layers.pruneIdle(time.Now().Add(time.Hour)))
+	require.Equal(t, int32(3), h.unmounted.Load())
+	require.NoDirExists(t, paths[0])
+}
+
+func TestMirrorLayerReadsThroughTheNodeCacheAndVerifies(t *testing.T) {
+	h := newMirrorLayerHarness(t)
+	pin := h.generation(t, 1, map[string]string{"a.txt": "alpha", "b.txt": "beta"})
+	ctx := context.Background()
+	manifestKey := types.MirrorObjectKey(h.mirrorID, pin.ManifestDigest)
+
+	path, release, err := h.layers.acquire(ctx, mirrorRequest(7), pin)
+	require.NoError(t, err)
+	content, err := readMirrorFile(t, h.mounts[path], "a.txt")
+	require.NoError(t, err)
+	require.Equal(t, "alpha", content)
+	require.Len(t, h.cache.objects, 2, "the manifest and the pack are in the node cache")
+	release()
+	require.Equal(t, 1, h.layers.pruneIdle(time.Now().Add(time.Hour)))
+
+	// A second worker on the node downloads nothing.
+	downloads := func() int {
+		total := 0
+		for _, count := range h.bucket.downloads {
+			total += count
+		}
+		return total
+	}
+	before := downloads()
+	path, release, err = h.layers.acquire(ctx, mirrorRequest(7), pin)
+	require.NoError(t, err)
+	content, err = readMirrorFile(t, h.mounts[path], "b.txt")
+	require.NoError(t, err)
+	require.Equal(t, "beta", content)
+	require.Equal(t, before, downloads())
+	release()
+	require.Equal(t, 1, h.layers.pruneIdle(time.Now().Add(time.Hour)))
+
+	// Objects that do not match their name are not served, and a failed
+	// mount is retried by the next VM.
+	h.cache.objects = map[mirror.Digest][]byte{}
+	h.bucket.corrupt[manifestKey] = true
+	_, _, err = h.layers.acquire(ctx, mirrorRequest(7), pin)
+	require.ErrorIs(t, err, mirror.ErrObjectMismatch)
+	require.Empty(t, h.cache.objects)
+	h.bucket.corrupt[manifestKey] = false
+	_, release, err = h.layers.acquire(ctx, mirrorRequest(7), pin)
+	require.NoError(t, err)
+	release()
+
+	// A manifest in the cache that is not the pinned one is refused too.
+	digest, err := mirror.ParseDigest(pin.ManifestDigest)
+	require.NoError(t, err)
+	require.Equal(t, 1, h.layers.pruneIdle(time.Now().Add(time.Hour)))
+	otherPin := h.generation(t, 2, map[string]string{"c.txt": "gamma"})
+	h.cache.objects[digest] = h.bucket.objects[types.MirrorObjectKey(h.mirrorID, otherPin.ManifestDigest)]
+	forged := *pin
+	forged.ManifestSize = otherPin.ManifestSize
+	_, _, err = h.layers.acquire(ctx, mirrorRequest(7), &forged)
+	require.ErrorIs(t, err, mirror.ErrObjectMismatch)
+
+	for _, invalid := range []types.VMMirror{
+		{ID: "../../etc", ManifestDigest: pin.ManifestDigest, ManifestSize: pin.ManifestSize},
+		{ID: h.mirrorID, ManifestDigest: "../" + pin.ManifestDigest[3:], ManifestSize: pin.ManifestSize},
+		{ID: h.mirrorID, ManifestDigest: pin.ManifestDigest, ManifestSize: 0},
+		{ID: h.mirrorID, ManifestDigest: pin.ManifestDigest, ManifestSize: mirror.MaxManifestSize + 1},
+	} {
+		_, _, err = h.layers.acquire(ctx, mirrorRequest(7), &invalid)
+		require.Error(t, err, invalid)
+	}
+}
+
+func TestPurgedMirrorLayerStopsServing(t *testing.T) {
+	h := newMirrorLayerHarness(t)
+	pin := h.generation(t, 1, map[string]string{"secret.txt": "do not keep"})
+	ctx := context.Background()
+	path, release, err := h.layers.acquire(ctx, mirrorRequest(7), pin)
+	require.NoError(t, err)
+	fsys := h.mounts[path]
+	content, err := readMirrorFile(t, fsys, "secret.txt")
+	require.NoError(t, err)
+	require.Equal(t, "do not keep", content)
+
+	// An unreachable store revokes nothing.
+	h.bucket.outage = true
+	require.Zero(t, h.layers.revokePurged(ctx))
+	h.bucket.outage = false
+	require.Zero(t, h.layers.revokePurged(ctx))
+	require.False(t, fsys.Revoked())
+
+	// The purge deletes the mirror's objects. The node cache still has
+	// them, and the layer has them in memory; neither is served again.
+	h.bucket.objects = map[string][]byte{}
+	require.Equal(t, 1, h.layers.revokePurged(ctx))
+	require.True(t, fsys.Revoked())
+	_, err = readMirrorFile(t, fsys, "secret.txt")
+	require.ErrorIs(t, err, mirror.ErrRevoked)
+	_, ok := fsys.Manifest().Find("secret.txt")
+	require.True(t, ok, "names stay so the overlay above keeps working")
+	require.Zero(t, h.unmounted.Load(), "the running VM keeps its mount")
+
+	// A new VM cannot mount the purged generation from the cache.
+	require.NotEmpty(t, h.cache.objects)
+	_, _, err = h.layers.acquire(ctx, mirrorRequest(7), pin)
+	require.ErrorContains(t, err, "no longer in the store")
+	release()
+	require.Equal(t, int32(1), h.unmounted.Load(), "unmounted when its last VM stops")
+}
+
+func TestAttachMirrorLayer(t *testing.T) {
+	h := newMirrorLayerHarness(t)
+	pin := h.generation(t, 1, map[string]string{"a.txt": "alpha"})
+	stub := func(config types.StubConfigV1) *types.ContainerRequest {
+		request := mirrorRequest(7)
+		data, err := json.Marshal(config)
+		require.NoError(t, err)
+		request.Stub.Config = string(data)
+		region, key, bucket := "us-east-1", "key", "bucket"
+		request.Workspace.Storage = &types.WorkspaceStorage{Region: &region, AccessKey: &key, SecretKey: &key, BucketName: &bucket}
+		return request
+	}
+	worker := &Worker{mirrorLayers: h.layers}
+
+	// Nothing happens for containers without a mirror.
+	plain := stub(types.StubConfigV1{})
+	overlay := common.NewContainerOverlay(plain, t.TempDir(), t.TempDir())
+	release, err := worker.attachMirrorLayer(context.Background(), plain, overlay)
+	require.NoError(t, err)
+	release()
+	require.Empty(t, h.mounts)
+
+	fakeBin := t.TempDir()
+	logPath := filepath.Join(fakeBin, "mount.log")
+	require.NoError(t, os.WriteFile(filepath.Join(fakeBin, "mount"), []byte("#!/bin/sh\necho \"$*\" >> "+logPath+"\nexit 0\n"), 0o755))
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	pinned := stub(types.StubConfigV1{Mirror: pin})
+	image := t.TempDir()
+	overlay = common.NewContainerOverlay(pinned, image, t.TempDir())
+	release, err = worker.attachMirrorLayer(context.Background(), pinned, overlay)
+	require.NoError(t, err)
+	require.Len(t, h.mounts, 1)
+	require.NoError(t, overlay.Setup())
+	var layer string
+	for path := range h.mounts {
+		layer = path
+	}
+	options, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	require.Contains(t, string(options), "lowerdir="+layer+":"+image+",upperdir=", "the mirror sits between the image and the writable layer")
+	release()
+	require.Equal(t, 1, h.layers.pruneIdle(time.Now().Add(time.Hour)))
+
+	// A VM whose generation cannot be mounted does not start without it.
+	h.bucket.objects = map[string][]byte{}
+	overlay = common.NewContainerOverlay(pinned, image, t.TempDir())
+	_, err = worker.attachMirrorLayer(context.Background(), pinned, overlay)
+	require.ErrorContains(t, err, "no longer in the store")
+	_, err = (&Worker{}).attachMirrorLayer(context.Background(), pinned, overlay)
+	require.Error(t, err)
+}

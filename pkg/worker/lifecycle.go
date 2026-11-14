@@ -1969,6 +1969,16 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			restoreFilesystemCleanupNeeded = false
 		}
 	}
+	// Declared before the overlay's cleanup so that it runs after it: the
+	// layer is released once nothing is mounted over it.
+	releaseMirrorLayer, err := s.attachMirrorLayer(ctx, request, containerInstance.Overlay)
+	if err != nil {
+		exitCode = int(types.ContainerExitCodeStartupFailed)
+		outputLogger.Error(fmt.Sprintf("Failed to mount the mirror: %v\n", err))
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to attach mirror layer")
+		return
+	}
+	defer releaseMirrorLayer()
 	phaseStart := time.Now()
 	if rootDisk := qcowRootDiskMount(request); rootDisk != nil && !s.runtimeOwnsBlockRoot() {
 		// The whole machine filesystem persists: the overlay's writable layer

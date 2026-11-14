@@ -593,4 +593,17 @@ func TestMountedFilesystem(t *testing.T) {
 	other, err := os.Stat(filepath.Join(second, "root/projects/app/main.go"))
 	require.NoError(t, err)
 	require.Equal(t, first.Sys().(*syscall.Stat_t).Ino, other.Sys().(*syscall.Stat_t).Ino)
+
+	// A revoked mount keeps its names and returns no contents it has not
+	// already handed to the kernel.
+	again.Revoke()
+	_, err = os.ReadFile(filepath.Join(second, "root/projects/data/model.bin"))
+	require.ErrorIs(t, err, syscall.EIO)
+	_, err = os.ReadFile(filepath.Join(second, "home/beam/.zshrc"))
+	require.ErrorIs(t, err, syscall.EIO)
+	entries, err := os.ReadDir(filepath.Join(second, "root/projects"))
+	require.NoError(t, err)
+	require.NotEmpty(t, entries)
+	_, err = os.ReadFile(filepath.Join(mountPoint, "root/projects/data/model.bin"))
+	require.NoError(t, err, "other mounts are unaffected")
 }
