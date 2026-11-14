@@ -109,4 +109,25 @@ func TestScale(t *testing.T) {
 	}))
 	require.Equal(t, int(entries), walked)
 	t.Logf("walk and stat of every entry through the mount: %s; heap after the walk %.1f MiB", time.Since(started).Round(time.Millisecond), heapMiB()-before)
+
+	// A purge tells the kernel to drop the data of every file, here with
+	// every file known to the kernel and one page of each in its cache.
+	read := 0
+	page := make([]byte, 4096)
+	require.NoError(t, filepath.WalkDir(filepath.Join(mountPoint, "root"), func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || !entry.Type().IsRegular() || read >= 50_000 {
+			return err
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		read++
+		_, err = file.Read(page)
+		return err
+	}))
+	started = time.Now()
+	fsys.Revoke()
+	t.Logf("revoke with %d files cached: %s", read, time.Since(started).Round(time.Millisecond))
 }

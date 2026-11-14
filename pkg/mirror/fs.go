@@ -81,11 +81,20 @@ type FS struct {
 
 	flights singleflight.Group
 	mu      sync.Mutex
+	mounts  []*mounted
 	decoded map[uint32]*list.Element
 	lru     *list.List
 	held    int
 	budget  int
 	starts  map[uint32][]uint64 // file -> raw offset of each extent
+}
+
+// mounted is one mount of the filesystem. gone is set once its server has
+// stopped, after which the server's device is closed and must not be
+// written to.
+type mounted struct {
+	server *fuse.Server
+	gone   atomic.Bool
 }
 
 type decodedExtent struct {
@@ -174,16 +183,57 @@ func (f *FS) String() string { return "beam-mirror" }
 // ErrRevoked is what reading a file returns once its mirror is purged.
 var ErrRevoked = errors.New("mirror was purged")
 
+// Init records the server of a mount, which is how Revoke reaches the
+// kernel.
+func (f *FS) Init(server *fuse.Server) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.mounts = append(f.mounts, &mounted{server: server})
+}
+
+func (f *FS) unmounted(server *fuse.Server) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, mount := range f.mounts {
+		if mount.server == server {
+			mount.gone.Store(true)
+			f.mounts = append(f.mounts[:i:i], f.mounts[i+1:]...)
+			return
+		}
+	}
+}
+
 // Revoke stops the filesystem from returning file contents, for a mirror
 // that has been purged while mounted. Names and attributes stay, so that the
-// overlay above keeps working for everything the guest wrote itself. Pages
-// the kernel or the guest already cached are beyond its reach.
+// overlay above keeps working for everything the guest wrote itself.
+//
+// The kernel keeps what it has read from an immutable file and serves it
+// again without asking, so it is told to drop every file's data. A read that
+// was already under way holds its pages locked in that cache, and the kernel
+// waits for it before dropping them. What a guest holds in its own memory is
+// beyond reach.
 func (f *FS) Revoke() {
 	f.revoked.Store(true)
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.decoded, f.held = map[uint32]*list.Element{}, 0
 	f.lru.Init()
+	mounts := f.mounts
+	f.mu.Unlock()
+
+	for _, mount := range mounts {
+		for view := range f.placements {
+			for index := range uint32(f.entries) {
+				if mount.gone.Load() {
+					break
+				}
+				if f.manifest.Kind(index) == KindFile {
+					// ENOENT is the answer for a file the kernel has not
+					// looked up.
+					mount.server.InodeNotify(f.nodeID(view, index), 0, 0)
+				}
+			}
+		}
+	}
 }
 
 func (f *FS) Revoked() bool { return f.revoked.Load() }
@@ -537,7 +587,10 @@ func Mount(mountPoint string, fsys *FS) (*fuse.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	go server.Serve()
+	go func() {
+		server.Serve()
+		fsys.unmounted(server)
+	}()
 	if err := server.WaitMount(); err != nil {
 		_ = server.Unmount()
 		return nil, err

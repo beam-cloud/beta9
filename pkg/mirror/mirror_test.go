@@ -691,9 +691,24 @@ func TestMountedFilesystem(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, first.Sys().(*syscall.Stat_t).Ino, other.Sys().(*syscall.Stat_t).Ino)
 
-	// A revoked mount keeps its names and returns no contents it has not
-	// already handed to the kernel.
+	// A revoked mount keeps its names and returns no contents, including
+	// those the kernel had cached and those of files already open.
+	cached := filepath.Join(second, "root/projects/app/main.go")
+	data, err := os.ReadFile(cached)
+	require.NoError(t, err)
+	require.True(t, bytes.Equal(tree["projects/app/main.go"], data))
+	open, err := os.Open(filepath.Join(second, "home/beam/projects/data/model.bin"))
+	require.NoError(t, err)
+	defer open.Close()
+	head := make([]byte, 4096)
+	_, err = io.ReadFull(open, head)
+	require.NoError(t, err)
+
 	again.Revoke()
+	_, err = os.ReadFile(cached)
+	require.ErrorIs(t, err, syscall.EIO, "read before the purge")
+	_, err = open.ReadAt(head, 0)
+	require.ErrorIs(t, err, syscall.EIO, "open before the purge")
 	_, err = os.ReadFile(filepath.Join(second, "root/projects/data/model.bin"))
 	require.ErrorIs(t, err, syscall.EIO)
 	_, err = os.ReadFile(filepath.Join(second, "home/beam/.zshrc"))
@@ -701,6 +716,9 @@ func TestMountedFilesystem(t *testing.T) {
 	entries, err := os.ReadDir(filepath.Join(second, "root/projects"))
 	require.NoError(t, err)
 	require.NotEmpty(t, entries)
+	target, err := os.Readlink(filepath.Join(second, "root/projects/current"))
+	require.NoError(t, err)
+	require.Equal(t, "app/src", target)
 	_, err = os.ReadFile(filepath.Join(mountPoint, "root/projects/data/model.bin"))
 	require.NoError(t, err, "other mounts are unaffected")
 }
