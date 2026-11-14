@@ -221,6 +221,10 @@ utility leaves out.
   31.7 s. Generations 1 and 2 stayed listed with their objects gone.
 - Generation 5, by then 39,070 files in 3.9 GiB, was restored and mounted in
   a new VM, and matched the home both ways.
+- A forced purge emptied the bucket of the mirror's 3,191 objects. The next
+  push stopped with a line saying that the mirror does not exist and to run
+  `beam-mirror init`, and `doctor` said the same. In the VM, names were
+  still listed and reads returned `EIO` within the minute.
 
 This run found one defect: the desktop user's home was served with uid 1000,
 but the desktop image's user has uid 1001, so the desktop session of a VM
