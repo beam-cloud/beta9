@@ -283,10 +283,11 @@ func perFile(output, label string) (time.Duration, int) {
 }
 
 // The host overlay takes the mirror as a second read-only FUSE lower above
-// the image. The guest reads both through one virtio-fs share, changes land
-// on its root disk, and a cold boot on the same disk (fresh overlay, fresh
-// FUSE mounts, as after a worker restart) sees its changes over an unchanged
-// lower.
+// the image. The guest reads both through one virtio-fs share. Mirrored files
+// are ordinary files to it: root and the desktop user change, move and delete
+// them, the changes land on its root disk, and a cold boot on the same disk
+// (fresh overlay, fresh FUSE mounts, as after a worker restart) sees them over
+// an unchanged lower.
 func TestMicroVMMirrorLayerBootAndColdBoot(t *testing.T) {
 	rt := requireMicroVMEnv(t)
 	layers := newMirrorLayers(t, extractRootfs(t, "alpine"))
@@ -326,6 +327,17 @@ echo local-edit >> /root/.zshrc
 mv /root/projects/app /root/projects/app-renamed
 rm /root/.ssh/config
 echo new > /root/projects/new.txt
+adduser -D -H -u 1001 -h /home/beam beam
+su beam -c '
+set -eu
+cd /home/beam
+test -w .zshrc
+echo beam-edit >> .zshrc
+mv projects/app projects/app-moved
+rm .ssh/config
+echo new > projects/beam-new.txt
+chmod 600 projects/notes.txt
+'
 sync
 echo first-done
 `},
@@ -355,6 +367,9 @@ echo first-done
 	require.NoError(t, err)
 	require.Equal(t, "export EDITOR=vim\n", string(data))
 	require.FileExists(t, filepath.Join(layers.mirrorMount(), "root/.ssh/config"))
+	data, err = os.ReadFile(filepath.Join(layers.mirrorMount(), "home/beam/.zshrc"))
+	require.NoError(t, err)
+	require.Equal(t, "export EDITOR=vim\n", string(data))
 
 	require.NoError(t, rt.Delete(ctx, first.id, &DeleteOpts{Force: true}))
 	require.NoError(t, manager.Detach(ctx, key))
@@ -378,6 +393,12 @@ test ! -e /root/projects/app
 echo "new=$(cat /root/projects/new.txt)"
 echo "big=$(sha256sum /root/big.bin | cut -d' ' -f1)"
 echo "later=$(sha256sum /root/later/0007.txt | cut -d' ' -f1)"
+echo "beamedit=$(head -n1 /home/beam/.zshrc):$(tail -n1 /home/beam/.zshrc)"
+echo "beammoved=$(sha256sum /home/beam/projects/app-moved/main.go | cut -d' ' -f1)"
+echo "beamnew=$(stat -c '%u:%g' /home/beam/projects/beam-new.txt):$(cat /home/beam/projects/beam-new.txt)"
+echo "beammode=$(stat -c '%u:%a' /home/beam/projects/notes.txt)"
+test ! -e /home/beam/.ssh/config
+test ! -e /home/beam/projects/app
 echo second-done
 `},
 		annotations: map[string]string{MicroVMRootDiskAnnotation: volume.ExportSocket()},
@@ -394,6 +415,10 @@ echo second-done
 	require.Contains(t, output, "new=new")
 	require.Contains(t, output, "big="+layers.sums["/root/big.bin"])
 	require.Contains(t, output, "later="+layers.sums["/root/later/0007.txt"])
+	require.Contains(t, output, "beamedit=export EDITOR=vim:beam-edit", "the desktop user can change a mirrored file")
+	require.Contains(t, output, "beammoved="+layers.sums["/root/projects/app/main.go"])
+	require.Contains(t, output, "beamnew=1001:1001:new")
+	require.Contains(t, output, "beammode=1001:600")
 	require.Contains(t, output, "second-done")
 }
 
