@@ -105,7 +105,9 @@ func (w *Writer) encode(raw []byte) []byte {
 		return raw
 	}
 	compressed := zstdEncoder.EncodeAll(raw, make([]byte, 0, len(raw)/2))
-	if len(compressed) > len(raw)-len(raw)/8 {
+	// An extent as long stored as raw is raw to a reader, so a compressed
+	// one is shorter whatever the eighth rounds to.
+	if len(compressed) >= len(raw) || len(compressed) > len(raw)-len(raw)/8 {
 		return raw
 	}
 	return compressed
