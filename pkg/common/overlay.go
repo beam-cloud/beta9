@@ -19,6 +19,7 @@ type ContainerOverlay struct {
 	containerId     string
 	layers          []ContainerOverlayLayer
 	root            string
+	readOnlyLayers  []string
 	overlayPath     string
 	persistentUpper string
 	persistentWork  string
@@ -53,6 +54,28 @@ func NewContainerOverlay(request *types.ContainerRequest, rootPath string, overl
 		root:        rootPath,
 		overlayPath: overlayPath,
 	}
+}
+
+// SetReadOnlyLayers places read-only directories between the image root and
+// the writable layer, the first on top. Where a path exists in more than one
+// the upper one wins, and directories merge.
+func (co *ContainerOverlay) SetReadOnlyLayers(dirs ...string) error {
+	if len(co.layers) != 0 {
+		return fmt.Errorf("container overlay is already mounted")
+	}
+	for _, dir := range dirs {
+		// The path becomes part of the mount options.
+		if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || strings.ContainsAny(dir, ":,\\") {
+			return fmt.Errorf("invalid read-only overlay layer %q", dir)
+		}
+	}
+	co.readOnlyLayers = append([]string(nil), dirs...)
+	return nil
+}
+
+// baseLower is the lowerdir of the first writable layer.
+func (co *ContainerOverlay) baseLower() string {
+	return strings.Join(append(append([]string(nil), co.readOnlyLayers...), co.root), ":")
 }
 
 func (co *ContainerOverlay) Setup() error {
@@ -103,7 +126,7 @@ func (co *ContainerOverlay) addPersistentLayer() error {
 		return err
 	}
 	layer := ContainerOverlayLayer{
-		lower:  co.root,
+		lower:  co.baseLower(),
 		upper:  co.persistentUpper,
 		work:   co.persistentWork,
 		merged: mergedDir,
@@ -118,7 +141,7 @@ func (co *ContainerOverlay) addPersistentLayer() error {
 
 func (co *ContainerOverlay) AddEmptyLayer() error {
 	index := 0
-	lowerDir := co.root
+	lowerDir := co.baseLower()
 	if len(co.layers) > 0 {
 		index = len(co.layers)
 		lowerDir = co.layers[index-1].merged
@@ -173,7 +196,7 @@ func (co *ContainerOverlay) AddEmptyLayer() error {
 
 func (co *ContainerOverlay) AddLayer(upperDir string) error {
 	index := 0
-	lowerDir := co.root
+	lowerDir := co.baseLower()
 	if len(co.layers) > 0 {
 		index = len(co.layers)
 		lowerDir = co.layers[index-1].merged
