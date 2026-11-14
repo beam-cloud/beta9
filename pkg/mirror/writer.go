@@ -46,7 +46,8 @@ func (p ChunkParams) Cut(data []byte) int {
 type WriterOptions struct {
 	Chunk ChunkParams
 	// Files up to PackLimit bytes are batched into pack objects of about
-	// PackTarget bytes; larger files are chunked into objects of their own.
+	// PackTarget stored bytes; larger files are chunked into objects of
+	// their own.
 	PackLimit  int
 	PackTarget int
 	// Compress stores an extent zstd-compressed when that saves at least
@@ -54,12 +55,15 @@ type WriterOptions struct {
 	Compress bool
 }
 
-// DefaultWriterOptions are the parameters fixed by the format spike.
+// DefaultWriterOptions are the parameters fixed by the format spike. A
+// reader fetches whole objects, so reading one small file costs one pack:
+// the pack target is the smallest the spike measured, and nothing on the
+// write side improved with a larger one.
 func DefaultWriterOptions() WriterOptions {
 	return WriterOptions{
 		Chunk:      ChunkParams{Min: 256 << 10, Avg: 1 << 20, Max: 4 << 20},
 		PackLimit:  256 << 10,
-		PackTarget: 8 << 20,
+		PackTarget: 1 << 20,
 		Compress:   true,
 	}
 }
