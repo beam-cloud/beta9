@@ -195,6 +195,10 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 	if err := s.prepare(ctx, v); err != nil {
 		return err
 	}
+	spec, err := s.launchSpec(ctx, v)
+	if err != nil {
+		return err
+	}
 
 	// Persist before enqueue. A retry uses this exact runtime identity.
 	if v.ContainerID == "" {
@@ -208,7 +212,7 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 		return err
 	}
 
-	err = s.runtime.RunVM(ctx, info, v.StubID, v.ContainerID, v.Spec, v.MemoryCheckpointID, v.MemoryDiskSnapshots)
+	err = s.runtime.RunVM(ctx, info, v.StubID, v.ContainerID, spec, v.MemoryCheckpointID, v.MemoryDiskSnapshots)
 	if err != nil {
 		if _, stateErr := s.containers.GetContainerState(v.ContainerID); (&types.ErrContainerStateNotFound{}).From(stateErr) {
 			v.ContainerID = ""

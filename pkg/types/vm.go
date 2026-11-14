@@ -94,6 +94,10 @@ type VMSpec struct {
 	Disks            []*pb.DurableDisk  `json:"disks,omitempty"`
 	Volumes          []*pb.Volume       `json:"volumes,omitempty"`
 	SourceSnapshotID string             `json:"source_snapshot_id,omitempty"`
+	// Mirror places a generation of a mirror under the guest homes. It is
+	// fixed at create: the root disk records changes relative to that
+	// generation, so it cannot be swapped or dropped later.
+	Mirror *VMMirror `json:"mirror,omitempty"`
 }
 
 // VMCreateOptions carries parsed inputs for creation and forks.
@@ -213,6 +217,7 @@ func (s VMSpec) DesktopPrivatePorts() []uint32 {
 func (s VMSpec) PublicTemplate() VMSpec {
 	s.Env, s.Secrets, s.Disks, s.Volumes = nil, nil, nil, nil
 	s.Pool, s.SSH, s.SSHPublicKey, s.SourceSnapshotID = "", false, "", ""
+	s.Mirror = nil
 	s.Ports = slices.DeleteFunc(slices.Clone(s.Ports), func(port uint32) bool { return port == VMSSHPort })
 	s.Kiosk = s.Kiosk.Clone()
 	if s.Kiosk != nil {

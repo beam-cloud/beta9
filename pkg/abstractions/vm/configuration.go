@@ -2,6 +2,7 @@ package vm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"path"
@@ -41,6 +42,80 @@ func normalizeDiskSize(size string) (string, error) {
 	}
 
 	return strconv.FormatInt(bytes, 10), nil
+}
+
+var validMirrorName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+
+// seedMirror applies the mirror rules for a VM made from a snapshot or
+// template. The files its root disk was written over are those of one
+// generation, so it keeps the generation its seed is pinned to; a seed
+// without a mirror can take one.
+func seedMirror(kind string, seed *types.VMMirror, override json.RawMessage) (*types.VMMirror, error) {
+	var requested *types.VMMirror
+	if len(override) > 0 {
+		if err := json.Unmarshal(override, &requested); err != nil {
+			return nil, fmt.Errorf("invalid mirror")
+		}
+	}
+	if seed == nil {
+		return requestedMirror(requested), nil
+	}
+	if requested != nil && (requested.Name != seed.Name || requested.Generation != 0 && requested.Generation != seed.Generation) {
+		return nil, fmt.Errorf("the %s is pinned to generation %d of mirror %s, and a VM made from it keeps that", kind, seed.Generation, seed.Name)
+	}
+	return seed, nil
+}
+
+// requestedMirror keeps what a caller may choose: the mirror and, optionally,
+// one of its generations. The rest of a pin is the gateway's to fill in.
+func requestedMirror(mirror *types.VMMirror) *types.VMMirror {
+	if mirror == nil {
+		return nil
+	}
+	return &types.VMMirror{Name: mirror.Name, Generation: mirror.Generation}
+}
+
+// pinMirror resolves the mirror of a VM being created to a generation. A pin
+// inherited from a fork's parent, a snapshot or a template is verified and
+// kept; one whose mirror has since been purged is kept as it is, and the VM
+// then runs without the layer like every other VM that was pinned to it.
+func (s *Service) pinMirror(ctx context.Context, workspaceID uint, mirror *types.VMMirror) (*types.VMMirror, error) {
+	if mirror == nil {
+		return nil, nil
+	}
+	if s.mirrors == nil {
+		return nil, echo.NewHTTPError(http.StatusBadRequest, "mirrors are not available on this gateway")
+	}
+	if mirror.ID != "" {
+		active, err := s.mirrors.Active(ctx, workspaceID, mirror)
+		if err != nil {
+			return nil, err
+		}
+		if !active {
+			return mirror, nil
+		}
+	}
+	return s.mirrors.Resolve(ctx, workspaceID, mirror)
+}
+
+// launchSpec is the spec a start hands to the runtime: the VM's own, less a
+// mirror that no longer exists.
+func (s *Service) launchSpec(ctx context.Context, v *types.VM) (types.VMSpec, error) {
+	spec := v.Spec
+	if spec.Mirror == nil {
+		return spec, nil
+	}
+	active := false
+	if s.mirrors != nil {
+		var err error
+		if active, err = s.mirrors.Active(ctx, v.WorkspaceID, spec.Mirror); err != nil {
+			return spec, fmt.Errorf("check mirror %s: %w", spec.Mirror.Name, err)
+		}
+	}
+	if !active {
+		spec.Mirror = nil
+	}
+	return spec, nil
 }
 
 func validate(spec *types.VMSpec) error {
@@ -126,6 +201,10 @@ func validate(spec *types.VMSpec) error {
 		if err := validateMountPath(volume.MountPath, seenMounts); err != nil {
 			return err
 		}
+	}
+
+	if spec.Mirror != nil && (!validMirrorName.MatchString(spec.Mirror.Name) || spec.Mirror.Generation < 0) {
+		return fmt.Errorf("mirror requires the name of a mirror and, optionally, one of its generations")
 	}
 
 	if spec.ImageID == "" {

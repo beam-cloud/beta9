@@ -33,6 +33,12 @@ type Gateway interface {
 	IsHostedCPUPool(string) bool
 }
 
+// Mirrors pins VMs to generations of the workspace's mirrors.
+type Mirrors interface {
+	Resolve(ctx context.Context, workspaceID uint, requested *types.VMMirror) (*types.VMMirror, error)
+	Active(ctx context.Context, workspaceID uint, pin *types.VMMirror) (bool, error)
+}
+
 type ImageVerifier interface {
 	VerifyImageBuild(context.Context, *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error)
 }
@@ -46,6 +52,7 @@ type Service struct {
 	runtime       Runtime
 	gateway       Gateway
 	images        ImageVerifier
+	mirrors       Mirrors
 	config        types.VMConfig
 	publicNetwork *publicVMNetwork
 	webrtc        *vmWebRTC
@@ -62,6 +69,7 @@ type ServiceOpts struct {
 	Runtime       Runtime
 	Gateway       Gateway
 	Images        ImageVerifier
+	Mirrors       Mirrors
 	RouteGroup    *echo.Group
 	Server        *echo.Echo
 	BackendDialer *network.BackendDialer
@@ -84,6 +92,7 @@ func New(ctx context.Context, opts ServiceOpts) error {
 		runtime:    opts.Runtime,
 		gateway:    opts.Gateway,
 		images:     opts.Images,
+		mirrors:    opts.Mirrors,
 		config:     opts.Config,
 	}
 

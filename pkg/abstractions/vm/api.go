@@ -376,8 +376,16 @@ func (s *Service) create(c echo.Context) error {
 			}
 		}
 
+		mirror, err := seedMirror(kind, a.Spec.Mirror, overrides["mirror"])
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
 		for key, value := range overrides {
 			fields[key] = value
+		}
+		delete(fields, "mirror")
+		if mirror != nil {
+			fields["mirror"], _ = json.Marshal(mirror)
 		}
 		_, transportOverride := overrides["desktop_transport"]
 		preserveDesktopTransport = a.Spec.Desktop && a.Spec.Kiosk == nil && !transportOverride
@@ -395,6 +403,9 @@ func (s *Service) create(c echo.Context) error {
 
 	if spec.SourceSnapshotID != "" && seed == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "use a VM template or fork to initialize a root disk")
+	}
+	if seed == "" {
+		spec.Mirror = requestedMirror(spec.Mirror)
 	}
 
 	var image *pb.VerifyImageBuildRequest
@@ -522,6 +533,11 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 	}
 
 	if err := s.resolveCPUTier(ctx, info.Workspace, &v.Spec); err != nil {
+		return nil, err
+	}
+	// Like the image, the generation is chosen after an idempotent retry is
+	// recovered: a retry gets the VM it made, not a newer generation.
+	if v.Spec.Mirror, err = s.pinMirror(ctx, info.Workspace.Id, v.Spec.Mirror); err != nil {
 		return nil, err
 	}
 	if opts.Image != nil {

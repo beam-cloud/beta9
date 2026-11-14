@@ -481,6 +481,7 @@ type vmRuntime struct {
 	forwardStatus   int
 	forwardHeaders  http.Header
 	iceHandler      func(net.Conn)
+	launched        []types.VMSpec
 }
 
 func (r *vmRuntime) SetVMICEHandler(handler func(net.Conn)) { r.iceHandler = handler }
@@ -493,8 +494,9 @@ func (r *vmRuntime) SandboxConnect(_ context.Context, req *pb.PodSandboxConnectR
 	return &pb.PodSandboxConnectResponse{Ok: state != nil && state.Status == types.ContainerStatusRunning}, nil
 }
 
-func (r *vmRuntime) RunVM(_ context.Context, info *auth.AuthInfo, stub, cid string, _ types.VMSpec, checkpoint string, disks map[string]string) error {
+func (r *vmRuntime) RunVM(_ context.Context, info *auth.AuthInfo, stub, cid string, spec types.VMSpec, checkpoint string, disks map[string]string) error {
 	r.launchToken = info.Token.ExternalId
+	r.launched = append(r.launched, spec)
 	r.checkpoint = checkpoint
 	r.checkpointDisks = disks
 	r.requests = append(r.requests, cid)

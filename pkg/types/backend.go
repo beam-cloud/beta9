@@ -605,6 +605,9 @@ type StubConfigV1 struct {
 	Serving   *ServingConfig    `json:"serving,omitempty"`
 	Pool      *PoolConfig       `json:"pool,omitempty"`
 	Disks     []*pb.DurableDisk `json:"disks,omitempty"`
+	// Mirror is the mirror generation a persistent VM reads through a
+	// read-only layer under its root. Set per launch.
+	Mirror *VMMirror `json:"mirror,omitempty"`
 	// ManagedEndpoint carries the platform endpoint/service spec for
 	// managed_endpoint/* and managed_service/* stubs.
 	ManagedEndpoint *ManagedEndpointStubConfig `json:"managed_endpoint,omitempty"`
