@@ -298,6 +298,22 @@ func (s *Service) missingObjects(c echo.Context) error {
 	if err := group.Wait(); err != nil {
 		return apiError(err)
 	}
+
+	// Serialize issuing new PUT URLs with purge. The lookups above can
+	// outlast a purge, including one followed by reuse of the name.
+	unlock, err := s.repo.LockVM(ctx, mirror.ID)
+	if err != nil {
+		return apiError(err)
+	}
+	defer unlock()
+	current, err := s.repo.GetMirror(ctx, info.Workspace.Id, mirror.Name)
+	if err != nil {
+		return apiError(err)
+	}
+	if current.ID != mirror.ID {
+		return apiError(sql.ErrNoRows)
+	}
+
 	response := struct {
 		Missing []objectURL `json:"missing"`
 		Expires int64       `json:"expires_in"`
@@ -482,11 +498,12 @@ func (s *Service) commit(c echo.Context) error {
 
 	// The parent's objects were checked when it was committed and it has
 	// been retained since, so only what this generation adds is checked.
-	known := map[store.Digest]bool{}
+	known := map[store.Digest]uint64{}
 	if latest != nil {
 		if parent, err := loadManifest(ctx, bucket, mirror.ID, latest.ManifestDigest); err == nil {
 			for i := range parent.Objects() {
-				known[parent.Object(i).Digest] = true
+				object := parent.Object(i)
+				known[object.Digest] = object.Size
 			}
 		}
 	}
@@ -496,7 +513,7 @@ func (s *Service) commit(c echo.Context) error {
 	group.SetLimit(headConcurrency)
 	for i := range manifest.Objects() {
 		object := manifest.Object(i)
-		if known[object.Digest] {
+		if size, ok := known[object.Digest]; ok && size == object.Size {
 			continue
 		}
 		group.Go(func() error {

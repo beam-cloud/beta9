@@ -190,11 +190,54 @@ def test_vm_new_mirror_names_this_machines_mirror(machine, new_vm):
     assert result.exit_code == 1 and not factory.called
     assert "not installed on this machine. Run: beta9 setup mirror" in result.stderr
 
-    machine.release({"beam-mirror": UTILITY.encode()})
+    status = {
+        "mirror": "laptop",
+        "context": "default",
+        "config_path": str(machine.root / "beam" / "config.ini"),
+    }
+    machine.release({"beam-mirror": f"#!/bin/sh\necho '{json.dumps(status)}'\n".encode()})
     mirror.install()
     result, factory = new_vm("dev", "--mirror")
     assert result.exit_code == 0, result.stderr
     assert factory.call_args.args == ("dev",) and factory.call_args.kwargs["mirror"] == "laptop"
+
+
+@pytest.mark.parametrize(
+    "binding", [{}, {"context": "staging"}, {"config_path": "/other/beam.ini"}]
+)
+def test_vm_new_rejects_a_local_mirror_for_a_different_or_unknown_context(
+    machine, monkeypatch, new_vm, binding
+):
+    status = {"mirror": "laptop", **binding}
+    if "config_path" in binding:
+        status["context"] = "default"
+    if "context" in binding:
+        status["config_path"] = str(machine.root / "beam" / "config.ini")
+    monkeypatch.setattr(mirror, "installed", lambda: "/usr/bin/beam-mirror")
+    monkeypatch.setattr(mirror, "status", lambda: status)
+
+    result, factory = new_vm("dev", "--mirror")
+    assert result.exit_code == 1 and not factory.called
+    assert "not configured for the selected Beam context" in result.stderr
+
+
+def test_vm_new_checks_the_explicit_context_for_a_local_mirror(machine, monkeypatch, new_vm):
+    status = {
+        "mirror": "laptop",
+        "context": "default",
+        "config_path": str(machine.root / "beam" / "config.ini"),
+    }
+    monkeypatch.setattr(mirror, "installed", lambda: "/usr/bin/beam-mirror")
+    monkeypatch.setattr(mirror, "status", lambda: status)
+
+    result, factory = new_vm("dev", "--mirror", "--context", "staging")
+    assert result.exit_code == 1 and not factory.called
+    assert "beta9 --context staging setup mirror" in result.stderr
+
+    status["context"] = "staging"
+    result, factory = new_vm("dev", "--mirror", "--context", "staging")
+    assert result.exit_code == 0, result.stderr
+    assert factory.call_args.kwargs["mirror"] == "laptop"
 
 
 def test_vm_new_takes_a_named_mirror_or_none(machine, new_vm):

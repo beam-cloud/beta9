@@ -29,7 +29,7 @@ type memoryRepo struct {
 	repository.BackendRepository
 	mu          sync.Mutex
 	mirrors     []*types.Mirror
-	purged      map[string]bool
+	purged      map[string]time.Time
 	deleted     map[string]bool
 	generations map[string][]types.MirrorGeneration
 	references  []types.MirrorReference
@@ -39,7 +39,7 @@ type memoryRepo struct {
 
 func newMemoryRepo() *memoryRepo {
 	return &memoryRepo{
-		purged: map[string]bool{}, deleted: map[string]bool{},
+		purged: map[string]time.Time{}, deleted: map[string]bool{},
 		generations: map[string][]types.MirrorGeneration{},
 		locks:       map[string]*sync.Mutex{},
 	}
@@ -69,7 +69,7 @@ func (r *memoryRepo) GetMirror(_ context.Context, workspaceID uint, name string)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, mirror := range r.mirrors {
-		if mirror.WorkspaceID == workspaceID && mirror.Name == name && !r.purged[mirror.ID] {
+		if mirror.WorkspaceID == workspaceID && mirror.Name == name && r.purged[mirror.ID].IsZero() {
 			copy := *mirror
 			copy.Latest = r.latest(mirror.ID)
 			return &copy, nil
@@ -83,7 +83,7 @@ func (r *memoryRepo) ListMirrors(_ context.Context, workspaceID uint) ([]types.M
 	defer r.mu.Unlock()
 	var mirrors []types.Mirror
 	for _, mirror := range r.mirrors {
-		if mirror.WorkspaceID == workspaceID && !r.purged[mirror.ID] {
+		if mirror.WorkspaceID == workspaceID && r.purged[mirror.ID].IsZero() {
 			copy := *mirror
 			copy.Latest = r.latest(mirror.ID)
 			mirrors = append(mirrors, copy)
@@ -97,7 +97,7 @@ func (r *memoryRepo) ListMirrorIDs(context.Context) ([]types.Mirror, error) {
 	defer r.mu.Unlock()
 	var mirrors []types.Mirror
 	for _, mirror := range r.mirrors {
-		if !r.purged[mirror.ID] {
+		if r.purged[mirror.ID].IsZero() {
 			mirrors = append(mirrors, *mirror)
 		}
 	}
@@ -108,7 +108,7 @@ func (r *memoryRepo) CommitMirrorGeneration(_ context.Context, generation *types
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	latest := r.latest(generation.MirrorID)
-	if r.purged[generation.MirrorID] || latest == nil && generation.Parent != 0 || latest != nil && latest.Number != generation.Parent {
+	if !r.purged[generation.MirrorID].IsZero() || latest == nil && generation.Parent != 0 || latest != nil && latest.Number != generation.Parent {
 		return repository.ErrMirrorGenerationConflict
 	}
 	generation.Number = generation.Parent + 1
@@ -176,15 +176,19 @@ func (r *memoryRepo) DeleteMirrorGenerations(_ context.Context, mirrorID string,
 func (r *memoryRepo) PurgeMirror(_ context.Context, mirrorID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.purged[mirrorID] = true
+	if r.purged[mirrorID].IsZero() {
+		r.purged[mirrorID] = r.now()
+	}
 	delete(r.generations, mirrorID)
 	return nil
 }
 
-func (r *memoryRepo) MarkMirrorObjectsDeleted(_ context.Context, mirrorID string) error {
+func (r *memoryRepo) MarkMirrorObjectsDeleted(_ context.Context, mirrorID string, purgedBefore time.Time) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.deleted[mirrorID] = true
+	if purgedAt := r.purged[mirrorID]; !purgedAt.IsZero() && !purgedAt.After(purgedBefore) {
+		r.deleted[mirrorID] = true
+	}
 	return nil
 }
 
@@ -193,7 +197,7 @@ func (r *memoryRepo) ListPurgedMirrors(context.Context) ([]types.Mirror, error) 
 	defer r.mu.Unlock()
 	var mirrors []types.Mirror
 	for _, mirror := range r.mirrors {
-		if r.purged[mirror.ID] && !r.deleted[mirror.ID] {
+		if !r.purged[mirror.ID].IsZero() && !r.deleted[mirror.ID] {
 			mirrors = append(mirrors, *mirror)
 		}
 	}
@@ -221,6 +225,7 @@ type memoryBucket struct {
 	objects    map[string][]byte
 	modified   map[string]time.Time
 	failDelete bool
+	beforeHead func()
 }
 
 func newMemoryBucket() *memoryBucket {
@@ -234,6 +239,9 @@ func (b *memoryBucket) put(key string, data []byte, modified time.Time) {
 }
 
 func (b *memoryBucket) Head(_ context.Context, key string) (int64, bool, error) {
+	if b.beforeHead != nil {
+		b.beforeHead()
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	data, ok := b.objects[key]
@@ -640,6 +648,35 @@ func TestRetentionAndSweep(t *testing.T) {
 	require.False(t, exists)
 }
 
+func TestCommitChecksChangedObjectSize(t *testing.T) {
+	h := newHarness(t, Config{})
+	var mirror types.Mirror
+	require.Equal(t, http.StatusCreated, h.call(http.MethodPost, "", map[string]string{"name": "laptop"}, &mirror))
+
+	content := []byte("contents")
+	digest := store.DigestOf(content)
+	h.bucket.put(types.MirrorObjectKey(mirror.ID, digest.String()), content, h.now)
+	commit := func(parent int, size uint64, response any) int {
+		builder := store.NewBuilder()
+		require.NoError(t, builder.AddFile("file", 0o644, 0, []store.FileExtent{{
+			Object: store.Object{Digest: digest, Size: size}, StoredLen: 1, RawLen: 1,
+		}}))
+		data, manifest, err := builder.Encode(nil, false)
+		require.NoError(t, err)
+		h.bucket.put(types.MirrorObjectKey(mirror.ID, manifest.Digest().String()), data, h.now)
+		return h.call(http.MethodPost, "/laptop/generations", map[string]any{
+			"parent": parent, "manifest_digest": manifest.Digest().String(),
+		}, response)
+	}
+
+	require.Equal(t, http.StatusCreated, commit(0, uint64(len(content)), nil))
+	var invalid struct {
+		Missing []string `json:"missing"`
+	}
+	require.Equal(t, http.StatusUnprocessableEntity, commit(1, uint64(len(content))+1, &invalid))
+	require.Equal(t, []string{digest.String()}, invalid.Missing)
+}
+
 func TestPurge(t *testing.T) {
 	h := newHarness(t, Config{})
 	require.Equal(t, http.StatusCreated, h.call(http.MethodPost, "", map[string]string{"name": "laptop"}, nil))
@@ -696,4 +733,63 @@ func TestPurge(t *testing.T) {
 	h.service.SweepAll(context.Background())
 	objects, _ = h.bucket.List(context.Background(), types.MirrorPrefix(other.ID))
 	require.Empty(t, objects)
+}
+
+func TestPurgeSweepsLateUploads(t *testing.T) {
+	h := newHarness(t, Config{URLExpiry: time.Hour, SweepGrace: 2 * time.Hour})
+	var mirror types.Mirror
+	require.Equal(t, http.StatusCreated, h.call(http.MethodPost, "", map[string]string{"name": "laptop"}, &mirror))
+	content := []byte("contents")
+	digest := store.DigestOf(content).String()
+	request := map[string]any{"objects": []objectRef{{Digest: digest, Size: int64(len(content))}}}
+	var signed struct {
+		Missing []objectURL `json:"missing"`
+	}
+	require.Equal(t, http.StatusOK, h.call(http.MethodPost, "/laptop/objects", request, &signed))
+	require.Len(t, signed.Missing, 1)
+
+	ctx := context.Background()
+	require.Equal(t, http.StatusNoContent, h.call(http.MethodDelete, "/laptop", nil, nil))
+	h.service.SweepAll(ctx)
+	require.False(t, h.repo.deleted[mirror.ID])
+
+	// A transfer started just before expiration can finish afterward.
+	h.now = h.now.Add(2 * time.Hour)
+	key := types.MirrorObjectKey(mirror.ID, digest)
+	require.Equal(t, "put://"+key, signed.Missing[0].URL)
+	h.bucket.put(key, content, h.now)
+	h.service.SweepAll(ctx)
+	require.Empty(t, h.bucket.objects)
+	require.False(t, h.repo.deleted[mirror.ID])
+
+	h.now = h.now.Add(time.Hour)
+	h.service.SweepAll(ctx)
+	require.True(t, h.repo.deleted[mirror.ID])
+}
+
+func TestUploadURLRequestCannotCrossPurge(t *testing.T) {
+	h := newHarness(t, Config{})
+	var mirror types.Mirror
+	require.Equal(t, http.StatusCreated, h.call(http.MethodPost, "", map[string]string{"name": "laptop"}, &mirror))
+
+	// Purge and reuse the mirror name after the upload request already
+	// looked up the old mirror but before it can issue any URLs.
+	started, finish := make(chan struct{}), make(chan struct{})
+	h.bucket.beforeHead = func() {
+		close(started)
+		<-finish
+	}
+	t.Cleanup(func() { close(finish) })
+	result := make(chan int, 1)
+	go func() {
+		request := map[string]any{"objects": []objectRef{{Digest: strings.Repeat("ab", 32), Size: 1}}}
+		result <- h.call(http.MethodPost, "/laptop/objects", request, nil)
+	}()
+	<-started
+	require.Equal(t, http.StatusNoContent, h.call(http.MethodDelete, "/laptop", nil, nil))
+	var fresh types.Mirror
+	require.Equal(t, http.StatusCreated, h.call(http.MethodPost, "", map[string]string{"name": "laptop"}, &fresh))
+	require.NotEqual(t, mirror.ID, fresh.ID)
+	finish <- struct{}{}
+	require.Equal(t, http.StatusNotFound, <-result)
 }

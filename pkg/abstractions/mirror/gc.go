@@ -108,6 +108,11 @@ func (s *Service) Sweep(ctx context.Context, bucket ObjectStore, mirror *types.M
 }
 
 func (s *Service) deleteObjects(ctx context.Context, bucket ObjectStore, mirrorID string) error {
+	// An issued PUT URL can outlast a purge, and a transfer can finish
+	// after the URL expires. Only a listing started after both windows
+	// have passed can finish the cleanup. Use the same transfer allowance
+	// as the sweep uses to protect uncommitted uploads.
+	purgedBefore := s.now().Add(-s.config.URLExpiry).Add(-s.config.SweepGrace)
 	objects, err := bucket.List(ctx, types.MirrorPrefix(mirrorID))
 	if err != nil {
 		return err
@@ -117,7 +122,7 @@ func (s *Service) deleteObjects(ctx context.Context, bucket ObjectStore, mirrorI
 			return err
 		}
 	}
-	return s.repo.MarkMirrorObjectsDeleted(ctx, mirrorID)
+	return s.repo.MarkMirrorObjectsDeleted(ctx, mirrorID, purgedBefore)
 }
 
 func (s *Service) bucketFor(ctx context.Context, workspaceID uint) (ObjectStore, error) {

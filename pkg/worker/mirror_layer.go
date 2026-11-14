@@ -76,6 +76,7 @@ type mirrorLayer struct {
 	refs      int
 	idleSince time.Time
 	retired   bool
+	closing   chan struct{}
 }
 
 func newMirrorLayers(ctx context.Context, workerID string, cacheClient *cache.Client) *mirrorLayers {
@@ -136,6 +137,24 @@ func (m *mirrorLayers) acquire(ctx context.Context, request *types.ContainerRequ
 
 	m.mu.Lock()
 	layer := m.layers[key]
+	for layer != nil {
+		if layer.retired {
+			m.mu.Unlock()
+			return "", nil, errors.New("mirror generation is no longer in the store")
+		}
+		closing := layer.closing
+		if closing == nil {
+			break
+		}
+		m.mu.Unlock()
+		select {
+		case <-closing:
+		case <-ctx.Done():
+			return "", nil, ctx.Err()
+		}
+		m.mu.Lock()
+		layer = m.layers[key]
+	}
 	if layer == nil {
 		name := sha256.Sum256([]byte(key))
 		layer = &mirrorLayer{
@@ -238,9 +257,12 @@ func (m *mirrorLayers) serve(ctx context.Context, layer *mirrorLayer, request *t
 func (m *mirrorLayers) release(layer *mirrorLayer) {
 	m.mu.Lock()
 	layer.refs--
-	unmount := layer.refs == 0 && layer.retired
+	unmount := layer.refs == 0 && layer.retired && layer.closing == nil
 	if layer.refs == 0 {
 		layer.idleSince = time.Now()
+	}
+	if unmount {
+		layer.closing = make(chan struct{})
 	}
 	m.mu.Unlock()
 	if unmount {
@@ -249,29 +271,19 @@ func (m *mirrorLayers) release(layer *mirrorLayer) {
 }
 
 func (m *mirrorLayers) unmount(layer *mirrorLayer) {
-	if layer.server == nil {
-		return
-	}
-	if err := layer.server.Unmount(); err != nil {
+	err := layer.server.Unmount()
+	if err != nil {
 		log.Warn().Err(err).Str("path", layer.path).Msg("could not unmount mirror layer")
-		return
+	} else {
+		_ = os.Remove(layer.path)
 	}
-	_ = os.Remove(layer.path)
-}
-
-// retire takes a layer out of use: nothing new joins it, and it is
-// unmounted when its last VM lets go.
-func (m *mirrorLayers) retire(layer *mirrorLayer) (unmount bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if layer.retired {
-		return false
-	}
-	layer.retired = true
-	if m.layers[layer.key] == layer {
+	if err == nil {
 		delete(m.layers, layer.key)
 	}
-	return layer.refs == 0
+	close(layer.closing)
+	layer.closing = nil
 }
 
 func (m *mirrorLayers) mounted() []*mirrorLayer {
@@ -295,9 +307,14 @@ func (m *mirrorLayers) pruneIdle(cutoff time.Time) int {
 	pruned := 0
 	for _, layer := range m.mounted() {
 		m.mu.Lock()
-		idle := layer.refs == 0 && layer.idleSince.Before(cutoff)
+		idle := m.layers[layer.key] == layer && layer.closing == nil && layer.refs == 0 && layer.idleSince.Before(cutoff)
+		if idle {
+			// Reserve the path until unmount finishes. Acquire cannot add
+			// a reference once the idle check has succeeded.
+			layer.closing = make(chan struct{})
+		}
 		m.mu.Unlock()
-		if idle && m.retire(layer) {
+		if idle {
 			m.unmount(layer)
 			pruned++
 		}
@@ -315,11 +332,22 @@ func (m *mirrorLayers) revokePurged(ctx context.Context) int {
 		if err != nil || exists {
 			continue
 		}
+		m.mu.Lock()
+		if m.layers[layer.key] != layer || layer.retired {
+			m.mu.Unlock()
+			continue
+		}
+		layer.retired = true
+		unmount := layer.refs == 0 && layer.closing == nil
+		if unmount {
+			layer.closing = make(chan struct{})
+		}
+		m.mu.Unlock()
 		layer.fsys.Revoke()
 		layer.source.Forget()
 		revoked++
 		log.Warn().Str("path", layer.path).Msg("mirror was purged; its layer no longer returns file contents")
-		if m.retire(layer) {
+		if unmount {
 			m.unmount(layer)
 		}
 	}

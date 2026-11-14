@@ -88,6 +88,17 @@ func (m fakeMirrorMount) Unmount() error {
 	return nil
 }
 
+type blockingMirrorMount struct {
+	started chan struct{}
+	finish  chan struct{}
+}
+
+func (m blockingMirrorMount) Unmount() error {
+	close(m.started)
+	<-m.finish
+	return nil
+}
+
 type mirrorLayerHarness struct {
 	layers    *mirrorLayers
 	bucket    *fakeMirrorBucket
@@ -218,6 +229,40 @@ func TestMirrorLayersShareOneMountPerGeneration(t *testing.T) {
 	require.Equal(t, 1, h.layers.pruneIdle(time.Now().Add(time.Hour)))
 	require.Equal(t, int32(3), h.unmounted.Load())
 	require.NoDirExists(t, paths[0])
+}
+
+func TestMirrorLayersReservePathUntilIdleTeardownFinishes(t *testing.T) {
+	h := newMirrorLayerHarness(t)
+	pin := h.generation(t, 1, map[string]string{"notes.txt": "one"})
+	mount := blockingMirrorMount{started: make(chan struct{}), finish: make(chan struct{})}
+	var finish sync.Once
+	defer finish.Do(func() { close(mount.finish) })
+	h.layers.mount = func(string, *mirror.FS) (mirrorMount, error) { return mount, nil }
+	path, release, err := h.layers.acquire(t.Context(), mirrorRequest(7), pin, nil)
+	require.NoError(t, err)
+	release()
+	pruned := make(chan int, 1)
+	go func() { pruned <- h.layers.pruneIdle(time.Now().Add(time.Hour)) }()
+	select {
+	case <-mount.started:
+	case <-time.After(time.Second):
+		t.Fatal("unmount did not start")
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 25*time.Millisecond)
+	defer cancel()
+	_, _, err = h.layers.acquire(ctx, mirrorRequest(7), pin, nil)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, int32(1), h.opened.Load())
+
+	finish.Do(func() { close(mount.finish) })
+	require.Equal(t, 1, <-pruned)
+	require.NoDirExists(t, path)
+	again, releaseAgain, err := h.layers.acquire(t.Context(), mirrorRequest(7), pin, nil)
+	require.NoError(t, err)
+	defer releaseAgain()
+	require.Equal(t, path, again)
+	require.Equal(t, int32(2), h.opened.Load())
 }
 
 // The homes are the image's, so VMs of images whose desktop users differ

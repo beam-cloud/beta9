@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
@@ -613,6 +614,44 @@ func TestCachedSourceVerifiesAndCaches(t *testing.T) {
 	require.Equal(t, 1, downloads)
 
 	require.Error(t, source.ReadObject(context.Background(), object, 4990, make([]byte, 100)), "read past the end")
+}
+
+func TestCachedSourcesShareDownloadBudget(t *testing.T) {
+	ctx := context.Background()
+	first, second := []byte("one"), []byte("two")
+	reserved := int64(downloadBudgetBytes - len(first) - 1)
+	require.NoError(t, downloadBudget.Acquire(ctx, reserved))
+	defer downloadBudget.Release(reserved)
+
+	opened := make(chan Digest, 3)
+	release := make(chan struct{})
+	defer close(release)
+	source := func(data []byte) (*CachedSource, Object) {
+		return &CachedSource{Download: func(_ context.Context, digest Digest) (io.ReadCloser, error) {
+			opened <- digest
+			<-release
+			return io.NopCloser(bytes.NewReader(data)), nil
+		}}, Object{Digest: DigestOf(data), Size: uint64(len(data))}
+	}
+	a, aObject := source(first)
+	b, bObject := source(second)
+	readCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	go func() { _ = a.ReadObject(readCtx, aObject, 0, nil) }()
+	select {
+	case got := <-opened:
+		require.Equal(t, aObject.Digest, got)
+	case <-readCtx.Done():
+		t.Fatal("first download did not start")
+	}
+	blockedCtx, cancelBlocked := context.WithTimeout(ctx, 25*time.Millisecond)
+	defer cancelBlocked()
+	require.ErrorIs(t, b.ReadObject(blockedCtx, bObject, 0, nil), context.DeadlineExceeded)
+	select {
+	case got := <-opened:
+		t.Fatalf("download %s opened with the budget exhausted", got)
+	default:
+	}
 }
 
 func TestPlacements(t *testing.T) {

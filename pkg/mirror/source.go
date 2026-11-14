@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/semaphore"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -122,7 +123,16 @@ type recentObject struct {
 
 var ErrObjectMismatch = errors.New("mirror object does not match its digest")
 
+const downloadBudgetBytes = 128 << 20
+
+// All mounts in this process share the budget. A manifest can be larger
+// than a file object and takes the whole budget if it exceeds it.
+var downloadBudget = semaphore.NewWeighted(downloadBudgetBytes)
+
 func (s *CachedSource) ReadObject(ctx context.Context, object Object, offset int64, dest []byte) error {
+	if object.Size > MaxManifestSize {
+		return ErrObjectMismatch
+	}
 	if offset < 0 || uint64(offset)+uint64(len(dest)) > object.Size {
 		return fmt.Errorf("read past the end of object %s", object.Digest)
 	}
@@ -171,6 +181,15 @@ func (s *CachedSource) fetch(ctx context.Context, object Object) ([]byte, error)
 	if data := s.remembered(object.Digest); data != nil {
 		return data, nil
 	}
+	weight := min(int64(object.Size)+1, downloadBudgetBytes)
+	waitCtx, cancelWait := context.WithTimeout(ctx, 2*time.Minute)
+	err := downloadBudget.Acquire(waitCtx, weight)
+	cancelWait()
+	if err != nil {
+		return nil, fmt.Errorf("wait to fetch mirror object %s: %w", object.Digest, err)
+	}
+	defer downloadBudget.Release(weight)
+
 	attempts := max(s.Attempts, 1)
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {

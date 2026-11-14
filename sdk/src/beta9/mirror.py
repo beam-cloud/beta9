@@ -171,3 +171,20 @@ def status() -> dict:
     if not isinstance(result, dict):
         raise MirrorError("The mirror utility returned an unreadable status.")
     return result
+
+
+def local_name(context: str) -> Optional[str]:
+    """Use the local mirror only for the CLI config and context it syncs to."""
+    current = status()
+    name = current.get("mirror")
+    if not isinstance(name, str) or not name:
+        return None
+    config_path = current.get("config_path")
+    if (
+        current.get("context") != context
+        or not isinstance(config_path, str)
+        or not Path(config_path).is_absolute()
+        or Path(config_path).resolve() != get_settings().config_path.expanduser().resolve()
+    ):
+        raise MirrorError("This machine's mirror is not configured for the selected Beam context.")
+    return name

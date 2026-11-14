@@ -464,13 +464,14 @@ def new(
 
 def _local_mirror():
     """The mirror this machine's utility pushes to."""
-    hint = f"Run: {extraclick.command_hint()} setup mirror"
+    context = extraclick.selected_context()
+    hint = f"Run: {extraclick.command_hint(context)} setup mirror"
     if mirror_utility.installed() is None:
         raise click.ClickException(f"The mirror utility is not installed on this machine. {hint}")
     try:
-        name = mirror_utility.status().get("mirror")
+        name = mirror_utility.local_name(context)
     except mirror_utility.MirrorError as exc:
-        raise click.ClickException(str(exc)) from exc
+        raise click.ClickException(f"{exc} {hint}") from exc
     if not name:
         raise click.ClickException(f"This machine has no mirror yet. {hint}")
     return name

@@ -40,7 +40,9 @@ type MirrorRepository interface {
 	// name. Its objects are deleted next; until MarkMirrorObjectsDeleted
 	// records that, ListPurgedMirrors keeps returning it.
 	PurgeMirror(ctx context.Context, mirrorID string) error
-	MarkMirrorObjectsDeleted(ctx context.Context, mirrorID string) error
+	// MarkMirrorObjectsDeleted completes cleanup only for a purge old
+	// enough that a final listing could not miss an outstanding upload.
+	MarkMirrorObjectsDeleted(ctx context.Context, mirrorID string, purgedBefore time.Time) error
 	ListPurgedMirrors(ctx context.Context) ([]types.Mirror, error)
 	// ListMirrorIDs lists every live mirror with its workspace, for sweeps.
 	ListMirrorIDs(ctx context.Context) ([]types.Mirror, error)
@@ -238,8 +240,8 @@ func (r *PostgresBackendRepository) PurgeMirror(ctx context.Context, mirrorID st
 	return tx.Commit()
 }
 
-func (r *PostgresBackendRepository) MarkMirrorObjectsDeleted(ctx context.Context, mirrorID string) error {
-	_, err := r.client.ExecContext(ctx, `UPDATE mirror SET objects_deleted_at=NOW() WHERE id=$1 AND purged_at IS NOT NULL`, mirrorID)
+func (r *PostgresBackendRepository) MarkMirrorObjectsDeleted(ctx context.Context, mirrorID string, purgedBefore time.Time) error {
+	_, err := r.client.ExecContext(ctx, `UPDATE mirror SET objects_deleted_at=NOW() WHERE id=$1 AND purged_at <= $2 AND objects_deleted_at IS NULL`, mirrorID, purgedBefore)
 	return err
 }
 
