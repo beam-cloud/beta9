@@ -260,6 +260,50 @@ def setup_vm(name, template, desktop, clients, skip_agents, yes, context):
         raise click.ClickException(str(exc)) from exc
 
 
+@setup.command(
+    name="mirror",
+    help="""Install the mirror utility, which keeps the files you choose on this machine
+    in your workspace so a VM can start with them (vm new --mirror). Signs in first if
+    needed. Run again to update.""",
+)
+@extraclick.config_context_option
+def setup_mirror(context: Optional[str]):
+    from .. import mirror
+
+    selected = context or extraclick.selected_context()
+    steps = terminal.StepTracker()
+    try:
+        with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
+            connect_workspace(selected)
+            with steps.step("Installing the mirror utility", "Mirror utility is up to date"):
+                path, updated = mirror.install()
+            with steps.step("Starting the mirror utility", "Mirror utility started"):
+                status = mirror.start(selected)
+    except (LoginError, mirror.MirrorError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if terminal.json_output():
+        terminal.print_json({"path": str(path), "updated": updated, **status})
+        return
+    utility, command = shlex.quote(str(path)), extraclick.command_hint(selected)
+    terminal.print("")
+    terminal.resource(
+        "Mirror " + str(status.get("mirror") or ""),
+        {
+            "Utility": path,
+            "Files": ", ".join(status.get("roots") or []) or "none chosen yet",
+            "Uploads": "paused" if status.get("paused") else "",
+        },
+    )
+    terminal.print("")
+    for line in (
+        f"{utility} add PATH    choose a folder or file under your home directory",
+        f"{utility} push        upload the chosen files",
+        f"{command} vm new --mirror    start a VM with those files",
+    ):
+        terminal.print("  " + line, markup=False, soft_wrap=True)
+
+
 def app_urls(info: Dict[str, Any]) -> Dict[int, str]:
     """Published HTTP ports other than the terminal and desktop, in port order."""
     urls = {int(port): url for port, url in (info.get("urls") or {}).items() if url}

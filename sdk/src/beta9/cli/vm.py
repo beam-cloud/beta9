@@ -24,6 +24,7 @@ from rich import box
 from rich.table import Column, Table
 from rich.text import Text
 
+from .. import mirror as mirror_utility
 from .. import terminal
 from ..abstractions.image import Image
 from ..abstractions.vm import VM, default_base_image, identity, prepare_image
@@ -164,6 +165,9 @@ def _show(info, as_json):
     else:
         urls = _published_urls(info)
         protected = (info.get("spec") or {}).get("protected_ports") or []
+        pin = (info.get("spec") or {}).get("mirror")
+        if pin:
+            info = {**info, "mirror": f"{pin['name']}, generation {pin.get('generation')}"}
         fields = {
             label: info[key]
             for key, label in (
@@ -171,6 +175,7 @@ def _show(info, as_json):
                 ("status", "Status"),
                 ("error", "Error"),
                 ("public_ipv6", "IPv6"),
+                ("mirror", "Mirror"),
                 ("terminal_url", "Terminal" if 7681 in protected else "Terminal (public)"),
                 (
                     "desktop_url",
@@ -283,6 +288,13 @@ def _show(info, as_json):
     help="Upload a local directory after creation.",
 )
 @click.option(
+    "--mirror",
+    is_flag=False,
+    flag_value="",
+    metavar="[NAME]",
+    help="Start with this machine's mirrored files, or those of mirror NAME.",
+)
+@click.option(
     "--ttl",
     type=click.IntRange(0, 31536000),
     metavar="SECONDS",
@@ -374,9 +386,12 @@ def new(
     idle_action=None,
     kiosk_config=None,
     gpu=None,
+    mirror=None,
 ):
     """Create a VM with a durable root. NAME defaults to a friendly generated name."""
     as_json = as_json or terminal.json_output()
+    if mirror == "":
+        mirror = _local_mirror()
     if sum(bool(v) for v in (image_uri, image_id, dockerfile, template)) > 1:
         raise click.UsageError("Choose one of --image, --image-id, --dockerfile or --template")
     if build_context and not dockerfile:
@@ -434,6 +449,7 @@ def new(
         request_id=str(request_id) if request_id else None,
         disks=list(disk) if disk else None,
         volumes=_volumes(volume) if volume else None,
+        mirror=mirror,
         _service=service,
     )
     with StoredStdoutInterceptor(capture_logs=as_json):
@@ -444,6 +460,20 @@ def new(
             with _progress("Syncing files", "Files synced", as_json):
                 _sync(vm, sync_dir, False)
     _show(vm.info, as_json)
+
+
+def _local_mirror():
+    """The mirror this machine's utility pushes to."""
+    hint = f"Run: {extraclick.command_hint()} setup mirror"
+    if mirror_utility.installed() is None:
+        raise click.ClickException(f"The mirror utility is not installed on this machine. {hint}")
+    try:
+        name = mirror_utility.status().get("mirror")
+    except mirror_utility.MirrorError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if not name:
+        raise click.ClickException(f"This machine has no mirror yet. {hint}")
+    return name
 
 
 def _ready(vm):

@@ -184,6 +184,11 @@ class VM:
     disk_size sets the writable root capacity over the base image
     (1–100 GiB; default 50 GiB).
 
+    mirror names a mirror of this workspace: local files uploaded by the
+    mirror utility (`setup mirror`). The VM starts with the mirror's latest
+    generation in /root and /home/beam, read on demand, and keeps that
+    generation for life; so do its forks, snapshots and templates.
+
     Fresh VMs default to digest-pinned Ubuntu 24.04, 4 CPUs, 8192 MiB RAM
     and a 50 GiB root. Desktop is opt-in and needs at least 1024 MiB RAM.
     GPU VMs currently require x86_64. The stock NVIDIA image pairs its guest
@@ -237,6 +242,7 @@ class VM:
         request_id: Optional[str] = None,
         disks: Optional[List[DurableDisk]] = None,
         volumes: Optional[List[Volume]] = None,
+        mirror: Optional[str] = None,
         context: Optional[Union[ConfigContext, str]] = None,
         _service: Optional[ServiceClient] = None,
     ):
@@ -291,6 +297,7 @@ class VM:
                 if disks is not None
                 else None
             ),
+            "mirror": {"name": mirror} if mirror else None,
         }
 
         self._spec = {key: value for key, value in self._spec.items() if value is not None}
