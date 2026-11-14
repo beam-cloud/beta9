@@ -307,6 +307,21 @@ func TestParseRejectsInvalidManifests(t *testing.T) {
 		}
 	}
 
+	// With a root that claims nothing, a directory claiming the run that
+	// starts at itself would tile the table with entries no path reaches.
+	orphans := NewBuilder()
+	require.NoError(t, orphans.AddDir("a", 0o755, 1))
+	require.NoError(t, orphans.AddFile("b", 0o644, 1, nil))
+	stored, _, err = orphans.Encode(nil, true)
+	require.NoError(t, err)
+	first := envelopeSize + headerSize
+	binary.LittleEndian.PutUint32(stored[first+20:], 0)
+	binary.LittleEndian.PutUint32(stored[first+entrySize+16:], 1)
+	binary.LittleEndian.PutUint32(stored[first+entrySize+20:], 2)
+	_, err = Parse(stored)
+	require.ErrorIs(t, err, ErrInvalidManifest)
+	require.ErrorContains(t, err, "claimed by no directory before it")
+
 	builder := NewBuilder()
 	require.Error(t, builder.AddFile("missing/file", 0o644, 0, nil), "parents are explicit")
 	require.Error(t, builder.AddDir("..", 0o755, 0))

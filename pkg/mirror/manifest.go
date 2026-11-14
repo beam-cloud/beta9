@@ -432,6 +432,11 @@ func (m *Manifest) validate() error {
 		if entry.Kind != KindDir {
 			continue
 		}
+		if dir >= nextEntry {
+			// Nothing before it claimed it, so the run it claims would
+			// start at itself.
+			return invalid("directory %d is claimed by no directory before it", dir)
+		}
 		if entry.First != nextEntry || entry.Count > m.entries-nextEntry {
 			return invalid("directory %d does not claim the next run of entries", dir)
 		}
