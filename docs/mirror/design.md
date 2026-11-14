@@ -54,7 +54,8 @@ generation.
 `beam-mirror` is a Rust workspace of two crates: a core library (format,
 chunker, writer, scanner, index, stores, push, restore) and a command-line
 front end with `init`, `add`, `rm`, `status`, `pause`, `resume`, `push`,
-`run`, `restore` and `doctor`. It is not in this repository.
+`run`, `restore` and `doctor`. It is not in this repository; its own is
+`beam-cloud/mirror`.
 
 It is a second implementation of the store format, written from the
 specification and checked against the same vectors as `pkg/mirror`. On a
@@ -370,10 +371,10 @@ credential the utility recognises is its own sign-in.
 
 ## Known gaps
 
-- The utility has no repository of its own and no release. `beam setup
-  mirror` downloads it from the `beam-cloud/beam-mirror` releases, so the
-  command fails until one exists, unless `BEAM_MIRROR_RELEASES_URL` names
-  another place.
+- The utility has no release. `beam setup mirror` downloads it, without
+  signing in to GitHub, from the releases of `beam-cloud/mirror`, which is
+  private. The command fails until a release can be downloaded that way,
+  unless `BEAM_MIRROR_RELEASES_URL` names another place.
 - The utility builds for Linux only, and nothing has run on macOS.
 - Nothing has been pushed from a real laptop, over a real network, or to S3.
 - Every generation is a whole manifest, and directory times are part of it:

@@ -21,7 +21,7 @@ import requests
 from .config import get_settings
 
 BINARY = "beam-mirror"
-RELEASES_URL = "https://github.com/beam-cloud/beam-mirror/releases/latest/download"
+RELEASES_URL = "https://github.com/beam-cloud/mirror/releases/latest/download"
 CHECKSUMS = "SHA256SUMS"
 MAX_DOWNLOAD = 256 << 20
 TARGETS = {
