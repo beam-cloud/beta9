@@ -41,8 +41,9 @@ one object:
 | `raw_len` | how many file bytes it holds |
 
 If `stored_len == raw_len` the range is the file bytes. If
-`stored_len < raw_len` the range is one zstd frame that decompresses to
-exactly `raw_len` bytes. `raw_len` is at most 16 MiB, so a reader never
+`stored_len < raw_len` the range is zstd data that decompresses to exactly
+`raw_len` bytes. A writer stores one frame; a reader does not check that
+there is only one. `raw_len` is at most 16 MiB, so a reader never
 decompresses more than that to serve a read. `stored_len > raw_len` is
 invalid: a writer stores an extent uncompressed when compression does not
 shrink it.
@@ -59,7 +60,7 @@ followed by the body:
 | offset | size | field |
 | --- | --- | --- |
 | 0 | 8 | magic `BMIRROR\x01` |
-| 8 | 4 | codec: 0 = body follows as is, 1 = body is one zstd frame |
+| 8 | 4 | codec: 0 = body follows as is, 1 = body follows as zstd data (a writer stores one frame) |
 | 12 | 4 | reserved, zero |
 | 16 | 8 | body length after decoding |
 
@@ -117,14 +118,16 @@ extended attributes. Ownership is given by whoever presents the tree.
 
 ### Canonical layout
 
-The same tree has exactly one encoding of the body.
+The same tree, with its files held in the same extents, has exactly one
+encoding of the body.
 
 - Entry 0 is the root directory. It has no name (offset and length zero).
 - The entry table is in breadth-first order: the root, then the root's
   children, then the children of each directory in entry order. Each
   directory's children are the next run of entries not yet claimed, so
   `first` of the n-th directory is one past the last child of the directory
-  before it.
+  before it, and every directory but the root comes after the directory that
+  claims it.
 - The children of a directory are sorted by name as bytes, and unique.
 - Names are 1 to 255 bytes of valid UTF-8 without `/` or NUL, and are not `.`
   or `..`. A path (names joined by `/`) is at most 4095 bytes.
@@ -144,10 +147,13 @@ object, and only directories, regular files and in-tree symlinks exist. The
 reference reader is `mirror.Parse`, and
 `TestParseRejectsInvalidManifests` lists the cases.
 
-The envelope may compress the body. Compressed bytes depend on the zstd
-implementation, so two writers that agree on a tree agree on the body and not
-necessarily on the stored manifest or its digest. Vectors therefore compare
-the body, stored with codec 0.
+The body names the objects and the stored length of every extent, and
+compressed bytes depend on the zstd implementation. So two writers given the
+same tree produce the same body only if they cut it into the same extents and
+none of those is compressed, or both compress them to the same bytes. The
+envelope may compress the body as well, so even then the stored manifest and
+its digest can differ. Vectors therefore state the extents and compare the
+body, stored with codec 0.
 
 ### Meta
 
@@ -180,17 +186,23 @@ A generation exists once the gateway has committed it. Against
    `parent` is the number of the generation this one replaces, or 0 for the
    first.
 
-The gateway downloads the manifest, parses it as a reader would, and checks
-that every object it names is in the store at the stated size. It then
-records generation `parent + 1`. Replies:
+The gateway checks `parent` first. It then downloads the manifest, parses it
+as a reader would, and checks that every object it names which the parent
+generation did not is in the store at the stated size. It then records
+generation `parent + 1`. Replies:
 
 - `201` with the generation.
 - `409` with `latest`: another writer committed first. Start again from
-  `latest`.
+  `latest`, which is null when the mirror has no generation.
 - `422` with `missing`: objects the manifest names that are not in the store
-  (they were swept, or never uploaded). Upload them and commit again.
-- `422` without `missing`: the manifest is not valid, or is not the bytes its
-  digest names.
+  (they were swept, or never uploaded), at most 1000 of them. Upload them
+  and commit again.
+- `422` without `missing`: the manifest is not in the store, is not valid,
+  or is not the bytes its digest names.
+
+Committing the manifest of the latest generation again records a new
+generation with the same contents; a writer that has nothing new does not
+commit.
 
 Objects that no kept generation names are deleted after a grace period
 (48 hours by default), so an upload has that long between its first object
