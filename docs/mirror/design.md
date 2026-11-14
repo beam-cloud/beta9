@@ -42,6 +42,42 @@ The pin is fixed at create because the VM's root disk records changes
 relative to the generation under it. A running VM is never moved to a newer
 generation.
 
+## The laptop utility
+
+`beam-mirror` is a Rust workspace of two crates: a core library (format,
+chunker, writer, scanner, index, stores, push, restore) and a command-line
+front end with `init`, `add`, `rm`, `status`, `pause`, `resume`, `push`,
+`run`, `restore` and `doctor`. It is not in this repository.
+
+It is a second implementation of the store format, written from the
+specification and checked against the same vectors as `pkg/mirror`. On a
+generated tree of 4,212 entries each implementation read what the other
+wrote; on incompressible content the two manifest bodies were byte for byte
+the same. Writing it found a manifest `Parse` should have refused (see the
+security review) and several places where the specification and the code
+disagreed, which are corrected.
+
+- **Sign-in** is the Beam CLI's config file, which the utility only reads.
+  Its own configuration is one file: the mirror's name, the roots, the
+  exclude rules and a paused flag.
+- **Roots** are files and directories under the home directory. `node_modules`,
+  `.venv`, `venv`, `__pycache__`, `.cache`, `.Trash`, `.DS_Store`, a `target`
+  beside a `Cargo.toml` and `~/Library` are left out unless named as a root.
+  The utility's state and the Beam config file are never uploaded.
+- **A push** reads only files whose size, times or inode changed, recognises
+  content it has stored before under another path, and uploads with eight
+  connections while it reads. Before committing a changed tree it asks the
+  store about every object the manifest names and makes again whatever is
+  missing.
+- **`run`** pushes when a rescan finds a change, by default at most once a
+  minute. It does not watch the file system.
+
+It does not have: a tray application, file watching, a login item,
+self-update, a bandwidth limit, browser or application adapters, a macOS or
+Windows build, or its own sign-in. It trusts the web PKI roots it is built
+with, not the system's, so a gateway behind a private certificate authority
+is refused.
+
 ## What was measured
 
 ### The layer under a microVM
@@ -123,15 +159,17 @@ The same measurements found costs the format does not address:
 
 ### End to end on the dev stack
 
-On a local k3d stack (gateway from the working tree, Postgres, Redis,
-localstack, a microVM worker pool):
+On a local k3d stack: gateway from the working tree, Postgres, Redis,
+LocalStack as the object store, a microVM worker pool.
 
-- Two generations were pushed through the gateway API. The second uploaded 3
-  of its 5 objects, and a commit on a stale parent got `409` with `latest`.
+**Through the gateway API**, with objects written by the Go reference writer
+and trees of six files:
+
+- Two generations were pushed. The second uploaded 3 of its 5 objects, and a
+  commit on a stale parent got `409` with `latest`.
 - `beam vm new --mirror laptop` reported the pinned generation, and every
-  file read in the guest had the SHA-256 of its source. Modes and the symlink
-  were intact, and guest writes landed in the upper layer and survived a stop
-  and start.
+  file read in the guest had the SHA-256 of its source. Guest writes landed
+  in the upper layer and survived a stop and start.
 - A VM created after the second generation saw it. The earlier VM and a fork
   of it still saw the first.
 - A purge without `force` was refused with the list of references. After a
@@ -139,13 +177,62 @@ localstack, a microVM worker pool):
   readable in the guest or on the worker's mount, and names were still
   listed. A restarted VM came up without the layer and kept its own files.
 
-Three things limit what that run shows. The objects were written by the Go
-reference writer and uploaded by a script, not by the laptop utility. The
-trees held six files each, so it says nothing about size. And the host
-kernel had
-no tc `mirred`, `u32` or `matchall`, so the worker image carried a
-development-only patch that bridges the guest's tap instead of redirecting
-into it.
+**With the laptop utility**, from a stand-in home directory: eleven roots
+holding dotfiles, `.config`, `.ssh`, six git checkouts, a 402 MiB SQLite
+file, a 306 MiB tar archive and a PDF. 39,067 files, 8,784 directories and
+129 symlinks in 1.3 GiB were mirrored; 7,365 more files sat under names the
+utility leaves out.
+
+- `beam setup mirror` installed the utility from a release served on
+  loopback, checked the archive against its checksum and created the mirror.
+- The first push took 8.5 s and 102 MiB of memory and uploaded 988 objects,
+  488.9 MiB. The manifest was 0.84 MiB for 47,981 entries.
+- In a VM made with `beam vm new --mirror`, all 47,980 entries below the home
+  had the type, mode, size, modification time and symlink target of their
+  source, and all 39,067 files its SHA-256. Nothing under the left-out names
+  was there.
+- With the generation's objects deleted from the node cache and a fresh
+  mount, hashing every file in the guest took 31.9 s, and 17.6 s the second
+  time. The store is on the same machine, so the first figure has no network
+  in it.
+- While the guest hashed every file again, with its page cache and the
+  host's dropped, the generation's objects were deleted from the node cache
+  every two to three seconds, fourteen times. No read failed and every hash
+  was the same; the pass took 34.3 s.
+- After edits on the laptop (a line appended, a file added, one deleted, a
+  35 MiB checkout renamed, 4 KiB overwritten in the middle of the SQLite
+  file, 1 KiB inserted into the tar archive, a symlink retargeted) the
+  second push took 2.5 s and uploaded 4 objects, 1.4 MiB. A new VM was ready
+  in 1.7 s on generation 2 and matched the edited home. The first VM still
+  matched the original.
+- `beam-mirror restore` of either generation into an empty directory
+  matched its source in content and metadata, in 5.3 s.
+- A gateway restart during a push (three seconds of refused connections)
+  did not fail it. With the gateway killed for 29 s the push gave up after
+  11 s with one line saying the gateway could not be reached, and status 1.
+  The next push uploaded only what had not arrived, 236 objects and 284 MiB
+  of a new 600 MiB file, and committed.
+- Unplanned: LocalStack ran out of file descriptors during a 1.5 GiB upload,
+  was restarted by its liveness probe and came back empty, because it does
+  not keep S3 objects across a restart. Within a minute the workers took the
+  missing manifests for a purge, and mirrored files in both VMs returned
+  `EIO`. The next push found that the store lacked all 988 objects its tree
+  named, made them again and committed generation 3: 2,215 objects, 1.9 GiB,
+  31.7 s. Generations 1 and 2 stayed listed with their objects gone.
+- Generation 5, by then 39,070 files in 3.9 GiB, was restored and mounted in
+  a new VM, and matched the home both ways.
+
+This run found one defect: the desktop user's home was served with uid 1000,
+but the desktop image's user has uid 1001, so the desktop session of a VM
+with a mirror could not enter its own home. The worker now takes the account
+from the image, and a screenshot of the session showed the mirrored files.
+
+What limits both runs: the object store is LocalStack on the same machine,
+so nothing here is a measurement over a network or of S3; the gateway speaks
+plain HTTP, so neither TLS nor an expired upload URL was exercised; the home
+directory is a stand-in; and the host kernel had no tc `mirred`, `u32` or
+`matchall`, so the worker image carried a development-only patch that
+bridges the guest's tap instead of redirecting into it.
 
 ## Security review
 
@@ -170,12 +257,22 @@ What it does not cover:
   the workspace bucket.
 - **A laptop can put anything in its own mirror.** The checks protect the
   platform and other tenants, not a workspace from its own machines.
+- **Credentials under a root are uploaded.** The utility keeps its own
+  sign-in out and nothing else: with the home directory as a root, `~/.ssh`
+  and `~/.aws` went into the generation, and every VM pinned to it could
+  read them.
+- **A store that loses a manifest looks like a purge.** A worker cannot tell
+  the two apart, so the layers it has mounted stop returning contents and do
+  not start again.
 
-Three defects were found and fixed during the review and the end-to-end run:
-a small zstd frame could expand to the decoder's limit rather than the
-declared size; an object another tenant had cached was readable by any
-manifest that named its digest; and a file read before a purge stayed
-readable from the worker's page cache afterwards.
+Four defects were found and fixed. Three came from the review and the first
+end-to-end run: a small zstd frame could expand to the decoder's limit
+rather than the declared size; an object another tenant had cached was
+readable by any manifest that named its digest; and a file read before a
+purge stayed readable from the worker's page cache afterwards. The fourth
+came from the second implementation: `Parse` accepted an entry table in
+which a directory claimed a run of entries that contained itself, so entries
+no path leads to passed validation.
 
 ## Open questions
 
@@ -236,24 +333,31 @@ carry over:
 Launching a VM from the tray is the request `beam vm new --mirror` makes, so
 it needs nothing new from the gateway. Editing sync paths from the tray needs
 the utility's configuration to be the single source of truth, with the tray
-and the command line both writing it. The utility is being built as a core
-library with a command-line front end so that a tray front end can use the
-same library. Neither tray feature is built.
+and the command line both writing it. The utility is a core library with a
+command-line front end, and its configuration is one file, so a tray front
+end can use the same library and write the same file. Neither tray feature
+is built.
 
 ### Credential scanning
 
 The utility reads every changed byte before it uploads, which is the place to
 scan: a finding can stop a file from being uploaded at all. A purge is the
-remedy after the fact, with the limit noted above. Not built.
+remedy after the fact, with the limit noted above. Not built: today the only
+credential the utility recognises is its own sign-in.
 
 ## Known gaps
 
-- The laptop utility is not finished or released. `beam setup mirror`
-  downloads it from the `beam-cloud/beam-mirror` releases, so the command
-  fails until a release exists, and nothing has been pushed from a real
-  laptop.
-- Nothing has run on macOS.
-- A first read that has to download from the bucket has not been timed.
+- The utility has no repository of its own and no release. `beam setup
+  mirror` downloads it from the `beam-cloud/beam-mirror` releases, so the
+  command fails until one exists, unless `BEAM_MIRROR_RELEASES_URL` names
+  another place.
+- The utility builds for Linux only, and nothing has run on macOS.
+- Nothing has been pushed from a real laptop, over a real network, or to S3.
+- Every generation is a whole manifest, and directory times are part of it:
+  a file appearing in the home directory, outside every root, is enough for
+  `run` to commit a generation that differs only in the manifest.
+- The homes are read from the image when a VM starts. An account whose uid is
+  changed inside a VM afterwards is not followed.
 - `beam vm get` still shows the pin of a mirror that was purged.
 - A fork's internal snapshot appears in a mirror's references under its
   UUID.
