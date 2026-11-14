@@ -46,7 +46,7 @@ type mirrorMount interface {
 type mirrorLayers struct {
 	ctx   context.Context
 	root  string
-	cache mirror.ObjectCache
+	cache mirror.ContentStore
 	open  func(context.Context, *types.ContainerRequest) (mirrorBucket, error)
 	mount func(string, *mirror.FS) (mirrorMount, error)
 	idle  time.Duration
@@ -91,17 +91,17 @@ func newMirrorLayers(ctx context.Context, workerID string, cacheClient *cache.Cl
 	return m
 }
 
-// mirrorNodeCache keeps mirror objects in the node's content cache under
-// their SHA-256, where every worker on the node finds them.
+// mirrorNodeCache is the node's content cache, where every worker on the
+// node finds what another has stored.
 type mirrorNodeCache struct{ client *cache.Client }
 
-func (c mirrorNodeCache) ReadObject(ctx context.Context, digest mirror.Digest, offset int64, dest []byte) bool {
-	n, err := c.client.ReadLocalContentInto(ctx, digest.String(), offset, dest)
+func (c mirrorNodeCache) ReadContent(ctx context.Context, key string, offset int64, dest []byte) bool {
+	n, err := c.client.ReadLocalContentInto(ctx, key, offset, dest)
 	return err == nil && n == int64(len(dest))
 }
 
-func (c mirrorNodeCache) StoreObject(ctx context.Context, digest mirror.Digest, data []byte) error {
-	return c.client.StoreLocalContent(ctx, digest.String(), data)
+func (c mirrorNodeCache) StoreContent(ctx context.Context, key string, content []byte) error {
+	return c.client.StoreLocalContent(ctx, key, content)
 }
 
 // acquire mounts the pinned generation, or joins its mount, and returns the
@@ -182,24 +182,29 @@ func (m *mirrorLayers) serve(ctx context.Context, layer *mirrorLayer, request *t
 		return errors.New("mirror generation is no longer in the store")
 	}
 	source := &mirror.CachedSource{
-		Cache:    m.cache,
 		Attempts: 3,
 		Download: func(ctx context.Context, digest mirror.Digest) (io.ReadCloser, error) {
 			return bucket.DownloadWithReader(ctx, types.MirrorObjectKey(mirrorID, digest.String()))
 		},
 	}
+	if m.cache != nil {
+		// The node cache is shared with other workspaces, and a manifest
+		// can name any digest: only what this workspace's mounts of this
+		// mirror have put there is visible here.
+		source.Cache = mirror.ScopedCache{Store: m.cache, Scope: fmt.Appendf(nil, "mirror %d %s", request.Workspace.Id, mirrorID)}
+	}
 	stored := make([]byte, manifest.Size)
 	if err := source.ReadObject(ctx, manifest, 0, stored); err != nil {
 		return fmt.Errorf("read mirror manifest: %w", err)
 	}
+	// The cache is trusted for file contents as for every other reader of
+	// it, but the manifest decides what the whole layer contains.
+	if mirror.DigestOf(stored) != manifest.Digest {
+		return mirror.ErrObjectMismatch
+	}
 	parsed, err := mirror.Parse(stored)
 	if err != nil {
 		return err
-	}
-	// The cache is trusted for file contents as for every other reader of
-	// it, but the manifest decides what the whole layer contains.
-	if parsed.Digest() != manifest.Digest {
-		return mirror.ErrObjectMismatch
 	}
 	fsys, err := mirror.NewFS(parsed, source, mirror.FSOptions{})
 	if err != nil {

@@ -53,15 +53,17 @@ func (b *fakeMirrorBucket) DownloadWithReader(_ context.Context, key string) (io
 	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
+// memoryMirrorCache is a node content cache: like the real one it takes
+// content only under its SHA-256.
 type memoryMirrorCache struct {
 	mu      sync.Mutex
-	objects map[mirror.Digest][]byte
+	objects map[string][]byte
 }
 
-func (c *memoryMirrorCache) ReadObject(_ context.Context, digest mirror.Digest, offset int64, dest []byte) bool {
+func (c *memoryMirrorCache) ReadContent(_ context.Context, key string, offset int64, dest []byte) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	data, ok := c.objects[digest]
+	data, ok := c.objects[key]
 	if !ok || offset+int64(len(dest)) > int64(len(data)) {
 		return false
 	}
@@ -69,10 +71,13 @@ func (c *memoryMirrorCache) ReadObject(_ context.Context, digest mirror.Digest, 
 	return true
 }
 
-func (c *memoryMirrorCache) StoreObject(_ context.Context, digest mirror.Digest, data []byte) error {
+func (c *memoryMirrorCache) StoreContent(_ context.Context, key string, content []byte) error {
+	if mirror.DigestOf(content).String() != key {
+		return errors.New("content does not match its key")
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.objects[digest] = bytes.Clone(data)
+	c.objects[key] = bytes.Clone(content)
 	return nil
 }
 
@@ -97,7 +102,7 @@ func newMirrorLayerHarness(t *testing.T) *mirrorLayerHarness {
 	t.Helper()
 	h := &mirrorLayerHarness{
 		bucket:   &fakeMirrorBucket{objects: map[string][]byte{}, downloads: map[string]int{}, corrupt: map[string]bool{}},
-		cache:    &memoryMirrorCache{objects: map[mirror.Digest][]byte{}},
+		cache:    &memoryMirrorCache{objects: map[string][]byte{}},
 		mounts:   map[string]*mirror.FS{},
 		mirrorID: uuid.NewString(),
 	}
@@ -250,7 +255,7 @@ func TestMirrorLayerReadsThroughTheNodeCacheAndVerifies(t *testing.T) {
 
 	// Objects that do not match their name are not served, and a failed
 	// mount is retried by the next VM.
-	h.cache.objects = map[mirror.Digest][]byte{}
+	h.cache.objects = map[string][]byte{}
 	h.bucket.corrupt[manifestKey] = true
 	_, _, err = h.layers.acquire(ctx, mirrorRequest(7), pin)
 	require.ErrorIs(t, err, mirror.ErrObjectMismatch)
@@ -260,15 +265,18 @@ func TestMirrorLayerReadsThroughTheNodeCacheAndVerifies(t *testing.T) {
 	require.NoError(t, err)
 	release()
 
-	// A manifest in the cache that is not the pinned one is refused too.
-	digest, err := mirror.ParseDigest(pin.ManifestDigest)
-	require.NoError(t, err)
+	// A manifest the cache has damaged is refused before it is read.
 	require.Equal(t, 1, h.layers.pruneIdle(time.Now().Add(time.Hour)))
-	otherPin := h.generation(t, 2, map[string]string{"c.txt": "gamma"})
-	h.cache.objects[digest] = h.bucket.objects[types.MirrorObjectKey(h.mirrorID, otherPin.ManifestDigest)]
-	forged := *pin
-	forged.ManifestSize = otherPin.ManifestSize
-	_, _, err = h.layers.acquire(ctx, mirrorRequest(7), &forged)
+	stored := h.bucket.objects[manifestKey]
+	damaged := 0
+	for _, content := range h.cache.objects {
+		if bytes.HasPrefix(content, stored) {
+			content[len(stored)-1] ^= 1
+			damaged++
+		}
+	}
+	require.Equal(t, 1, damaged)
+	_, _, err = h.layers.acquire(ctx, mirrorRequest(7), pin)
 	require.ErrorIs(t, err, mirror.ErrObjectMismatch)
 
 	for _, invalid := range []types.VMMirror{
@@ -280,6 +288,74 @@ func TestMirrorLayerReadsThroughTheNodeCacheAndVerifies(t *testing.T) {
 		_, _, err = h.layers.acquire(ctx, mirrorRequest(7), &invalid)
 		require.Error(t, err, invalid)
 	}
+}
+
+func TestMirrorLayersDoNotShareCachedObjects(t *testing.T) {
+	h := newMirrorLayerHarness(t)
+	ctx := context.Background()
+	files := map[string]string{"secret.txt": "the same bytes in two mirrors"}
+	downloads := func(mirrorID string) int {
+		total := 0
+		for key, count := range h.bucket.downloads {
+			if strings.HasPrefix(key, types.MirrorPrefix(mirrorID)) {
+				total += count
+			}
+		}
+		return total
+	}
+
+	theirs := h.generation(t, 1, files)
+	path, release, err := h.layers.acquire(ctx, mirrorRequest(7), theirs)
+	require.NoError(t, err)
+	defer release()
+	content, err := readMirrorFile(t, h.mounts[path], "secret.txt")
+	require.NoError(t, err)
+	require.Equal(t, files["secret.txt"], content)
+	require.Len(t, h.cache.objects, 2)
+	for key := range h.cache.objects {
+		require.NotContains(t, h.bucket.objects, types.MirrorObjectKey(theirs.ID, key), "no object is cached under its own digest")
+	}
+
+	// Another workspace's mirror names the same objects, so its manifest
+	// is the same bytes, but it has only the manifest in its store. The
+	// gateway refuses such a commit; the worker does not depend on that.
+	h.mirrorID = uuid.NewString()
+	ours := h.generation(t, 1, files)
+	require.Equal(t, theirs.ManifestDigest, ours.ManifestDigest)
+	ourManifest := types.MirrorObjectKey(ours.ID, ours.ManifestDigest)
+	held := map[string][]byte{}
+	for key, data := range h.bucket.objects {
+		if strings.HasPrefix(key, types.MirrorPrefix(ours.ID)) && key != ourManifest {
+			held[key] = data
+			delete(h.bucket.objects, key)
+		}
+	}
+	require.Len(t, held, 1)
+	path, releaseOurs, err := h.layers.acquire(ctx, mirrorRequest(8), ours)
+	require.NoError(t, err)
+	require.Equal(t, 1, downloads(ours.ID), "the manifest came from this mirror's store, not the cache")
+	_, err = readMirrorFile(t, h.mounts[path], "secret.txt")
+	require.Error(t, err, "the cache holds the object, but not for this mirror")
+	releaseOurs()
+
+	// With the object in its own store the mirror reads it from there.
+	for key, data := range held {
+		h.bucket.objects[key] = data
+	}
+	content, err = readMirrorFile(t, h.mounts[path], "secret.txt")
+	require.NoError(t, err)
+	require.Equal(t, files["secret.txt"], content)
+	require.Len(t, h.cache.objects, 4)
+
+	// One mirror pinned by two workspaces, which the gateway never does,
+	// shares nothing either.
+	before := downloads(theirs.ID)
+	path, releaseForeign, err := h.layers.acquire(ctx, mirrorRequest(9), theirs)
+	require.NoError(t, err)
+	defer releaseForeign()
+	_, err = readMirrorFile(t, h.mounts[path], "secret.txt")
+	require.NoError(t, err)
+	require.Equal(t, before+2, downloads(theirs.ID))
 }
 
 func TestPurgedMirrorLayerStopsServing(t *testing.T) {

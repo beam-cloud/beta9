@@ -450,8 +450,8 @@ type countingCache struct {
 	fail    bool
 }
 
-func (c *countingCache) ReadObject(_ context.Context, digest Digest, offset int64, dest []byte) bool {
-	data, ok := c.objects[digest]
+func (c *countingCache) ReadObject(_ context.Context, object Object, offset int64, dest []byte) bool {
+	data, ok := c.objects[object.Digest]
 	if !ok {
 		return false
 	}
@@ -459,13 +459,77 @@ func (c *countingCache) ReadObject(_ context.Context, digest Digest, offset int6
 	return true
 }
 
-func (c *countingCache) StoreObject(_ context.Context, digest Digest, data []byte) error {
+func (c *countingCache) StoreObject(_ context.Context, object Object, data []byte) error {
 	if c.fail {
 		return errors.New("cache unavailable")
 	}
 	c.stores++
-	c.objects[digest] = data
+	c.objects[object.Digest] = data
 	return nil
+}
+
+// contentStore takes content only under its SHA-256, as a node cache does.
+type contentStore map[string][]byte
+
+func (c contentStore) ReadContent(_ context.Context, key string, offset int64, dest []byte) bool {
+	data, ok := c[key]
+	if !ok || offset+int64(len(dest)) > int64(len(data)) {
+		return false
+	}
+	copy(dest, data[offset:])
+	return true
+}
+
+func (c contentStore) StoreContent(_ context.Context, key string, content []byte) error {
+	if DigestOf(content).String() != key {
+		return errors.New("content does not match its key")
+	}
+	c[key] = bytes.Clone(content)
+	return nil
+}
+
+func TestScopedCacheKeepsMirrorsApart(t *testing.T) {
+	ctx := context.Background()
+	store := contentStore{}
+	ours := ScopedCache{Store: store, Scope: []byte("mirror a")}
+	theirs := ScopedCache{Store: store, Scope: []byte("mirror b")}
+
+	// Every length around the block and padding boundaries of SHA-256 is
+	// stored under a key the store accepts as the hash of what it is given,
+	// and read back from the digest and size alone.
+	sizes := []int{0, 1, 54, 55, 56, 57, 63, 64, 65, 118, 119, 120, 121, 127, 128, 129, 5000, 1 << 20}
+	for _, size := range sizes {
+		data := pseudoRandom(int64(size), size)
+		object := Object{Digest: DigestOf(data), Size: uint64(size)}
+		require.NoError(t, ours.StoreObject(ctx, object, data), size)
+		dest := make([]byte, size)
+		require.True(t, ours.ReadObject(ctx, object, 0, dest), size)
+		require.Equal(t, data, dest, size)
+		if size > 10 {
+			tail := make([]byte, 10)
+			require.True(t, ours.ReadObject(ctx, object, int64(size-10), tail))
+			require.Equal(t, data[size-10:], tail)
+		}
+
+		// Knowing an object's digest and size is not enough to read it
+		// from another mirror's entries, nor under its bare digest.
+		require.False(t, theirs.ReadObject(ctx, object, 0, dest), size)
+		require.NotContains(t, store, object.Digest.String())
+		// A wrong size finds nothing, and so never the padding or the
+		// scope that follow the object in the store.
+		for _, wrong := range []uint64{object.Size + 1, object.Size + 9, object.Size + 64} {
+			require.False(t, ours.ReadObject(ctx, Object{Digest: object.Digest, Size: wrong}, 0, nil), "%d as %d", size, wrong)
+			require.Error(t, ours.StoreObject(ctx, Object{Digest: object.Digest, Size: wrong}, data))
+		}
+	}
+	require.Len(t, store, len(sizes))
+
+	// The same object in two mirrors is two entries.
+	data := pseudoRandom(9, 300)
+	object := Object{Digest: DigestOf(data), Size: 300}
+	require.NoError(t, ours.StoreObject(ctx, object, data))
+	require.NoError(t, theirs.StoreObject(ctx, object, data))
+	require.Len(t, store, len(sizes)+2)
 }
 
 func TestCachedSourceVerifiesAndCaches(t *testing.T) {

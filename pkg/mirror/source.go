@@ -3,6 +3,10 @@ package mirror
 import (
 	"container/list"
 	"context"
+	"crypto/sha256"
+	"encoding"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -12,12 +16,84 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// ObjectCache is a content-addressed cache shared by the mounts on a node.
+// ObjectCache keeps verified objects for later reads.
 type ObjectCache interface {
 	// ReadObject reports whether it filled dest from the cached object.
-	ReadObject(ctx context.Context, digest Digest, offset int64, dest []byte) bool
-	// StoreObject keeps verified object bytes for later reads.
-	StoreObject(ctx context.Context, digest Digest, data []byte) error
+	ReadObject(ctx context.Context, object Object, offset int64, dest []byte) bool
+	StoreObject(ctx context.Context, object Object, data []byte) error
+}
+
+// ContentStore is a cache keyed by the SHA-256 of what it holds, shared by
+// every tenant on a node.
+type ContentStore interface {
+	ReadContent(ctx context.Context, key string, offset int64, dest []byte) bool
+	StoreContent(ctx context.Context, key string, content []byte) error
+}
+
+// ScopedCache keeps one mirror's objects in a ContentStore.
+//
+// A manifest is written by a tenant and names objects by digest. Looking
+// those digests up in a store that other tenants fill would hand a tenant
+// any cached object whose digest it can name, without it ever having held
+// the bytes. So an object is stored with its mirror's scope appended, under
+// the SHA-256 of the whole: only a reader with the same scope computes that
+// key, and only someone holding the bytes can have stored under it.
+//
+// The key can be computed from the digest and size alone because SHA-256
+// can be continued from a digest. The object is stored followed by its own
+// SHA-256 padding, and at that point the hash state is the object's digest.
+// What follows is the scope and the object's size, so that a manifest which
+// declares a wrong size for a digest finds nothing rather than the padding.
+type ScopedCache struct {
+	Store ContentStore
+	Scope []byte
+}
+
+// sha256Padding is what SHA-256 appends to a message of size bytes.
+func sha256Padding(size uint64) []byte {
+	padding := make([]byte, 1+(119-size%64)%64, 72)
+	padding[0] = 0x80
+	return binary.BigEndian.AppendUint64(padding, size*8)
+}
+
+func (c ScopedCache) suffix(size uint64) []byte {
+	suffix := make([]byte, 0, len(c.Scope)+8)
+	suffix = append(suffix, c.Scope...)
+	return binary.BigEndian.AppendUint64(suffix, size)
+}
+
+func (c ScopedCache) key(object Object) string {
+	// crypto/sha256's saved state: magic, the eight state words, the
+	// unprocessed block, and the count of bytes hashed.
+	state := make([]byte, 0, 4+sha256.Size+sha256.BlockSize+8)
+	state = append(state, "sha\x03"...)
+	state = append(state, object.Digest[:]...)
+	state = append(state, make([]byte, sha256.BlockSize)...)
+	state = binary.BigEndian.AppendUint64(state, object.Size+uint64(len(sha256Padding(object.Size))))
+	hash := sha256.New()
+	if err := hash.(encoding.BinaryUnmarshaler).UnmarshalBinary(state); err != nil {
+		return ""
+	}
+	hash.Write(c.suffix(object.Size))
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func (c ScopedCache) ReadObject(ctx context.Context, object Object, offset int64, dest []byte) bool {
+	key := c.key(object)
+	return key != "" && c.Store.ReadContent(ctx, key, offset, dest)
+}
+
+func (c ScopedCache) StoreObject(ctx context.Context, object Object, data []byte) error {
+	key := c.key(object)
+	if key == "" {
+		return errors.New("cannot derive a cache key")
+	}
+	size := uint64(len(data))
+	content := make([]byte, 0, len(data)+72+len(c.Scope)+8)
+	content = append(content, data...)
+	content = append(content, sha256Padding(size)...)
+	content = append(content, c.suffix(size)...)
+	return c.Store.StoreContent(ctx, key, content)
 }
 
 // CachedSource reads objects from a cache and, on a miss, downloads the
@@ -54,7 +130,7 @@ func (s *CachedSource) ReadObject(ctx context.Context, object Object, offset int
 		copy(dest, data[offset:])
 		return nil
 	}
-	if s.Cache != nil && s.Cache.ReadObject(ctx, object.Digest, offset, dest) {
+	if s.Cache != nil && s.Cache.ReadObject(ctx, object, offset, dest) {
 		return nil
 	}
 	result := s.flights.DoChan(string(object.Digest[:]), func() (any, error) {
@@ -104,7 +180,7 @@ func (s *CachedSource) fetch(ctx context.Context, object Object) ([]byte, error)
 		if err == nil {
 			s.remember(object.Digest, data)
 			if s.Cache != nil {
-				_ = s.Cache.StoreObject(ctx, object.Digest, data)
+				_ = s.Cache.StoreObject(ctx, object, data)
 			}
 			return data, nil
 		}
