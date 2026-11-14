@@ -114,9 +114,33 @@ type Manifest struct {
 }
 
 var (
-	zstdDecoder, _ = zstd.NewReader(nil, zstd.WithDecoderConcurrency(0), zstd.WithDecoderMaxMemory(MaxManifestSize))
+	// Decoding stops at the capacity of the buffer it is given, so a frame
+	// costs no more memory than the size its manifest declares for it.
+	zstdDecoder, _ = zstd.NewReader(nil, zstd.WithDecoderConcurrency(0), zstd.WithDecoderMaxMemory(MaxManifestSize), zstd.WithDecodeAllCapLimit(true))
 	zstdEncoder, _ = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
 )
+
+// decompress decodes one zstd frame that must hold exactly size bytes.
+func decompress(stored []byte, size uint64) ([]byte, error) {
+	decoded, err := zstdDecoder.DecodeAll(stored, make([]byte, 0, size))
+	if err != nil {
+		return nil, err
+	}
+	if uint64(len(decoded)) != size {
+		return nil, fmt.Errorf("decoded to %d bytes, want %d", len(decoded), size)
+	}
+	return decoded, nil
+}
+
+// BodySize is the decoded size a stored manifest declares: what parsing it
+// allocates and what a reader holds while it is mounted. Zero if stored is
+// not a manifest.
+func BodySize(stored []byte) uint64 {
+	if len(stored) < envelopeSize || string(stored[:8]) != Magic {
+		return 0
+	}
+	return binary.LittleEndian.Uint64(stored[16:])
+}
 
 // Parse decodes and fully validates a stored manifest. A manifest that
 // parses can be served to a guest as is: every path stays inside the tree,
@@ -139,7 +163,7 @@ func Parse(stored []byte) (*Manifest, error) {
 	case CodecRaw:
 		body = stored[envelopeSize:]
 	case CodecZstd:
-		decoded, err := zstdDecoder.DecodeAll(stored[envelopeSize:], make([]byte, 0, bodyLen))
+		decoded, err := decompress(stored[envelopeSize:], bodyLen)
 		if err != nil {
 			return nil, invalid("decompress body: %v", err)
 		}

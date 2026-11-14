@@ -13,6 +13,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
 )
 
@@ -315,14 +317,45 @@ func TestParseRejectsInvalidManifests(t *testing.T) {
 
 // A compressed manifest cannot make the reader allocate more than the
 // envelope declares.
-func TestParseBoundsDecompression(t *testing.T) {
-	bomb := zstdEncoder.EncodeAll(make([]byte, 64<<20), nil)
+// allocated reports the bytes run allocates.
+func allocated(run func()) uint64 {
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	run()
+	runtime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// A frame that decodes to more than the manifest declares for it is refused
+// without being decoded: what a tenant's manifest can make a reader allocate
+// is what the manifest says, not what its frames expand to.
+func TestDecompressionIsBoundedByDeclaredSizes(t *testing.T) {
+	bomb := zstdEncoder.EncodeAll(make([]byte, 128<<20), nil)
+	require.Less(t, len(bomb), 1<<20)
+
 	stored := make([]byte, envelopeSize, envelopeSize+len(bomb))
 	copy(stored, Magic)
 	binary.LittleEndian.PutUint32(stored[8:], CodecZstd)
 	binary.LittleEndian.PutUint64(stored[16:], headerSize)
-	_, err := Parse(append(stored, bomb...))
+	stored = append(stored, bomb...)
+	require.EqualValues(t, headerSize, BodySize(stored))
+	var err error
+	require.Less(t, allocated(func() { _, err = Parse(stored) }), uint64(8<<20))
 	require.ErrorIs(t, err, ErrInvalidManifest)
+
+	object := Object{Digest: DigestOf(bomb), Size: uint64(len(bomb))}
+	store := newMemoryStore()
+	require.NoError(t, store.put(object, bomb))
+	builder := NewBuilder()
+	extent := FileExtent{Object: object, StoredLen: uint32(len(bomb)), RawLen: 1 << 20}
+	require.NoError(t, builder.AddFile("bomb", 0o644, 0, []FileExtent{extent}))
+	_, manifest, err := builder.Encode(nil, false)
+	require.NoError(t, err)
+	fsys, err := NewFS(manifest, store, FSOptions{})
+	require.NoError(t, err)
+	index, _ := manifest.Find("bomb")
+	require.Less(t, allocated(func() { _, err = fsys.ReadFile(context.Background(), index, 0, make([]byte, 4096)) }), uint64(8<<20))
+	require.ErrorIs(t, err, zstd.ErrDecoderSizeExceeded)
 }
 
 // The chunk boundaries are shared with the Rust client: both must cut the

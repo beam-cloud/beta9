@@ -79,6 +79,11 @@ const (
 	maxMissingListed = 1000
 )
 
+// maxManifestBody bounds a decoded manifest: what a commit holds in memory
+// here, and what a worker holds for as long as the generation is mounted.
+// It is about three million files.
+var maxManifestBody uint64 = 256 << 20
+
 var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 type ServiceOpts struct {
@@ -401,6 +406,9 @@ func loadManifest(ctx context.Context, bucket ObjectStore, mirrorID, digest stri
 	stored, err := bucket.Download(ctx, types.MirrorObjectKey(mirrorID, digest), maxManifestBytes)
 	if err != nil {
 		return nil, err
+	}
+	if store.BodySize(stored) > maxManifestBody {
+		return nil, fmt.Errorf("%w: it describes more files than a generation can hold", store.ErrInvalidManifest)
 	}
 	manifest, err := store.Parse(stored)
 	if err != nil {

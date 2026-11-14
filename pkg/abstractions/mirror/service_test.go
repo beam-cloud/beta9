@@ -476,6 +476,15 @@ func TestPushCommitsOnlyCompleteGenerations(t *testing.T) {
 	require.Equal(t, http.StatusUnprocessableEntity, h.call(http.MethodPost, "/laptop/generations", map[string]any{"parent": 2, "manifest_digest": strings.Repeat("cd", 32)}, nil), "manifest never uploaded")
 	require.Equal(t, http.StatusBadRequest, h.call(http.MethodPost, "/laptop/generations", map[string]any{"parent": 2, "manifest_digest": "../../etc"}, nil))
 
+	// Nor is a manifest that would cost a worker more memory than a
+	// generation may.
+	limit := maxManifestBody
+	maxManifestBody = 200
+	status, _, failure = h.push("laptop", 2, map[string]string{"a.txt": "one", "b.txt": "two", "c.txt": "three"})
+	maxManifestBody = limit
+	require.Equal(t, http.StatusUnprocessableEntity, status)
+	require.Contains(t, failure["message"], "more files than a generation can hold")
+
 	var generations []types.MirrorGeneration
 	require.Equal(t, http.StatusOK, h.call(http.MethodGet, "/laptop/generations", nil, &generations))
 	require.Len(t, generations, 2)

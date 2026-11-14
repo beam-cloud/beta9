@@ -493,12 +493,9 @@ func (f *FS) decodedExtent(ctx context.Context, number uint32, extent Extent) ([
 		if err := f.source.ReadObject(context.WithoutCancel(ctx), object, int64(extent.Offset), stored); err != nil {
 			return nil, err
 		}
-		raw, err := zstdDecoder.DecodeAll(stored, make([]byte, 0, extent.RawLen))
+		raw, err := decompress(stored, uint64(extent.RawLen))
 		if err != nil {
 			return nil, fmt.Errorf("decompress extent of object %s: %w", object.Digest, err)
-		}
-		if uint32(len(raw)) != extent.RawLen {
-			return nil, fmt.Errorf("extent of object %s decoded to %d bytes, want %d", object.Digest, len(raw), extent.RawLen)
 		}
 		f.mu.Lock()
 		if _, ok := f.decoded[number]; !ok && !f.revoked.Load() {
