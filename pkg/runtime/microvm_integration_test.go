@@ -217,6 +217,7 @@ func (b *lockedBuffer) String() string {
 
 type vmOptions struct {
 	image       string // alpine | dind | python
+	lower       string // overlay lowerdir replacing the extracted image
 	args        []string
 	annotations map[string]string
 	memoryMiB   int64
@@ -243,8 +244,15 @@ func newTestVM(t *testing.T, rt *MicroVM, opts vmOptions) *testVM {
 		result:  make(chan runResult, 1),
 	}
 	vm.rootfs = extractRootfs(t, opts.image)
-	vm.canvas = mountCanvas(t, id, vm.rootfs)
+	lower := vm.rootfs
+	if opts.lower != "" {
+		lower = opts.lower
+	}
+	vm.canvas = mountCanvas(t, id, lower)
 	vm.netns, vm.vethHost, vm.vethMAC = createTestNetwork(t, id, vm.ip4, vm.ip6, opts.mtu)
+	if os.Getenv("MICROVM_TEST_BRIDGED_TAP") != "" {
+		require.NoError(t, prepareBridgedTap(rt, vm.netns))
+	}
 	vm.spec = vm.buildSpec(opts)
 
 	data, err := json.MarshalIndent(vm.spec, "", "  ")
