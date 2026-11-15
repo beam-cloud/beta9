@@ -166,6 +166,8 @@ if [ "$desktop" = true ] && [ "$kiosk" != true ]; then
   fi
   desktop_home=$(getent passwd "$desktop_user" | cut -d: -f6)
   printf '%s\n' "$desktop_user" > /opt/beam-vm/desktop-user
+  # A mirror can move the account's home; the desktop copies its defaults from here.
+  printf '%s\n' "$desktop_home" > /opt/beam-vm/desktop-home
   test -u /usr/bin/sudo
   printf '%s ALL=(ALL:ALL) NOPASSWD: ALL\n' "$desktop_user" > /etc/sudoers.d/beam-desktop
   chmod 0440 /etc/sudoers.d/beam-desktop

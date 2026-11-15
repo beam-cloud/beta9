@@ -252,14 +252,35 @@ def test_vm_new_checks_the_explicit_context_for_a_local_mirror(machine, monkeypa
     assert factory.call_args.kwargs["mirror"] == "laptop"
 
 
-def test_vm_new_takes_a_named_mirror_or_none(machine, new_vm):
-    result, factory = new_vm("dev", "--mirror", "work-laptop")
+@pytest.mark.parametrize("args", [("myvm", "--mirror"), ("--mirror", "myvm")])
+def test_vm_new_mirror_is_a_flag_wherever_it_appears(machine, monkeypatch, new_vm, args):
+    status = {
+        "mirror": "laptop",
+        "context": "default",
+        "config_path": str(machine.root / "beam" / "config.ini"),
+    }
+    monkeypatch.setattr(mirror, "installed", lambda: "/usr/bin/beam-mirror")
+    monkeypatch.setattr(mirror, "status", lambda: status)
+    result, factory = new_vm(*args)
     assert result.exit_code == 0, result.stderr
-    assert factory.call_args.kwargs["mirror"] == "work-laptop"
+    assert factory.call_args.args == ("myvm",)
+    assert factory.call_args.kwargs["mirror"] == "laptop"
+
+
+def test_vm_new_takes_a_named_mirror_or_none(machine, monkeypatch, new_vm):
+    monkeypatch.setattr(mirror, "status", MagicMock(side_effect=AssertionError("not needed")))
+    for args in (("--mirror-name", "work-laptop"), ("--mirror", "--mirror-name", "work-laptop")):
+        result, factory = new_vm("dev", *args)
+        assert result.exit_code == 0, result.stderr
+        assert factory.call_args.args == ("dev",)
+        assert factory.call_args.kwargs["mirror"] == "work-laptop"
 
     result, factory = new_vm("dev")
     assert result.exit_code == 0, result.stderr
     assert factory.call_args.kwargs["mirror"] is None
+
+    usage = CliRunner().invoke(vm_cli.management, ["new", "--help"]).output
+    assert "--mirror-name NAME" in usage and "--mirror [NAME]" not in usage
 
 
 def test_vm_new_rejects_the_local_folder_destination(monkeypatch, new_vm):

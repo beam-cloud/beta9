@@ -295,12 +295,11 @@ def _show(info, as_json):
     type=click.Path(exists=True, file_okay=False),
     help="Upload a local directory after creation.",
 )
+@click.option("--mirror", is_flag=True, help="Start with this machine's mirrored files.")
 @click.option(
-    "--mirror",
-    is_flag=False,
-    flag_value="",
-    metavar="[NAME]",
-    help="Start with this machine's mirrored files, or those of mirror NAME.",
+    "--mirror-name",
+    metavar="NAME",
+    help="Start with the mirrored files of mirror NAME instead; implies --mirror.",
 )
 @click.option(
     "--ttl",
@@ -394,13 +393,14 @@ def new(
     idle_action=None,
     kiosk_config=None,
     gpu=None,
-    mirror=None,
+    mirror=False,
+    mirror_name=None,
     open_desktop=False,
 ):
     """Create a VM with a durable root. NAME defaults to a friendly generated name."""
     as_json = as_json or terminal.json_output()
-    if mirror == "":
-        mirror = _local_mirror()
+    if mirror and not mirror_name:
+        mirror_name = _local_mirror()
     if sum(bool(v) for v in (image_uri, image_id, dockerfile, template)) > 1:
         raise click.UsageError("Choose one of --image, --image-id, --dockerfile or --template")
     if build_context and not dockerfile:
@@ -458,7 +458,7 @@ def new(
         request_id=str(request_id) if request_id else None,
         disks=list(disk) if disk else None,
         volumes=_volumes(volume) if volume else None,
-        mirror=mirror,
+        mirror=mirror_name,
         _service=service,
     )
     with StoredStdoutInterceptor(capture_logs=as_json):

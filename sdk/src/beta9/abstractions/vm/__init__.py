@@ -186,10 +186,13 @@ class VM:
 
     mirror names a mirror of this workspace: local files uploaded by the
     mirror utility (`setup mirror`). The VM starts with the mirror's latest
-    generation in /root and, with a desktop, in the desktop user's home,
-    read on demand, and keeps that generation for life; so do its forks,
-    snapshots and templates. The files can be changed like any others;
-    changes stay on the VM's disk and are not sent back to the mirror.
+    generation, read on demand, at the home directory the files came from
+    (such as /Users/NAME), which becomes the desktop user's home; a
+    generation that does not record one is in /root and the desktop user's
+    home. The VM keeps that generation for life; so do its forks, snapshots
+    and private templates. The files can be changed like any others;
+    changes stay on the VM's disk and are not sent back to the mirror, so
+    the VM cannot be published as a public template.
 
     Fresh VMs default to digest-pinned Ubuntu 24.04, 4 CPUs, 8192 MiB RAM
     and a 50 GiB root. Desktop is opt-in and needs at least 1024 MiB RAM.

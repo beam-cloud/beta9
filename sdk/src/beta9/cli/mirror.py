@@ -99,7 +99,7 @@ def launch(ctx, name, pool, open_desktop, as_json):
         vm_cli.new,
         name=name,
         pool=pool,
-        mirror=current["mirror"],
+        mirror_name=current["mirror"],
         desktop=True,
         as_json=as_json,
         open_desktop=open_desktop,
