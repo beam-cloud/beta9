@@ -248,7 +248,7 @@ class CommandGroupCollection(click.CommandCollection):
 
     def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         groups = {
-            "Work": "run deploy dev serve shell logs doctor".split(),
+            "Work": "run deploy dev serve shell mirror logs doctor".split(),
             "Resources": "container deployment image task volume disk db ls cp rm mv".split(),
         }
         remaining = set(self.list_commands(ctx)) - {

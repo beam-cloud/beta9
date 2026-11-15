@@ -13,6 +13,7 @@ from click.testing import CliRunner
 from beta9 import mirror
 from beta9.abstractions.vm import VM
 from beta9.cli import extraclick
+from beta9.cli import mirror as mirror_cli
 from beta9.cli import setup as setup_cli
 from beta9.cli import vm as vm_cli
 
@@ -155,8 +156,18 @@ def test_setup_mirror_signs_in_installs_and_starts_the_utility(machine, monkeypa
         }
     else:
         assert "Mirror laptop" in result.stdout and "projects/app" in result.stdout
-        assert f"{path} push " in result.stdout
-        assert "beta9 vm new --mirror " in result.stdout
+        assert "beta9 mirror launch " in result.stdout
+        assert "beta9 mirror open NAME " in result.stdout
+        assert "beta9 mirror run " in result.stdout
+
+
+def test_setup_mirror_guides_an_empty_selection(machine, monkeypatch):
+    machine.release({"beam-mirror": UTILITY.replace('["projects/app"]', "[]").encode()})
+    monkeypatch.setattr(setup_cli, "connect_workspace", lambda selected: None)
+    result = CliRunner().invoke(setup_cli.setup, ["mirror", "--context", "staging"])
+    assert result.exit_code == 0, result.output
+    assert "beta9 --context staging mirror suggest --add RELATIVE_PATH" in result.output
+    assert "beta9 --context staging mirror launch" in result.output
 
 
 def test_setup_mirror_stops_when_the_utility_cannot_start(machine, monkeypatch):
@@ -248,6 +259,98 @@ def test_vm_new_takes_a_named_mirror_or_none(machine, new_vm):
     result, factory = new_vm("dev")
     assert result.exit_code == 0, result.stderr
     assert factory.call_args.kwargs["mirror"] is None
+
+
+@pytest.mark.parametrize(
+    "roots,paused,push_exit",
+    [([], False, 0), (["work"], True, 0), (["work"], False, 9), (["work"], False, 0)],
+)
+def test_mirror_launch_uploads_before_creating(
+    machine, monkeypatch, new_vm, roots, paused, push_exit
+):
+    monkeypatch.setattr(mirror, "installed", lambda: "/usr/bin/beam-mirror")
+    config = str(machine.root / "beam" / "config.ini")
+    monkeypatch.setattr(
+        mirror,
+        "status",
+        lambda: {
+            "mirror": "laptop",
+            "context": "staging",
+            "config_path": config,
+            "roots": roots,
+            "paused": paused,
+        },
+    )
+    push = MagicMock(return_value=push_exit)
+    monkeypatch.setattr(mirror, "run", push)
+    _, factory = new_vm("existing")
+    factory.reset_mock()
+
+    def upload(*args, **kwargs):
+        factory.assert_not_called()
+        return push_exit
+
+    push.side_effect = upload
+    browser = MagicMock()
+    monkeypatch.setattr(vm_cli, "_open_browser", browser)
+
+    result = CliRunner(mix_stderr=False).invoke(
+        mirror_cli.mirror_group,
+        ["--context", "staging", "launch", "dev", "--pool", "cpu", "--json"],
+    )
+    if not roots or paused or push_exit:
+        assert result.exit_code == 1 and not factory.called
+        assert push.called == bool(roots and not paused)
+        return
+
+    assert result.exit_code == 0, result.stderr
+    assert json.loads(result.stdout)["name"] == "dev"
+    assert push.call_args.args == ("push",)
+    assert push.call_args.kwargs["stdout"] is not None
+    assert factory.call_args.args == ("dev",)
+    assert factory.call_args.kwargs["mirror"] == "laptop"
+    assert factory.call_args.kwargs["pool"] == "cpu"
+    assert factory.call_args.kwargs["desktop"] is True
+    browser.assert_not_called()
+
+
+def test_mirror_launch_uses_the_selected_context_before_upload(machine, monkeypatch):
+    monkeypatch.setattr(mirror, "installed", lambda: "/usr/bin/beam-mirror")
+    monkeypatch.setattr(
+        mirror,
+        "status",
+        lambda: {
+            "mirror": "laptop",
+            "context": "default",
+            "config_path": str(machine.root / "beam" / "config.ini"),
+            "roots": ["work"],
+        },
+    )
+    push = MagicMock()
+    monkeypatch.setattr(mirror, "run", push)
+    result = CliRunner().invoke(mirror_cli.mirror_group, ["--context", "staging", "launch"])
+    assert result.exit_code == 1
+    assert "beta9 --context staging setup mirror" in result.output
+    push.assert_not_called()
+
+
+def test_mirror_add_preserves_arguments_and_utility_exit(monkeypatch):
+    monkeypatch.setattr(mirror_cli, "_selection", lambda: {})
+    run = MagicMock(return_value=7)
+    monkeypatch.setattr(mirror, "run", run)
+    result = CliRunner().invoke(mirror_cli.mirror_group, ["add", "my files", "--exclude", "*.temp"])
+    assert result.exit_code == 7
+    run.assert_called_once_with("add", "my files", "--exclude", "*.temp")
+
+
+def test_mirror_open_resumes_the_existing_vm(monkeypatch):
+    callback = MagicMock()
+    monkeypatch.setattr(vm_cli.desktop_vm, "callback", callback)
+    result = CliRunner().invoke(mirror_cli.mirror_group, ["open", "my-vm"])
+    assert result.exit_code == 0, result.output
+    callback.assert_called_once_with(
+        name="my-vm", resume=True, open_url=True, url_only=False, context=None
+    )
 
 
 def test_vm_requests_a_mirror_by_name_only():

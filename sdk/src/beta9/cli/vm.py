@@ -468,6 +468,7 @@ def new(
             with _progress("Syncing files", "Files synced", as_json):
                 _sync(vm, sync_dir, False)
     _show(vm.info, as_json)
+    return vm
 
 
 def _local_mirror():

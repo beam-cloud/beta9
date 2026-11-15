@@ -19,6 +19,7 @@ from typing import Dict, Optional, Tuple
 import requests
 
 from .config import get_settings
+from .utils import local_process_kwargs
 
 BINARY = "beam-mirror"
 RELEASES_URL = "https://github.com/beam-cloud/mirror/releases/latest/download"
@@ -147,7 +148,12 @@ def _run(*args: str) -> str:
         raise MirrorError("The mirror utility is not installed on this machine.")
     try:
         result = subprocess.run(
-            [utility, *args], capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL
+            [utility, *args],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            stdin=subprocess.DEVNULL,
+            **local_process_kwargs(utility),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise MirrorError(f"Could not run {utility}: {exc}") from exc
@@ -155,6 +161,17 @@ def _run(*args: str) -> str:
         reason = (result.stderr or result.stdout).strip().splitlines()
         raise MirrorError(reason[-1] if reason else f"{utility} {args[0]} failed")
     return result.stdout
+
+
+def run(*args: str, stdout=None) -> int:
+    """Run an interactive or long-running utility command with live output."""
+    utility = installed()
+    if utility is None:
+        raise MirrorError("The mirror utility is not installed on this machine.")
+    try:
+        return subprocess.call([utility, *args], stdout=stdout, **local_process_kwargs(utility))
+    except OSError as exc:
+        raise MirrorError(f"Could not run {utility}: {exc}") from exc
 
 
 def start(context: str) -> dict:
@@ -174,11 +191,15 @@ def status() -> dict:
 
 
 def local_name(context: str) -> Optional[str]:
+    return local_status(context).get("mirror") or None
+
+
+def local_status(context: str) -> dict:
     """Use the local mirror only for the CLI config and context it syncs to."""
     current = status()
     name = current.get("mirror")
     if not isinstance(name, str) or not name:
-        return None
+        return {**current, "mirror": None}
     config_path = current.get("config_path")
     if (
         current.get("context") != context
@@ -187,4 +208,4 @@ def local_name(context: str) -> Optional[str]:
         or Path(config_path).resolve() != get_settings().config_path.expanduser().resolve()
     ):
         raise MirrorError("This machine's mirror is not configured for the selected Beam context.")
-    return name
+    return current

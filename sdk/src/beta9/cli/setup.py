@@ -285,29 +285,37 @@ def setup_mirror(context: Optional[str]):
     if terminal.json_output():
         terminal.print_json({"path": str(path), "updated": updated, **status})
         return
-    utility, command = shlex.quote(str(path)), extraclick.command_hint(selected)
+    command = extraclick.command_hint(selected)
+    roots = status.get("roots") or []
     terminal.print("")
     terminal.resource(
         "Mirror " + str(status.get("mirror") or ""),
         {
-            "Utility": path,
-            "Files": ", ".join(status.get("roots") or []) or "none chosen yet",
+            "Selected paths": ", ".join(roots) or "none yet",
             "Uploads": "paused" if status.get("paused") else "",
         },
     )
     terminal.print("")
-    if mirror.platform.system() == "Darwin":
-        terminal.print(
-            f"  {utility} tray    review suggested files in the menu bar",
-            markup=False,
-            soft_wrap=True,
+    next_steps = []
+    if not roots:
+        next_steps.extend(
+            (
+                f"{command} mirror suggest    review local settings",
+                f"{command} mirror suggest --add RELATIVE_PATH    select one of those settings",
+                f"{command} mirror add PATH    select a file or folder under your home",
+            )
         )
-    for line in (
-        f"{utility} suggest    review shell, Git, editor, and agent settings",
-        f"{utility} add PATH    choose a folder or file under your home directory",
-        f"{utility} push        upload the chosen files",
-        f"{command} vm new --mirror    start a VM with those files",
-    ):
+    next_steps.extend(
+        (
+            f"{command} mirror launch    upload selected files and open a new VM",
+            f"{command} mirror open NAME    return to the same VM and its browser session",
+        )
+    )
+    if mirror.platform.system() == "Darwin":
+        next_steps.append(f"{command} mirror tray    manage sync from the menu bar")
+    else:
+        next_steps.append(f"{command} mirror run    keep selected paths syncing while this runs")
+    for line in next_steps:
         terminal.print("  " + line, markup=False, soft_wrap=True)
 
 

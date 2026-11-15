@@ -350,6 +350,22 @@ carry over:
 - **Absolute symlinks and links out of the tree** cannot be represented.
 - **macOS-only applications** have no counterpart.
 
+### Set up and launch a mirrored VM
+
+On macOS or Linux, run `beam setup mirror`, then `beam mirror suggest` to
+see which settings you can bring. Select the files you use with
+`beam mirror suggest --add RELATIVE_PATH`, or choose a file or folder under
+your home with `beam mirror add PATH`. A selected folder includes its
+descendants, so review what it contains before syncing.
+
+`beam mirror launch` pushes your selection and opens a new private desktop
+VM with the mirror's latest uploaded generation. Run `beam mirror open NAME`
+to return to that same VM, its edits, and its browser profile. On macOS,
+`beam mirror tray` adds these controls to the menu bar. On either platform,
+`beam mirror run` uploads changes to the selected paths while it runs.
+Use `beam vm new --mirror` to create a VM from the currently uploaded
+generation.
+
 ### The tray application
 
 Both source platforms can use `beam-mirror suggest` to review shell, Git,

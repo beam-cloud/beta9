@@ -27,6 +27,7 @@ from . import (
     logs,
     machine,
     mcp,
+    mirror,
     pool,
     run,
     secret,
@@ -89,7 +90,7 @@ class CLI:
 
     # Commands that work without credentials or establish them; the first-run
     # prompt would only get in their way.
-    NO_FIRST_AUTH_PROMPT = ("mcp", "login", "setup", "config", "configure")
+    NO_FIRST_AUTH_PROMPT = ("mcp", "login", "setup", "config", "configure", "mirror")
 
     def check_config(self) -> None:
         if os.getenv("CI") or any(
@@ -140,6 +141,7 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli.register(serve)
     cli.register(volume)
     cli.register(vm)
+    cli.register(mirror)
     cli.register(disk)
     cli.register(image)
     cli.register(logs)
