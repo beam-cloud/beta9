@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -47,12 +46,8 @@ type Hetzner struct {
 // NewHetzner makes a client that buys as owner: the name this control plane
 // puts on the servers it buys.
 func NewHetzner(config types.HetznerProviderConfig, owner string) *Hetzner {
-	if config.BaseURL == "" {
-		config.BaseURL = hetznerBaseURL
-	}
-	if config.Image == "" {
-		config.Image = hetznerImage
-	}
+	config.BaseURL = cmp.Or(config.BaseURL, hetznerBaseURL)
+	config.Image = cmp.Or(config.Image, hetznerImage)
 	if len(config.DefaultRegions) == 0 {
 		config.DefaultRegions = hetznerDefaultRegions
 	}
@@ -127,43 +122,37 @@ func (c *Hetzner) Offers(ctx context.Context, filter OfferFilter) ([]Offer, erro
 			continue
 		}
 		for _, where := range serverType.Locations {
-			if !where.Available || where.Deprecation != nil {
-				continue
-			}
 			hourlyCost := c.hourlyCostMicros(serverType, where.Name)
-			if hourlyCost <= 0 {
+			if !where.Available || where.Deprecation != nil || hourlyCost <= 0 {
 				continue
 			}
-			location := locations[where.Name]
-			region := c.config.RegionMetadata[where.Name]
-			offer := Offer{
-				ID:                serverType.Name,
-				Provider:          hetznerName,
-				Cloud:             hetznerName,
-				InstanceType:      serverType.Name,
-				Region:            where.Name,
-				CPUMillicores:     int64(serverType.Cores * 1000),
-				MemoryMB:          int64(serverType.MemoryGB * 1024),
-				StorageMB:         int64(serverType.DiskGB * 1024),
-				HourlyCostMicros:  hourlyCost,
-				DisplayName:       cmp.Or(serverType.Description, serverType.Name),
-				Category:          cmp.Or(c.config.ServerTypeCategories[serverType.Name], c.config.ServerTypeCategories[serverType.Category], serverType.Category, serverType.CPUType),
-				RegionDisplayName: cmp.Or(region.DisplayName, location.Description, location.City, where.Name),
-				Latitude:          location.Latitude,
-				Longitude:         location.Longitude,
-			}
-			if region.Latitude != 0 {
-				offer.Latitude = region.Latitude
-			}
-			if region.Longitude != 0 {
-				offer.Longitude = region.Longitude
-			}
-			if filter.Matches(offer) {
-				offers = append(offers, offer)
-			}
+			offers = append(offers, c.offer(serverType, locations[where.Name], where.Name, hourlyCost))
 		}
 	}
-	return offers, nil
+	return filter.matching(offers), nil
+}
+
+// offer is a server type as it is sold in one location. What the config
+// says of the location comes before what Hetzner says of it.
+func (c *Hetzner) offer(serverType hetznerServerType, location hetznerLocation, region string, hourlyCost int64) Offer {
+	configured := c.config.RegionMetadata[region]
+	categories := c.config.ServerTypeCategories
+	return Offer{
+		ID:                serverType.Name,
+		Provider:          hetznerName,
+		Cloud:             hetznerName,
+		InstanceType:      serverType.Name,
+		Region:            region,
+		CPUMillicores:     int64(serverType.Cores * 1000),
+		MemoryMB:          int64(serverType.MemoryGB * 1024),
+		StorageMB:         int64(serverType.DiskGB * 1024),
+		HourlyCostMicros:  hourlyCost,
+		DisplayName:       cmp.Or(serverType.Description, serverType.Name),
+		Category:          cmp.Or(categories[serverType.Name], categories[serverType.Category], serverType.Category, serverType.CPUType),
+		RegionDisplayName: cmp.Or(configured.DisplayName, location.Description, location.City, region),
+		Latitude:          cmp.Or(configured.Latitude, location.Latitude),
+		Longitude:         cmp.Or(configured.Longitude, location.Longitude),
+	}
 }
 
 // hourlyCostMicros is what a server type costs in a location: the price the
@@ -284,10 +273,7 @@ func (c *Hetzner) Get(ctx context.Context, id string) (Instance, error) {
 		Server hetznerServer `json:"server"`
 	}
 	if err := c.api.do(ctx, call{method: http.MethodGet, path: "/servers/" + url.PathEscape(id), out: &found}); err != nil {
-		if statusOf(err) == http.StatusNotFound {
-			return Instance{}, because(ErrNotFound, err)
-		}
-		return Instance{}, err
+		return Instance{}, notFound(err)
 	}
 	return c.instance(found.Server), nil
 }
@@ -310,33 +296,28 @@ func (c *Hetzner) List(ctx context.Context) ([]Instance, error) {
 }
 
 func (c *Hetzner) Delete(ctx context.Context, id string) error {
-	err := c.api.do(ctx, call{method: http.MethodDelete, path: "/servers/" + url.PathEscape(id), repeatable: true})
-	if statusOf(err) == http.StatusNotFound {
-		return nil
-	}
-	return err
+	return unlessGone(c.api.do(ctx, call{method: http.MethodDelete, path: "/servers/" + url.PathEscape(id), repeatable: true}))
+}
+
+// hetznerProblem is the body of an answer Hetzner turned a call down with.
+type hetznerProblem struct {
+	Error struct {
+		Code string `json:"code"`
+	} `json:"error"`
 }
 
 // hetznerRefusal names why a create was turned down, from Hetzner's error
 // code.
 func hetznerRefusal(err error) error {
-	var status *StatusError
-	if !errors.As(err, &status) {
-		return err
-	}
-	var refusal struct {
-		Error struct {
-			Code string `json:"code"`
-		} `json:"error"`
-	}
-	status.decode(&refusal)
-	switch refusal.Error.Code {
-	case "resource_unavailable", "placement_error":
-		return because(ErrOutOfStock, err)
-	case "resource_limit_exceeded":
-		return because(ErrQuota, err)
-	}
-	return err
+	return refusal(err, func(_ *StatusError, refused hetznerProblem) error {
+		switch refused.Error.Code {
+		case "resource_unavailable", "placement_error":
+			return ErrOutOfStock
+		case "resource_limit_exceeded":
+			return ErrQuota
+		}
+		return nil
+	})
 }
 
 func (c *Hetzner) knownLocations(ctx context.Context) (map[string]hetznerLocation, error) {
@@ -353,26 +334,49 @@ func (c *Hetzner) knownLocations(ctx context.Context) (map[string]hetznerLocatio
 	})
 }
 
-// privateNetworkID returns the network a new server in the region joins. The
-// config names one for every region, by ID or by name, and may name another
-// for a region. A network that has no subnet in the region's network zone is
-// refused, unless requireSubnet is set and false.
-func (c *Hetzner) privateNetworkID(ctx context.Context, region string) (int64, error) {
-	network := c.config.PrivateNetwork
-	wantID, wantName := network.ID, network.Name
-	if id := network.RegionIDs[region]; id > 0 {
-		wantID, wantName = id, ""
-	} else if name := network.RegionNames[region]; name != "" {
-		wantID, wantName = 0, name
+// hetznerNetworkName is how the config names a network: by ID, or else by
+// name.
+type hetznerNetworkName struct {
+	id   int64
+	name string
+}
+
+// hetznerNetworkFor is the network the config names for a region: the one it
+// names for that region, or else the one it names for every region.
+func hetznerNetworkFor(config types.HetznerPrivateNetworkConfig, region string) hetznerNetworkName {
+	switch {
+	case config.RegionIDs[region] > 0:
+		return hetznerNetworkName{id: config.RegionIDs[region]}
+	case config.RegionNames[region] != "":
+		return hetznerNetworkName{name: config.RegionNames[region]}
 	}
-	if wantID <= 0 && wantName == "" {
+	return hetznerNetworkName{id: config.ID, name: config.Name}
+}
+
+func (n hetznerNetworkName) String() string {
+	if n.id > 0 {
+		return strconv.FormatInt(n.id, 10)
+	}
+	return n.name
+}
+
+// names reports whether the network is the one named.
+func (n hetznerNetworkName) names(network hetznerNetwork) bool {
+	if n.id > 0 {
+		return network.ID == n.id
+	}
+	return network.Name == n.name
+}
+
+// privateNetworkID returns the network a new server in the region joins. A
+// network that has no subnet in the region's network zone is refused, unless
+// requireSubnet is set and false.
+func (c *Hetzner) privateNetworkID(ctx context.Context, region string) (int64, error) {
+	want := hetznerNetworkFor(c.config.PrivateNetwork, region)
+	if want.id <= 0 && want.name == "" {
 		return 0, fmt.Errorf("Hetzner privateNetwork has no id or name for location %q", region)
 	}
-	want := wantName
-	if wantID > 0 {
-		want = strconv.FormatInt(wantID, 10)
-	}
-	requireSubnet := network.RequireSubnet == nil || *network.RequireSubnet
+	requireSubnet := c.config.PrivateNetwork.RequireSubnet == nil || *c.config.PrivateNetwork.RequireSubnet
 
 	locations, err := c.knownLocations(ctx)
 	if err != nil {
@@ -389,22 +393,20 @@ func (c *Hetzner) privateNetworkID(ctx context.Context, region string) (int64, e
 		return 0, err
 	}
 
-	for _, candidate := range networks {
-		if (wantID > 0 && candidate.ID != wantID) || (wantID <= 0 && candidate.Name != wantName) {
-			continue
-		}
-		if requireSubnet && !candidate.hasSubnetIn(location.NetworkZone) {
-			// The operator's fix should count on the next attempt.
-			c.networks.forget()
-			return 0, fmt.Errorf("Hetzner private network %q has no cloud subnet in network zone %q for location %q", want, location.NetworkZone, region)
-		}
-		return candidate.ID, nil
+	at := slices.IndexFunc(networks, want.names)
+	switch {
+	case at < 0 && want.id > 0 && !requireSubnet:
+		// A network whose subnets need no checking is taken at its ID.
+		return want.id, nil
+	case at < 0:
+		// The operator's fix should count on the next attempt.
+		c.networks.forget()
+		return 0, fmt.Errorf("Hetzner private network %q was not found", want)
+	case requireSubnet && !networks[at].hasSubnetIn(location.NetworkZone):
+		c.networks.forget()
+		return 0, fmt.Errorf("Hetzner private network %q has no cloud subnet in network zone %q for location %q", want, location.NetworkZone, region)
 	}
-	if wantID > 0 && !requireSubnet {
-		return wantID, nil
-	}
-	c.networks.forget()
-	return 0, fmt.Errorf("Hetzner private network %q was not found", want)
+	return networks[at].ID, nil
 }
 
 func (n hetznerNetwork) hasSubnetIn(networkZone string) bool {

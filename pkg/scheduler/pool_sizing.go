@@ -39,9 +39,9 @@ func NewWorkerPoolSizer(controller WorkerPoolController,
 	}
 }
 
-// hasFloor reports whether the pool keeps any capacity free.
-func (s *WorkerPoolSizer) hasFloor() bool {
-	return s.sizing.MinFreeCpu > 0 || s.sizing.MinFreeMemory > 0 || s.sizing.MinFreeGpu > 0
+// hasFloor reports whether the sizing keeps any capacity free.
+func hasFloor(sizing *types.WorkerPoolSizingConfig) bool {
+	return sizing.MinFreeCpu > 0 || sizing.MinFreeMemory > 0 || sizing.MinFreeGpu > 0
 }
 
 // tick adds one worker when the pool's free capacity, counting workers that
@@ -92,47 +92,19 @@ func (s *WorkerPoolSizer) addWorkerIfNeeded(freeCapacity *WorkerPoolCapacity) (*
 func readPoolSizing(pool types.WorkerPoolConfig) (sizing *types.WorkerPoolSizingConfig, ignored []string) {
 	sizing = types.NewWorkerPoolSizingConfig()
 	written := pool.PoolSizing
-	read := func(key, value, example string, parse func(string) error) {
-		if value = strings.TrimSpace(value); value != "" && parse(value) != nil {
-			ignored = append(ignored, fmt.Sprintf("%s %q: write it like %s", key, value, example))
-		}
-	}
 
-	read("minFreeCpu", written.MinFreeCPU, "2000m", func(value string) (err error) {
-		sizing.MinFreeCpu, err = ParseCPU(value)
-		return err
-	})
-	read("minFreeMemory", written.MinFreeMemory, "4Gi", func(value string) (err error) {
-		sizing.MinFreeMemory, err = ParseMemory(value)
-		return err
-	})
-	read("minFreeGpu", written.MinFreeGPU, "1", func(value string) (err error) {
-		sizing.MinFreeGpu, err = ParseGPU(value)
-		return err
-	})
-	read("defaultWorkerCpu", written.DefaultWorkerCPU, "2000m", func(value string) error {
-		cpu, err := ParseCPU(value)
-		if err == nil {
-			sizing.DefaultWorkerCpu = cpu
-		}
-		return err
-	})
-	read("defaultWorkerMemory", written.DefaultWorkerMemory, "4Gi", func(value string) error {
-		memory, err := ParseMemory(value)
-		if err == nil {
-			sizing.DefaultWorkerMemory = memory
-		}
-		return err
-	})
-	read("defaultWorkerGpuType", written.DefaultWorkerGpuType, "A10G", func(value string) error {
+	readSetting(&ignored, "minFreeCpu", written.MinFreeCPU, "2000m", &sizing.MinFreeCpu, ParseCPU)
+	readSetting(&ignored, "minFreeMemory", written.MinFreeMemory, "4Gi", &sizing.MinFreeMemory, ParseMemory)
+	readSetting(&ignored, "minFreeGpu", written.MinFreeGPU, "1", &sizing.MinFreeGpu, ParseGPU)
+	readSetting(&ignored, "defaultWorkerCpu", written.DefaultWorkerCPU, "2000m", &sizing.DefaultWorkerCpu, ParseCPU)
+	readSetting(&ignored, "defaultWorkerMemory", written.DefaultWorkerMemory, "4Gi", &sizing.DefaultWorkerMemory, ParseMemory)
+	readSetting(&ignored, "defaultWorkerGpuType", written.DefaultWorkerGpuType, "A10G", &sizing.DefaultWorkerGpuType, func(value any) (string, error) {
 		gpu, err := ParseGPUType(value)
-		sizing.DefaultWorkerGpuType = gpu.String()
-		return err
+		return gpu.String(), err
 	})
-	read("defaultWorkerGpuCount", written.DefaultWorkerGpuCount, "1", func(value string) error {
+	readSetting(&ignored, "defaultWorkerGpuCount", written.DefaultWorkerGpuCount, "1", &sizing.DefaultWorkerGpuCount, func(value any) (uint32, error) {
 		count, err := ParseGpuCount(value)
-		sizing.DefaultWorkerGpuCount = uint32(count)
-		return err
+		return uint32(count), err
 	})
 
 	// A pool gives the workers it adds its own gpuType. One with no gpuType
@@ -149,17 +121,29 @@ func readPoolSizing(pool types.WorkerPoolConfig) (sizing *types.WorkerPoolSizing
 	return sizing, ignored
 }
 
+// readSetting parses one poolSizing setting into field. One that is left out
+// leaves the field at its default. So does one that cannot be parsed, which
+// is added to ignored.
+func readSetting[T any](ignored *[]string, key, value, example string, field *T, parse func(any) (T, error)) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	parsed, err := parse(value)
+	if err != nil {
+		*ignored = append(*ignored, fmt.Sprintf("%s %q: write it like %s", key, value, example))
+		return
+	}
+	*field = parsed
+}
+
+// applyBuildPoolSizingMinimums makes the workers the image build pool adds
+// big enough for a build.
 func applyBuildPoolSizingMinimums(poolName string, config types.AppConfig, sizing *types.WorkerPoolSizingConfig) {
 	if sizing == nil || poolName == "" || poolName != config.ImageService.BuildContainerPoolSelector {
 		return
 	}
-
-	if config.ImageService.BuildContainerCpu > sizing.DefaultWorkerCpu {
-		sizing.DefaultWorkerCpu = config.ImageService.BuildContainerCpu
-	}
-
 	buildMemory := capacityMemoryForScheduling(&types.ContainerRequest{Memory: config.ImageService.BuildContainerMemory})
-	if buildMemory > sizing.DefaultWorkerMemory {
-		sizing.DefaultWorkerMemory = buildMemory
-	}
+	sizing.DefaultWorkerCpu = max(sizing.DefaultWorkerCpu, config.ImageService.BuildContainerCpu)
+	sizing.DefaultWorkerMemory = max(sizing.DefaultWorkerMemory, buildMemory)
 }

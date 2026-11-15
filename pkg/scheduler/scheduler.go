@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -8,7 +9,6 @@ import (
 	"net"
 	"reflect"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1261,9 +1261,13 @@ func filterWorkersByStatus(workers []*types.Worker, status types.WorkerStatus) [
 	return filteredWorkers
 }
 
+// scoredWorker is a worker that can take a request, with what decides
+// whether it is the one that does (see scoredWorker.before).
 type scoredWorker struct {
 	worker *types.Worker
-	score  int32
+	// overflow is set when the request runs here only as overflow (see
+	// types.CPUTier.Overflows).
+	overflow bool
 	// routeRank is where the worker's pool sits in the request's route: 0
 	// for a pool the request asked for, higher for each pool that only also
 	// serves it.
@@ -1271,9 +1275,44 @@ type scoredWorker struct {
 	storageRank int32
 	// evictionRank is 1 when placing here would stop evictable containers.
 	evictionRank int32
-	// overflow is set when the request runs here only as overflow (see
-	// types.CPUTier.Overflows).
-	overflow bool
+	// score is the pool's priority, less the rank of the worker's GPU among
+	// those the request asked for.
+	score int32
+	// free is how much of the worker would stay unused.
+	free int64
+}
+
+// before orders the workers that can take a request: the one that takes it
+// is first. tiered is set for CPU tier work.
+//
+// Overflow capacity comes last of all, even after reclaiming Spot. CPU tier
+// work then takes free capacity first, so it evicts Spot only when no worker
+// has room. Pools the request asked for come before pools that only also
+// serve it, and those in route order. Storage-backed work prefers agent
+// capacity, so local workers remain available to workspaces that cannot run
+// on agents.
+//
+// Among the workers that are left, idle capacity comes before eviction, ahead
+// of pool priority: a worker that can start the request now beats a preferred
+// worker that first has to drain a managed endpoint replica (and throw away
+// its loaded model). Then the higher score, and last the best fit: the
+// fullest worker that still fits, so idle workers drain to zero, hit their
+// spindown timeout, and release their nodes.
+func (a scoredWorker) before(b scoredWorker, tiered bool) int {
+	eviction := cmp.Compare(a.evictionRank, b.evictionRank)
+	tierEviction := 0
+	if tiered {
+		tierEviction = eviction
+	}
+	return cmp.Or(
+		compareBool(a.overflow, b.overflow),
+		tierEviction,
+		cmp.Compare(a.routeRank, b.routeRank),
+		cmp.Compare(a.storageRank, b.storageRank),
+		eviction,
+		cmp.Compare(b.score, a.score),
+		cmp.Compare(a.free, b.free),
+	)
 }
 
 func (s *Scheduler) selectWorkerFromWorkers(workers []*types.Worker, request *types.ContainerRequest) (*types.Worker, error) {
@@ -1315,61 +1354,23 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 		return nil, &types.ErrNoSuitableWorkerFound{}
 	}
 
-	// Score workers by priority, less the rank of their GPU among those the
-	// request asked for
 	tier := request.CPUTier()
-	scoredWorkers := []scoredWorker{}
+	scoredWorkers := make([]scoredWorker, 0, len(filteredWorkers))
 	for _, worker := range filteredWorkers {
 		pool, _ := s.PoolConfig(workerPoolSelector(worker))
-		score := scoreWorkerForRequest(worker, request)
 		routeRank, _ := route.rankOf(worker)
 		scoredWorkers = append(scoredWorkers, scoredWorker{
 			worker:       worker,
-			score:        score,
+			overflow:     tier.Overflows(pool),
 			routeRank:    routeRank,
 			storageRank:  s.storagePreferenceRank(worker, request),
 			evictionRank: evictionRankForWorker(worker, request, tier.CPUReservation(pool, request.Cpu)),
-			overflow:     tier.Overflows(pool),
+			score:        scoreWorkerForRequest(worker, request),
+			free:         workerFreeCapacityScore(worker, request),
 		})
 	}
-
-	// Pools the request asked for come before pools that only also serve it,
-	// and those in route order. Within a rank, storage-backed work prefers
-	// agent capacity so local workers remain available to workspaces that
-	// cannot run on agents. CPU tier work ranks free capacity first, so it
-	// evicts Spot only when no worker has room. Overflow capacity comes last
-	// of all, even after reclaiming Spot.
-	tiered := tier != ""
-	sort.Slice(scoredWorkers, func(i, j int) bool {
-		if scoredWorkers[i].overflow != scoredWorkers[j].overflow {
-			return !scoredWorkers[i].overflow
-		}
-		if tiered && scoredWorkers[i].evictionRank != scoredWorkers[j].evictionRank {
-			return scoredWorkers[i].evictionRank < scoredWorkers[j].evictionRank
-		}
-		if scoredWorkers[i].routeRank != scoredWorkers[j].routeRank {
-			return scoredWorkers[i].routeRank < scoredWorkers[j].routeRank
-		}
-		if scoredWorkers[i].storageRank != scoredWorkers[j].storageRank {
-			return scoredWorkers[i].storageRank < scoredWorkers[j].storageRank
-		}
-		// Idle capacity before eviction, ahead of pool priority: a worker that
-		// can start the request now beats a preferred worker that first has to
-		// drain a managed endpoint replica (and throw away its loaded model).
-		// Hard constraints (isolation, storage, route order) were applied
-		// above and are not traded for this.
-		if scoredWorkers[i].evictionRank != scoredWorkers[j].evictionRank {
-			return scoredWorkers[i].evictionRank < scoredWorkers[j].evictionRank
-		}
-		if scoredWorkers[i].score != scoredWorkers[j].score {
-			return scoredWorkers[i].score > scoredWorkers[j].score
-		}
-		// Best-fit: prefer the fullest worker that still fits so idle workers
-		// drain to zero, hit their spindown timeout, and release their nodes.
-		return workerFreeCapacityScore(scoredWorkers[i].worker, request) < workerFreeCapacityScore(scoredWorkers[j].worker, request)
-	})
-
-	return scoredWorkers[0].worker, nil
+	best := slices.MinFunc(scoredWorkers, func(a, b scoredWorker) int { return a.before(b, tier != "") })
+	return best.worker, nil
 }
 
 // evictionRankForWorker is 0 when the request, taking cpu, fits in the worker's
@@ -1501,19 +1502,19 @@ func scoreWorkerForRequest(worker *types.Worker, request *types.ContainerRequest
 	return score
 }
 
+// gpuCatalog is the place of every GPU type the platform knows in its own
+// order of preference, which a request for any GPU goes by.
+var gpuCatalog = sync.OnceValue(func() map[string]int { return types.GPUTypesToMap(types.AllGPUTypes()) })
+
+// gpuPriorityModifier is where the GPU type comes among those the request
+// asked for: 0 for the one it would rather have, and for one it did not ask
+// for.
 func gpuPriorityModifier(request *types.ContainerRequest, gpu string) int {
 	gpuRequests := gpuRequestsForScheduling(request)
 	if slices.Contains(gpuRequests, string(types.GPU_ANY)) {
-		modifiers := types.GPUTypesToMap(types.AllGPUTypes())
-		return modifiers[gpu]
+		return gpuCatalog()[gpu]
 	}
-
-	for index, requestedGPU := range gpuRequests {
-		if requestedGPU == gpu {
-			return index
-		}
-	}
-	return 0
+	return max(slices.Index(gpuRequests, gpu), 0)
 }
 
 func workerFreeCapacityScore(worker *types.Worker, request *types.ContainerRequest) int64 {

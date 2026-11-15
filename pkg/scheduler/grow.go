@@ -135,13 +135,12 @@ func (a *schedulingAttempt) grow() {
 	}
 
 	choice := s.chooseGrowth(route, a.request)
-	if choice.exhausted {
+	switch {
+	case choice.exhausted:
 		a.fail(types.ContainerSchedulingFailureProvisioningLimit)
 		return
-	}
-	if choice.pool == nil {
-		a.recordBacklogWait(false, "worker_provisioning_backoff")
-		a.requeueForWorkerWaitDelay(provisioningWorkerRequeueDelay, "worker_provisioning_backoff")
+	case choice.pool == nil:
+		a.askAgainLater("worker_provisioning_backoff")
 		return
 	}
 
@@ -154,8 +153,7 @@ func (a *schedulingAttempt) grow() {
 		if !errors.Is(err, redislock.ErrNotObtained) {
 			requestLog(log.Error(), a.request).Err(err).Msg("unable to acquire worker provisioning lock")
 		}
-		a.recordBacklogWait(false, "worker_provisioning_in_progress")
-		a.requeueForWorkerWaitDelay(provisioningWorkerRequeueDelay, "worker_provisioning_in_progress")
+		a.askAgainLater("worker_provisioning_in_progress")
 		return
 	}
 
@@ -168,6 +166,13 @@ func (a *schedulingAttempt) grow() {
 	reservationID := s.provisioning.addReservation(s, a.request, choice.pool, choice.size)
 	s.background(func() { s.addWorker(a.request, choice.pool, choice.size, reservationID) })
 	a.requeueForWorkerWait()
+}
+
+// askAgainLater requeues a request that no pool could be asked for a worker
+// for, to ask again on a later pass.
+func (a *schedulingAttempt) askAgainLater(reason string) {
+	a.recordBacklogWait(false, reason)
+	a.requeueForWorkerWaitDelay(provisioningWorkerRequeueDelay, reason)
 }
 
 // growLockTTL is how long a request waits for the worker it asked the pool

@@ -60,12 +60,8 @@ type Vast struct {
 // NewVast makes a client that rents as owner: the name this control plane
 // puts on the instances it rents.
 func NewVast(config types.VastProviderConfig, owner string) *Vast {
-	if config.BaseURL == "" {
-		config.BaseURL = vastBaseURL
-	}
-	if config.Image == "" {
-		config.Image = vastImage
-	}
+	config.BaseURL = cmp.Or(config.BaseURL, vastBaseURL)
+	config.Image = cmp.Or(config.Image, vastImage)
 	if config.DiskGB <= 0 {
 		config.DiskGB = defaultDiskGB
 	}
@@ -144,7 +140,7 @@ func (c *Vast) Offers(ctx context.Context, filter OfferFilter) ([]Offer, error) 
 		if region == "" || ask.GPUs == 0 || price <= 0 {
 			continue
 		}
-		offer := Offer{
+		offers = append(offers, Offer{
 			ID:           vastOfferID(ask.MachineID, ask.GPUs),
 			Provider:     vastName,
 			Cloud:        vastName,
@@ -163,11 +159,9 @@ func (c *Vast) Offers(ctx context.Context, filter OfferFilter) ([]Offer, error) 
 			Available:         1,
 			Reliability:       ask.Reliability,
 			RegionDisplayName: ask.Geolocation,
-		}
-		if filter.Matches(offer) {
-			offers = append(offers, offer)
-		}
+		})
 	}
+	offers = filter.matching(offers)
 	sortOffers(offers)
 	return offers, nil
 }
@@ -262,19 +256,9 @@ func (c *Vast) Create(ctx context.Context, req CreateRequest) (Instance, error) 
 		instance["onstart"] = script
 	}
 
-	asks, err := c.search(ctx, 1, map[string]any{
-		"machine_id": map[string]any{"eq": machine},
-		"num_gpus":   map[string]any{"eq": gpus},
-	})
+	ask, err := c.askNow(ctx, machine, gpus, req.Offer.HourlyCostMicros)
 	if err != nil {
 		return Instance{}, err
-	}
-	if len(asks) == 0 {
-		return Instance{}, because(ErrOutOfStock, fmt.Errorf("Vast machine %d has no %d GPUs to rent as a VM now", machine, gpus))
-	}
-	ask := asks[0]
-	if price := DollarsToMicros(ask.DollarsPerHour); price > req.Offer.HourlyCostMicros {
-		return Instance{}, because(ErrOutOfStock, fmt.Errorf("Vast machine %d now costs %d micros an hour, and was offered at %d", machine, price, req.Offer.HourlyCostMicros))
 	}
 	instance["price"] = ask.MinBid
 
@@ -293,31 +277,52 @@ func (c *Vast) Create(ctx context.Context, req CreateRequest) (Instance, error) 
 	return Instance{ID: strconv.FormatInt(rented.Contract, 10), Status: StatusPending, Tags: req.Tags}, nil
 }
 
+// askNow returns what the host asks now for the GPUs of an offer that was
+// priced at offered micros an hour. A host that no longer rents them, or
+// that has raised its price since, has nothing to rent.
+func (c *Vast) askNow(ctx context.Context, machine int64, gpus uint32, offered int64) (vastAsk, error) {
+	asks, err := c.search(ctx, 1, map[string]any{
+		"machine_id": map[string]any{"eq": machine},
+		"num_gpus":   map[string]any{"eq": gpus},
+	})
+	if err != nil {
+		return vastAsk{}, err
+	}
+	if len(asks) == 0 {
+		return vastAsk{}, because(ErrOutOfStock, fmt.Errorf("Vast machine %d has no %d GPUs to rent as a VM now", machine, gpus))
+	}
+	if price := DollarsToMicros(asks[0].DollarsPerHour); price > offered {
+		return vastAsk{}, because(ErrOutOfStock, fmt.Errorf("Vast machine %d now costs %d micros an hour, and was offered at %d", machine, price, offered))
+	}
+	return asks[0], nil
+}
+
+// vastProblem is the body of an answer Vast turned a call down with.
+type vastProblem struct {
+	Error   string `json:"error"`
+	Message string `json:"msg"`
+}
+
+var errVastNoSSHKey = errors.New("Vast starts a VM only for an account with an SSH key; add one in Vast's console")
+
 // vastRefusal names why Vast turned a create down.
 func vastRefusal(err error) error {
-	var refused *StatusError
-	if !errors.As(err, &refused) {
-		return err
-	}
-	var body struct {
-		Error   string `json:"error"`
-		Message string `json:"msg"`
-	}
-	refused.decode(&body)
-	said := strings.ToLower(body.Error + " " + body.Message)
-	switch {
-	// Someone else has the machine, or bid more for it, or its host now
-	// asks more than was bid.
-	case refused.Status == http.StatusGone, containsAny(said, "no_such_ask", "invalid_price"):
-		return because(ErrOutOfStock, err)
-	case strings.Contains(said, "no_ssh_key_for_vm"):
-		return fmt.Errorf("Vast starts a VM only for an account with an SSH key; add one in Vast's console: %w", err)
-	// Vast is paid in advance. It does not document how it refuses an
-	// account that has run out.
-	case containsAny(said, "credit", "balance"):
-		return because(ErrQuota, err)
-	}
-	return err
+	return refusal(err, func(answer *StatusError, refused vastProblem) error {
+		said := strings.ToLower(refused.Error + " " + refused.Message)
+		switch {
+		// Someone else has the machine, or bid more for it, or its host now
+		// asks more than was bid.
+		case answer.Status == http.StatusGone, containsAny(said, "no_such_ask", "invalid_price"):
+			return ErrOutOfStock
+		case strings.Contains(said, "no_ssh_key_for_vm"):
+			return errVastNoSSHKey
+		// Vast is paid in advance. It does not document how it refuses an
+		// account that has run out.
+		case containsAny(said, "credit", "balance"):
+			return ErrQuota
+		}
+		return nil
+	})
 }
 
 // vastInstance is what Vast says of an instance.
@@ -393,12 +398,8 @@ func (c *Vast) Get(ctx context.Context, id string) (Instance, error) {
 	var found struct {
 		Instance *vastInstance `json:"instances"`
 	}
-	err := c.api.do(ctx, call{method: http.MethodGet, path: fmt.Sprintf("/api/v0/instances/%d/", number), out: &found})
-	if statusOf(err) == http.StatusNotFound {
-		return Instance{}, because(ErrNotFound, err)
-	}
-	if err != nil {
-		return Instance{}, err
+	if err := c.api.do(ctx, call{method: http.MethodGet, path: fmt.Sprintf("/api/v0/instances/%d/", number), out: &found}); err != nil {
+		return Instance{}, notFound(err)
 	}
 	// Vast answers about an instance it does not have with none.
 	if found.Instance == nil || found.Instance.ID == 0 {
@@ -443,11 +444,7 @@ func (c *Vast) Delete(ctx context.Context, id string) error {
 		Success *bool  `json:"success"`
 		Message string `json:"msg"`
 	}
-	err := c.api.do(ctx, call{method: http.MethodDelete, path: fmt.Sprintf("/api/v0/instances/%d/", number), out: &destroyed, repeatable: true})
-	if statusOf(err) == http.StatusNotFound {
-		return nil
-	}
-	if err != nil {
+	if err := unlessGone(c.api.do(ctx, call{method: http.MethodDelete, path: fmt.Sprintf("/api/v0/instances/%d/", number), out: &destroyed, repeatable: true})); err != nil {
 		return err
 	}
 	if destroyed.Success != nil && !*destroyed.Success {

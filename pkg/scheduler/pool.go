@@ -202,7 +202,7 @@ func MonitorPoolSize(wpc WorkerPoolController,
 	workerPoolRepo repository.WorkerPoolRepository,
 	c clock.Clock) {
 	poolSizer := NewWorkerPoolSizer(wpc, config, workerPoolConfig, workerPoolRepo)
-	if !poolSizer.hasFloor() {
+	if !hasFloor(poolSizer.sizing) {
 		return
 	}
 	clock.OrReal(c).Every(wpc.Context(), poolMonitoringInterval, poolSizer.tick)

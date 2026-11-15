@@ -187,13 +187,8 @@ func poolCanRun(pool *WorkerPool, query routeQuery) bool {
 	// when this route has no worker free (selectWorkerFromWorkers), which
 	// brings in the pools of other accelerators. Waiting and growth do not:
 	// a worker is added where the checkpoint restores.
-	if checkpointAccelerator(request) == "" {
-		return true
-	}
-	if strings.TrimSpace(config.GPUType) == "" && config.AgentHosted() {
-		return true
-	}
-	return acceleratorMatchesCheckpoint(request, config.GPUType)
+	anyHardware := strings.TrimSpace(config.GPUType) == "" && config.AgentHosted()
+	return anyHardware || acceleratorMatchesCheckpoint(request, config.GPUType)
 }
 
 func poolRuntime(config types.WorkerPoolConfig) string {
@@ -276,40 +271,36 @@ func (s *Scheduler) growthRouteFor(request *types.ContainerRequest) (route, erro
 // eligible keeps the workers whose pool is in the route and whose GPU the
 // request can use there.
 func (r route) eligible(workers []*types.Worker) []*types.Worker {
-	request, gpus, anyGPU := r.query.request, r.query.gpus, r.query.anyGPU
-	var catalog map[string]int
-	if anyGPU {
-		catalog = types.GPUTypesToMap(types.AllGPUTypes())
-	}
+	// A machine pin has already chosen the worker, whose pool may need a
+	// selector the request does not carry.
+	pinned := r.query.request.MachineId != ""
 
 	filtered := []*types.Worker{}
 	for _, worker := range workers {
 		rank, inRoute := r.rankOf(worker)
-		// A machine pin has already chosen the worker, whose pool may need a
-		// selector the request does not carry.
-		if !inRoute && request.MachineId == "" {
-			continue
+		if (inRoute || pinned) && r.query.canUseGPU(worker.Gpu, rank > 0) {
+			filtered = append(filtered, worker)
 		}
-
-		if request.RequiresGPU() {
-			switch {
-			case rank > 0:
-				// The pool also serves this request, whatever GPU it has.
-			case slices.Contains(gpus, worker.Gpu):
-			case anyGPU && request.PoolSelector != "":
-				// Inside a named pool "any" is a true wildcard: its hardware
-				// may not be in the GPU catalog.
-			case anyGPU:
-				if _, known := catalog[worker.Gpu]; !known {
-					continue
-				}
-			default:
-				continue
-			}
-		}
-		filtered = append(filtered, worker)
 	}
 	return filtered
+}
+
+// canUseGPU reports whether the request can run on a worker with this GPU.
+// fallback is set for a worker of a pool that only also serves the request,
+// which it does whatever GPU it has.
+func (q routeQuery) canUseGPU(gpu string, fallback bool) bool {
+	switch {
+	case !q.request.RequiresGPU(), fallback, slices.Contains(q.gpus, gpu):
+		return true
+	case !q.anyGPU:
+		return false
+	case q.request.PoolSelector != "":
+		// Inside a named pool "any" is a true wildcard: its hardware may not
+		// be in the GPU catalog.
+		return true
+	}
+	_, known := gpuCatalog()[gpu]
+	return known
 }
 
 // HasManagedPoolForGPU reports whether work that asks for the GPU type and

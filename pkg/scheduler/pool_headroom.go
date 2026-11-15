@@ -44,28 +44,31 @@ func (s *Scheduler) WorkerHoldsPoolHeadroom(worker *types.Worker) bool {
 }
 
 func workerHoldsPoolHeadroom(workerRepo repository.WorkerRepository, pool types.WorkerPoolConfig, worker *types.Worker) bool {
-	if worker == nil || worker.PoolName == "" || worker.Status != types.WorkerStatusAvailable || poolFloor(pool) == nil {
+	floor := poolFloor(pool)
+	if floor == nil || worker == nil || worker.PoolName == "" || worker.Status != types.WorkerStatusAvailable {
 		return false
 	}
 	workers, err := workerRepo.GetAllWorkersInPool(worker.PoolName)
 	if err != nil {
 		return true
 	}
-	return HoldsHeadroom(pool, workers, worker)
+	return holdsFloor(floor, workers, worker)
 }
 
 // HoldsHeadroom is the rule of WorkerHoldsPoolHeadroom for a caller that has
 // the pool's config and its workers at hand: it reports whether worker is one
 // of the workers that keep the pool's free capacity at its floor.
 func HoldsHeadroom(pool types.WorkerPoolConfig, workers []*types.Worker, worker *types.Worker) bool {
-	if worker == nil || worker.Status != types.WorkerStatusAvailable {
-		return false
-	}
-	floor := poolFloor(pool)
-	if floor == nil {
-		return false
-	}
-	return freeCapacityAhead(workers, worker.Id).belowMinimum(floor)
+	return worker != nil && holdsFloor(poolFloor(pool), workers, worker)
+}
+
+// holdsFloor reports whether the worker is ready and the ready workers ahead
+// of it do not cover the floor on their own. A pool with no floor (nil) has
+// no worker that holds it.
+func holdsFloor(floor *types.WorkerPoolSizingConfig, workers []*types.Worker, worker *types.Worker) bool {
+	return floor != nil &&
+		worker.Status == types.WorkerStatusAvailable &&
+		freeCapacityAhead(workers, worker.Id).belowMinimum(floor)
 }
 
 // poolFloor returns the free capacity the pool keeps (poolSizing.minFree*),
@@ -74,7 +77,7 @@ func HoldsHeadroom(pool types.WorkerPoolConfig, workers []*types.Worker, worker 
 // file.
 func poolFloor(pool types.WorkerPoolConfig) *types.WorkerPoolSizingConfig {
 	sizing, _ := readPoolSizing(pool)
-	if sizing.MinFreeCpu <= 0 && sizing.MinFreeMemory <= 0 && sizing.MinFreeGpu <= 0 {
+	if !hasFloor(sizing) {
 		return nil
 	}
 	return sizing
@@ -133,51 +136,43 @@ func (s *Scheduler) filterWorkersByPoolHeadroom(workers []*types.Worker, request
 	if request == nil || !request.OpportunisticOnly {
 		return workers
 	}
-	ready := map[string]*WorkerPoolCapacity{}
-	pools := map[string][]*types.Worker{}
+	// A pool with no ready worker has nothing for the request.
+	ready := map[string][]*types.Worker{}
 	for _, w := range workers {
-		if w.Status != types.WorkerStatusAvailable {
-			continue
+		if w.Status == types.WorkerStatusAvailable {
+			ready[w.PoolName] = append(ready[w.PoolName], w)
 		}
-		pools[w.PoolName] = append(pools[w.PoolName], w)
-		c := ready[w.PoolName]
-		if c == nil {
-			c = &WorkerPoolCapacity{}
-			ready[w.PoolName] = c
-		}
-		c.addFree(w)
 	}
+
 	tier := request.CPUTier()
 	keep := map[string]bool{}
-	sizings := map[string]*types.WorkerPoolSizingConfig{}
-	for name, c := range ready {
+	floors := map[string]*types.WorkerPoolSizingConfig{}
+	for name, poolWorkers := range ready {
 		var pool types.WorkerPoolConfig
-		if loaded, ok := s.poolOf(pools[name][0]); ok {
+		if loaded, ok := s.poolOf(poolWorkers[0]); ok {
 			pool = loaded.Config
 		}
-		sizing := poolFloor(pool)
-		if sizing == nil {
+		floor := poolFloor(pool)
+		floors[name] = floor
+		if floor == nil {
 			keep[name] = true
 			continue
 		}
-		sizings[name] = sizing
+		free := poolCapacityFromWorkers(poolWorkers)
 		after := WorkerPoolCapacity{
-			FreeCpu:    c.FreeCpu - tier.CPUReservation(pool, request.Cpu),
-			FreeMemory: c.FreeMemory - capacityMemoryForScheduling(request),
-			FreeGpu:    c.FreeGpu - min(c.FreeGpu, uint(gpuCountForScheduling(request))),
+			FreeCpu:    free.FreeCpu - tier.CPUReservation(pool, request.Cpu),
+			FreeMemory: free.FreeMemory - capacityMemoryForScheduling(request),
+			FreeGpu:    free.FreeGpu - min(free.FreeGpu, uint(gpuCountForScheduling(request))),
 		}
-		keep[name] = !after.belowMinimum(sizing)
+		keep[name] = !after.belowMinimum(floor)
 	}
+
 	borrowed := tier.Borrows()
 	filtered := make([]*types.Worker, 0, len(workers))
 	for _, w := range workers {
-		if !keep[w.PoolName] {
-			continue
+		if keep[w.PoolName] && !(borrowed && holdsFloor(floors[w.PoolName], ready[w.PoolName], w)) {
+			filtered = append(filtered, w)
 		}
-		if sizing := sizings[w.PoolName]; borrowed && sizing != nil && w.Status == types.WorkerStatusAvailable && freeCapacityAhead(pools[w.PoolName], w.Id).belowMinimum(sizing) {
-			continue
-		}
-		filtered = append(filtered, w)
 	}
 	return filtered
 }

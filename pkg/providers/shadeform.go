@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -86,24 +85,11 @@ func (c *Shadeform) Offers(ctx context.Context, filter OfferFilter) ([]Offer, er
 			continue
 		}
 		for _, stock := range instanceType.Availability {
-			if !stock.Available {
+			price := instanceType.hourlyMicros(stock.RentalType, stock.HourlyPrice)
+			if !stock.Available || price <= 0 {
 				continue
 			}
-			// The on-demand price is for the instance type, in cents. A spot
-			// price is for the region, in dollars.
-			price := instanceType.HourlyPriceCents * 10_000
-			switch stock.RentalType {
-			case shadeformOnDemand:
-			case shadeformSpot:
-				price = int64(stock.HourlyPrice)
-			default:
-				continue
-			}
-			if price <= 0 {
-				// Shadeform has it and does not say for how much.
-				continue
-			}
-			offer := Offer{
+			offers = append(offers, Offer{
 				ID:               instanceType.ShadeInstanceType,
 				Provider:         shadeformName,
 				Cloud:            instanceType.Cloud,
@@ -116,13 +102,25 @@ func (c *Shadeform) Offers(ctx context.Context, filter OfferFilter) ([]Offer, er
 				StorageMB:        instanceType.Configuration.StorageInGB * 1024,
 				HourlyCostMicros: price,
 				Spot:             stock.RentalType == shadeformSpot,
-			}
-			if filter.Matches(offer) {
-				offers = append(offers, offer)
-			}
+			})
 		}
 	}
-	return offers, nil
+	return filter.matching(offers), nil
+}
+
+// hourlyMicros is what the type costs an hour when rented this way: on
+// demand the price of the type, which is in cents, and as spot the price of
+// the region, which is in dollars. It is zero for a way of renting that this
+// client does not buy, and when Shadeform has the type and does not say for
+// how much.
+func (t shadeformInstanceType) hourlyMicros(rentalType string, spotPrice dollars) int64 {
+	switch rentalType {
+	case shadeformOnDemand:
+		return t.HourlyPriceCents * 10_000
+	case shadeformSpot:
+		return int64(spotPrice)
+	}
+	return 0
 }
 
 type shadeformCreate struct {
@@ -253,10 +251,7 @@ func (i shadeformInstance) status() Status {
 func (c *Shadeform) Get(ctx context.Context, id string) (Instance, error) {
 	var raw shadeformInstance
 	if err := c.api.do(ctx, call{method: http.MethodGet, path: "/instances/" + url.PathEscape(id) + "/info", out: &raw}); err != nil {
-		if statusOf(err) == http.StatusNotFound {
-			return Instance{}, because(ErrNotFound, err)
-		}
-		return Instance{}, err
+		return Instance{}, notFound(err)
 	}
 	if raw.ID == "" {
 		raw.ID = id
@@ -294,34 +289,31 @@ func (c *Shadeform) Extend(ctx context.Context, id string, until time.Time) erro
 }
 
 func (c *Shadeform) Delete(ctx context.Context, id string) error {
-	err := c.api.do(ctx, call{method: http.MethodPost, path: "/instances/" + url.PathEscape(id) + "/delete", body: struct{}{}, repeatable: true})
-	if statusOf(err) == http.StatusNotFound {
-		return nil
-	}
-	return err
+	return unlessGone(c.api.do(ctx, call{method: http.MethodPost, path: "/instances/" + url.PathEscape(id) + "/delete", body: struct{}{}, repeatable: true}))
+}
+
+// shadeformProblem is the body of an answer Shadeform turned a call down with.
+type shadeformProblem struct {
+	Error     string `json:"error"`
+	ErrorCode string `json:"error_code"`
 }
 
 // shadeformRefusal names why a create was turned down. Shadeform answers a
 // refusal with 409 and a reason, and publishes the shape of that answer but
 // not its codes, so the reason is read from its words.
 func shadeformRefusal(err error) error {
-	var status *StatusError
-	if !errors.As(err, &status) || status.Status != http.StatusConflict {
-		return err
-	}
-	var refusal struct {
-		Error     string `json:"error"`
-		ErrorCode string `json:"error_code"`
-	}
-	status.decode(&refusal)
-	reason := strings.ToLower(refusal.ErrorCode + " " + refusal.Error)
-	switch {
-	case containsAny(reason, "quota", "limit", "balance", "funds", "payment"):
-		return because(ErrQuota, err)
-	case containsAny(reason, "capacity", "available", "availability", "stock"):
-		return because(ErrOutOfStock, err)
-	}
-	return err
+	return refusal(err, func(answer *StatusError, refused shadeformProblem) error {
+		reason := strings.ToLower(refused.ErrorCode + " " + refused.Error)
+		switch {
+		case answer.Status != http.StatusConflict:
+			return nil
+		case containsAny(reason, "quota", "limit", "balance", "funds", "payment"):
+			return ErrQuota
+		case containsAny(reason, "capacity", "available", "availability", "stock"):
+			return ErrOutOfStock
+		}
+		return nil
+	})
 }
 
 // shortenName fits a name into limit characters. The end of a name tells

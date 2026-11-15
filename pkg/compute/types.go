@@ -39,18 +39,16 @@ func (p Pool) Validate() error {
 	if err := ValidatePoolName(p.Name); err != nil {
 		return err
 	}
-	if p.Nodes == 0 && (p.TTL > 0 || p.MaxSpendMicros > 0 || len(p.Providers) > 0 || len(p.Regions) > 0 || p.MinReliability > 0) {
+	// What only a reservation has a use for.
+	reserves := p.TTL > 0 || p.MaxSpendMicros > 0 || len(p.Providers) > 0 || len(p.Regions) > 0 || p.MinReliability > 0
+	switch {
+	case p.Nodes == 0 && reserves:
 		return errors.New("pool reservations require nodes > 0")
-	}
-	if p.Nodes > 0 {
-		if p.TTL <= 0 {
-			return errors.New("pool reservations require ttl")
-		}
-		if p.MaxSpendMicros <= 0 {
-			return errors.New("pool reservations require max_spend")
-		}
-	}
-	if p.MinReliability < 0 || p.MinReliability > 1 {
+	case p.Nodes > 0 && p.TTL <= 0:
+		return errors.New("pool reservations require ttl")
+	case p.Nodes > 0 && p.MaxSpendMicros <= 0:
+		return errors.New("pool reservations require max_spend")
+	case p.MinReliability < 0 || p.MinReliability > 1:
 		return errors.New("min_reliability must be between 0 and 1")
 	}
 	return nil
@@ -58,27 +56,19 @@ func (p Pool) Validate() error {
 
 // MatchesOffer reports whether a machine of the offer could join the pool.
 func (p Pool) MatchesOffer(offer providers.Offer) bool {
+	wanted := providers.OfferFilter{GPUs: p.GPUs, Regions: p.Regions}
+	switch {
 	// What has no price can be neither budgeted nor billed, and must not
 	// pass for the cheapest machine there is.
-	if offer.HourlyCostMicros <= 0 {
+	case offer.HourlyCostMicros <= 0,
+		p.OfferID != "" && p.OfferID != offer.ID,
+		!wanted.Matches(offer),
+		len(p.Providers) > 0 && !slices.Contains(p.Providers, offer.Provider),
+		p.MinReliability > 0 && offer.Reliability > 0 && offer.Reliability < p.MinReliability:
 		return false
-	}
-	if p.OfferID != "" && p.OfferID != offer.ID {
-		return false
-	}
-	if !(providers.OfferFilter{GPUs: p.GPUs, Regions: p.Regions}).Matches(offer) {
-		return false
-	}
-	if len(p.Providers) > 0 && !slices.Contains(p.Providers, offer.Provider) {
-		return false
-	}
-	if p.MinReliability > 0 && offer.Reliability > 0 && offer.Reliability < p.MinReliability {
-		return false
-	}
-	if len(p.GPUs) > 0 {
+	case len(p.GPUs) > 0:
 		return offer.GPUCount > 0
-	}
-	if p.Nodes > 0 {
+	case p.Nodes > 0:
 		// A pool that names no GPU and asks for machines wants CPU machines.
 		return offer.GPUCount == 0 && offer.CPUMillicores > 0
 	}

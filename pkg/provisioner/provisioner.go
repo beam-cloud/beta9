@@ -41,6 +41,7 @@ import (
 	"github.com/beam-cloud/redislock"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -330,19 +331,16 @@ func (p *Provisioner) recordInstance(ctx context.Context, machine Machine, insta
 	if err != nil {
 		// The instance carries the machine's tag, so the next tick ties it
 		// to its record.
-		log.Warn().Err(err).Str("pool_name", machine.Pool).Str("machine_id", machine.ID).Msg("provisioner: bought a machine but could not record its instance")
+		machineLog(log.Warn(), machine).Err(err).Msg("provisioner: bought a machine but could not record its instance")
 		bought = machine
+		bought.InstanceID = instance.ID
 	}
 
-	log.Info().
-		Str("pool_name", machine.Pool).
-		Str("machine_id", machine.ID).
-		Str("provider", machine.Provider).
-		Str("instance_id", instance.ID).
-		Str("offer", machine.OfferID).
-		Str("region", machine.Region).
-		Bool("spot", machine.Spot).
-		Int64("hourly_micros", machine.HourlyMicros).
+	machineLog(log.Info(), bought).
+		Str("offer", bought.OfferID).
+		Str("region", bought.Region).
+		Bool("spot", bought.Spot).
+		Int64("hourly_micros", bought.HourlyMicros).
 		Msg("provisioner: bought a machine")
 	provisioned := bought.provisioned()
 	return &provisioned, nil
@@ -442,19 +440,19 @@ func (p *Provisioner) sold(pool string, offer providers.Offer) {
 	defer p.mu.Unlock()
 	delete(p.said, pool)
 	list := p.offers[offer.Provider]
-	for i, listed := range list.offers {
-		if keyOf(listed) != keyOf(offer) || listed.Available == 0 {
-			continue
-		}
-		if listed.Available == 1 {
-			list.offers = slices.Delete(slices.Clone(list.offers), i, i+1)
-		} else {
-			list.offers = slices.Clone(list.offers)
-			list.offers[i].Available--
-		}
-		p.offers[offer.Provider] = list
-		return
+	i := slices.IndexFunc(list.offers, func(listed providers.Offer) bool {
+		return keyOf(listed) == keyOf(offer) && listed.Available > 0
+	})
+	if i < 0 {
+		return // no longer listed, or its provider does not count how many it has
 	}
+	// The list is the provider's own, so a copy is changed.
+	list.offers = slices.Clone(list.offers)
+	list.offers[i].Available--
+	if list.offers[i].Available == 0 {
+		list.offers = slices.Delete(list.offers, i, i+1)
+	}
+	p.offers[offer.Provider] = list
 }
 
 // recentRecords returns the records, read at most recordsMaxAge ago.
@@ -488,14 +486,14 @@ func (p *Provisioner) abandon(ctx context.Context, machine Machine) {
 	p.forget(ctx, machine)
 	if err := p.store.Remove(ctx, machine.ID, p.clock.Now()); err != nil {
 		// The tick removes it once the purchase is old enough to give up on.
-		log.Warn().Err(err).Str("pool_name", machine.Pool).Str("machine_id", machine.ID).Msg("provisioner: could not remove the record of a machine that was not bought")
+		machineLog(log.Warn(), machine).Err(err).Msg("provisioner: could not remove the record of a machine that was not bought")
 	}
 	p.forgetRecentRecords()
 }
 
 func (p *Provisioner) forget(ctx context.Context, machine Machine) bool {
 	if err := p.controlPlane.ForgetMachine(ctx, machine.Pool, machine.ID, machine.TokenHash); err != nil {
-		log.Warn().Err(err).Str("pool_name", machine.Pool).Str("machine_id", machine.ID).Msg("provisioner: could not remove a machine from its pool")
+		machineLog(log.Warn(), machine).Err(err).Msg("provisioner: could not remove a machine from its pool")
 		return false
 	}
 	return true
@@ -612,6 +610,15 @@ func newMachine(id, pool string, offer providers.Offer, now time.Time) Machine {
 		HourlyMicros:  offer.HourlyCostMicros,
 		CreatedAt:     now,
 	}
+}
+
+// machineLog adds what tells the machine apart to a log event.
+func machineLog(event *zerolog.Event, m Machine) *zerolog.Event {
+	return event.
+		Str("pool_name", m.Pool).
+		Str("machine_id", m.ID).
+		Str("provider", m.Provider).
+		Str("instance_id", m.InstanceID)
 }
 
 // booting reports whether the machine has been bought and has not run a
@@ -825,14 +832,12 @@ func selling(stock []providers.Offer, asked types.WorkerPoolConfig) []providers.
 
 // regionsOf lists the regions the offers are in, in a fixed order.
 func regionsOf(offers []providers.Offer) []string {
-	var regions []string
+	regions := make([]string, 0, len(offers))
 	for _, offer := range offers {
-		if !slices.Contains(regions, offer.Region) {
-			regions = append(regions, offer.Region)
-		}
+		regions = append(regions, offer.Region)
 	}
 	slices.Sort(regions)
-	return regions
+	return slices.Compact(regions)
 }
 
 // cents writes a price in cents, with as many decimals as it has.
@@ -844,22 +849,13 @@ func cents(micros int64) string {
 // spot or on-demand as configured, in its regions, within its price limit.
 func sells(offer providers.Offer, pool types.WorkerPoolConfig) bool {
 	buying := pool.Provisioning
-	switch {
-	case offer.Spot != buying.Spot:
-		return false
-	case !strings.EqualFold(offer.GPU, strings.TrimSpace(pool.GPUType)):
-		return false
-	case (offer.GPUCount > 0) != (offer.GPU != ""):
-		return false
-	case len(buying.Regions) > 0 && !slices.Contains(buying.Regions, offer.Region):
-		return false
-	case offer.HourlyCostMicros <= 0:
+	return offer.Spot == buying.Spot &&
+		strings.EqualFold(offer.GPU, strings.TrimSpace(pool.GPUType)) &&
+		(offer.GPUCount > 0) == (offer.GPU != "") &&
+		(len(buying.Regions) == 0 || slices.Contains(buying.Regions, offer.Region)) &&
 		// Without a price there is no telling what it does to the caps.
-		return false
-	case buying.MaxNodeHourlyCents > 0 && offer.HourlyCostMicros > buying.MaxNodeHourlyCents*microsPerCent:
-		return false
-	}
-	return true
+		offer.HourlyCostMicros > 0 &&
+		(buying.MaxNodeHourlyCents <= 0 || offer.HourlyCostMicros <= buying.MaxNodeHourlyCents*microsPerCent)
 }
 
 // holds reports whether a machine bought from the offer has room for need.
@@ -960,14 +956,12 @@ func (p *Provisioner) refreshPools(ctx context.Context) {
 
 // providersOf lists the providers the pools buy from, in a fixed order.
 func providersOf(pools map[string]types.WorkerPoolConfig) []string {
-	var names []string
+	names := make([]string, 0, len(pools))
 	for _, config := range pools {
-		if name := config.Provisioning.Provider; !slices.Contains(names, name) {
-			names = append(names, name)
-		}
+		names = append(names, config.Provisioning.Provider)
 	}
 	slices.Sort(names)
-	return names
+	return slices.Compact(names)
 }
 
 func (p *Provisioner) refreshOffers(ctx context.Context, name string, now time.Time) {
@@ -1032,7 +1026,7 @@ func (p *Provisioner) vouch(ctx context.Context) {
 			continue
 		}
 		if _, err := p.store.Update(ctx, machine.ID, func(record *Machine) { record.PoolGoneSince = time.Time{} }); err != nil && !errors.Is(err, errNoRecord) {
-			log.Warn().Err(err).Str("machine_id", machine.ID).Msg("provisioner: could not keep a machine whose pool exists")
+			machineLog(log.Warn(), machine).Err(err).Msg("provisioner: could not keep a machine whose pool exists")
 		}
 	}
 }
@@ -1180,13 +1174,14 @@ func (p *Provisioner) instanceOf(ctx context.Context, machine Machine, instances
 	if !asked {
 		return notAsked, providers.Instance{}
 	}
-	for _, instance := range listed {
-		if machine.InstanceID != "" && instance.ID == machine.InstanceID {
-			return present, instance
+	isMachine := func(instance providers.Instance) bool {
+		if machine.InstanceID == "" {
+			return instance.Tags[MachineTag] == machine.ID
 		}
-		if machine.InstanceID == "" && instance.Tags[MachineTag] == machine.ID {
-			return present, instance
-		}
+		return instance.ID == machine.InstanceID
+	}
+	if i := slices.IndexFunc(listed, isMachine); i >= 0 {
+		return present, listed[i]
 	}
 	if machine.InstanceID == "" {
 		return gone, providers.Instance{}
@@ -1201,8 +1196,7 @@ func (p *Provisioner) instanceOf(ctx context.Context, machine Machine, instances
 	case errors.Is(err, providers.ErrNotFound):
 		return gone, providers.Instance{}
 	case err != nil:
-		log.Warn().Err(err).Str("machine_id", machine.ID).Str("provider", machine.Provider).Str("instance_id", machine.InstanceID).
-			Msg("provisioner: could not ask the provider about a machine it does not list")
+		machineLog(log.Warn(), machine).Err(err).Msg("provisioner: could not ask the provider about a machine it does not list")
 		return notAsked, providers.Instance{}
 	}
 	return present, instance
@@ -1388,17 +1382,7 @@ func unused(worker *types.Worker) bool {
 func (p *Provisioner) reconcileMachine(ctx context.Context, machine Machine, s sighting) {
 	next, releaseIfIdle := decide(machine, s)
 	if releaseIfIdle {
-		// The worker is cordoned in the same step that finds it without
-		// work, so nothing can be placed on it from here on.
-		idle, err := p.workers.CordonWorkerIfIdle(machine.workerID())
-		switch {
-		case err != nil:
-			log.Warn().Err(err).Str("machine_id", machine.ID).Msg("provisioner: could not check whether a machine is idle")
-		case idle:
-			next.Release = &Release{Reason: fmt.Sprintf("it had nothing to run for %s", s.pool.Provisioning.IdleAfter())}
-		default:
-			next.IdleSince = time.Time{}
-		}
+		next = p.releaseIfIdle(next, s)
 	}
 	next = billed(next, s.now)
 	if next.Release == nil {
@@ -1407,30 +1391,48 @@ func (p *Provisioner) reconcileMachine(ctx context.Context, machine Machine, s s
 
 	if !reflect.DeepEqual(next, machine) {
 		if _, err := p.store.Update(ctx, machine.ID, func(record *Machine) { record.take(next) }); err != nil {
-			log.Warn().Err(err).Str("machine_id", machine.ID).Msg("provisioner: could not update a machine's record")
+			machineLog(log.Warn(), machine).Err(err).Msg("provisioner: could not update a machine's record")
 			return
 		}
-		if next.Release != nil && machine.Release == nil {
-			giving := log.Info().
-				Str("pool_name", machine.Pool).
-				Str("machine_id", machine.ID).
-				Str("provider", machine.Provider).
-				Str("instance_id", next.InstanceID).
-				Str("reason", next.Release.Reason)
-			if _, lost := lostStatus[s.instance.Status]; lost {
-				// Why, only the provider knows: what it said goes with it.
-				giving = giving.Str("status_detail", s.instance.StatusDetail)
-			}
-			giving.Msg("provisioner: giving a machine back")
-			if next.Release.SoldOut {
-				// The next machine is bought as something else, if anything
-				// else is on offer.
-				p.markSoldOut(ctx, next.offerKey)
-			}
-		}
 	}
-	if next.Release != nil {
-		p.finishRelease(ctx, next, s.now)
+	if next.Release == nil {
+		return
+	}
+	if machine.Release == nil {
+		p.announceRelease(ctx, next, s)
+	}
+	p.finishRelease(ctx, next, s.now)
+}
+
+// releaseIfIdle releases a machine that has nothing to run. The worker is
+// cordoned in the same step that finds it without work, so nothing can be
+// placed on it from here on. A machine that has work after all starts its
+// idle time anew.
+func (p *Provisioner) releaseIfIdle(machine Machine, s sighting) Machine {
+	idle, err := p.workers.CordonWorkerIfIdle(machine.workerID())
+	switch {
+	case err != nil:
+		machineLog(log.Warn(), machine).Err(err).Msg("provisioner: could not check whether a machine is idle")
+	case idle:
+		machine.Release = &Release{Reason: fmt.Sprintf("it had nothing to run for %s", s.pool.Provisioning.IdleAfter())}
+	default:
+		machine.IdleSince = time.Time{}
+	}
+	return machine
+}
+
+// announceRelease says that a machine is given back from now on, and why.
+func (p *Provisioner) announceRelease(ctx context.Context, machine Machine, s sighting) {
+	giving := machineLog(log.Info(), machine).Str("reason", machine.Release.Reason)
+	if _, lost := lostStatus[s.instance.Status]; lost {
+		// Why, only the provider knows: what it said goes with it.
+		giving = giving.Str("status_detail", s.instance.StatusDetail)
+	}
+	giving.Msg("provisioner: giving a machine back")
+	if machine.Release.SoldOut {
+		// The next machine is bought as something else, if anything else is
+		// on offer.
+		p.markSoldOut(ctx, machine.offerKey)
 	}
 }
 
@@ -1459,20 +1461,18 @@ func (p *Provisioner) finishRelease(ctx context.Context, machine Machine, now ti
 	if machine.InstanceID != "" {
 		provider, ok := p.providers.Get(machine.Provider)
 		if !ok {
-			log.Error().Str("machine_id", machine.ID).Str("provider", machine.Provider).Str("instance_id", machine.InstanceID).
-				Msg("provisioner: cannot delete a machine at a provider that is not configured; it may still be running")
+			machineLog(log.Error(), machine).Msg("provisioner: cannot delete a machine at a provider that is not configured; it may still be running")
 			return
 		}
 		if err := provider.Delete(ctx, machine.InstanceID); err != nil {
-			log.Warn().Err(err).Str("machine_id", machine.ID).Str("provider", machine.Provider).Str("instance_id", machine.InstanceID).
-				Msg("provisioner: could not delete a machine at its provider")
+			machineLog(log.Warn(), machine).Err(err).Msg("provisioner: could not delete a machine at its provider")
 			return
 		}
 	}
 	// The machine is paid for until now. Should its record stay, it is paid
 	// for until the record goes: there is no telling since when it is gone.
 	if err := p.store.Remove(ctx, machine.ID, now); err != nil {
-		log.Warn().Err(err).Str("machine_id", machine.ID).Msg("provisioner: could not remove the record of a machine that is gone")
+		machineLog(log.Warn(), machine).Err(err).Msg("provisioner: could not remove the record of a machine that is gone")
 	}
 }
 
@@ -1490,7 +1490,7 @@ func (p *Provisioner) stillWorking(machine Machine) bool {
 		return false
 	}
 	if err := p.workers.SetWorkerCordon(machine.workerID(), true); err != nil {
-		log.Warn().Err(err).Str("machine_id", machine.ID).Msg("provisioner: could not cordon a machine that is being drained")
+		machineLog(log.Warn(), machine).Err(err).Msg("provisioner: could not cordon a machine that is being drained")
 	}
 	return true
 }
@@ -1520,7 +1520,7 @@ func (p *Provisioner) renewLease(ctx context.Context, machine Machine, now time.
 	}
 	until := now.Add(leaseFor)
 	if err := provider.Extend(ctx, machine.InstanceID, until); err != nil {
-		log.Warn().Err(err).Str("machine_id", machine.ID).Str("instance_id", machine.InstanceID).Msg("provisioner: could not put off the machine's deletion at its provider")
+		machineLog(log.Warn(), machine).Err(err).Msg("provisioner: could not put off the machine's deletion at its provider")
 		return machine
 	}
 	machine.Until = until
@@ -1582,9 +1582,9 @@ func (s *Store) List(ctx context.Context) ([]Machine, error) {
 	}
 	machines := make([]Machine, 0, len(stored))
 	for id, data := range stored {
-		var machine Machine
-		if err := json.Unmarshal([]byte(data), &machine); err != nil {
-			return nil, fmt.Errorf("read the record of machine %s: %w", id, err)
+		machine, err := readRecord(id, data)
+		if err != nil {
+			return nil, err
 		}
 		machines = append(machines, machine)
 	}
@@ -1659,6 +1659,10 @@ func (s *Store) get(ctx context.Context, id string) (Machine, error) {
 	if err != nil {
 		return Machine{}, err
 	}
+	return readRecord(id, data)
+}
+
+func readRecord(id, data string) (Machine, error) {
 	var machine Machine
 	if err := json.Unmarshal([]byte(data), &machine); err != nil {
 		return Machine{}, fmt.Errorf("read the record of machine %s: %w", id, err)

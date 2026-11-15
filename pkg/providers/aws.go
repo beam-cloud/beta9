@@ -650,14 +650,23 @@ func (c *AWS) Get(ctx context.Context, id string) (Instance, error) {
 	if err != nil {
 		return Instance{}, err
 	}
-	var described []ec2types.Instance
-	for _, reservation := range found.Reservations {
-		described = append(described, reservation.Instances...)
-	}
+	described := awsInstances(found)
 	if len(described) == 0 {
 		return Instance{}, because(ErrNotFound, fmt.Errorf("AWS has no instance %s", id))
 	}
-	return c.instance(region, awsInstance(described[0])), nil
+	return c.instance(region, described[0]), nil
+}
+
+// awsInstances lists the instances EC2 described. It groups them by the
+// launch they came from, which says nothing here.
+func awsInstances(described *ec2.DescribeInstancesOutput) []awsInstance {
+	var instances []awsInstance
+	for _, launch := range described.Reservations {
+		for _, instance := range launch.Instances {
+			instances = append(instances, awsInstance(instance))
+		}
+	}
+	return instances
 }
 
 // List returns the instances this control plane bought, in every configured
@@ -678,15 +687,12 @@ func (c *AWS) List(ctx context.Context) ([]Instance, error) {
 			if err != nil {
 				return nil, fmt.Errorf("AWS instances in %s: %w", name, err)
 			}
-			for _, reservation := range page.Reservations {
-				for _, described := range reservation.Instances {
-					// What is listed here may be deleted as an orphan,
-					// so the filter is not left to EC2 alone.
-					raw := awsInstance(described)
-					mine := awsTagMap(raw.Tags)[OwnerTag] == c.owner
-					if mine && raw.state() != string(ec2types.InstanceStateNameTerminated) {
-						instances = append(instances, c.instance(name, raw))
-					}
+			for _, raw := range awsInstances(page) {
+				// What is listed here may be deleted as an orphan, so the
+				// filter is not left to EC2 alone.
+				mine := awsTagMap(raw.Tags)[OwnerTag] == c.owner
+				if mine && raw.state() != string(ec2types.InstanceStateNameTerminated) {
+					instances = append(instances, c.instance(name, raw))
 				}
 			}
 		}

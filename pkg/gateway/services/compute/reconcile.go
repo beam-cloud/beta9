@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"math"
@@ -732,16 +733,12 @@ func (s *Service) reconcileReservationStatus(ctx context.Context, workspaceID st
 	// Any other status is one the provider's client does not know, and says
 	// nothing about the machine: the reservation keeps the status it had.
 
+	// What the provider does not say of where the machine is stays as it
+	// was.
 	reservation.LastStatusMessage = instance.StatusDetail
-	if instance.PublicIP != "" {
-		reservation.PublicIP = instance.PublicIP
-	}
-	if instance.SSHHost != "" {
-		reservation.SSHHost = instance.SSHHost
-	}
-	if instance.SSHPort != 0 {
-		reservation.SSHPort = instance.SSHPort
-	}
+	reservation.PublicIP = cmp.Or(instance.PublicIP, reservation.PublicIP)
+	reservation.SSHHost = cmp.Or(instance.SSHHost, reservation.SSHHost)
+	reservation.SSHPort = cmp.Or(instance.SSHPort, reservation.SSHPort)
 	changed := *reservation != before
 	if err := s.updateMachineSSHProviderEndpoint(ctx, workspaceID, state.Name, reservation.MachineID, instance.PublicIP, instance.SSHHost, instance.SSHPort); err != nil {
 		reservationFailed(workspaceID, state.Name, reservation, "check status", fmt.Errorf("update SSH endpoint: %w", err))

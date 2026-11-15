@@ -243,42 +243,52 @@ func (p *provisioningTracker) reserve(s *Scheduler, workers []*types.Worker, req
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if reservationID, ok := p.requestReservations[request.ContainerId]; ok {
-		reservation, exists := p.reservations[reservationID]
-		switch {
-		case exists && reservation.gone(workers, p.clock.Now()):
-			// Nothing can wait for it any more.
-			free = p.releaseLocked(reservationID)
-		case exists && !s.stalled(reservation.worker, s.now()):
-			return true, nil
-		default:
-			// The worker has stalled: this request stops waiting for it.
-			delete(p.requestReservations, request.ContainerId)
-			if exists {
-				delete(reservation.requestIDs, request.ContainerId)
-			}
-			free = []string{request.ContainerId}
-		}
+	waiting, free := p.keepWaitingLocked(s, workers, request)
+	if waiting {
+		return true, nil
 	}
+	return p.waitForWorkerLocked(s, workers, request), free
+}
 
-	if worker := p.selectInFlightWorkerLocked(s, request); worker != nil {
-		if s.reserveWorkerCapacity(worker, request) {
-			p.trackRequestLocked(worker.Id, request.ContainerId)
-			return true, free
-		}
+// keepWaitingLocked reports whether the request goes on waiting for the
+// worker it waited for. When that worker is no longer worth waiting for, it
+// returns the requests that stopped waiting.
+func (p *provisioningTracker) keepWaitingLocked(s *Scheduler, workers []*types.Worker, request *types.ContainerRequest) (waiting bool, free []string) {
+	reservationID, ok := p.requestReservations[request.ContainerId]
+	if !ok {
+		return false, nil
+	}
+	reservation, exists := p.reservations[reservationID]
+	switch {
+	case exists && reservation.gone(workers, p.clock.Now()):
+		// Nothing can wait for it any more.
+		return false, p.releaseLocked(reservationID)
+	case exists && !s.stalled(reservation.worker, s.now()):
+		return true, nil
+	}
+	// The worker has stalled: this request stops waiting for it.
+	delete(p.requestReservations, request.ContainerId)
+	if exists {
+		delete(reservation.requestIDs, request.ContainerId)
+	}
+	return false, []string{request.ContainerId}
+}
+
+// waitForWorkerLocked has the request wait for a worker that is on its way
+// and has room for it: one that requests wait for already, or else one that
+// is starting. It reports whether there is one.
+func (p *provisioningTracker) waitForWorkerLocked(s *Scheduler, workers []*types.Worker, request *types.ContainerRequest) bool {
+	if worker := p.selectInFlightWorkerLocked(s, request); worker != nil && s.reserveWorkerCapacity(worker, request) {
+		p.trackRequestLocked(worker.Id, request.ContainerId)
+		return true
 	}
 
 	worker, err := s.selectWorkerFromWorkersByStatus(p.unreservedWorkersLocked(workers), request, types.WorkerStatusPending)
-	if err != nil || worker == nil {
-		return false, free
+	if err != nil || worker == nil || !s.reserveWorkerCapacity(worker, request) {
+		return false
 	}
-
-	if !s.reserveWorkerCapacity(worker, request) {
-		return false, free
-	}
-
 	p.trackPendingWorkerLocked(s, worker, request)
-	return true, free
+	return true
 }
 
 // addReservation holds room for the request on a worker the pool is about to

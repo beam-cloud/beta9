@@ -74,6 +74,18 @@ func (f OfferFilter) Matches(offer Offer) bool {
 	return len(f.Regions) == 0 || slices.Contains(f.Regions, offer.Region)
 }
 
+// matching returns the offers the filter lets through, in the order they
+// came in.
+func (f OfferFilter) matching(offers []Offer) []Offer {
+	matching := make([]Offer, 0, len(offers))
+	for _, offer := range offers {
+		if f.Matches(offer) {
+			matching = append(matching, offer)
+		}
+	}
+	return matching
+}
+
 // Offer is one kind of machine in one region.
 type Offer struct {
 	// ID is the provider's name for what is sold. With Cloud and Region it
@@ -191,6 +203,42 @@ var (
 // because wraps one of the errors above with the provider's own explanation.
 func because(kind error, cause error) error {
 	return fmt.Errorf("%w: %w", kind, cause)
+}
+
+// notFound is the error of a call that asked for one instance. A provider
+// that answers 404 has no such instance, which is ErrNotFound.
+func notFound(err error) error {
+	if statusOf(err) == http.StatusNotFound {
+		return because(ErrNotFound, err)
+	}
+	return err
+}
+
+// unlessGone is the error of a call that deleted something. A provider that
+// answers 404 no longer has it, and what is gone needs no deleting.
+func unlessGone(err error) error {
+	if statusOf(err) == http.StatusNotFound {
+		return nil
+	}
+	return err
+}
+
+// refusal names why a provider turned a create down. kind reads the reason
+// from the provider's answer, whose body is decoded into the shape the
+// provider gives its errors, and returns nil when the answer names none it
+// knows. That error is passed on as it is, and so is one that is not the
+// provider's answer.
+func refusal[T any](err error, kind func(answer *StatusError, body T) error) error {
+	var answer *StatusError
+	if !errors.As(err, &answer) {
+		return err
+	}
+	var body T
+	answer.decode(&body)
+	if kind := kind(answer, body); kind != nil {
+		return because(kind, err)
+	}
+	return err
 }
 
 // OwnerTag marks an instance with the control plane that bought it. List
@@ -466,38 +514,39 @@ func (e *StatusError) decode(into any) {
 	_ = json.Unmarshal([]byte(e.Body), into)
 }
 
-func (a *api) do(ctx context.Context, c call) error {
-	var payload []byte
+// payload is what the call sends: its form, or else its body as JSON.
+func (c call) payload() ([]byte, error) {
 	switch {
 	case c.form != nil:
-		payload = []byte(c.form.Encode())
+		return []byte(c.form.Encode()), nil
 	case c.body != nil:
-		var err error
-		if payload, err = json.Marshal(c.body); err != nil {
-			return err
-		}
+		return json.Marshal(c.body)
+	}
+	return nil, nil
+}
+
+func (a *api) do(ctx context.Context, c call) error {
+	payload, err := c.payload()
+	if err != nil {
+		return err
 	}
 
 	wait := firstRetryWait
 	renewed := false
 	for attempt := 1; ; attempt++ {
 		retryAfter, err := a.send(ctx, c, payload)
-		if err == nil {
-			return nil
-		}
 		if statusOf(err) == http.StatusUnauthorized && a.authorize.renew != nil && !renewed {
 			// The provider did nothing with the call. Fetched credentials
 			// can stop being good before they said they would, so the call
-			// goes once more, with new ones.
+			// goes once more, with new ones, and that is not a retry.
 			a.authorize.renew()
 			renewed = true
-			attempt--
-			continue
+			retryAfter, err = a.send(ctx, c, payload)
 		}
-		if attempt == maxAttempts || ctx.Err() != nil || !retryable(c, err) {
-			return err
+		if err == nil {
+			return nil
 		}
-		if retryAfter > maxRetryWait {
+		if attempt == maxAttempts || ctx.Err() != nil || !retryable(c, err) || retryAfter > maxRetryWait {
 			return err
 		}
 		if err := a.sleep(ctx, max(wait, retryAfter)); err != nil {
@@ -875,11 +924,7 @@ func offersByRegion(provider string, regions []string, filter OfferFilter, read 
 			unread = append(unread, err)
 			continue
 		}
-		for _, offer := range sold {
-			if filter.Matches(offer) {
-				offers = append(offers, offer)
-			}
-		}
+		offers = append(offers, filter.matching(sold)...)
 	}
 	if asked > 0 && len(unread) == asked {
 		return nil, errors.Join(unread...)
@@ -1070,13 +1115,7 @@ func (f *Fake) Until(id string) time.Time {
 func (f *Fake) Offers(ctx context.Context, filter OfferFilter) ([]Offer, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	offers := []Offer{}
-	for _, offer := range f.offers {
-		if filter.Matches(offer) {
-			offers = append(offers, offer)
-		}
-	}
-	return offers, nil
+	return filter.matching(f.offers), nil
 }
 
 func (f *Fake) Create(ctx context.Context, req CreateRequest) (Instance, error) {

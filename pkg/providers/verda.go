@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -70,9 +71,7 @@ func NewVerda(config types.VerdaProviderConfig, owner string) (*Verda, error) {
 	if config.ClientSecret == "" {
 		return nil, errors.New("providers.verda.clientSecret is not set")
 	}
-	if config.BaseURL == "" {
-		config.BaseURL = verdaBaseURL
-	}
+	config.BaseURL = cmp.Or(config.BaseURL, verdaBaseURL)
 	// A machine boots the first of the images that its instance type
 	// supports, and a type that supports none is not offered.
 	if len(config.Images) == 0 {
@@ -122,6 +121,14 @@ type verdaInstanceType struct {
 		SpotPrice    dollars `json:"spot_price"`
 	} `json:"location_prices"`
 	SupportedOS []string `json:"supported_os"`
+}
+
+// gpu is Beam's name for the type's GPU, or "" for a machine without one.
+func (t verdaInstanceType) gpu() string {
+	if t.GPU.Count == 0 {
+		return ""
+	}
+	return string(types.NormalizeGPUType(t.Name))
 }
 
 // price is what the machine costs per hour in the location, in micros.
@@ -184,18 +191,30 @@ func (c *Verda) image(instanceType verdaInstanceType) string {
 	return ""
 }
 
-// stock asks which instance types each location has now, on demand or as
-// spot. Verda says whether it has a type, not how many.
-func (c *Verda) stock(ctx context.Context, spot bool) ([]verdaStock, error) {
-	var stock []verdaStock
-	path := fmt.Sprintf("/instance-availability?is_spot=%t", spot)
-	err := c.api.do(ctx, call{method: http.MethodGet, path: path, out: &stock})
-	return stock, err
-}
-
+// verdaStock is what one location has now, bought one way: on demand, or as
+// spot.
 type verdaStock struct {
 	LocationCode   string   `json:"location_code"`
 	Availabilities []string `json:"availabilities"`
+	spot           bool
+}
+
+// stock asks which instance types each location has now: on demand first,
+// then as spot. Verda says whether it has a type, not how many.
+func (c *Verda) stock(ctx context.Context) ([]verdaStock, error) {
+	var all []verdaStock
+	for _, spot := range []bool{false, true} {
+		var stock []verdaStock
+		path := fmt.Sprintf("/instance-availability?is_spot=%t", spot)
+		if err := c.api.do(ctx, call{method: http.MethodGet, path: path, out: &stock}); err != nil {
+			return nil, err
+		}
+		for i := range stock {
+			stock[i].spot = spot
+		}
+		all = append(all, stock...)
+	}
+	return all, nil
 }
 
 // Offers lists what Verda has now: one offer for each instance type,
@@ -205,11 +224,7 @@ func (c *Verda) Offers(ctx context.Context, filter OfferFilter) ([]Offer, error)
 	if err != nil {
 		return nil, err
 	}
-	onDemand, err := c.stock(ctx, false)
-	if err != nil {
-		return nil, err
-	}
-	spot, err := c.stock(ctx, true)
+	stock, err := c.stock(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -219,44 +234,29 @@ func (c *Verda) Offers(ctx context.Context, filter OfferFilter) ([]Offer, error)
 		if c.image(instanceType) == "" {
 			continue
 		}
-		gpu := ""
-		if instanceType.GPU.Count > 0 {
-			gpu = string(types.NormalizeGPUType(instanceType.Name))
-		}
-		for _, bought := range []struct {
-			spot  bool
-			stock []verdaStock
-		}{{false, onDemand}, {true, spot}} {
-			for _, location := range bought.stock {
-				if !slices.Contains(location.Availabilities, instanceType.InstanceType) {
-					continue
-				}
-				price := instanceType.price(location.LocationCode, bought.spot)
-				if price <= 0 {
-					// Verda has it and does not say for how much.
-					continue
-				}
-				offer := Offer{
-					ID:               instanceType.InstanceType,
-					Provider:         verdaName,
-					Cloud:            verdaName,
-					InstanceType:     instanceType.InstanceType,
-					Region:           location.LocationCode,
-					GPU:              gpu,
-					GPUCount:         instanceType.GPU.Count,
-					CPUMillicores:    instanceType.CPU.Cores * 1000,
-					MemoryMB:         int64(math.Round(instanceType.Memory.GB * 1024)),
-					StorageMB:        c.config.DiskGB * 1024,
-					HourlyCostMicros: price + catalogue.diskMicros,
-					Spot:             bought.spot,
-				}
-				if filter.Matches(offer) {
-					offers = append(offers, offer)
-				}
+		for _, location := range stock {
+			// Verda may have a type and not say for how much.
+			price := instanceType.price(location.LocationCode, location.spot)
+			if !slices.Contains(location.Availabilities, instanceType.InstanceType) || price <= 0 {
+				continue
 			}
+			offers = append(offers, Offer{
+				ID:               instanceType.InstanceType,
+				Provider:         verdaName,
+				Cloud:            verdaName,
+				InstanceType:     instanceType.InstanceType,
+				Region:           location.LocationCode,
+				GPU:              instanceType.gpu(),
+				GPUCount:         instanceType.GPU.Count,
+				CPUMillicores:    instanceType.CPU.Cores * 1000,
+				MemoryMB:         int64(math.Round(instanceType.Memory.GB * 1024)),
+				StorageMB:        c.config.DiskGB * 1024,
+				HourlyCostMicros: price + catalogue.diskMicros,
+				Spot:             location.spot,
+			})
 		}
 	}
-	return offers, nil
+	return filter.matching(offers), nil
 }
 
 type verdaCreate struct {
@@ -402,13 +402,8 @@ func (raw verdaInstance) going() bool {
 
 func (c *Verda) get(ctx context.Context, id string) (verdaInstance, error) {
 	var found verdaInstance
-	if err := c.api.do(ctx, call{method: http.MethodGet, path: "/instances/" + url.PathEscape(id), out: &found}); err != nil {
-		if statusOf(err) == http.StatusNotFound {
-			return found, because(ErrNotFound, err)
-		}
-		return found, err
-	}
-	return found, nil
+	err := c.api.do(ctx, call{method: http.MethodGet, path: "/instances/" + url.PathEscape(id), out: &found})
+	return found, notFound(err)
 }
 
 func (c *Verda) Get(ctx context.Context, id string) (Instance, error) {
@@ -449,33 +444,33 @@ func (c *Verda) List(ctx context.Context) ([]Instance, error) {
 // later List.
 func (c *Verda) Delete(ctx context.Context, id string) error {
 	found, err := c.get(ctx, id)
-	if errors.Is(err, ErrNotFound) {
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return nil
+	case err != nil:
+		return err
+	case found.gone() || found.going():
 		return nil
 	}
-	if err != nil {
+
+	action := map[string]any{"action": "delete", "id": id}
+	if found.OSVolumeID != "" {
+		// Without this the disk goes to Verda's trash for four days, where
+		// it counts towards the account's storage quota.
+		action["volume_ids"] = []string{found.OSVolumeID}
+		action["delete_permanently"] = true
+	}
+	var results []struct {
+		Status     string `json:"status"`
+		Error      string `json:"error"`
+		StatusCode int    `json:"statusCode"`
+	}
+	if err := unlessGone(c.api.do(ctx, call{method: http.MethodPut, path: "/instances", body: action, out: &results, repeatable: true})); err != nil {
 		return err
 	}
-	if !found.gone() && !found.going() {
-		action := map[string]any{"action": "delete", "id": id}
-		if found.OSVolumeID != "" {
-			// Without this the disk goes to Verda's trash for four days,
-			// where it counts towards the account's storage quota.
-			action["volume_ids"] = []string{found.OSVolumeID}
-			action["delete_permanently"] = true
-		}
-		var results []struct {
-			Status     string `json:"status"`
-			Error      string `json:"error"`
-			StatusCode int    `json:"statusCode"`
-		}
-		err := c.api.do(ctx, call{method: http.MethodPut, path: "/instances", body: action, out: &results, repeatable: true})
-		if err != nil && statusOf(err) != http.StatusNotFound {
-			return err
-		}
-		for _, result := range results {
-			if result.Status == "error" && result.StatusCode != http.StatusNotFound {
-				return fmt.Errorf("Verda did not delete instance %s: %s", id, result.Error)
-			}
+	for _, result := range results {
+		if result.Status == "error" && result.StatusCode != http.StatusNotFound {
+			return fmt.Errorf("Verda did not delete instance %s: %s", id, result.Error)
 		}
 	}
 	return nil
@@ -488,8 +483,8 @@ func (c *Verda) scriptPrefix() string { return OwnerTag + "=" + c.owner + " " }
 // deleteScript removes a startup script. One that stays is removed by a later
 // List.
 func (c *Verda) deleteScript(ctx context.Context, id string) {
-	err := c.api.do(ctx, call{method: http.MethodDelete, path: "/scripts/" + url.PathEscape(id), repeatable: true})
-	if err != nil && statusOf(err) != http.StatusNotFound {
+	err := unlessGone(c.api.do(ctx, call{method: http.MethodDelete, path: "/scripts/" + url.PathEscape(id), repeatable: true}))
+	if err != nil {
 		log.Warn().Err(err).Str("provider", verdaName).Str("script", id).Msg("could not delete a startup script")
 	}
 }
@@ -537,29 +532,28 @@ func (c *Verda) unusedScripts(ctx context.Context, inUse map[string]bool) ([]str
 	return nil, tooManyPages("GET /scripts")
 }
 
+// verdaProblem is the body of an answer Verda turned a call down with.
+type verdaProblem struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 // verdaRefusal names why a create was turned down.
 func verdaRefusal(err error) error {
-	var status *StatusError
-	if !errors.As(err, &status) {
-		return err
-	}
-	var refusal struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	}
-	status.decode(&refusal)
-	switch {
-	case refusal.Code == "service_unavailable":
-		// Verda's answer when the type has no capacity in the location.
-		return because(ErrOutOfStock, err)
-	case refusal.Code == "insufficient_funds":
-		return because(ErrQuota, err)
-	case containsAny(strings.ToLower(refusal.Message), "quota", "limit"):
-		// Verda documents no code for an account at its quota. Its message
-		// is the only sign.
-		return because(ErrQuota, err)
-	}
-	return err
+	return refusal(err, func(_ *StatusError, refused verdaProblem) error {
+		switch {
+		case refused.Code == "service_unavailable":
+			// Verda's answer when the type has no capacity in the location.
+			return ErrOutOfStock
+		case refused.Code == "insufficient_funds":
+			return ErrQuota
+		case containsAny(strings.ToLower(refused.Message), "quota", "limit"):
+			// Verda documents no code for an account at its quota. Its
+			// message is the only sign.
+			return ErrQuota
+		}
+		return nil
+	})
 }
 
 func verdaTagList(tags map[string]string) []verdaTag {

@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -86,15 +87,9 @@ func NewNebius(config types.NebiusProviderConfig, owner string) (*Nebius, error)
 	if err != nil {
 		return nil, fmt.Errorf("providers.nebius.privateKey: %w", err)
 	}
-	if config.BaseURL == "" {
-		config.BaseURL = nebiusBaseURL
-	}
-	if config.TokenURL == "" {
-		config.TokenURL = nebiusTokenURL
-	}
-	if config.ImageFamily == "" {
-		config.ImageFamily = nebiusImageFamily
-	}
+	config.BaseURL = cmp.Or(config.BaseURL, nebiusBaseURL)
+	config.TokenURL = cmp.Or(config.TokenURL, nebiusTokenURL)
+	config.ImageFamily = cmp.Or(config.ImageFamily, nebiusImageFamily)
 	if config.DiskGB <= 0 {
 		config.DiskGB = defaultDiskGB
 	}
@@ -351,19 +346,12 @@ func (c *Nebius) Offers(ctx context.Context, filter OfferFilter) ([]Offer, error
 			}
 			offer := c.offerOf(advised, price)
 			key := offer.Region + "/" + offer.ID
-			if other, listed := offers[key]; listed {
-				offer.Available = max(offer.Available, other.Available)
-			}
+			offer.Available = max(offer.Available, offers[key].Available)
 			offers[key] = offer
 		}
 	}
 
-	matching := make([]Offer, 0, len(offers))
-	for _, offer := range offers {
-		if filter.Matches(offer) {
-			matching = append(matching, offer)
-		}
-	}
+	matching := filter.matching(slices.Collect(maps.Values(offers)))
 	sortOffers(matching)
 	return matching, nil
 }
@@ -402,19 +390,25 @@ func (c *Nebius) Create(ctx context.Context, req CreateRequest) (Instance, error
 		return Instance{}, nebiusRefusal(err)
 	}
 	if err := started.failure(); err != nil {
-		if started.ResourceID != "" {
-			// Nebius can turn a create down and leave a stopped VM, whose
-			// disk is paid for.
-			if err := c.Delete(ctx, started.ResourceID); err != nil {
-				log.Warn().Err(err).Str("provider", nebiusName).Str("instance", started.ResourceID).Msg("could not delete what a failed create left")
-			}
-		}
+		c.deleteLeftover(ctx, started.ResourceID)
 		return Instance{}, err
 	}
 	if started.ResourceID == "" {
 		return Instance{}, fmt.Errorf("Nebius accepted the create without returning an instance id")
 	}
 	return Instance{ID: started.ResourceID, Status: StatusPending, Tags: req.Tags}, nil
+}
+
+// deleteLeftover deletes what a create that failed left, if it left
+// anything: Nebius can turn a create down and leave a stopped VM, whose disk
+// is paid for.
+func (c *Nebius) deleteLeftover(ctx context.Context, id string) {
+	if id == "" {
+		return
+	}
+	if err := c.Delete(ctx, id); err != nil {
+		log.Warn().Err(err).Str("provider", nebiusName).Str("instance", id).Msg("could not delete what a failed create left")
+	}
 }
 
 // projectIn returns the project that machines in a region are bought in.
@@ -626,16 +620,7 @@ func (o nebiusOperation) failure() error {
 
 // nebiusRefusal names why a call was turned down.
 func nebiusRefusal(err error) error {
-	var refused *StatusError
-	if !errors.As(err, &refused) {
-		return err
-	}
-	var status nebiusStatus
-	refused.decode(&status)
-	if kind := status.kind(); kind != nil {
-		return because(kind, err)
-	}
-	return err
+	return refusal(err, func(_ *StatusError, status nebiusStatus) error { return status.kind() })
 }
 
 type nebiusInstance struct {
@@ -701,10 +686,7 @@ func (i nebiusInstance) status() Status {
 func (c *Nebius) Get(ctx context.Context, id string) (Instance, error) {
 	var found nebiusInstance
 	if err := c.api.do(ctx, call{method: http.MethodGet, path: "/compute/v1/instances/" + url.PathEscape(id), out: &found}); err != nil {
-		if statusOf(err) == http.StatusNotFound {
-			return Instance{}, because(ErrNotFound, err)
-		}
-		return Instance{}, err
+		return Instance{}, notFound(err)
 	}
 	return c.instance(found), nil
 }

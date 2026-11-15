@@ -117,12 +117,8 @@ func NewGCP(config types.GCPProviderConfig, owner string) (*GCP, error) {
 	if project == "" {
 		return nil, errors.New("providers.gcp.project is not set, and the service account's key names no project")
 	}
-	if config.BaseURL == "" {
-		config.BaseURL = gcpBaseURL
-	}
-	if config.Image == "" {
-		config.Image = gcpImage
-	}
+	config.BaseURL = cmp.Or(config.BaseURL, gcpBaseURL)
+	config.Image = cmp.Or(config.Image, gcpImage)
 	if config.DiskGB <= 0 {
 		config.DiskGB = defaultDiskGB
 	}
@@ -245,18 +241,28 @@ func (c *GCP) region(ctx context.Context, name string) (gcpRegionFacts, error) {
 
 // learn asks Compute Engine for what a region's offers are made from.
 func (c *GCP) learn(ctx context.Context, region string) (gcpRegionFacts, error) {
-	facts := gcpRegionFacts{zones: map[string]map[string]gcpType{}, prices: map[string]int64{}}
+	zones, err := c.gpuMachineTypes(ctx, region)
+	if err != nil {
+		return gcpRegionFacts{}, err
+	}
+	prices, err := c.spotPrices(ctx, region, zones)
+	return gcpRegionFacts{zones: zones, prices: prices}, err
+}
+
+// gpuMachineTypes lists the GPU machine types of each of a region's zones,
+// by name.
+func (c *GCP) gpuMachineTypes(ctx context.Context, region string) (map[string]map[string]gcpType, error) {
 	var found struct {
 		Zones []string `json:"zones"` // their addresses
 	}
 	if err := c.do(ctx, call{method: http.MethodGet, path: "/regions/" + url.PathEscape(region), out: &found}); err != nil {
-		return facts, err
+		return nil, err
 	}
 
-	sold := map[string]bool{}
+	zones := map[string]map[string]gcpType{}
 	for _, address := range found.Zones {
 		zone := path.Base(address)
-		facts.zones[zone] = map[string]gcpType{}
+		zones[zone] = map[string]gcpType{}
 		err := c.pages(ctx, "/zones/"+url.PathEscape(zone)+"/machineTypes", func(items json.RawMessage) error {
 			var machineTypes []gcpMachineType
 			if err := json.Unmarshal(items, &machineTypes); err != nil {
@@ -264,17 +270,29 @@ func (c *GCP) learn(ctx context.Context, region string) (gcpRegionFacts, error) 
 			}
 			for _, machineType := range machineTypes {
 				if machine, ok := machineType.machine(); ok {
-					facts.zones[zone][machineType.Name] = machine
-					sold[machineType.Name] = true
+					zones[zone][machineType.Name] = machine
 				}
 			}
 			return nil
 		})
 		if err != nil {
-			return facts, fmt.Errorf("the machine types of %s: %w", zone, err)
+			return nil, fmt.Errorf("the machine types of %s: %w", zone, err)
+		}
+	}
+	return zones, nil
+}
+
+// spotPrices asks for the hourly Spot price of each machine type the
+// region's zones have, in micros. One that has none is left out.
+func (c *GCP) spotPrices(ctx context.Context, region string, zones map[string]map[string]gcpType) (map[string]int64, error) {
+	sold := map[string]bool{}
+	for _, machineTypes := range zones {
+		for machineType := range machineTypes {
+			sold[machineType] = true
 		}
 	}
 
+	prices := map[string]int64{}
 	var unpriced error
 	for machineType := range sold {
 		price, err := c.spotPrice(ctx, region, machineType)
@@ -284,18 +302,18 @@ func (c *GCP) learn(ctx context.Context, region string) (gcpRegionFacts, error) 
 			continue
 		}
 		if err != nil {
-			return facts, fmt.Errorf("the Spot price of %s: %w", machineType, err)
+			return nil, fmt.Errorf("the Spot price of %s: %w", machineType, err)
 		}
-		facts.prices[machineType] = price
+		prices[machineType] = price
 	}
 	// Some machine types are not sold as Spot VMs. When none of a region's
 	// has a price, it is the question that is wrong, or the answer is not
 	// one this client can read, and a region that silently offers nothing
 	// would hide that.
-	if len(facts.prices) == 0 && unpriced != nil {
-		return facts, fmt.Errorf("none of its %d GPU machine types has a Spot price in dollars: %w", len(sold), unpriced)
+	if len(prices) == 0 && unpriced != nil {
+		return nil, fmt.Errorf("none of its %d GPU machine types has a Spot price in dollars: %w", len(sold), unpriced)
 	}
-	return facts, nil
+	return prices, nil
 }
 
 // errNoSpotPrice says that a machine type has no price to buy a Spot VM at.
@@ -584,26 +602,25 @@ func (o gcpOperation) failure() error {
 	return err
 }
 
+// gcpProblem is the body of an answer Compute Engine turned a call down with.
+type gcpProblem struct {
+	Error struct {
+		Errors []struct {
+			Reason string `json:"reason"`
+		} `json:"errors"`
+	} `json:"error"`
+}
+
 // gcpRefusal names why Compute Engine turned a create down at once.
 func gcpRefusal(err error) error {
-	var refused *StatusError
-	if !errors.As(err, &refused) {
-		return err
-	}
-	var body struct {
-		Error struct {
-			Errors []struct {
-				Reason string `json:"reason"`
-			} `json:"errors"`
-		} `json:"error"`
-	}
-	refused.decode(&body)
-	for _, problem := range body.Error.Errors {
-		if problem.Reason == "quotaExceeded" {
-			return because(ErrQuota, err)
+	return refusal(err, func(_ *StatusError, refused gcpProblem) error {
+		for _, problem := range refused.Error.Errors {
+			if problem.Reason == "quotaExceeded" {
+				return ErrQuota
+			}
 		}
-	}
-	return err
+		return nil
+	})
 }
 
 type gcpInstance struct {
@@ -682,12 +699,8 @@ func (c *GCP) Get(ctx context.Context, id string) (Instance, error) {
 		return Instance{}, err
 	}
 	var found gcpInstance
-	err = c.do(ctx, call{method: http.MethodGet, path: "/zones/" + zone + "/instances/" + name, out: &found})
-	if statusOf(err) == http.StatusNotFound {
-		return Instance{}, because(ErrNotFound, err)
-	}
-	if err != nil {
-		return Instance{}, err
+	if err := c.do(ctx, call{method: http.MethodGet, path: "/zones/" + zone + "/instances/" + name, out: &found}); err != nil {
+		return Instance{}, notFound(err)
 	}
 	return c.instance(found), nil
 }
@@ -727,9 +740,5 @@ func (c *GCP) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return nil
 	}
-	err = c.do(ctx, call{method: http.MethodDelete, path: "/zones/" + zone + "/instances/" + name, repeatable: true})
-	if statusOf(err) == http.StatusNotFound {
-		return nil
-	}
-	return err
+	return unlessGone(c.do(ctx, call{method: http.MethodDelete, path: "/zones/" + zone + "/instances/" + name, repeatable: true}))
 }
