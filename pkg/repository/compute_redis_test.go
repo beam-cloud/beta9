@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/compute"
+	"github.com/stretchr/testify/require"
 )
 
 func TestComputeMachineSSHStateStorageAndLock(t *testing.T) {
@@ -200,4 +201,24 @@ func TestComputeAgentStateIndexesMachinesAndWorkers(t *testing.T) {
 	if tokenState != nil {
 		t.Fatalf("agent token after machine delete = %#v, want nil", tokenState)
 	}
+}
+
+func TestProviderOwnerIsChosenOnceAndSharedByEveryGateway(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	owner, err := NewComputeRedisRepository(rdb).ProviderOwner(ctx)
+	require.NoError(t, err)
+	require.Regexp(t, `^beam-[0-9a-f]{12}$`, owner)
+
+	again, err := NewComputeRedisRepository(rdb).ProviderOwner(ctx)
+	require.NoError(t, err)
+	require.Equal(t, owner, again)
+
+	elsewhere, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	other, err := NewComputeRedisRepository(elsewhere).ProviderOwner(ctx)
+	require.NoError(t, err)
+	require.NotEqual(t, owner, other, "a deployment with its own records has its own name")
 }

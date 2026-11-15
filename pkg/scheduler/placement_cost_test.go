@@ -31,18 +31,18 @@ func placementCostScheduler(t *testing.T, workers int) (*Scheduler, *repo.RedisC
 	config.Worker.Pools = map[string]types.WorkerPoolConfig{placementCostPool: {}}
 	backendRepo, _ := repo.NewBackendPostgresRepositoryForTest()
 	s := &Scheduler{
-		ctx:                       context.Background(),
-		config:                    config,
-		backendRepo:               backendRepo,
-		workerRepo:                repo.NewWorkerRedisRepositoryForTest(rdb),
-		containerRepo:             repo.NewContainerRedisRepositoryForTest(rdb),
-		workspaceRepo:             repo.NewWorkspaceRedisRepositoryForTest(rdb),
-		computeRepo:               repo.NewComputeRedisRepository(rdb),
-		workerPoolManager:         NewWorkerPoolManager(),
-		requestBacklog:            NewRequestBacklog(rdb),
-		credentials:               newSchedulerCredentialCache(),
-		provisioning:              newProvisioningTracker(),
-		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
+		ctx:               context.Background(),
+		config:            config,
+		backendRepo:       backendRepo,
+		workerRepo:        repo.NewWorkerRedisRepositoryForTest(rdb),
+		containerRepo:     repo.NewContainerRedisRepositoryForTest(rdb),
+		workspaceRepo:     repo.NewWorkspaceRedisRepositoryForTest(rdb),
+		computeRepo:       repo.NewComputeRedisRepository(rdb),
+		workerPoolManager: NewWorkerPoolManager(),
+		requestBacklog:    NewRequestBacklog(rdb),
+		credentials:       newSchedulerCredentialCache(),
+		provisioning:      newProvisioningTracker(nil),
+		growBackoff:       newGrowBackoff(nil),
 	}
 	s.workerPoolManager.SetPool(placementCostPool, config.Worker.Pools[placementCostPool], nil)
 	require.NoError(t, s.workspaceRepo.SetConcurrencyLimitByWorkspaceId("workspace", &types.ConcurrencyLimit{GPULimit: 100, CPUMillicoreLimit: 1 << 30}))

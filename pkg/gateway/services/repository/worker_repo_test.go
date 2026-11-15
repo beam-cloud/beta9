@@ -315,14 +315,11 @@ func TestUpdateContainerStatusRejectsNonPositiveExpiryBeforeWriting(t *testing.T
 	require.Zero(t, containerRepo.updates)
 }
 
-// keepAliveWorkerRepo records how often the pool is consulted for a headroom
-// answer and can fail the worker lookup.
+// keepAliveWorkerRepo holds one worker and can fail its lookup.
 type keepAliveWorkerRepo struct {
 	repository.WorkerRepository
-	worker        *types.Worker
-	lookupErr     error
-	poolScans     int
-	poolScanError error
+	worker    *types.Worker
+	lookupErr error
 }
 
 func (r *keepAliveWorkerRepo) SetWorkerKeepAlive(workerId string, keepAlive types.WorkerKeepAlive) error {
@@ -336,50 +333,53 @@ func (r *keepAliveWorkerRepo) GetWorkerById(workerId string) (*types.Worker, err
 	return r.worker, nil
 }
 
-func (r *keepAliveWorkerRepo) GetAllWorkersInPool(poolName string) ([]*types.Worker, error) {
-	r.poolScans++
-	if r.poolScanError != nil {
-		return nil, r.poolScanError
-	}
-	return []*types.Worker{r.worker}, nil
+// headroomRule stands in for the scheduler's rule: it answers holds and
+// counts how often it was asked.
+type headroomRule struct {
+	holds bool
+	asked []string
 }
 
-func headroomTestConfig() types.AppConfig {
-	return types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
-		"default": {PoolSizing: types.WorkerPoolJobSpecPoolSizingConfig{MinFreeCPU: "1000m", MinFreeMemory: "1Gi", MinFreeGPU: "0"}},
-	}}}
+func (r *headroomRule) ask(worker *types.Worker) bool {
+	r.asked = append(r.asked, worker.Id)
+	return r.holds
 }
 
-func TestSetWorkerKeepAliveOnlyScansThePoolForIdleWorkers(t *testing.T) {
+func TestSetWorkerKeepAliveAsksAboutHeadroomOnlyForIdleWorkers(t *testing.T) {
 	workerRepo := &keepAliveWorkerRepo{worker: &types.Worker{Id: "worker-1", PoolName: "default", Status: types.WorkerStatusAvailable, FreeCpu: 4000, FreeMemory: 8192}}
-	service := &WorkerRepositoryService{workerRepo: workerRepo, appConfig: headroomTestConfig()}
+	rule := &headroomRule{holds: true}
+	service := &WorkerRepositoryService{workerRepo: workerRepo, holdsPoolHeadroom: rule.ask}
 
 	resp, err := service.SetWorkerKeepAlive(context.Background(), &pb.SetWorkerKeepAliveRequest{WorkerId: "worker-1"})
 	require.NoError(t, err)
 	require.True(t, resp.Ok)
 	require.False(t, resp.PoolHeadroom, "a busy worker cannot spin down, so it is not told it holds headroom")
-	require.Equal(t, 0, workerRepo.poolScans, "busy keepalives must not scan the pool")
+	require.Empty(t, rule.asked, "busy keepalives must not scan the pool")
 
 	resp, err = service.SetWorkerKeepAlive(context.Background(), &pb.SetWorkerKeepAliveRequest{WorkerId: "worker-1", Idle: true})
 	require.NoError(t, err)
 	require.True(t, resp.Ok)
-	require.True(t, resp.PoolHeadroom, "the only ready worker holds the pool's minimum")
-	require.Equal(t, 1, workerRepo.poolScans)
+	require.True(t, resp.PoolHeadroom)
+	require.Equal(t, []string{"worker-1"}, rule.asked)
+
+	rule.holds = false
+	resp, err = service.SetWorkerKeepAlive(context.Background(), &pb.SetWorkerKeepAliveRequest{WorkerId: "worker-1", Idle: true})
+	require.NoError(t, err)
+	require.False(t, resp.PoolHeadroom, "the reply carries the rule's answer")
 }
 
-func TestSetWorkerKeepAliveFailsClosedWhenHeadroomCannotBeDetermined(t *testing.T) {
-	for name, repo := range map[string]*keepAliveWorkerRepo{
-		"worker lookup fails": {lookupErr: errors.New("redis: connection refused")},
-		"pool scan fails":     {worker: &types.Worker{Id: "worker-1", PoolName: "default", Status: types.WorkerStatusAvailable}, poolScanError: errors.New("redis: timeout")},
-	} {
-		t.Run(name, func(t *testing.T) {
-			service := &WorkerRepositoryService{workerRepo: repo, appConfig: headroomTestConfig()}
-			resp, err := service.SetWorkerKeepAlive(context.Background(), &pb.SetWorkerKeepAliveRequest{WorkerId: "worker-1", Idle: true})
-			require.NoError(t, err)
-			require.True(t, resp.Ok)
-			require.True(t, resp.PoolHeadroom, "an idle worker must stay up until the pool can actually be read")
-		})
+func TestSetWorkerKeepAliveFailsClosedWhenTheWorkerCannotBeRead(t *testing.T) {
+	rule := &headroomRule{}
+	service := &WorkerRepositoryService{
+		workerRepo:        &keepAliveWorkerRepo{lookupErr: errors.New("redis: connection refused")},
+		holdsPoolHeadroom: rule.ask,
 	}
+
+	resp, err := service.SetWorkerKeepAlive(context.Background(), &pb.SetWorkerKeepAliveRequest{WorkerId: "worker-1", Idle: true})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.True(t, resp.PoolHeadroom, "an idle worker must stay up until it can actually be read")
+	require.Empty(t, rule.asked)
 }
 
 func TestClaimContainerRefusesForeignRouteWorkspaceAfterAcceptance(t *testing.T) {

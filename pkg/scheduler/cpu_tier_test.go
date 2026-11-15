@@ -127,7 +127,7 @@ func TestUnsharedCPUProvisionsSharedPoolsLast(t *testing.T) {
 		scheduler.workerPoolManager.SetPool(name, config, &LocalWorkerPoolControllerForTest{ctx: scheduler.ctx, name: name, config: scheduler.config, workerRepo: scheduler.workerRepo})
 	}
 	for tier, want := range map[string][]string{"": {"performance", "shared"}, "performance": {"performance", "shared"}, "shared": {"shared"}} {
-		controllers, err := scheduler.getControllers(&types.ContainerRequest{Cpu: 1000, Memory: 1024, Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"cpu_tier":"` + tier + `"}`}}})
+		controllers, err := controllersFor(scheduler, &types.ContainerRequest{Cpu: 1000, Memory: 1024, Stub: types.StubWithRelated{Stub: types.Stub{Config: `{"cpu_tier":"` + tier + `"}`}}})
 		require.NoError(t, err)
 		require.Equal(t, want, controllerNames(controllers), tier)
 	}
@@ -136,6 +136,7 @@ func TestUnsharedCPUProvisionsSharedPoolsLast(t *testing.T) {
 func TestSpotWaitsForSpareCapacity(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	require.NoError(t, err)
+	scheduler.spawn = inline
 	controller := &LocalWorkerPoolControllerForTest{ctx: scheduler.ctx, name: "shared", config: scheduler.config, workerRepo: scheduler.workerRepo}
 	scheduler.workerPoolManager.SetPool("shared", sharedPool, controller)
 	request := spotRequest()
@@ -143,7 +144,7 @@ func TestSpotWaitsForSpareCapacity(t *testing.T) {
 	setPendingSchedulerRequests(t, scheduler, request)
 
 	// Without spare capacity, Spot stays pending in the backlog and adds no worker.
-	newSchedulingAttempt(scheduler, request, nil).run()
+	scheduler.processRequestBatch([]*types.ContainerRequest{request}, nil)
 	require.Equal(t, 0, controller.AddWorkerCallCount())
 	require.Equal(t, int64(1), scheduler.requestBacklog.Len())
 	state, err := scheduler.containerRepo.GetContainerState(request.ContainerId)
@@ -152,7 +153,7 @@ func TestSpotWaitsForSpareCapacity(t *testing.T) {
 
 	// It gives up when the scheduling window ends.
 	request.Timestamp = time.Now().Add(-maxScheduleRetryDuration)
-	newSchedulingAttempt(scheduler, request, nil).run()
+	scheduler.processRequestBatch([]*types.ContainerRequest{request}, nil)
 	require.Equal(t, 0, controller.AddWorkerCallCount())
 	status, err := scheduler.containerRepo.GetContainerRequestStatus(request.ContainerId)
 	require.NoError(t, err)
@@ -163,7 +164,7 @@ func TestSpotWaitsForSpareCapacity(t *testing.T) {
 	replica := spotRequest()
 	replica.Stub.Config, replica.DrainSeconds, replica.Timestamp = `{"cpu_tier":"shared"}`, 0, time.Now()
 	setPendingSchedulerRequests(t, scheduler, replica)
-	newSchedulingAttempt(scheduler, replica, nil).run()
+	scheduler.processRequestBatch([]*types.ContainerRequest{replica}, nil)
 	status, err = scheduler.containerRepo.GetContainerRequestStatus(replica.ContainerId)
 	require.NoError(t, err)
 	require.Equal(t, types.ContainerRequestStatusFailed, status)
@@ -183,4 +184,12 @@ func TestSpotSkipsWorkersHoldingPoolHeadroom(t *testing.T) {
 	require.Equal(t, "b", selected.Id)
 	_, err = s.selectWorkerFromWorkers([]*types.Worker{worker("a")}, request)
 	require.Error(t, err)
+}
+
+func controllerNames(controllers []WorkerPoolController) []string {
+	names := make([]string, 0, len(controllers))
+	for _, controller := range controllers {
+		names = append(names, controller.Name())
+	}
+	return names
 }

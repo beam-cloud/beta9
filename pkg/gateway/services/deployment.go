@@ -213,18 +213,6 @@ func (gws *GatewayService) ScaleDeployment(ctx context.Context, in *pb.ScaleDepl
 	}, nil
 }
 
-func (gws *GatewayService) usesPrivatePool(ctx context.Context, workspaceID string, stubConfig *types.StubConfigV1) bool {
-	if gws == nil || gws.computeRepo == nil || stubConfig == nil {
-		return false
-	}
-	poolName := stubConfig.PoolSelector()
-	if poolName == "" {
-		return false
-	}
-	pool, err := gws.computeRepo.GetPoolState(ctx, workspaceID, poolName)
-	return err == nil && pool != nil
-}
-
 func (gws *GatewayService) StartDeployment(ctx context.Context, in *pb.StartDeploymentRequest) (*pb.StartDeploymentResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 

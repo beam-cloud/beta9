@@ -12,8 +12,6 @@ const (
 	CommandSentinel         = "sentinel"
 	CommandController       = "_controller"
 	CommandGPUAgent         = "_gpu-agent"
-	LegacyCommandHost       = "host"
-	LegacyCommandAgent      = "gpu-agent"
 	PreemptReason           = "vast_preempt"
 	LeaseLostReason         = "vast_sentinel_lost"
 	DefaultStateDir         = "/var/lib/beam/agent-vast"

@@ -1,0 +1,10 @@
+{
+  "locations": [
+    {"id": 1, "name": "fsn1", "description": "Falkenstein DC Park 1", "country": "DE", "city": "Falkenstein", "latitude": 50.47612, "longitude": 12.370071, "network_zone": "eu-central"},
+    {"id": 4, "name": "ash", "description": "Ashburn, VA", "country": "US", "city": "Ashburn, VA", "latitude": 39.045821, "longitude": -77.487073, "network_zone": "us-east"},
+    {"id": 5, "name": "hil", "description": "Hillsboro, OR", "country": "US", "city": "Hillsboro, OR", "latitude": 45.54222, "longitude": -122.951924, "network_zone": "us-west"}
+  ],
+  "meta": {
+    "pagination": {"page": 1, "per_page": 50, "previous_page": null, "next_page": null, "last_page": 1, "total_entries": 3}
+  }
+}

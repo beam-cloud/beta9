@@ -124,7 +124,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 			Stub:              *i.Stub,
 			CheckpointEnabled: checkpointEnabled,
 			CheckpointTrigger: i.StubConfig.CheckpointTrigger,
-			Preemptable:       true,
+			Preemptable:       i.Stub.Type.Preemptable(),
 			PoolSelector:      i.StubConfig.PoolSelector(),
 		}
 		if err := abstractions.ConfigureContainerRequestNetwork(runRequest, *i.StubConfig); err != nil {

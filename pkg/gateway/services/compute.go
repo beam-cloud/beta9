@@ -178,6 +178,10 @@ func (gws *GatewayService) UpdateAgentAvailability(ctx context.Context, in *pb.U
 	return gws.computeService.UpdateAgentAvailability(ctx, in)
 }
 
+func (gws *GatewayService) ReportAgentInterruption(ctx context.Context, in *pb.ReportAgentInterruptionRequest) (*pb.ReportAgentInterruptionResponse, error) {
+	return gws.computeService.ReportAgentInterruption(ctx, in)
+}
+
 func (gws *GatewayService) UpdateAgentSSHStatus(ctx context.Context, in *pb.UpdateAgentSSHStatusRequest) (*pb.UpdateAgentSSHStatusResponse, error) {
 	return gws.computeService.UpdateAgentSSHStatus(ctx, in)
 }

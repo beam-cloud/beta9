@@ -64,7 +64,7 @@ func TestManagedEndpointLeaseSurvivesGatewayOutageWithoutLosingCapacity(t *testi
 			require.NoError(t, containers.UpdateContainerStatus(model.ContainerId, types.ContainerStatusRunning, types.ContainerStateTtlS))
 			request := &types.ContainerRequest{ContainerId: "serverless-after-recovery", Cpu: 500, Memory: 500, Gpu: "RTX5090", GpuCount: 1}
 			setPendingContainerRequests(t, rdb, request)
-			err = workers.ScheduleContainerRequest(&reconnected, request)
+			err = workers.ScheduleContainerRequests(&reconnected, []*types.ContainerRequest{request})
 			if !evictable {
 				require.Error(t, err, "protected GPU cannot be scheduled over after reconnect")
 				require.Empty(t, request.EvictContainerIds)
@@ -188,7 +188,7 @@ func TestManagedEndpointHeartbeatCannotOverwriteConcurrentSchedulerEviction(t *t
 	}
 	request := &types.ContainerRequest{ContainerId: "serverless-race", Cpu: 500, Memory: 500, Gpu: "RTX5090", GpuCount: 1}
 	setPendingContainerRequests(t, rdb, request)
-	require.NoError(t, workers.ScheduleContainerRequest(worker, request))
+	require.NoError(t, workers.ScheduleContainerRequests(worker, []*types.ContainerRequest{request}))
 	require.Equal(t, []string{model.ContainerId}, request.EvictContainerIds)
 	release()
 	select {

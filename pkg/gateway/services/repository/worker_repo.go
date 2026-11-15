@@ -14,7 +14,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/compute"
 	computesvc "github.com/beam-cloud/beta9/pkg/gateway/services/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
-	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
@@ -35,6 +34,9 @@ type WorkerRepositoryService struct {
 	computeService        *computesvc.Service
 	eventRepo             repository.EventRepository
 	appConfig             types.AppConfig
+	// holdsPoolHeadroom reports whether an idle worker keeps its pool at its
+	// floor (scheduler.WorkerHoldsPoolHeadroom). Nil: no worker does.
+	holdsPoolHeadroom func(worker *types.Worker) bool
 	pb.UnimplementedWorkerRepositoryServiceServer
 }
 
@@ -50,7 +52,7 @@ const (
 	containerRequestBatchSize         = 128
 )
 
-func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.WorkerRepository, containerRepo repository.ContainerRepository, backendRepo repository.BackendRepository, computeRepo repository.ComputeRepository, computeService *computesvc.Service, eventRepo repository.EventRepository, rdb *common.RedisClient, appConfig types.AppConfig, cacheCoordinatorToken string) *WorkerRepositoryService {
+func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.WorkerRepository, containerRepo repository.ContainerRepository, backendRepo repository.BackendRepository, computeRepo repository.ComputeRepository, computeService *computesvc.Service, eventRepo repository.EventRepository, rdb *common.RedisClient, appConfig types.AppConfig, cacheCoordinatorToken string, holdsPoolHeadroom func(worker *types.Worker) bool) *WorkerRepositoryService {
 	service := &WorkerRepositoryService{
 		ctx:                   ctx,
 		workerRepo:            workerRepo,
@@ -61,6 +63,7 @@ func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.Worke
 		eventRepo:             eventRepo,
 		appConfig:             appConfig,
 		cacheCoordinatorToken: configuredCacheCoordinatorToken(cacheCoordinatorToken),
+		holdsPoolHeadroom:     holdsPoolHeadroom,
 	}
 	if rdb != nil {
 		service.cacheCoordinator = cache.NewCoordinator(repository.NewCacheRedisRepository(rdb))
@@ -437,10 +440,10 @@ func (s *WorkerRepositoryService) SetWorkerKeepAlive(ctx context.Context, req *p
 	// Only idle workers can spin down, so only they pay for the pool scan; a
 	// lookup failure answers "headroom" so the worker stays until a good read.
 	headroom := false
-	if req.Idle {
+	if req.Idle && s.holdsPoolHeadroom != nil {
 		headroom = true
 		if worker, err := s.workerRepo.GetWorkerById(req.WorkerId); err == nil {
-			headroom = scheduler.WorkerHoldsPoolHeadroom(s.workerRepo, s.appConfig, worker)
+			headroom = s.holdsPoolHeadroom(worker)
 		}
 	}
 

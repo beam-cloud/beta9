@@ -990,6 +990,13 @@ func (t StubType) Kind() string {
 	return strings.Split(string(t), "/")[0]
 }
 
+// Preemptable reports whether the stub's containers may be stopped at any
+// time, and so may run on capacity that can be taken back. An endpoint's may:
+// its requests go to another container.
+func (t StubType) Preemptable() bool {
+	return t.Kind() == StubTypeEndpoint || t.Kind() == StubTypeASGI
+}
+
 // IsSandbox identifies workloads that share sandbox execution and storage.
 // Persistent VMs retain their own kind for lifecycle and billing.
 func (t StubType) IsSandbox() bool {

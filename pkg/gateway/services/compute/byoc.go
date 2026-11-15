@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,33 +27,14 @@ var (
 	errBYOCProviderResourceNotFound   = errors.New("BYOC provider resource not found")
 )
 
-// byocProvider owns provider-specific validation and setup links; the service
-// owns auth, pool state, join tokens, events, and scheduler registration.
-type byocProvider interface {
-	Source() model.CapacitySource
-	NormalizePoolRequest(byocRawPoolRequest) (byocPoolRequest, error)
-	ValidateSetupConfig(types.ManagedComputeConfig) error
-	PoolState(workspaceID string, req byocPoolRequest, config types.ManagedComputeConfig) *model.BYOCProviderState
-	Setup(context.Context, byocProviderSetupInput) (*byocProviderSetupResult, error)
-	Resource(workspaceID string, state *model.PoolState, config types.ManagedComputeConfig) (*byocProviderResource, error)
-	Scale(context.Context, byocProviderScaleInput) error
-	ResourceDeleted(context.Context, byocProviderResourceInput) (bool, error)
-	ReleaseMachine(context.Context, byocProviderReleaseMachineInput) error
-	UpdateScaleState(*model.PoolState, byocPoolRequest, types.ManagedComputeConfig) error
-	ValidateExistingPool(*model.PoolState, byocPoolRequest) error
-}
+// A BYOC pool runs on machines in the tenant's own cloud account. AWS is the
+// one cloud there is; byoc_aws.go has what is particular to it, and this file
+// the pool's record, its join tokens, its events and its place in the
+// scheduler.
 
-type byocRawPoolRequest struct {
-	PoolName     string
-	Region       string
-	InstanceType string
-	DesiredNodes uint32
-	MaxNodes     uint32
-	AccountID    string
-	GPU          string
-	GPUCount     uint32
-}
-
+// byocPoolRequest is what a tenant asks for when setting up or resizing a
+// BYOC pool: as it was sent, and then as normalizeAWSBYOCPoolRequest returns
+// it.
 type byocPoolRequest struct {
 	poolName     string
 	region       string
@@ -62,45 +44,6 @@ type byocPoolRequest struct {
 	accountID    string
 	gpu          string
 	gpuCount     uint32
-}
-
-type byocProviderSetupInput struct {
-	WorkspaceID  string
-	GatewayURL   string
-	JoinToken    string
-	WorkerImage  string
-	Config       types.ManagedComputeConfig
-	Request      byocPoolRequest
-	Pool         *model.PoolState
-	ProviderData *model.BYOCProviderState
-}
-
-type byocProviderSetupResult struct {
-	SetupURL     string
-	ResourceName string
-	ResourceURL  string
-	EventAttrs   map[string]string
-}
-
-type byocProviderScaleInput struct {
-	WorkspaceID  string
-	Config       types.ManagedComputeConfig
-	Request      byocPoolRequest
-	Pool         *model.PoolState
-	ProviderData *model.BYOCProviderState
-}
-
-type byocProviderResourceInput struct {
-	WorkspaceID  string
-	Pool         *model.PoolState
-	ProviderData *model.BYOCProviderState
-}
-
-type byocProviderReleaseMachineInput struct {
-	WorkspaceID  string
-	Pool         *model.PoolState
-	ProviderData *model.BYOCProviderState
-	Machine      *model.AgentTokenState
 }
 
 type byocProviderResource struct {
@@ -122,133 +65,91 @@ type byocProviderResource struct {
 	DirectScale       bool
 }
 
-type byocPoolSetupResult struct {
-	Pool         *model.PoolState
-	SetupURL     string
-	ResourceName string
-	ResourceURL  string
-}
-
 func (s *Service) CreateBYOCPool(ctx context.Context, in *pb.CreateBYOCPoolRequest) (*pb.CreateBYOCPoolResponse, error) {
-	if in == nil {
-		return &pb.CreateBYOCPoolResponse{Ok: false, ErrMsg: "request is required"}, nil
+	switch strings.ToLower(strings.TrimSpace(in.Provider)) {
+	case "":
+		return &pb.CreateBYOCPoolResponse{Ok: false, ErrMsg: "provider is required"}, nil
+	case string(model.SourceAWS):
+	default:
+		return &pb.CreateBYOCPoolResponse{Ok: false, ErrMsg: fmt.Sprintf("unsupported BYOC provider %q", in.Provider)}, nil
 	}
-	provider, err := byocProviderForName(in.Provider)
-	if err != nil {
-		return &pb.CreateBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	result, err := s.prepareBYOCPoolSetup(ctx, provider, byocRawPoolRequest{
-		PoolName:     in.PoolName,
-		Region:       in.Region,
-		InstanceType: in.InstanceType,
-		DesiredNodes: in.DesiredNodes,
-		MaxNodes:     in.MaxNodes,
-		AccountID:    in.AccountId,
-		GPU:          in.Gpu,
-		GPUCount:     in.GpuCount,
+	state, setupURL, err := s.prepareBYOCPoolSetup(ctx, byocPoolRequest{
+		poolName:     in.PoolName,
+		region:       in.Region,
+		instanceType: in.InstanceType,
+		desiredNodes: in.DesiredNodes,
+		maxNodes:     in.MaxNodes,
+		accountID:    in.AccountId,
+		gpu:          in.Gpu,
+		gpuCount:     in.GpuCount,
 	})
 	if err != nil {
 		return &pb.CreateBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
-	pool := s.privatePoolStateToProto(result.Pool)
+	pool := s.privatePoolStateToProto(state)
 	return &pb.CreateBYOCPoolResponse{
 		Ok:           true,
 		Pool:         pool,
-		SetupUrl:     result.SetupURL,
-		ResourceName: result.ResourceName,
-		ResourceUrl:  result.ResourceURL,
+		SetupUrl:     setupURL,
+		ResourceName: state.BYOC.ResourceName,
+		ResourceUrl:  state.BYOC.ResourceURL,
 		Byoc:         pool.GetByoc(),
 	}, nil
 }
 
-func (s *Service) prepareBYOCPoolSetup(ctx context.Context, provider byocProvider, raw byocRawPoolRequest) (*byocPoolSetupResult, error) {
+// prepareBYOCPoolSetup saves the pool a tenant asked for and returns it with
+// the link at which the tenant creates its stack.
+func (s *Service) prepareBYOCPoolSetup(ctx context.Context, raw byocPoolRequest) (*model.PoolState, string, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	workspaceID := computeWorkspaceID(authInfo)
 	actorTokenID := computeActorTokenID(authInfo)
 	if workspaceID == "" || actorTokenID == "" {
-		return nil, fmt.Errorf("missing workspace auth")
+		return nil, "", fmt.Errorf("missing workspace auth")
 	}
 
-	req, err := provider.NormalizePoolRequest(raw)
+	req, err := normalizeAWSBYOCPoolRequest(raw)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	var state *model.PoolState
+	var joinToken string
 	lockErr := s.withPoolStateLock(ctx, workspaceID, req.poolName, func(lockCtx context.Context) error {
-		next, err := s.createOrUpdateBYOCPool(lockCtx, authInfo, provider, req)
-		if err != nil {
-			return err
-		}
-		state = next
-		return nil
+		var err error
+		state, joinToken, err = s.createOrUpdateBYOCPool(lockCtx, authInfo, req)
+		return err
 	})
 	if lockErr != nil {
-		return nil, lockErr
+		return nil, "", lockErr
 	}
 
-	joinToken, tokenState, err := s.createPersistentPrivatePoolJoinToken(
-		ctx,
-		workspaceID,
-		req.poolName,
-		state.CreatedAt,
-		"",
-	)
+	setupURL, err := s.awsBYOCSetupURL(workspaceID, joinToken, req, state.BYOC)
 	if err != nil {
-		return nil, err
-	}
-	if state.BYOC != nil {
-		recordBYOCBootstrapJoinTokenHash(state.BYOC, tokenState.TokenHash)
-		if err := s.savePrivatePoolState(ctx, workspaceID, state); err != nil {
-			_ = s.revokeComputeJoinTokenHash(ctx, tokenState.TokenHash)
-			return nil, err
-		}
+		return nil, "", err
 	}
 
-	setup, err := provider.Setup(ctx, byocProviderSetupInput{
-		WorkspaceID:  workspaceID,
-		GatewayURL:   strings.TrimRight(s.appConfig.GatewayService.HTTP.GetExternalURL(), "/"),
-		JoinToken:    joinToken,
-		WorkerImage:  agentWorkerImage(s.appConfig),
-		Config:       s.appConfig.ManagedCompute,
-		Request:      req,
-		Pool:         state,
-		ProviderData: state.BYOC,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	attrs := map[string]string{
-		"provider": string(provider.Source()),
-	}
-	for key, value := range setup.EventAttrs {
-		attrs[key] = value
-	}
 	s.emitComputeEvent(types.EventComputePool, types.EventComputeSchema{
 		WorkspaceID: workspaceID,
 		PoolName:    state.Name,
 		Action:      types.EventComputeActionPoolCreated,
 		Status:      "byoc_pool_configured",
-		Source:      string(provider.Source()),
+		Source:      string(model.SourceAWS),
 		Transport:   state.Transport,
 		Fallback:    state.Fallback,
 		NodeCount:   req.desiredNodes,
-		Attrs:       attrs,
+		Attrs: map[string]string{
+			"provider":      string(model.SourceAWS),
+			"cloud":         string(model.SourceAWS),
+			"region":        req.region,
+			"instance_type": req.instanceType,
+			"gpu":           req.gpu,
+			"gpu_count":     strconv.FormatUint(uint64(req.gpuCount), 10),
+		},
 	})
-
-	return &byocPoolSetupResult{
-		Pool:         state,
-		SetupURL:     setup.SetupURL,
-		ResourceName: setup.ResourceName,
-		ResourceURL:  setup.ResourceURL,
-	}, nil
+	return state, setupURL, nil
 }
 
 func (s *Service) GetBYOCPool(ctx context.Context, in *pb.GetBYOCPoolRequest) (*pb.GetBYOCPoolResponse, error) {
-	if in == nil {
-		return &pb.GetBYOCPoolResponse{Ok: false, ErrMsg: "request is required"}, nil
-	}
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	workspaceID := computeWorkspaceID(authInfo)
 	if workspaceID == "" {
@@ -263,11 +164,7 @@ func (s *Service) GetBYOCPool(ctx context.Context, in *pb.GetBYOCPoolRequest) (*
 		return &pb.GetBYOCPoolResponse{Ok: false, ErrMsg: "pool not found"}, nil
 	}
 
-	machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, state.Name)
-	if err != nil {
-		return &pb.GetBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	machines, deleted, err := s.reconcileBYOCPoolMachinesForRead(ctx, workspaceID, state, machines, time.Now().UTC())
+	machines, deleted, err := s.poolMachines(ctx, workspaceID, state)
 	if err != nil {
 		return &pb.GetBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -290,9 +187,6 @@ func (s *Service) GetBYOCPool(ctx context.Context, in *pb.GetBYOCPoolRequest) (*
 }
 
 func (s *Service) ScaleBYOCPool(ctx context.Context, in *pb.ScaleBYOCPoolRequest) (*pb.ScaleBYOCPoolResponse, error) {
-	if in == nil {
-		return &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: "request is required"}, nil
-	}
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	workspaceID := computeWorkspaceID(authInfo)
 	if workspaceID == "" {
@@ -307,65 +201,46 @@ func (s *Service) ScaleBYOCPool(ctx context.Context, in *pb.ScaleBYOCPoolRequest
 	lockErr := s.withPoolStateLock(ctx, workspaceID, poolName, func(lockCtx context.Context) error {
 		state, err := s.getWorkspacePrivatePoolState(lockCtx, authInfo, poolName)
 		if err != nil {
-			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
-			return nil
+			return err
 		}
 		if state == nil {
-			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: "pool not found"}
-			return nil
+			return errors.New("pool not found")
 		}
-		provider, err := byocProviderForState(state)
+		if state.BYOC == nil {
+			return errors.New("missing BYOC provider metadata")
+		}
+		resource, err := awsBYOCResource(state.BYOC, s.appConfig.ManagedCompute)
 		if err != nil {
-			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
-			return nil
+			return err
 		}
-		resource, err := provider.Resource(workspaceID, state, s.appConfig.ManagedCompute)
-		if err != nil {
-			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
-			return nil
-		}
-		req, err := provider.NormalizePoolRequest(byocRawPoolRequest{
-			PoolName:     state.Name,
-			Region:       resource.Region,
-			InstanceType: resource.InstanceType,
-			DesiredNodes: in.GetDesiredNodes(),
-			MaxNodes:     firstNonZeroUint32(in.GetMaxNodes(), in.GetDesiredNodes()),
-			AccountID:    resource.AccountID,
-			GPU:          resource.GPU,
-			GPUCount:     resource.GPUCount,
+		req, err := normalizeAWSBYOCPoolRequest(byocPoolRequest{
+			poolName:     state.Name,
+			region:       resource.Region,
+			instanceType: resource.InstanceType,
+			desiredNodes: in.GetDesiredNodes(),
+			maxNodes:     firstNonZeroUint32(in.GetMaxNodes(), in.GetDesiredNodes()),
+			accountID:    resource.AccountID,
+			gpu:          resource.GPU,
+			gpuCount:     resource.GPUCount,
 		})
 		if err != nil {
-			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
-			return nil
+			return err
 		}
-		if err := provider.Scale(lockCtx, byocProviderScaleInput{
-			WorkspaceID:  workspaceID,
-			Config:       s.appConfig.ManagedCompute,
-			Request:      req,
-			Pool:         state,
-			ProviderData: state.BYOC,
-		}); err != nil {
-			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
-			return nil
+		if err := awsBYOCScale(lockCtx, state.BYOC, req); err != nil {
+			return err
 		}
-		if err := provider.UpdateScaleState(state, req, s.appConfig.ManagedCompute); err != nil {
-			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
-			return nil
-		}
+		updateAWSBYOCScaleState(state, req, s.appConfig.ManagedCompute)
 		state.UpdatedAt = time.Now().UTC()
 		if err := s.savePrivatePoolState(lockCtx, workspaceID, state); err != nil {
-			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
-			return nil
+			return err
 		}
 		machines, err := s.computeRepo.ListAgentTokenStates(lockCtx, workspaceID, state.Name)
 		if err != nil {
-			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
-			return nil
+			return err
 		}
 		machines, err = s.pruneBYOCPoolMachinesAboveDesired(lockCtx, workspaceID, state, machines, time.Now().UTC())
 		if err != nil {
-			response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: err.Error()}
-			return nil
+			return err
 		}
 		pool := s.privatePoolStateToProtoWithMachines(state, machines)
 		s.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolExtended, "byoc_scaled"))
@@ -379,9 +254,6 @@ func (s *Service) ScaleBYOCPool(ctx context.Context, in *pb.ScaleBYOCPoolRequest
 	if lockErr != nil {
 		return &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: lockErr.Error()}, nil
 	}
-	if response == nil {
-		response = &pb.ScaleBYOCPoolResponse{Ok: false, ErrMsg: "failed to scale BYOC pool"}
-	}
 	return response, nil
 }
 
@@ -389,11 +261,7 @@ func byocPoolStateToProto(state *model.PoolState, pool *pb.PrivatePool, config t
 	if state == nil || state.BYOC == nil {
 		return nil
 	}
-	provider, err := byocProviderForState(state)
-	if err != nil {
-		return nil
-	}
-	resource, err := provider.Resource(state.WorkspaceID, state, config)
+	resource, err := awsBYOCResource(state.BYOC, config)
 	if err != nil {
 		return nil
 	}
@@ -430,7 +298,7 @@ func byocPoolGPUs(req byocPoolRequest) []string {
 }
 
 func (s *Service) cleanupDeletedBYOCPoolIfNeeded(ctx context.Context, workspaceID string, state *model.PoolState, machines []*model.AgentTokenState, now time.Time) (bool, error) {
-	if !s.byocPoolDeletedForCleanup(ctx, workspaceID, state, machines, now) && !byocPoolLooksDeleted(state, machines, now) {
+	if !byocPoolDeletedForCleanup(ctx, state, machines, now) {
 		return false, nil
 	}
 
@@ -444,7 +312,7 @@ func (s *Service) cleanupDeletedBYOCPoolIfNeeded(ctx context.Context, workspaceI
 		if err != nil {
 			return err
 		}
-		if !s.byocPoolDeletedForCleanup(ctx, workspaceID, fresh, freshMachines, now) && !byocPoolLooksDeleted(fresh, freshMachines, now) {
+		if !byocPoolDeletedForCleanup(ctx, fresh, freshMachines, now) {
 			return nil
 		}
 		deleted = true
@@ -453,24 +321,11 @@ func (s *Service) cleanupDeletedBYOCPoolIfNeeded(ctx context.Context, workspaceI
 	return deleted, err
 }
 
-func (s *Service) reconcileBYOCPoolMachinesForRead(ctx context.Context, workspaceID string, state *model.PoolState, machines []*model.AgentTokenState, now time.Time) ([]*model.AgentTokenState, bool, error) {
-	deleted, err := s.cleanupDeletedBYOCPoolIfNeeded(ctx, workspaceID, state, machines, now)
-	if err != nil || deleted {
-		return nil, deleted, err
-	}
-	machines, err = s.pruneBYOCPoolMachinesAboveDesired(ctx, workspaceID, state, machines, now)
-	return machines, false, err
-}
-
 func (s *Service) pruneBYOCPoolMachinesAboveDesired(ctx context.Context, workspaceID string, state *model.PoolState, machines []*model.AgentTokenState, now time.Time) ([]*model.AgentTokenState, error) {
 	if state == nil || state.BYOC == nil || len(machines) == 0 {
 		return machines, nil
 	}
-	provider, err := byocProviderForState(state)
-	if err != nil {
-		return machines, err
-	}
-	resource, err := provider.Resource(workspaceID, state, s.appConfig.ManagedCompute)
+	resource, err := awsBYOCResource(state.BYOC, s.appConfig.ManagedCompute)
 	if err != nil {
 		return machines, err
 	}
@@ -502,9 +357,6 @@ func (s *Service) pruneBYOCPoolMachinesAboveDesired(ctx context.Context, workspa
 
 func staleBYOCMachinesAboveDesired(machines []*model.AgentTokenState, desiredNodes int, now time.Time) []*model.AgentTokenState {
 	excess := len(machines) - desiredNodes
-	if excess <= 0 {
-		return nil
-	}
 	candidates := make([]*model.AgentTokenState, 0, excess)
 	for _, machine := range machines {
 		if machine == nil || model.AgentMachineConnected(machine, now) {
@@ -535,57 +387,39 @@ func staleBYOCMachinesAboveDesired(machines []*model.AgentTokenState, desiredNod
 	return candidates
 }
 
-func (s *Service) byocPoolDeletedForCleanup(ctx context.Context, workspaceID string, state *model.PoolState, machines []*model.AgentTokenState, now time.Time) bool {
-	resourceDeleted, err := s.byocProviderResourceDeleted(ctx, workspaceID, state)
-	if resourceDeleted {
-		return true
-	}
-	if !errors.Is(err, errBYOCProviderControlUnavailable) && !errors.Is(err, errBYOCProviderResourceNotFound) {
-		return false
-	}
-	return byocProviderResourceUnavailableLooksDeleted(state, machines, now)
-}
-
-func byocPoolInProvisioningGrace(state *model.PoolState, machines []*model.AgentTokenState, now time.Time) bool {
-	if state == nil || state.BYOC == nil || len(machines) > 0 {
-		return false
-	}
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	if state.CreatedAt.IsZero() {
-		return false
-	}
-	return now.Sub(state.CreatedAt) < byocProviderControlUnavailableCleanupGrace
-}
-
-func (s *Service) byocProviderResourceDeleted(ctx context.Context, workspaceID string, state *model.PoolState) (bool, error) {
+// byocPoolDeletedForCleanup reports whether the pool's cloud resource is
+// gone, so that what Beam holds for it is to be cleaned up. A provider that
+// can be asked decides: machines fall silent for many reasons, and a pool
+// that is cleaned up takes the token in the tenant's stack with it.
+func byocPoolDeletedForCleanup(ctx context.Context, state *model.PoolState, machines []*model.AgentTokenState, now time.Time) bool {
 	if state == nil || state.BYOC == nil {
-		return false, nil
+		return false
 	}
-	provider, err := byocProviderForState(state)
-	if err != nil {
-		return false, err
+	deleted, err := awsBYOCStackDeleted(ctx, state.BYOC)
+	switch {
+	case err == nil:
+		return deleted
+	case errors.Is(err, errBYOCDirectScaleUnavailable):
+		// The stack gave Beam no role to ask with. All there is to go by is
+		// that its machines stay silent.
+		return byocPoolLooksDeleted(machines, now)
+	case errors.Is(err, errBYOCProviderControlUnavailable), errors.Is(err, errBYOCProviderResourceNotFound):
+		return byocProviderResourceUnavailableLooksDeleted(state, machines, now)
+	default:
+		// The provider did not answer. The next read asks again.
+		return false
 	}
-	return provider.ResourceDeleted(ctx, byocProviderResourceInput{
-		WorkspaceID:  workspaceID,
-		Pool:         state,
-		ProviderData: state.BYOC,
-	})
 }
 
 func byocProviderResourceUnavailableLooksDeleted(state *model.PoolState, machines []*model.AgentTokenState, now time.Time) bool {
 	if byocPoolMachinesAllDisconnected(machines, now) {
 		return true
 	}
-	if byocPoolLooksDeleted(state, machines, now) {
+	if byocPoolLooksDeleted(machines, now) {
 		return true
 	}
-	if byocPoolInProvisioningGrace(state, machines, now) || state == nil || state.BYOC == nil || len(machines) > 0 || state.CreatedAt.IsZero() {
+	if len(machines) > 0 || state.CreatedAt.IsZero() {
 		return false
-	}
-	if now.IsZero() {
-		now = time.Now().UTC()
 	}
 	return now.Sub(state.CreatedAt) >= byocProviderControlUnavailableCleanupGrace
 }
@@ -604,12 +438,9 @@ func byocPoolMachinesAllDisconnected(machines []*model.AgentTokenState, now time
 
 // Without provider credentials, external stack deletion is observable as all
 // previously joined BYOC machines disconnecting and staying gone.
-func byocPoolLooksDeleted(state *model.PoolState, machines []*model.AgentTokenState, now time.Time) bool {
-	if state == nil || state.BYOC == nil || len(machines) == 0 {
+func byocPoolLooksDeleted(machines []*model.AgentTokenState, now time.Time) bool {
+	if len(machines) == 0 {
 		return false
-	}
-	if now.IsZero() {
-		now = time.Now().UTC()
 	}
 	latestSeen := time.Time{}
 	for _, machine := range machines {
@@ -649,27 +480,30 @@ func (s *Service) deleteBYOCPoolLocalState(ctx context.Context, workspaceID stri
 	return nil
 }
 
-func (s *Service) createOrUpdateBYOCPool(ctx context.Context, authInfo *auth.AuthInfo, provider byocProvider, req byocPoolRequest) (*model.PoolState, error) {
+// createOrUpdateBYOCPool saves the pool's record together with a new token for
+// its stack to join with, and returns both. The caller holds the pool lock,
+// so the one save cannot undo what the reconciler wrote in between.
+func (s *Service) createOrUpdateBYOCPool(ctx context.Context, authInfo *auth.AuthInfo, req byocPoolRequest) (*model.PoolState, string, error) {
 	workspaceID := computeWorkspaceID(authInfo)
 	actorTokenID := computeActorTokenID(authInfo)
 	if _, exists := s.appConfig.Worker.Pools[req.poolName]; exists {
-		return nil, fmt.Errorf("pool %q conflicts with a configured worker pool", req.poolName)
+		return nil, "", fmt.Errorf("pool %q conflicts with a configured worker pool", req.poolName)
 	}
 	existing, err := s.getPrivatePoolState(ctx, workspaceID, req.poolName)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if existing != nil && !poolStateIsPrivate(existing) {
-		return nil, fmt.Errorf("pool already exists in this workspace")
+		return nil, "", fmt.Errorf("pool already exists in this workspace")
 	}
-	if existing != nil && existing.Source.Canonical() != provider.Source() {
-		return nil, fmt.Errorf("pool already exists with source %s", existing.Source)
+	if existing != nil && existing.Source.Canonical() != model.SourceAWS {
+		return nil, "", fmt.Errorf("pool already exists with source %s", existing.Source)
 	}
-	if err := provider.ValidateExistingPool(existing, req); err != nil {
-		return nil, err
+	if err := validateExistingAWSBYOCPool(existing, req); err != nil {
+		return nil, "", err
 	}
-	if err := provider.ValidateSetupConfig(s.appConfig.ManagedCompute); err != nil {
-		return nil, err
+	if err := validateAWSBYOCSetupConfig(s.appConfig.ManagedCompute); err != nil {
+		return nil, "", err
 	}
 
 	config := normalizePoolConfig(&pb.PoolConfig{
@@ -682,11 +516,10 @@ func (s *Service) createOrUpdateBYOCPool(ctx context.Context, authInfo *auth.Aut
 		Priority:  defaultPrivatePriority,
 	})
 	if _, err := computePoolFromProto(config, 0, false); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
-	now := time.Now()
-	byocState := provider.PoolState(workspaceID, req, s.appConfig.ManagedCompute)
+	byocState := awsBYOCPoolState(workspaceID, req, s.appConfig.ManagedCompute)
 	if existing != nil {
 		for _, label := range []string{byocBootstrapJoinTokenHashLabel, byocBootstrapJoinTokenHashesLabel} {
 			value := byocLabelValue(existing.BYOC, label)
@@ -699,38 +532,27 @@ func (s *Service) createOrUpdateBYOCPool(ctx context.Context, authInfo *auth.Aut
 			byocState.Labels[label] = value
 		}
 	}
-	state := &model.PoolState{
-		Name:             config.Name,
-		Selector:         config.Selector,
-		Config:           config,
-		Status:           types.ComputePoolStatusActive,
-		Source:           provider.Source(),
-		Mode:             config.Mode,
-		Transport:        config.Transport,
-		Fallback:         config.Fallback,
-		Priority:         config.Priority,
-		CreatedByTokenID: actorTokenID,
-		CreatedAt:        now,
-		UpdatedAt:        now,
-		BYOC:             byocState,
+	state := nextPoolState(existing, config, actorTokenID, time.Now())
+	state.Source = model.SourceAWS
+	state.BYOC = byocState
+
+	joinToken, tokenState, err := s.createPersistentPrivatePoolJoinToken(ctx, workspaceID, req.poolName, state.CreatedAt, "")
+	if err != nil {
+		return nil, "", err
 	}
-	if existing != nil {
-		state.Reservations = existing.Reservations
-		state.ReservedNodes = existing.ReservedNodes
-		state.CommittedSpendMicros = existing.CommittedSpendMicros
-		state.CreatedByTokenID = existing.CreatedByTokenID
-		state.CreatedAt = existing.CreatedAt
-		state.ExpiresAt = existing.ExpiresAt
-	}
+	recordBYOCBootstrapJoinTokenHash(state.BYOC, tokenState.TokenHash)
 	if err := s.savePrivatePoolState(ctx, workspaceID, state); err != nil {
-		return nil, err
+		_ = s.revokeComputeJoinTokenHash(ctx, tokenState.TokenHash)
+		return nil, "", err
 	}
 	if s.scheduler != nil {
 		if err := s.scheduler.EnsureAgentPool(workspaceID, state); err != nil {
-			return nil, s.rollbackPoolState(ctx, workspaceID, state.Name, existing, err)
+			// The token was given to nobody, and must admit nobody.
+			_ = s.revokeComputeJoinTokenHash(ctx, tokenState.TokenHash)
+			return nil, "", s.rollbackPoolState(ctx, workspaceID, state.Name, existing, err)
 		}
 	}
-	return state, nil
+	return state, joinToken, nil
 }
 
 func (s *Service) revokeBYOCBootstrapJoinTokens(ctx context.Context, state *model.PoolState) error {
@@ -793,28 +615,7 @@ func byocLabelValue(state *model.BYOCProviderState, key string) string {
 	return strings.TrimSpace(state.Labels[key])
 }
 
-func byocProviderForState(state *model.PoolState) (byocProvider, error) {
-	if state == nil || state.BYOC == nil {
-		return nil, fmt.Errorf("missing BYOC provider metadata")
-	}
-	return byocProviderForName(byocProviderNameForState(state))
-}
-
-func byocProviderNameForState(state *model.PoolState) string {
-	if state == nil || state.BYOC == nil {
-		return ""
-	}
-	name := strings.TrimSpace(state.BYOC.Provider)
-	if name != "" {
-		return name
-	}
-	return string(state.Source.Canonical())
-}
-
 func byocPoolPhase(resource *byocProviderResource, pool *pb.PrivatePool) (string, string) {
-	if resource == nil || pool == nil {
-		return "unknown", "Waiting for provider status"
-	}
 	desiredNodes := resource.DesiredNodes
 	if desiredNodes == 0 {
 		desiredNodes = 1
@@ -836,15 +637,4 @@ func pluralSuffix(count uint32) string {
 		return ""
 	}
 	return "s"
-}
-
-func byocProviderForName(name string) (byocProvider, error) {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "":
-		return nil, fmt.Errorf("provider is required")
-	case string(model.SourceAWS):
-		return byocAWSProvider{}, nil
-	default:
-		return nil, fmt.Errorf("unsupported BYOC provider %q", name)
-	}
 }

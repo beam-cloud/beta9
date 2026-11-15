@@ -1,0 +1,117 @@
+package compute
+
+import (
+	"math"
+	"time"
+)
+
+// CapacitySource says where a pool's or a reservation's machines come from.
+type CapacitySource string
+
+const (
+	SourceCLIReservation CapacitySource = "cli_reservation"
+	SourceAttached       CapacitySource = "attached"
+	// SourceManual is the old name of SourceAttached, still found in stored
+	// records.
+	SourceManual CapacitySource = "manual"
+	SourceAWS    CapacitySource = "aws"
+)
+
+func (s CapacitySource) Canonical() CapacitySource {
+	if s == SourceManual {
+		return SourceAttached
+	}
+	return s
+}
+
+// IsAttached reports whether the machines are the tenant's own, so that Beam
+// neither buys nor bills them.
+func (s CapacitySource) IsAttached() bool {
+	return s == SourceAttached || s == SourceManual || s == SourceAWS
+}
+
+type ReservationStatus string
+
+const (
+	ReservationPending     ReservationStatus = "pending"
+	ReservationActive      ReservationStatus = "active"
+	ReservationTerminating ReservationStatus = "terminating"
+	ReservationDeleted     ReservationStatus = "deleted"
+	ReservationFailed      ReservationStatus = "failed"
+)
+
+// Reservation is one machine Beam bought for a tenant's pool: what was bought,
+// and on what terms. It is stored as JSON under these field names.
+type Reservation struct {
+	ID                    string
+	PoolName              string
+	Name                  string
+	Selector              string
+	Provider              string
+	Cloud                 string
+	Region                string
+	OfferID               string
+	InstanceType          string
+	InstanceID            string
+	MachineID             string
+	GPU                   string
+	GPUCount              uint32
+	NodeCount             uint32
+	CPUMillicores         int64
+	MemoryMB              int64
+	StorageMB             int64
+	HourlyCostMicros      int64
+	CommittedMicros       int64
+	Source                CapacitySource
+	Status                ReservationStatus
+	CreatedAt             time.Time
+	ExpiresAt             time.Time
+	BillingRenewalAt      time.Time
+	BillingCursorAt       time.Time
+	LastStatusCheckAt     time.Time
+	LastReconcileAt       time.Time
+	LastStatusMessage     string
+	LastError             string
+	TerminatingReason     string
+	RegistrationTokenHash string
+	PublicIP              string
+	SSHHost               string
+	SSHPort               uint32
+	// ExtendPending is set from the moment a reservation is renewed until
+	// its provider has been told how long the machine is now wanted. A
+	// provider that could not be told is told again on the next pass.
+	ExtendPending bool
+}
+
+// Closed reports whether the reservation has ended: its machine was deleted,
+// or failed.
+func (r Reservation) Closed() bool {
+	return r.Status == ReservationDeleted || r.Status == ReservationFailed
+}
+
+// Open reports whether the machine is still wanted: the reservation has not
+// ended and is not being given back.
+func (r Reservation) Open() bool {
+	return !r.Closed() && r.Status != ReservationTerminating
+}
+
+// ActiveAt reports whether the reservation is open and has not run out at the
+// given time.
+func (r Reservation) ActiveAt(now time.Time) bool {
+	return r.Open() && (r.ExpiresAt.IsZero() || r.ExpiresAt.After(now))
+}
+
+// Managed reports whether Beam bought the machine for the tenant. It did for
+// every reservation that is made now; the answer is no only for a stored
+// record whose Source says the machine is the tenant's own.
+func (r Reservation) Managed() bool {
+	return !r.Source.IsAttached()
+}
+
+// WholeHours rounds a duration up to the hours a provider bills for it.
+func WholeHours(d time.Duration) int64 {
+	if d <= 0 {
+		return 0
+	}
+	return int64(math.Ceil(float64(d) / float64(time.Hour)))
+}

@@ -29,6 +29,35 @@ func testWorkspaceWithStorage() types.Workspace {
 	return types.Workspace{Storage: &types.WorkspaceStorage{Id: &id}}
 }
 
+// inline runs the scheduler's background work on the calling goroutine, so
+// that a scheduling pass is complete when it returns.
+func inline(fn func()) { fn() }
+
+// selectWorker picks a worker for the request from the workers on record.
+func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker, error) {
+	workers, err := s.workerRepo.GetAllWorkers()
+	if err != nil {
+		return nil, err
+	}
+	return s.selectWorkerFromWorkers(workers, request)
+}
+
+// scheduleRequest places the request on the worker, as dispatching a batch
+// does with each request it planned.
+func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
+	return s.pushWorkerRequests(worker, []*types.ContainerRequest{s.prepareWorkerRequest(worker, request)})
+}
+
+// nextContainerRequest takes the next request queued on the worker, as the
+// worker does, or nil when none is queued.
+func nextContainerRequest(workers repo.WorkerRepository, workerId string) (*types.ContainerRequest, error) {
+	requests, err := workers.GetNextContainerRequests(workerId, 1)
+	if err != nil || len(requests) == 0 {
+		return nil, err
+	}
+	return requests[0], nil
+}
+
 func NewSchedulerForTest() (*Scheduler, error) {
 	s, err := miniredis.Run()
 	if err != nil {
@@ -95,10 +124,10 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		eventRepo:             eventRepo,
 		workspaceRepo:         workspaceRepo,
 
-		provisioning:              newProvisioningTracker(),
-		workerProvisioningLock:    common.NewRedisLock(rdb),
-		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
-		credentials:               newSchedulerCredentialCache(),
+		provisioning:           newProvisioningTracker(nil),
+		workerProvisioningLock: common.NewRedisLock(rdb),
+		growBackoff:            newGrowBackoff(nil),
+		credentials:            newSchedulerCredentialCache(),
 	}, nil
 }
 
@@ -246,30 +275,32 @@ func TestPrivateGPUWorkerCapacityRequiresRequestedGPUCount(t *testing.T) {
 func TestDockerEnabledRequestRuntimeSelection(t *testing.T) {
 	request := &types.ContainerRequest{DockerEnabled: true}
 
-	controllers := []WorkerPoolController{
-		&LocalWorkerPoolControllerForTest{name: "runc", containerRuntime: types.ContainerRuntimeRunc.String()},
-		&LocalWorkerPoolControllerForTest{name: "gvisor", containerRuntime: types.ContainerRuntimeGvisor.String()},
-	}
-
-	filteredControllers := filterControllersByFlags(controllers, request)
-	assert.Equal(t, controllers[1:], filteredControllers)
+	assert.Equal(t, []string{"gvisor"}, poolsAccepting(request, map[string]types.WorkerPoolConfig{
+		"runc":   {ContainerRuntime: types.ContainerRuntimeRunc.String()},
+		"gvisor": {ContainerRuntime: types.ContainerRuntimeGvisor.String()},
+	}))
 
 	workers := []*types.Worker{
 		{Id: "runc-worker", Runtime: types.ContainerRuntimeRunc.String()},
 		{Id: "gvisor-worker", Runtime: types.ContainerRuntimeGvisor.String()},
 	}
 
-	filteredWorkers := filterWorkersByResources(workers, request, nil)
+	filteredWorkers := filterWorkersByResources(workers, request)
 	assert.Equal(t, workers[1:], filteredWorkers)
 }
 
 // The microvm runtime is opt-in in both directions: only use_vm sandboxes
 // reach it, and use_vm sandboxes reach nothing else.
 func TestMicroVMRuntimeIsOptInBothWays(t *testing.T) {
-	runc := &LocalWorkerPoolControllerForTest{name: "runc", containerRuntime: types.ContainerRuntimeRunc.String()}
-	gvisor := &LocalWorkerPoolControllerForTest{name: "gvisor", containerRuntime: types.ContainerRuntimeGvisor.String()}
-	microvm := &LocalWorkerPoolControllerForTest{name: "microvm", containerRuntime: types.ContainerRuntimeMicroVM.String()}
-	controllers := []WorkerPoolController{runc, gvisor, microvm}
+	pools := map[string]types.WorkerPoolConfig{
+		"runc":    {ContainerRuntime: types.ContainerRuntimeRunc.String()},
+		"gvisor":  {ContainerRuntime: types.ContainerRuntimeGvisor.String()},
+		"microvm": {ContainerRuntime: types.ContainerRuntimeMicroVM.String()},
+	}
+	microvm := map[string]types.WorkerPoolConfig{"microvm": pools["microvm"]}
+	gpuMicrovm := map[string]types.WorkerPoolConfig{
+		"microvm": {GPUType: "RTX4090", ContainerRuntime: types.ContainerRuntimeMicroVM.String()},
+	}
 
 	worker := func(id, runtimeName string) *types.Worker {
 		return &types.Worker{Id: id, Status: types.WorkerStatusAvailable, FreeCpu: 4000, FreeMemory: 8000, Runtime: runtimeName}
@@ -286,51 +317,51 @@ func TestMicroVMRuntimeIsOptInBothWays(t *testing.T) {
 	}
 
 	// A plain sandbox never sees VM capacity, even when it is the only idle worker.
-	assert.Equal(t, []WorkerPoolController{runc, gvisor}, filterControllersByFlags(controllers, sandbox(false)))
-	assert.Equal(t, []*types.Worker{runcWorker, gvisorWorker}, filterWorkersByResources(workers, sandbox(false), nil))
-	assert.Equal(t, []*types.Worker{}, filterWorkersByResources([]*types.Worker{microvmWorker}, sandbox(false), nil))
+	assert.Equal(t, []string{"gvisor", "runc"}, poolsAccepting(sandbox(false), pools))
+	assert.Equal(t, []*types.Worker{runcWorker, gvisorWorker}, filterWorkersByResources(workers, sandbox(false)))
+	assert.Equal(t, []*types.Worker{}, filterWorkersByResources([]*types.Worker{microvmWorker}, sandbox(false)))
 
 	// use_vm goes only to microvm, and fails closed when there is none.
-	assert.Equal(t, []WorkerPoolController{microvm}, filterControllersByFlags(controllers, sandbox(true)))
-	assert.Equal(t, []*types.Worker{microvmWorker}, filterWorkersByResources(workers, sandbox(true), nil))
-	assert.Equal(t, []*types.Worker{}, filterWorkersByResources([]*types.Worker{runcWorker, gvisorWorker}, sandbox(true), nil))
+	assert.Equal(t, []string{"microvm"}, poolsAccepting(sandbox(true), pools))
+	assert.Equal(t, []*types.Worker{microvmWorker}, filterWorkersByResources(workers, sandbox(true)))
+	assert.Equal(t, []*types.Worker{}, filterWorkersByResources([]*types.Worker{runcWorker, gvisorWorker}, sandbox(true)))
 
 	// Persistent VMs retain their own kind while using the same placement.
 	vm := sandbox(true)
 	vm.Stub.Type = types.StubType(types.StubTypeVM)
-	assert.Equal(t, []WorkerPoolController{microvm}, filterControllersByFlags(controllers, vm))
-	assert.Equal(t, []*types.Worker{microvmWorker}, filterWorkersByResources(workers, vm, nil))
+	assert.Equal(t, []string{"microvm"}, poolsAccepting(vm, pools))
+	assert.Equal(t, []*types.Worker{microvmWorker}, filterWorkersByResources(workers, vm))
 	vm.UseVM = false
-	assert.Empty(t, filterControllersByFlags(controllers, vm), "VMs must never fall back to a container runtime")
-	assert.Empty(t, filterWorkersByResources(workers, vm, nil))
+	assert.Empty(t, poolsAccepting(vm, pools), "VMs must never fall back to a container runtime")
+	assert.Empty(t, filterWorkersByResources(workers, vm))
 
 	// GPU VMs use the same model and free-device accounting as containers.
 	gpu := sandbox(true)
 	gpu.Gpu = "RTX4090"
 	gpu.GpuCount = 1
-	assert.Equal(t, []WorkerPoolController{microvm}, filterControllersByFlags(controllers, gpu))
+	assert.Equal(t, []string{"microvm"}, poolsAccepting(gpu, gpuMicrovm))
 	gpuWorker := worker("gpu-worker", types.ContainerRuntimeMicroVM.String())
 	gpuWorker.Gpu, gpuWorker.FreeGpuCount = "RTX4090", 1
-	assert.Equal(t, []*types.Worker{gpuWorker}, filterWorkersByResources(append(workers, gpuWorker), gpu, nil))
+	assert.Equal(t, []*types.Worker{gpuWorker}, filterWorkersByResources(append(workers, gpuWorker), gpu))
 	gpuWorker.FreeGpuCount = 0
-	assert.Empty(t, filterWorkersByResources([]*types.Worker{gpuWorker}, gpu, nil))
+	assert.Empty(t, filterWorkersByResources([]*types.Worker{gpuWorker}, gpu))
 	gpuWorker.FreeGpuCount, gpuWorker.Gpu = 1, "A100"
-	assert.Empty(t, filterWorkersByResources([]*types.Worker{gpuWorker}, gpu, nil))
+	assert.Empty(t, newRoute(gpu, nil, "").eligible([]*types.Worker{gpuWorker}))
 	gpu.GpuCount = 2
-	assert.Empty(t, filterControllersByFlags([]WorkerPoolController{microvm}, gpu))
+	assert.Empty(t, poolsAccepting(gpu, gpuMicrovm))
 
 	checkpointing := sandbox(true)
 	checkpointing.CheckpointEnabled = true
-	assert.Len(t, filterControllersByFlags([]WorkerPoolController{microvm}, checkpointing), 1, "VM sandboxes snapshot through the runtime's own checkpoint support")
+	assert.Len(t, poolsAccepting(checkpointing, microvm), 1, "VM sandboxes snapshot through the runtime's own checkpoint support")
 
 	restoring := sandbox(true)
 	restoring.Checkpoint = &types.Checkpoint{CheckpointId: "c1", Status: string(types.CheckpointStatusAvailable), Runtime: types.ContainerRuntimeGvisor.String()}
-	assert.Empty(t, filterControllersByFlags([]WorkerPoolController{microvm}, restoring))
+	assert.Empty(t, poolsAccepting(restoring, microvm))
 
 	pod := &types.ContainerRequest{Cpu: 1000, Memory: 1024, UseVM: true}
 	pod.Stub.Type = types.StubType(types.StubTypePodRun)
-	assert.Empty(t, filterControllersByFlags([]WorkerPoolController{microvm}, pod))
-	assert.Empty(t, filterWorkersByResources([]*types.Worker{microvmWorker}, pod, nil))
+	assert.Empty(t, poolsAccepting(pod, microvm))
+	assert.Empty(t, filterWorkersByResources([]*types.Worker{microvmWorker}, pod))
 }
 
 func buildPoolSchedulerForTest(poolName string) *Scheduler {
@@ -380,12 +411,12 @@ func TestBuildPoolControllerPlacement(t *testing.T) {
 		t.Run(poolName, func(t *testing.T) {
 			scheduler := buildPoolSchedulerForTest(poolName)
 			request := &types.ContainerRequest{PoolSelector: poolName}
-			controllers, err := scheduler.getControllers(request)
+			controllers, err := controllersFor(scheduler, request)
 			require.Error(t, err)
 			require.Empty(t, controllers)
 
 			request.PoolSelector = ""
-			controllers, err = scheduler.getControllers(request)
+			controllers, err = controllersFor(scheduler, request)
 			require.NoError(t, err)
 			require.Len(t, controllers, 1)
 			require.Equal(t, "regular", controllers[0].Name())
@@ -395,7 +426,7 @@ func TestBuildPoolControllerPlacement(t *testing.T) {
 			dockerfile := "FROM python:3.12"
 			for _, options := range []types.BuildOptions{{SourceImage: &sourceImage}, {Dockerfile: &dockerfile}, {GitSource: &types.GitSource{}}} {
 				request.BuildOptions = options
-				controllers, err = scheduler.getControllers(request)
+				controllers, err = controllersFor(scheduler, request)
 				require.NoError(t, err)
 				require.Len(t, controllers, 1)
 				require.Equal(t, poolName, controllers[0].Name())
@@ -441,18 +472,16 @@ func TestBuildPoolWorkerPlacement(t *testing.T) {
 	}
 }
 
-func TestBuildPoolExcludedFromFailover(t *testing.T) {
+func TestBuildPoolTakesNoOverflow(t *testing.T) {
 	scheduler := buildPoolSchedulerForTest("build")
-	scheduler.config.Scheduling.Failover = types.FailoverConfig{
-		Enabled: true,
-		Chains:  map[string]types.FailoverChain{"A10G": {Pools: []string{"build"}}},
-	}
-	scheduler.workerPoolManager.SetPool("build", types.WorkerPoolConfig{GPUType: "RTX4090"}, &LocalWorkerPoolControllerForTest{name: "build", requiresSelector: true})
+	scheduler.workerPoolManager.SetPool("build", types.WorkerPoolConfig{
+		GPUType: "RTX4090", RequiresPoolSelector: true, AlsoServes: []string{"A10G"},
+	}, &LocalWorkerPoolControllerForTest{name: "build", requiresSelector: true})
 	request := &types.ContainerRequest{Gpu: "A10G", GpuCount: 1}
-	controllers, err := scheduler.getControllers(request)
+	controllers, err := controllersFor(scheduler, request)
 	require.Error(t, err)
 	require.Empty(t, controllers)
-	selected, err := scheduler.selectWorkerFromWorkers([]*types.Worker{failoverWorker("build-worker", "build", "RTX4090", 1)}, request)
+	selected, err := scheduler.selectWorkerFromWorkers([]*types.Worker{gpuWorkerForTest("build-worker", "build", "RTX4090", 1)}, request)
 	require.Error(t, err)
 	require.Nil(t, selected)
 }
@@ -474,13 +503,15 @@ func TestBuildPoolLeavesOtherRuncPoolsAvailable(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			scheduler := buildPoolSchedulerForTest("build")
 			controller := &LocalWorkerPoolControllerForTest{name: "default-ovh", requiresSelector: test.selector != "", containerRuntime: types.ContainerRuntimeRunc.String()}
-			scheduler.workerPoolManager.SetPool(controller.Name(), types.WorkerPoolConfig{GPUType: test.gpu, ContainerRuntime: types.ContainerRuntimeRunc.String()}, controller)
+			scheduler.workerPoolManager.SetPool(controller.Name(), types.WorkerPoolConfig{
+				GPUType: test.gpu, ContainerRuntime: types.ContainerRuntimeRunc.String(), RequiresPoolSelector: test.selector != "",
+			}, controller)
 			request := &types.ContainerRequest{PoolSelector: test.selector, Cpu: 1000, Memory: 1024, Gpu: test.gpu}
 			request.Stub.Type = types.StubType(test.stubType)
 			if test.gpu != "" {
 				request.GpuCount = 1
 			}
-			controllers, err := scheduler.getControllers(request)
+			controllers, err := controllersFor(scheduler, request)
 			require.NoError(t, err)
 			require.Contains(t, controllers, controller)
 
@@ -498,22 +529,21 @@ func TestBuildPoolLeavesOtherRuncPoolsAvailable(t *testing.T) {
 
 // Provider pools (workspace-supplied machines) only run platform-owned managed
 // endpoint replicas; ordinary requests never reach them, even by selector.
-func TestProviderControllersOnlyAdmitManagedRequests(t *testing.T) {
-	provider := &LocalWorkerPoolControllerForTest{name: "provider", mode: types.PoolModeProvider, requiresSelector: true}
-	regular := &LocalWorkerPoolControllerForTest{name: "regular", mode: types.PoolModeLocal}
-	controllers := []WorkerPoolController{provider, regular}
+func TestProviderPoolsOnlyAdmitManagedRequests(t *testing.T) {
+	provider := types.WorkerPoolConfig{Mode: types.PoolModeProvider, RequiresPoolSelector: true}
+	pools := map[string]types.WorkerPoolConfig{"provider": provider, "regular": {Mode: types.PoolModeLocal}}
 	workspace := testWorkspaceWithStorage()
 
-	assert.Equal(t, []WorkerPoolController{regular}, filterControllersByFlags(controllers, &types.ContainerRequest{Workspace: workspace}))
-	assert.Empty(t, filterControllersByFlags(controllers, &types.ContainerRequest{PoolSelector: "provider", Workspace: workspace}))
+	assert.Equal(t, []string{"regular"}, poolsAccepting(&types.ContainerRequest{Workspace: workspace}, pools))
+	assert.Empty(t, poolsAccepting(&types.ContainerRequest{PoolSelector: "provider", Workspace: workspace}, pools))
 
 	managed := &types.ContainerRequest{PoolSelector: "provider", Workspace: workspace}
 	managed.Stub.Type = types.StubType(types.StubTypeManagedEndpointDeployment)
-	assert.Equal(t, []WorkerPoolController{provider}, filterControllersByFlags(controllers, managed))
+	assert.Equal(t, []string{"provider"}, poolsAccepting(managed, pools))
 
 	// Provider capacity gets no preemption exception.
-	preemptible := &LocalWorkerPoolControllerForTest{name: "provider", mode: types.PoolModeProvider, requiresSelector: true, preemptable: true}
-	assert.Empty(t, filterControllersByFlags([]WorkerPoolController{preemptible}, managed))
+	provider.Preemptable = true
+	assert.Empty(t, poolsAccepting(managed, map[string]types.WorkerPoolConfig{"provider": provider}))
 }
 
 func TestProviderWorkersOnlyAdmitManagedRequests(t *testing.T) {
@@ -711,8 +741,13 @@ func TestLoadedPrivatePoolDoesNotReconcileOnRequest(t *testing.T) {
 	worker, err := scheduler.workerRepo.GetWorkerById(compute.AgentMachineWorkerID(machine.MachineID))
 	assert.NoError(t, err)
 	assert.NoError(t, scheduler.workerRepo.UpdateWorkerStatus(worker.Id, types.WorkerStatusAvailable))
-	assert.NoError(t, scheduler.workerRepo.UpdateWorkerCapacity(worker, &types.ContainerRequest{Cpu: 100, Memory: 100}, types.RemoveCapacity))
+	placed := &types.ContainerRequest{ContainerId: "container-private", Cpu: 100, Memory: 100}
+	setPendingSchedulerRequests(t, scheduler, placed)
+	assert.NoError(t, scheduler.workerRepo.ScheduleContainerRequests(worker, []*types.ContainerRequest{placed}))
+	worker, err = scheduler.workerRepo.GetWorkerById(worker.Id)
+	assert.NoError(t, err)
 	version := worker.ResourceVersion
+	assert.NotZero(t, version)
 
 	_, err = scheduler.ensureAgentPoolForRequest(request)
 	assert.NoError(t, err)
@@ -733,7 +768,8 @@ func TestFilterWorkersByMachinePinsWorker(t *testing.T) {
 
 	// The pin overrides pool-selector filtering: w2 requires a selector the
 	// request doesn't carry, but it was already selected by the pin.
-	selected := filterWorkersByPoolSelector(pinned, &types.ContainerRequest{MachineId: "machine-2"})
+	request := &types.ContainerRequest{MachineId: "machine-2"}
+	selected := newRoute(request, nil, "").eligible(pinned)
 	assert.Len(t, selected, 1)
 
 	unpinned := filterWorkersByMachine(workers, &types.ContainerRequest{})
@@ -803,7 +839,6 @@ func TestSelectorCannotScheduleForeignPrivateWorker(t *testing.T) {
 type LocalWorkerPoolControllerForTest struct {
 	ctx              context.Context
 	name             string
-	mode             types.PoolMode
 	config           types.AppConfig
 	workerRepo       repo.WorkerRepository
 	preemptable      bool
@@ -812,6 +847,9 @@ type LocalWorkerPoolControllerForTest struct {
 	addWorkerDone    chan struct{}
 	unblockAddWorker chan struct{}
 	addWorkerErr     error
+	// cannotAddWorker and canAddWorkerErr are what CanAddWorker answers.
+	cannotAddWorker  bool
+	canAddWorkerErr  error
 	requiresSelector bool
 	containerRuntime string
 	addWorkerMu      sync.Mutex
@@ -828,13 +866,6 @@ func (wpc *LocalWorkerPoolControllerForTest) IsPreemptable() bool {
 
 func (wpc *LocalWorkerPoolControllerForTest) State() (*types.WorkerPoolState, error) {
 	return &types.WorkerPoolState{}, nil
-}
-
-func (wpc *LocalWorkerPoolControllerForTest) Mode() types.PoolMode {
-	if wpc.mode != "" {
-		return wpc.mode
-	}
-	return types.PoolModeLocal
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) RequiresPoolSelector() bool {
@@ -854,6 +885,10 @@ func (wpc *LocalWorkerPoolControllerForTest) ContainerRuntime() string {
 
 func (wpc *LocalWorkerPoolControllerForTest) generateWorkerId() string {
 	return uuid.New().String()[:8]
+}
+
+func (wpc *LocalWorkerPoolControllerForTest) CanAddWorker(cpu int64, memory int64, gpuCount uint32) (bool, error) {
+	return !wpc.cannotAddWorker, wpc.canAddWorkerErr
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
@@ -926,10 +961,6 @@ func (wpc *LocalWorkerPoolControllerForTest) AddWorkerCallCount() int {
 	wpc.addWorkerMu.Lock()
 	defer wpc.addWorkerMu.Unlock()
 	return wpc.addWorkerCalls
-}
-
-func (wpc *LocalWorkerPoolControllerForTest) AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {
-	return nil, errors.New("unimplemented")
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) Name() string {
@@ -1278,7 +1309,7 @@ func TestSchedulerProcessesLargeReadyBatch(t *testing.T) {
 		default:
 		}
 
-		request, err := wb.workerRepo.GetNextContainerRequest(worker.Id)
+		request, err := nextContainerRequest(wb.workerRepo, worker.Id)
 		assert.Nil(t, err)
 		if request == nil {
 			time.Sleep(time.Millisecond)
@@ -1358,7 +1389,7 @@ func TestSchedulerDoesNotBlockOnSlowWorkerProvisioning(t *testing.T) {
 		default:
 		}
 
-		request, err := wb.workerRepo.GetNextContainerRequest(fastWorker.Id)
+		request, err := nextContainerRequest(wb.workerRepo, fastWorker.Id)
 		assert.Nil(t, err)
 		if request != nil && request.ContainerId == fastRequest.ContainerId {
 			break
@@ -1406,14 +1437,14 @@ func TestProcessRequestUsesInFlightProvisioningForCurrentBatch(t *testing.T) {
 	}
 	setPendingSchedulerRequests(t, wb, firstRequest, secondRequest)
 
-	wb.processRequest(firstRequest, nil)
+	wb.processRequestBatch([]*types.ContainerRequest{firstRequest}, nil)
 	select {
 	case <-started:
 	case <-time.After(time.Second):
 		t.Fatal("expected scheduler to start worker provisioning")
 	}
 
-	wb.processRequest(secondRequest, nil)
+	wb.processRequestBatch([]*types.ContainerRequest{secondRequest}, nil)
 
 	select {
 	case <-started:
@@ -1489,11 +1520,11 @@ func TestProcessRequestTracksPendingWorkerCapacityAcrossBatches(t *testing.T) {
 
 	firstBatchWorkers, err := wb.workerRepo.GetAllWorkers()
 	assert.Nil(t, err)
-	wb.processRequest(firstRequest, firstBatchWorkers)
+	wb.processRequestBatch([]*types.ContainerRequest{firstRequest}, firstBatchWorkers)
 
 	secondBatchWorkers, err := wb.workerRepo.GetAllWorkers()
 	assert.Nil(t, err)
-	wb.processRequest(secondRequest, secondBatchWorkers)
+	wb.processRequestBatch([]*types.ContainerRequest{secondRequest}, secondBatchWorkers)
 
 	select {
 	case <-started:
@@ -1546,7 +1577,7 @@ func TestProcessRequestUpdatesBatchWorkerCapacity(t *testing.T) {
 	}
 	setPendingSchedulerRequests(t, wb, firstRequest)
 
-	wb.processRequest(firstRequest, workers)
+	wb.processRequestBatch([]*types.ContainerRequest{firstRequest}, workers)
 
 	assert.Equal(t, int64(0), workers[0].FreeCpu)
 	assert.Equal(t, int64(0), workers[0].FreeMemory)
@@ -1601,12 +1632,12 @@ func TestProcessRequestBatchDoesNotOverScheduleWorkerSnapshot(t *testing.T) {
 
 	queued := map[string]struct{}{}
 	for i := 0; i < 2; i++ {
-		request, err := wb.workerRepo.GetNextContainerRequest(worker.Id)
+		request, err := nextContainerRequest(wb.workerRepo, worker.Id)
 		assert.Nil(t, err)
 		assert.NotNil(t, request)
 		queued[request.ContainerId] = struct{}{}
 	}
-	extraRequest, err := wb.workerRepo.GetNextContainerRequest(worker.Id)
+	extraRequest, err := nextContainerRequest(wb.workerRepo, worker.Id)
 	assert.Nil(t, err)
 	assert.Nil(t, extraRequest)
 
@@ -1643,7 +1674,7 @@ func TestProcessRequestBatchImmediatelyReplansStaleCapacity(t *testing.T) {
 	currentWorkers, err := first.workerRepo.GetAllWorkers()
 	assert.NoError(t, err)
 	first.processRequestBatch([]*types.ContainerRequest{requeued}, currentWorkers)
-	queued, err := first.workerRepo.GetNextContainerRequest(idle.Id)
+	queued, err := nextContainerRequest(first.workerRepo, idle.Id)
 	assert.NoError(t, err)
 	assert.Equal(t, secondRequest.ContainerId, queued.ContainerId)
 }
@@ -1703,7 +1734,7 @@ func TestProcessRequestBatchPacksOntoSingleWorker(t *testing.T) {
 	for _, w := range []*types.Worker{firstWorker, secondWorker} {
 		queued := 0
 		for {
-			request, err := wb.workerRepo.GetNextContainerRequest(w.Id)
+			request, err := nextContainerRequest(wb.workerRepo, w.Id)
 			assert.Nil(t, err)
 			if request == nil {
 				break
@@ -1817,7 +1848,7 @@ func TestProcessRequestBatchSchedulesTinySandboxBurstByRequestedCapacity(t *test
 	for _, worker := range workers {
 		queued := 0
 		for {
-			request, err := wb.workerRepo.GetNextContainerRequest(worker.Id)
+			request, err := nextContainerRequest(wb.workerRepo, worker.Id)
 			assert.Nil(t, err)
 			if request == nil {
 				break
@@ -1881,13 +1912,13 @@ func TestProcessRequestBatchKeepsCPUAndGPUCapacitySeparate(t *testing.T) {
 
 	wb.processRequestBatch([]*types.ContainerRequest{gpuRequest, cpuRequest}, workers)
 
-	queuedCPURequest, err := wb.workerRepo.GetNextContainerRequest(cpuWorker.Id)
+	queuedCPURequest, err := nextContainerRequest(wb.workerRepo, cpuWorker.Id)
 	assert.Nil(t, err)
 	assert.NotNil(t, queuedCPURequest)
 	assert.Equal(t, cpuRequest.ContainerId, queuedCPURequest.ContainerId)
 	assert.Equal(t, "", queuedCPURequest.Gpu)
 
-	queuedGPURequest, err := wb.workerRepo.GetNextContainerRequest(gpuWorker.Id)
+	queuedGPURequest, err := nextContainerRequest(wb.workerRepo, gpuWorker.Id)
 	assert.Nil(t, err)
 	assert.NotNil(t, queuedGPURequest)
 	assert.Equal(t, gpuRequest.ContainerId, queuedGPURequest.ContainerId)
@@ -1946,16 +1977,16 @@ func TestProcessRequestKeepsCPUAndGPUWorkersSeparate(t *testing.T) {
 	}
 	setPendingSchedulerRequests(t, wb, cpuRequest, gpuRequest)
 
-	wb.processRequest(cpuRequest, workers)
-	wb.processRequest(gpuRequest, workers)
+	wb.processRequestBatch([]*types.ContainerRequest{cpuRequest}, workers)
+	wb.processRequestBatch([]*types.ContainerRequest{gpuRequest}, workers)
 
-	queuedCPURequest, err := wb.workerRepo.GetNextContainerRequest(cpuWorker.Id)
+	queuedCPURequest, err := nextContainerRequest(wb.workerRepo, cpuWorker.Id)
 	assert.Nil(t, err)
 	assert.NotNil(t, queuedCPURequest)
 	assert.Equal(t, cpuRequest.ContainerId, queuedCPURequest.ContainerId)
 	assert.Equal(t, "", queuedCPURequest.Gpu)
 
-	queuedGPURequest, err := wb.workerRepo.GetNextContainerRequest(gpuWorker.Id)
+	queuedGPURequest, err := nextContainerRequest(wb.workerRepo, gpuWorker.Id)
 	assert.Nil(t, err)
 	assert.NotNil(t, queuedGPURequest)
 	assert.Equal(t, gpuRequest.ContainerId, queuedGPURequest.ContainerId)
@@ -2005,9 +2036,9 @@ func TestProcessRequestDefaultsGPUCountBeforeScheduling(t *testing.T) {
 	}
 	setPendingSchedulerRequests(t, wb, request)
 
-	wb.processRequest(request, workers)
+	wb.processRequestBatch([]*types.ContainerRequest{request}, workers)
 
-	queuedRequest, err := wb.workerRepo.GetNextContainerRequest(worker.Id)
+	queuedRequest, err := nextContainerRequest(wb.workerRepo, worker.Id)
 	assert.Nil(t, err)
 	assert.NotNil(t, queuedRequest)
 	assert.Equal(t, uint32(1), queuedRequest.GpuCount)
@@ -2020,24 +2051,24 @@ func TestProcessRequestDefaultsGPUCountBeforeScheduling(t *testing.T) {
 
 func schedulerReplicaForTest(source *Scheduler) *Scheduler {
 	return &Scheduler{
-		ctx:                       source.ctx,
-		config:                    source.config,
-		backendRepo:               source.backendRepo,
-		workerRepo:                source.workerRepo,
-		workerPoolRepo:            source.workerPoolRepo,
-		computeRepo:               source.computeRepo,
-		workerPoolManager:         source.workerPoolManager,
-		requestBacklog:            source.requestBacklog,
-		containerRepo:             source.containerRepo,
-		workspaceRepo:             source.workspaceRepo,
-		eventRepo:                 source.eventRepo,
-		schedulerUsageMetrics:     source.schedulerUsageMetrics,
-		eventBus:                  source.eventBus,
-		provisioning:              newProvisioningTracker(),
-		workerProvisioningLock:    common.NewRedisLock(source.requestBacklog.rdb),
-		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
-		credentials:               newSchedulerCredentialCache(),
-		pushComputeEvent:          source.pushComputeEvent,
+		ctx:                    source.ctx,
+		config:                 source.config,
+		backendRepo:            source.backendRepo,
+		workerRepo:             source.workerRepo,
+		workerPoolRepo:         source.workerPoolRepo,
+		computeRepo:            source.computeRepo,
+		workerPoolManager:      source.workerPoolManager,
+		requestBacklog:         source.requestBacklog,
+		containerRepo:          source.containerRepo,
+		workspaceRepo:          source.workspaceRepo,
+		eventRepo:              source.eventRepo,
+		schedulerUsageMetrics:  source.schedulerUsageMetrics,
+		eventBus:               source.eventBus,
+		provisioning:           newProvisioningTracker(nil),
+		workerProvisioningLock: common.NewRedisLock(source.requestBacklog.rdb),
+		growBackoff:            newGrowBackoff(nil),
+		credentials:            newSchedulerCredentialCache(),
+		pushComputeEvent:       source.pushComputeEvent,
 	}
 }
 
@@ -2083,15 +2114,15 @@ func TestProcessRequestStaleReplicaGPUReservationRequeues(t *testing.T) {
 	}
 	setPendingSchedulerRequests(t, firstScheduler, firstRequest, secondRequest)
 
-	firstScheduler.processRequest(firstRequest, firstReplicaWorkers)
-	secondScheduler.processRequest(secondRequest, secondReplicaWorkers)
+	firstScheduler.processRequestBatch([]*types.ContainerRequest{firstRequest}, firstReplicaWorkers)
+	secondScheduler.processRequestBatch([]*types.ContainerRequest{secondRequest}, secondReplicaWorkers)
 
-	queuedRequest, err := firstScheduler.workerRepo.GetNextContainerRequest(worker.Id)
+	queuedRequest, err := nextContainerRequest(firstScheduler.workerRepo, worker.Id)
 	assert.Nil(t, err)
 	assert.NotNil(t, queuedRequest)
 	assert.Equal(t, firstRequest.ContainerId, queuedRequest.ContainerId)
 
-	extraQueuedRequest, err := firstScheduler.workerRepo.GetNextContainerRequest(worker.Id)
+	extraQueuedRequest, err := nextContainerRequest(firstScheduler.workerRepo, worker.Id)
 	assert.Nil(t, err)
 	assert.Nil(t, extraQueuedRequest)
 
@@ -2171,22 +2202,22 @@ func TestProcessRequestConcurrentStaleReplicaGPUReservationRequeues(t *testing.T
 	go func() {
 		defer wg.Done()
 		<-start
-		firstScheduler.processRequest(firstRequest, firstReplicaWorkers)
+		firstScheduler.processRequestBatch([]*types.ContainerRequest{firstRequest}, firstReplicaWorkers)
 	}()
 	go func() {
 		defer wg.Done()
 		<-start
-		secondScheduler.processRequest(secondRequest, secondReplicaWorkers)
+		secondScheduler.processRequestBatch([]*types.ContainerRequest{secondRequest}, secondReplicaWorkers)
 	}()
 
 	close(start)
 	wg.Wait()
 
-	queuedRequest, err := firstScheduler.workerRepo.GetNextContainerRequest(worker.Id)
+	queuedRequest, err := nextContainerRequest(firstScheduler.workerRepo, worker.Id)
 	assert.Nil(t, err)
 	assert.NotNil(t, queuedRequest)
 
-	extraQueuedRequest, err := firstScheduler.workerRepo.GetNextContainerRequest(worker.Id)
+	extraQueuedRequest, err := nextContainerRequest(firstScheduler.workerRepo, worker.Id)
 	assert.Nil(t, err)
 	assert.Nil(t, extraQueuedRequest)
 
@@ -2258,14 +2289,13 @@ func TestAddWorkerForReservationReleasesOnContextCancellation(t *testing.T) {
 		Timestamp:    time.Now(),
 	}
 
-	controllers, err := wb.getControllers(request)
-	assert.Nil(t, err)
-	reservationID := wb.provisioning.addReservation(wb, request, controllers[0])
+	choice := growthForTest(t, wb, request)
+	reservationID := wb.provisioning.addReservation(wb, request, choice.pool, choice.size)
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		newWorkerProvisioningAttempt(wb, request, controllers[0], reservationID).run()
+		wb.addWorker(request, choice.pool, choice.size, reservationID)
 	}()
 
 	select {
@@ -2299,12 +2329,9 @@ func TestProvisionedWorkerUsesSchedulingMemory(t *testing.T) {
 		Timestamp:    time.Now(),
 	}
 
-	controllers, err := wb.getControllers(request)
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(controllers))
-
+	choice := growthForTest(t, wb, request)
 	expectedMemory := capacityMemoryForScheduling(request)
-	reservationID := wb.provisioning.addReservation(wb, request, controllers[0])
+	reservationID := wb.provisioning.addReservation(wb, request, choice.pool, choice.size)
 
 	wb.provisioning.mu.Lock()
 	reservation := wb.provisioning.reservations[reservationID]
@@ -2313,7 +2340,7 @@ func TestProvisionedWorkerUsesSchedulingMemory(t *testing.T) {
 	assert.Equal(t, int64(0), reservation.worker.FreeMemory)
 	wb.provisioning.mu.Unlock()
 
-	newWorkerProvisioningAttempt(wb, request, controllers[0], reservationID).run()
+	wb.addWorker(request, choice.pool, choice.size, reservationID)
 
 	workers, err := wb.workerRepo.GetAllWorkers()
 	assert.Nil(t, err)
@@ -2348,11 +2375,8 @@ func TestProvisionedWorkerUsesPoolSizingDefaults(t *testing.T) {
 		Timestamp:    time.Now(),
 	}
 
-	controllers, err := wb.getControllers(request)
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(controllers))
-
-	reservationID := wb.provisioning.addReservation(wb, request, controllers[0])
+	choice := growthForTest(t, wb, request)
+	reservationID := wb.provisioning.addReservation(wb, request, choice.pool, choice.size)
 	wb.provisioning.mu.Lock()
 	reservation := wb.provisioning.reservations[reservationID]
 	assert.NotNil(t, reservation)
@@ -2362,7 +2386,7 @@ func TestProvisionedWorkerUsesPoolSizingDefaults(t *testing.T) {
 	assert.Equal(t, int64(16384-capacityMemoryForScheduling(request)), reservation.worker.FreeMemory)
 	wb.provisioning.mu.Unlock()
 
-	newWorkerProvisioningAttempt(wb, request, controllers[0], reservationID).run()
+	wb.addWorker(request, choice.pool, choice.size, reservationID)
 
 	workers, err := wb.workerRepo.GetAllWorkers()
 	assert.Nil(t, err)
@@ -2391,7 +2415,6 @@ func TestAgentHostedProvisioningUsesRequestSizing(t *testing.T) {
 	wb.workerPoolManager.SetPool("private-pool", poolConfig, &LocalWorkerPoolControllerForTest{
 		ctx:        context.Background(),
 		name:       "private-pool",
-		mode:       types.PoolModePrivate,
 		config:     wb.config,
 		workerRepo: wb.workerRepo,
 	})
@@ -2407,11 +2430,8 @@ func TestAgentHostedProvisioningUsesRequestSizing(t *testing.T) {
 		Workspace:    testWorkspaceWithStorage(),
 	}
 
-	controllers, err := wb.getControllers(request)
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(controllers))
-
-	reservationID := wb.provisioning.addReservation(wb, request, controllers[0])
+	choice := growthForTest(t, wb, request)
+	reservationID := wb.provisioning.addReservation(wb, request, choice.pool, choice.size)
 	wb.provisioning.mu.Lock()
 	reservation := wb.provisioning.reservations[reservationID]
 	assert.NotNil(t, reservation)
@@ -2440,7 +2460,7 @@ func TestProcessRequestMarksNoControllerRequestFailed(t *testing.T) {
 	err = wb.containerRepo.CreateContainerStateWithConcurrencyLimit(nil, request)
 	assert.Nil(t, err)
 
-	wb.processRequest(request, nil)
+	wb.processRequestBatch([]*types.ContainerRequest{request}, nil)
 
 	_, err = wb.containerRepo.GetContainerState(request.ContainerId)
 	assert.Error(t, err)
@@ -2469,31 +2489,31 @@ func TestGetController(t *testing.T) {
 
 	t.Run("returns correct controller", func(t *testing.T) {
 		cpuRequest := &types.ContainerRequest{Gpu: ""}
-		defaultController, err := wb.getControllers(cpuRequest)
+		defaultController, err := controllersFor(wb, cpuRequest)
 		if err != nil || defaultController[0].Name() != "default" {
 			t.Errorf("Expected default controller, got %v, error: %v", defaultController, err)
 		}
 
 		noGPURequest := &types.ContainerRequest{Gpu: string(types.NO_GPU)}
-		noGPUController, err := wb.getControllers(noGPURequest)
+		noGPUController, err := controllersFor(wb, noGPURequest)
 		if err != nil || noGPUController[0].Name() != "default" {
 			t.Errorf("Expected default controller for NO_GPU request, got %v, error: %v", noGPUController, err)
 		}
 
 		a10gRequest := &types.ContainerRequest{GpuRequest: []string{"A10G"}}
-		a10gController, err := wb.getControllers(a10gRequest)
+		a10gController, err := controllersFor(wb, a10gRequest)
 		if err != nil || a10gController[0].Name() != "beta9-a10g" {
 			t.Errorf("Expected beta9-a10g controller, got %v, error: %v", a10gController, err)
 		}
 
 		t4Request := &types.ContainerRequest{GpuRequest: []string{"T4"}}
-		t4Controller, err := wb.getControllers(t4Request)
+		t4Controller, err := controllersFor(wb, t4Request)
 		if err != nil || t4Controller[0].Name() != "beta9-t4" {
 			t.Errorf("Expected beta9-t4 controller, got %v, error: %v", t4Controller, err)
 		}
 
 		buildRequest := &types.ContainerRequest{PoolSelector: "beta9-build"}
-		buildController, err := wb.getControllers(buildRequest)
+		buildController, err := controllersFor(wb, buildRequest)
 		if err != nil || buildController[0].Name() != "beta9-build" {
 			t.Errorf("Expected beta9-build controller, got %v, error: %v", buildController, err)
 		}
@@ -2501,7 +2521,7 @@ func TestGetController(t *testing.T) {
 
 	t.Run("returns error if no suitable controller found", func(t *testing.T) {
 		unknownRequest := &types.ContainerRequest{GpuRequest: []string{"UNKNOWN_GPU"}}
-		_, err := wb.getControllers(unknownRequest)
+		_, err := controllersFor(wb, unknownRequest)
 		if err == nil {
 			t.Errorf("Expected error for unknown GPU type, got nil")
 		}
@@ -2557,7 +2577,7 @@ func TestGetControllersRegistersAgentPoolFromRepository(t *testing.T) {
 		Workspace:    testWorkspaceWithStorage(),
 	}
 
-	controllers, err := wb.getControllers(request)
+	controllers, err := controllersFor(wb, request)
 	assert.NoError(t, err)
 	assert.Len(t, controllers, 1)
 	if len(controllers) == 1 {
@@ -3031,10 +3051,12 @@ func TestSelectorBoundAnyGPUAcceptsUncataloguedHardware(t *testing.T) {
 		PoolSelector: "my-pool",
 	}
 
-	assert.Equal(t, []*types.Worker{worker}, filterWorkersByResources([]*types.Worker{worker}, request, nil))
+	assert.Equal(t, []*types.Worker{worker}, newRoute(request, nil, "").eligible([]*types.Worker{worker}))
 
+	// Outside a named pool, "any" means any GPU in the catalog.
 	request.PoolSelector = ""
-	assert.Empty(t, filterWorkersByResources([]*types.Worker{worker}, request, nil))
+	worker.RequiresPoolSelector = false
+	assert.Empty(t, newRoute(request, nil, "").eligible([]*types.Worker{worker}))
 }
 
 func TestCheckpointRuntimeSelection(t *testing.T) {
@@ -3067,10 +3089,10 @@ func TestCheckpointRuntimeSelection(t *testing.T) {
 
 	workers := []*types.Worker{runc, gvisor}
 
-	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "legacy checkpoints have no runtime metadata")
+	assert.Equal(t, workers, filterWorkersByResources(workers, request), "legacy checkpoints have no runtime metadata")
 
 	request.Checkpoint.Runtime = types.ContainerRuntimeRunc.String()
-	assert.Equal(t, []*types.Worker{runc}, filterWorkersByResources(workers, request, nil))
+	assert.Equal(t, []*types.Worker{runc}, filterWorkersByResources(workers, request))
 
 	request.Stub.Type = types.StubType(types.StubTypeSandbox)
 	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{gvisor}, request)
@@ -3100,23 +3122,23 @@ func TestCheckpointRuntimeSelection(t *testing.T) {
 
 	// Matching runtime and logical GPU do not imply a compatible host.
 	runc.CheckpointCompatibilityKey = "changed-driver-or-cpu"
-	assert.Empty(t, filterWorkersByResources([]*types.Worker{runc}, request, nil))
+	assert.Empty(t, filterWorkersByResources([]*types.Worker{runc}, request))
 	selected, err = scheduler.selectWorkerFromWorkers([]*types.Worker{runc}, request)
 	assert.NoError(t, err)
 	assert.Equal(t, runc, selected, "use ready capacity for a compatible variant or cold start")
 	assert.Nil(t, scheduler.prepareWorkerRequest(runc, request).Checkpoint)
 
 	request.Checkpoint.CompatibilityKey = ""
-	assert.Empty(t, filterWorkersByResources(workers, request, nil), "legacy deployment snapshots need rebuilding")
+	assert.Empty(t, filterWorkersByResources(workers, request), "legacy deployment snapshots need rebuilding")
 	request.Stub.Type = types.StubType(types.StubTypeSandbox)
 	request.Checkpoint.Runtime = types.ContainerRuntimeGvisor.String()
-	assert.Equal(t, []*types.Worker{gvisor}, filterWorkersByResources(workers, request, nil))
+	assert.Equal(t, []*types.Worker{gvisor}, filterWorkersByResources(workers, request))
 
 	request.Checkpoint.Runtime = types.CheckpointRuntimeFilesystem
-	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "filesystem checkpoints cold-start on any runtime")
+	assert.Equal(t, workers, filterWorkersByResources(workers, request), "filesystem checkpoints cold-start on any runtime")
 
 	request.Checkpoint.Status = string(types.CheckpointStatusCheckpointFailed)
-	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "non-available checkpoints cold-start normally")
+	assert.Equal(t, workers, filterWorkersByResources(workers, request), "non-available checkpoints cold-start normally")
 }
 
 func TestGPUDeviceCheckpointRequiresCompatibleWorker(t *testing.T) {
@@ -3150,25 +3172,26 @@ func TestGPUDeviceCheckpointRequiresCompatibleWorker(t *testing.T) {
 	legacy := worker("v1:profile", types.WorkerStatusAvailable)
 	gpuDevices := worker("v2:profile", types.WorkerStatusAvailable)
 	pending := worker("", types.WorkerStatusPending)
-	assert.Equal(t, []*types.Worker{gpuDevices}, filterWorkersByResources([]*types.Worker{legacy, gpuDevices, pending}, request, nil))
+	assert.Equal(t, []*types.Worker{gpuDevices}, filterWorkersByResources([]*types.Worker{legacy, gpuDevices, pending}, request))
 	assert.False(t, hostMatchesCheckpoint(request.Checkpoint, pending))
 
 	request.Checkpoint.CompatibilityKey = "v1:profile"
 	assert.True(t, hostMatchesCheckpoint(request.Checkpoint, gpuDevices))
 	assert.True(t, hostMatchesCheckpoint(request.Checkpoint, pending), "legacy pending routing remains unchanged")
 	other := worker("v2:other", types.WorkerStatusAvailable)
-	assert.Equal(t, []*types.Worker{legacy, gpuDevices, pending}, filterWorkersByResources([]*types.Worker{legacy, gpuDevices, pending, other}, request, nil))
+	assert.Equal(t, []*types.Worker{legacy, gpuDevices, pending}, filterWorkersByResources([]*types.Worker{legacy, gpuDevices, pending, other}, request))
 	request.Checkpoint.CompatibilityKey = ""
-	assert.Equal(t, []*types.Worker{other}, filterWorkersByResources([]*types.Worker{other}, request, nil), "keyless restores still use free capacity")
+	assert.Equal(t, []*types.Worker{other}, filterWorkersByResources([]*types.Worker{other}, request), "keyless restores still use free capacity")
 	request.Checkpoint.Runtime = types.CheckpointRuntimeFilesystem
 	request.Checkpoint.CompatibilityKey = "v2:other"
-	assert.Equal(t, []*types.Worker{legacy, gpuDevices, pending}, filterWorkersByResources([]*types.Worker{legacy, gpuDevices, pending}, request, nil))
+	assert.Equal(t, []*types.Worker{legacy, gpuDevices, pending}, filterWorkersByResources([]*types.Worker{legacy, gpuDevices, pending}, request))
 }
 
 func TestCheckpointRuntimeFiltersProvisioningControllers(t *testing.T) {
-	runc := &LocalWorkerPoolControllerForTest{name: "runc", containerRuntime: types.ContainerRuntimeRunc.String()}
-	gvisor := &LocalWorkerPoolControllerForTest{name: "gvisor", containerRuntime: types.ContainerRuntimeGvisor.String()}
-	controllers := []WorkerPoolController{runc, gvisor}
+	pools := map[string]types.WorkerPoolConfig{
+		"runc":   {ContainerRuntime: types.ContainerRuntimeRunc.String()},
+		"gvisor": {ContainerRuntime: types.ContainerRuntimeGvisor.String()},
+	}
 	request := &types.ContainerRequest{
 		Checkpoint: &types.Checkpoint{
 			CheckpointId: "checkpoint-1",
@@ -3177,13 +3200,13 @@ func TestCheckpointRuntimeFiltersProvisioningControllers(t *testing.T) {
 		},
 	}
 
-	assert.Equal(t, []WorkerPoolController{gvisor}, filterControllersByFlags(controllers, request))
+	assert.Equal(t, []string{"gvisor"}, poolsAccepting(request, pools))
 
 	request.Checkpoint.Runtime = ""
-	assert.Equal(t, controllers, filterControllersByFlags(controllers, request), "legacy checkpoints retain existing placement")
+	assert.Equal(t, []string{"gvisor", "runc"}, poolsAccepting(request, pools), "legacy checkpoints retain existing placement")
 
 	request.Checkpoint.Runtime = types.CheckpointRuntimeFilesystem
-	assert.Equal(t, controllers, filterControllersByFlags(controllers, request), "filesystem checkpoints cold-start on any runtime")
+	assert.Equal(t, []string{"gvisor", "runc"}, poolsAccepting(request, pools), "filesystem checkpoints cold-start on any runtime")
 }
 
 func TestCheckpointAcceleratorFiltersExistingWorkers(t *testing.T) {
@@ -3212,18 +3235,18 @@ func TestCheckpointAcceleratorFiltersExistingWorkers(t *testing.T) {
 	l40s := worker("l40s", "L40S")
 	workers := []*types.Worker{rtx5090, l40s}
 
-	assert.Equal(t, []*types.Worker{rtx5090}, filterWorkersByResources(workers, request, nil))
+	assert.Equal(t, []*types.Worker{rtx5090}, filterWorkersByResources(workers, request))
 
 	request.Checkpoint.Accelerator = ""
-	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "legacy checkpoints retain GPU preference placement")
+	assert.Equal(t, workers, filterWorkersByResources(workers, request), "legacy checkpoints retain GPU preference placement")
 
 	request.Checkpoint.Runtime = types.CheckpointRuntimeFilesystem
 	request.Checkpoint.Accelerator = "RTX5090"
-	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "filesystem checkpoints do not require the source accelerator")
+	assert.Equal(t, workers, filterWorkersByResources(workers, request), "filesystem checkpoints do not require the source accelerator")
 
 	request.Checkpoint.Accelerator = "RTX5090"
 	request.Checkpoint.Status = string(types.CheckpointStatusRestoreFailed)
-	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "non-available checkpoints cold-start normally")
+	assert.Equal(t, workers, filterWorkersByResources(workers, request), "non-available checkpoints cold-start normally")
 }
 
 func TestCheckpointAcceleratorFiltersProvisioningControllers(t *testing.T) {
@@ -3245,12 +3268,12 @@ func TestCheckpointAcceleratorFiltersProvisioningControllers(t *testing.T) {
 			Accelerator:  "NVIDIA GeForce RTX 5090",
 		},
 	}
-	controllers, err := scheduler.getControllers(request)
+	controllers, err := controllersFor(scheduler, request)
 	assert.Nil(t, err)
 	assert.Equal(t, []WorkerPoolController{rtx5090}, controllers)
 
 	request.Checkpoint.Accelerator = ""
-	controllers, err = scheduler.getControllers(request)
+	controllers, err = controllersFor(scheduler, request)
 	assert.Nil(t, err)
 	assert.ElementsMatch(t, []WorkerPoolController{rtx5090, l40s}, controllers)
 }
@@ -3260,19 +3283,19 @@ func TestCheckpointAcceleratorDefersUnknownAgentGPUToWorker(t *testing.T) {
 	assert.NoError(t, err)
 	scheduler.workerPoolManager = NewWorkerPoolManager()
 
-	private := &LocalWorkerPoolControllerForTest{name: "private", mode: types.PoolModePrivate}
-	localCPU := &LocalWorkerPoolControllerForTest{name: "local-cpu"}
-	privateL40S := &LocalWorkerPoolControllerForTest{name: "private-l40s", mode: types.PoolModePrivate}
-	scheduler.workerPoolManager.SetPool(private.name, types.WorkerPoolConfig{Mode: types.PoolModePrivate}, private)
-	scheduler.workerPoolManager.SetPool(localCPU.name, types.WorkerPoolConfig{}, localCPU)
-	scheduler.workerPoolManager.SetPool(privateL40S.name, types.WorkerPoolConfig{Mode: types.PoolModePrivate, GPUType: "L40S"}, privateL40S)
+	pools := []*WorkerPool{
+		routeTestPool("private", types.WorkerPoolConfig{Mode: types.PoolModePrivate}),
+		routeTestPool("local-cpu", types.WorkerPoolConfig{}),
+		routeTestPool("private-l40s", types.WorkerPoolConfig{Mode: types.PoolModePrivate, GPUType: "L40S"}),
+	}
 
 	request := &types.ContainerRequest{
 		Cpu:          1000,
 		Memory:       1000,
 		GpuRequest:   []string{string(types.GPU_ANY)},
 		GpuCount:     1,
-		PoolSelector: private.name,
+		PoolSelector: "private",
+		Workspace:    testWorkspaceWithStorage(),
 		Checkpoint: &types.Checkpoint{
 			CheckpointId: "checkpoint-1",
 			Status:       string(types.CheckpointStatusAvailable),
@@ -3280,8 +3303,17 @@ func TestCheckpointAcceleratorDefersUnknownAgentGPUToWorker(t *testing.T) {
 		},
 	}
 
-	controllers := []WorkerPoolController{private, localCPU, privateL40S}
-	assert.Equal(t, []WorkerPoolController{private}, scheduler.filterControllersByCheckpointAccelerator(controllers, request))
+	// Whichever pool the request names, these are the ones able to restore it.
+	ableToRun := func() []string {
+		names := []string{}
+		for _, pool := range pools {
+			if poolCanRun(pool, newRouteQuery(request, "")) {
+				names = append(names, pool.Name)
+			}
+		}
+		return names
+	}
+	assert.Equal(t, []string{"private"}, ableToRun())
 
 	matching := &types.Worker{
 		Id:           "rtx5090",
@@ -3299,62 +3331,15 @@ func TestCheckpointAcceleratorDefersUnknownAgentGPUToWorker(t *testing.T) {
 		FreeGpuCount: 1,
 		Gpu:          "L40S",
 	}
-	assert.Equal(t, []*types.Worker{matching}, filterWorkersByResources([]*types.Worker{matching, mismatching}, request, nil))
+	assert.Equal(t, []*types.Worker{matching}, filterWorkersByResources([]*types.Worker{matching, mismatching}, request))
 
 	request.GpuRequest = nil
 	request.GpuCount = 0
 	request.Checkpoint.Accelerator = "CPU"
-	assert.Equal(t, []WorkerPoolController{private, localCPU}, scheduler.filterControllersByCheckpointAccelerator(controllers, request))
+	assert.Equal(t, []string{"private", "local-cpu"}, ableToRun())
 
 	request.Checkpoint.Accelerator = ""
-	assert.Equal(t, controllers, scheduler.filterControllersByCheckpointAccelerator(controllers, request))
-}
-
-func TestCheckpointCompatibilityKeepsManagedOnDemandFallback(t *testing.T) {
-	scheduler, err := NewSchedulerForTest()
-	assert.Nil(t, err)
-	scheduler.workerPoolManager = NewWorkerPoolManager()
-
-	serverless := &LocalWorkerPoolControllerForTest{
-		name:             "serverless-rtx5090",
-		containerRuntime: types.ContainerRuntimeGvisor.String(),
-	}
-	scheduler.workerPoolManager.SetPool(serverless.name, types.WorkerPoolConfig{
-		GPUType:          "RTX5090",
-		ContainerRuntime: types.ContainerRuntimeGvisor.String(),
-	}, serverless)
-
-	onDemandName := types.FailoverOnDemandPoolName("RTX5090")
-	onDemand := &LocalWorkerPoolControllerForTest{
-		name:             onDemandName,
-		containerRuntime: types.ContainerRuntimeRunc.String(),
-		requiresSelector: true,
-	}
-	scheduler.workerPoolManager.SetPool(onDemandName, types.WorkerPoolConfig{
-		GPUType:              "RTX5090",
-		ContainerRuntime:     types.ContainerRuntimeRunc.String(),
-		RequiresPoolSelector: true,
-	}, onDemand)
-	scheduler.config.Scheduling.Failover = types.FailoverConfig{
-		Enabled: true,
-		Chains: map[string]types.FailoverChain{
-			"RTX5090": {OnDemand: &types.FailoverOnDemandStep{MaxNodes: 1}},
-		},
-	}
-
-	request := &types.ContainerRequest{
-		Gpu:      "RTX5090",
-		GpuCount: 1,
-		Checkpoint: &types.Checkpoint{
-			CheckpointId: "checkpoint-1",
-			Status:       string(types.CheckpointStatusAvailable),
-			Runtime:      types.ContainerRuntimeRunc.String(),
-			Accelerator:  "NVIDIA GeForce RTX 5090",
-		},
-	}
-	controllers, err := scheduler.getControllers(request)
-	assert.Nil(t, err)
-	assert.Equal(t, []WorkerPoolController{onDemand}, controllers)
+	assert.Equal(t, []string{"private", "local-cpu", "private-l40s"}, ableToRun())
 }
 
 func TestSelectGPUWorkerDoesNotMutatePriority(t *testing.T) {
@@ -3588,16 +3573,10 @@ func TestAgentManagedCapacityRequiresWorkspaceStorage(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 
-	agentController := &AgentWorkerPoolController{
-		name:             "gladiator",
-		workerPoolConfig: types.WorkerPoolConfig{Mode: types.PoolModeExternal},
-	}
-	localController := &LocalWorkerPoolControllerForTest{name: "default"}
+	pools := map[string]types.WorkerPoolConfig{"gladiator": {Mode: types.PoolModeExternal}, "default": {}}
 	request := &types.ContainerRequest{Cpu: 1000, Memory: 1000}
 
-	assert.Equal(t, []WorkerPoolController{localController}, filterControllersByFlags(
-		[]WorkerPoolController{agentController, localController}, request,
-	))
+	assert.Equal(t, []string{"default"}, poolsAccepting(request, pools))
 
 	workers := []*types.Worker{
 		{Id: "gladiator", PoolName: "gladiator", PoolSelector: "gladiator", Status: types.WorkerStatusAvailable, FreeCpu: 2000, FreeMemory: 2500, Priority: 1000},
@@ -3612,9 +3591,7 @@ func TestAgentManagedCapacityRequiresWorkspaceStorage(t *testing.T) {
 	worker, err = scheduler.selectWorkerFromWorkers(workers, request)
 	assert.Nil(t, err)
 	assert.Equal(t, "gladiator", worker.Id)
-	assert.Equal(t, []WorkerPoolController{agentController, localController}, filterControllersByFlags(
-		[]WorkerPoolController{agentController, localController}, request,
-	))
+	assert.Equal(t, []string{"default", "gladiator"}, poolsAccepting(request, pools))
 }
 
 func TestSelectBuildWorker(t *testing.T) {
@@ -3943,13 +3920,12 @@ func TestCPUShareAgentPoolAdmission(t *testing.T) {
 
 func TestCPUShareLocalWorkerKeepsPodCPUPhysical(t *testing.T) {
 	controller := &LocalKubernetesWorkerPoolController{
-		name: "shared",
+		poolIdentity: poolIdentity{name: "shared", workerPoolConfig: types.WorkerPoolConfig{CPUShareMultiplier: 1.5}},
 		config: types.AppConfig{Worker: types.WorkerConfig{
 			JobResourcesEnforced:       true,
 			DefaultWorkerCPURequest:    1000,
 			DefaultWorkerMemoryRequest: 1024,
 		}},
-		workerPoolConfig: types.WorkerPoolConfig{CPUShareMultiplier: 1.5},
 	}
 
 	job, worker := controller.createWorkerJob("worker-1", 4000, 8192, "", 0, "token")
@@ -3964,15 +3940,15 @@ func TestCPUShareProvisioningPlaceholderMatchesLocalWorker(t *testing.T) {
 	s, err := NewSchedulerForTest()
 	require.NoError(t, err)
 	request := &types.ContainerRequest{ContainerId: "c", Cpu: 3000, Memory: 1024}
-	for _, controller := range []*LocalWorkerPoolControllerForTest{{name: "local"}, {name: "agent", mode: types.PoolModePrivate}} {
-		s.workerPoolManager.SetPool(controller.Name(), types.WorkerPoolConfig{CPUShareMultiplier: 2}, controller)
+	for name, mode := range map[string]types.PoolMode{"local": types.PoolModeLocal, "agent": types.PoolModePrivate} {
+		s.workerPoolManager.SetPool(name, types.WorkerPoolConfig{CPUShareMultiplier: 2, Mode: mode}, &LocalWorkerPoolControllerForTest{name: name})
 	}
 
 	local, _ := s.workerPoolManager.GetPool("local")
-	cpu := s.workerCPUForControllerRequest(local.Controller, request)
-	require.Equal(t, 2*cpu, s.newProvisioningReservation(request, local.Controller).worker.TotalCpu)
+	size := s.workerSizeFor(local, request)
+	require.Equal(t, 2*size.cpu, s.newProvisioningReservation(request, local, size, 1).worker.TotalCpu)
 	agent, _ := s.workerPoolManager.GetPool("agent")
-	require.EqualValues(t, 3000, s.newProvisioningReservation(request, agent.Controller).worker.TotalCpu)
+	require.EqualValues(t, 3000, s.newProvisioningReservation(request, agent, s.workerSizeFor(agent, request), 1).worker.TotalCpu)
 }
 
 func TestNewSchedulerRejectsInvalidCPUShareMultiplier(t *testing.T) {

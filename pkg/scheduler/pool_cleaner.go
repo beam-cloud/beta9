@@ -24,6 +24,15 @@ type WorkerResourceCleaner struct {
 	EventRepo   repository.EventRepository
 	WorkerRepo  repository.WorkerRepository
 	BackendRepo repository.BackendRepository
+	// Now is the clock pod ages are measured on. Nil means the wall clock.
+	Now func() time.Time
+}
+
+func (c *WorkerResourceCleaner) now() time.Time {
+	if c.Now == nil {
+		return time.Now()
+	}
+	return c.Now()
 }
 
 func (c *WorkerResourceCleaner) listJobs(ctx context.Context) (*batchv1.JobList, error) {
@@ -71,9 +80,15 @@ func (c *WorkerResourceCleaner) bindWorkerToken(ctx context.Context, job batchv1
 	}
 }
 
+// Clean is one cleanup pass over the pool. It removes the worker Jobs that
+// have finished, that have no worker on record or that have been pending for
+// too long, and the workers on record that have no Job. On the way it binds
+// the token of each Job's worker (see BindWorkerTokens). What it cannot do it
+// reports and leaves for the next pass.
 func (c *WorkerResourceCleaner) Clean(ctx context.Context) {
 	jobList, err := c.listJobs(ctx)
 	if err != nil {
+		log.Error().Err(err).Str("pool_name", c.PoolName).Msg("unable to list worker jobs to clean up")
 		return
 	}
 
@@ -88,6 +103,7 @@ func (c *WorkerResourceCleaner) Clean(ctx context.Context) {
 			LabelSelector: fmt.Sprintf("job-name=%s", job.Name),
 		})
 		if err != nil {
+			log.Error().Err(err).Str("pool_name", c.PoolName).Str("job_name", job.Name).Msg("unable to list the pods of a worker job")
 			continue
 		}
 
@@ -113,11 +129,7 @@ func (c *WorkerResourceCleaner) deleteCompletedJob(ctx context.Context, pod core
 		return
 	}
 
-	if err := c.deleteWorkerResources(ctx, workerId, job); err != nil {
-		return
-	}
-
-	c.pushWorkerDeletedEvent(workerId, machineIdForJobPod(job, pod), types.DeletedWorkerReasonPodCompleted)
+	c.deleteWorker(ctx, workerId, job, pod, types.DeletedWorkerReasonPodCompleted)
 }
 
 // deleteStaleJob deletes jobs/pods that have no corresponding state in the repository
@@ -138,14 +150,12 @@ func (c *WorkerResourceCleaner) deleteStaleJob(ctx context.Context, pod corev1.P
 	}
 
 	if _, ok := err.(*types.ErrWorkerNotFound); !ok {
+		// The worker may well be on record, so its Job stays.
+		log.Error().Err(err).Str("pool_name", c.PoolName).Str("worker_id", workerId).Str("job_name", job.Name).Msg("unable to read the worker of a job")
 		return
 	}
 
-	if err := c.deleteWorkerResources(ctx, workerId, job); err != nil {
-		return
-	}
-
-	c.pushWorkerDeletedEvent(workerId, machineIdForJobPod(job, pod), types.DeletedWorkerReasonPodWithoutState)
+	c.deleteWorker(ctx, workerId, job, pod, types.DeletedWorkerReasonPodWithoutState)
 }
 
 // deletePendingJob deletes pending jobs/pods that have exceeded the age limit in a "pending" state
@@ -159,20 +169,29 @@ func (c *WorkerResourceCleaner) deletePendingJob(ctx context.Context, pod corev1
 		return
 	}
 
-	if time.Since(pod.CreationTimestamp.Time) < c.Config.CleanupPendingWorkerAgeLimit {
+	if c.now().Sub(pod.CreationTimestamp.Time) < c.Config.CleanupPendingWorkerAgeLimit {
 		return
 	}
 
+	c.deleteWorker(ctx, workerId, job, pod, types.DeletedWorkerReasonPodExceededPendingAgeLimit)
+}
+
+// deleteWorker removes a worker's record and its Job, and reports the worker
+// deleted for the reason given.
+func (c *WorkerResourceCleaner) deleteWorker(ctx context.Context, workerId string, job batchv1.Job, pod corev1.Pod, reason types.DeletedWorkerReason) {
 	if err := c.deleteWorkerResources(ctx, workerId, job); err != nil {
+		log.Error().Err(err).Str("pool_name", c.PoolName).Str("worker_id", workerId).Str("job_name", job.Name).
+			Str("reason", string(reason)).Msg("unable to delete worker")
 		return
 	}
 
-	c.pushWorkerDeletedEvent(workerId, machineIdForJobPod(job, pod), types.DeletedWorkerReasonPodExceededPendingAgeLimit)
+	c.pushWorkerDeletedEvent(workerId, machineIdForJobPod(job, pod), reason)
 }
 
 func (c *WorkerResourceCleaner) deleteWorkerStatesWithoutJobs(ctx context.Context, workerJobIds map[string]struct{}) {
 	workers, err := c.WorkerRepo.GetAllWorkersInPool(c.PoolName)
 	if err != nil {
+		log.Error().Err(err).Str("pool_name", c.PoolName).Msg("unable to list the pool's workers to find those without a job")
 		return
 	}
 
@@ -185,13 +204,18 @@ func (c *WorkerResourceCleaner) deleteWorkerStatesWithoutJobs(ctx context.Contex
 		}
 		jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, c.PoolName, worker.Id)
 		_, err := c.KubeClient.BatchV1().Jobs(c.Config.Namespace).Get(ctx, jobName, metav1.GetOptions{})
-		if err == nil || !apierrors.IsNotFound(err) {
+		if err == nil {
 			// The job may have been created after the list at the start of this
 			// cleanup pass. Only delete state after a point-in-time recheck.
 			continue
 		}
+		if !apierrors.IsNotFound(err) {
+			log.Error().Err(err).Str("pool_name", c.PoolName).Str("worker_id", worker.Id).Str("job_name", jobName).Msg("unable to read the job of a worker")
+			continue
+		}
 
 		if err := c.deleteWorkerState(ctx, worker.Id); err != nil {
+			log.Error().Err(err).Str("pool_name", c.PoolName).Str("worker_id", worker.Id).Msg("unable to remove the record of a worker that has no job")
 			continue
 		}
 

@@ -484,6 +484,10 @@ func (l *RedisLock) ReleaseWithToken(key string, token string) error {
 	return lock.Release(context.Background())
 }
 
+// Release gives up the lock on key. The lock is forgotten whatever Redis
+// answers: one that has expired, or that Redis could not be asked to release,
+// is not held either, and would otherwise be remembered until the process
+// ends.
 func (l *RedisLock) Release(key string) error {
 	l.mu.Lock()
 	lock, ok := l.locks[key]
@@ -492,16 +496,15 @@ func (l *RedisLock) Release(key string) error {
 	if !ok {
 		return redislock.ErrLockNotHeld
 	}
-	if err := lock.Release(context.Background()); err != nil {
-		return err
-	}
+	err := lock.Release(context.Background())
 
+	// The key may have been locked again since; that lock is not this one.
 	l.mu.Lock()
 	if l.locks[key] == lock {
 		delete(l.locks, key)
 	}
 	l.mu.Unlock()
-	return nil
+	return err
 }
 
 func CopyStruct(src, dst any) error {

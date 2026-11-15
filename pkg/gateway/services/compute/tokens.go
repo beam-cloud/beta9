@@ -241,23 +241,34 @@ func (s *Service) savePoolJoinToken(ctx context.Context, state *model.JoinTokenS
 		WorkspaceID: state.WorkspaceID,
 		PoolName:    state.PoolName,
 		Action:      types.EventComputeActionJoinTokenCreated,
-		Status:      types.ComputePoolStatusActive,
+		Status:      model.PoolStatusActive,
 		Attrs:       attrs,
 	})
 	return nil
 }
 
+// revokedJoinTokenKept is how long a join token stays in Redis once it is
+// revoked: the shortest life the repository gives a token.
+const revokedJoinTokenKept = time.Second
+
+// revokeComputeJoinTokenHash ends a join token: it admits nothing from now
+// on, and a moment later it is gone from Redis. Revoking a token that is
+// gone is not an error.
+//
+// The repository cannot delete a token, so it is saved once more: marked as
+// revoked, which every release honours, and to lapse at once. A token that
+// an earlier release left in Redis as revoked goes the same way.
 func (s *Service) revokeComputeJoinTokenHash(ctx context.Context, tokenHash string) error {
 	tokenHash = strings.TrimSpace(tokenHash)
 	if s == nil || s.computeRepo == nil || tokenHash == "" {
 		return nil
 	}
 	state, err := s.computeRepo.GetJoinTokenState(ctx, tokenHash)
-	if err != nil || state == nil || state.Revoked {
+	if err != nil || state == nil {
 		return err
 	}
 	state.Revoked = true
-	return s.saveComputeJoinTokenState(ctx, state, joinTokenStateTTL(state))
+	return s.saveComputeJoinTokenState(ctx, state, revokedJoinTokenKept)
 }
 
 func joinTokenExpired(state *model.JoinTokenState, now time.Time) bool {

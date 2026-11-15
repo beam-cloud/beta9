@@ -2,6 +2,8 @@ package types
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -31,6 +33,31 @@ type AppConfig struct {
 	// ManagedEndpoints configures the platform-owned inference endpoints
 	// (GitOps-driven stubs filled onto spare GPU capacity, served under /v1).
 	ManagedEndpoints ManagedEndpointsConfig `key:"managedEndpoints" json:"managed_endpoints"`
+}
+
+// Validate reports settings that cannot mean what was intended, and stops the
+// gateway starting. So it refuses only what a config that ran on the previous
+// release cannot hold: anything else is logged where it is read, and an
+// upgrade never fails on a config that worked.
+func (c AppConfig) Validate() error {
+	pendingLimit := c.Worker.CleanupPendingWorkerAgeLimit
+	for _, name := range slices.Sorted(maps.Keys(c.Worker.Pools)) {
+		pool := c.Worker.Pools[name]
+		if err := pool.Validate(); err != nil {
+			return fmt.Errorf("worker pool %q: %w", name, err)
+		}
+		if stalledAfter := time.Duration(pool.StalledAfter); pendingLimit > 0 && stalledAfter >= pendingLimit {
+			return fmt.Errorf("worker pool %q: stalledAfter is %s, but a worker that is still Pending after %s is removed (worker.cleanupPendingWorkerAgeLimit), so the pool would never count as stalled",
+				name, stalledAfter, pendingLimit)
+		}
+	}
+	switch {
+	case c.Providers.MaxHourlyCents < 0:
+		return fmt.Errorf("providers.maxHourlyCents cannot be negative: leave it out for no cap")
+	case c.Providers.MaxDailyCents < 0:
+		return fmt.Errorf("providers.maxDailyCents cannot be negative: leave it out for no cap")
+	}
+	return nil
 }
 
 // ManagedEndpointsConfig is the cluster-level configuration for the managed
@@ -680,7 +707,12 @@ func (m PoolMode) AgentHosted() bool {
 }
 
 type WorkerPoolConfig struct {
-	GPUType                   string                            `key:"gpuType" json:"gpu_type"`
+	GPUType string `key:"gpuType" json:"gpu_type"`
+	// AlsoServes lists other GPU types whose requests may overflow into this
+	// pool once the pools of that type have no room. It is the whole of
+	// fallback configuration: a request for A10G runs on pools whose gpuType
+	// is A10G, then on pools that list A10G here.
+	AlsoServes                []string                          `key:"alsoServes" json:"also_serves,omitempty"`
 	Runtime                   string                            `key:"runtime" json:"runtime"`                                 // Kubernetes RuntimeClass for pod (e.g., "nvidia")
 	ContainerRuntime          string                            `key:"containerRuntime" json:"container_runtime"`              // Pool-specific container runtime: "runc", "gvisor", or "microvm"
 	ContainerRuntimeConfig    RuntimeConfig                     `key:"containerRuntimeConfig" json:"container_runtime_config"` // Pool-specific container runtime configuration
@@ -710,11 +742,199 @@ type WorkerPoolConfig struct {
 	// Locality is the network domain used to scope KV caching and P/D pairing.
 	// Defaults to the pool name.
 	Locality string `key:"locality" json:"locality"`
+	// StalledAfter is how long a Kubernetes pool's worker may stay Pending
+	// before the pool counts as stalled. A stalled pool is not asked for more
+	// workers, and requests stop waiting for the ones that have not started,
+	// so they move on to the next pool in their route. Unset, the pool never
+	// counts as stalled and its requests wait.
+	StalledAfter Duration `key:"stalledAfter" json:"stalled_after,omitempty"`
+	// Provisioning makes the pool buy its machines from one provider. With
+	// poolSizing.minFree* the pool keeps that much free, and with alsoServes
+	// it takes overflow, like any other pool.
+	Provisioning WorkerPoolProvisioningConfig `key:"provisioning" json:"provisioning,omitzero"`
+}
+
+// WorkerPoolProvisioningConfig is where and how a pool buys machines.
+// Provider and MaxNodes are required.
+type WorkerPoolProvisioningConfig struct {
+	// Provider is the key under providers that the machines are bought from.
+	Provider string `key:"provider" json:"provider"`
+	// Spot buys machines the provider may take back, which makes the pool
+	// preemptable. Without it the pool buys on-demand machines.
+	Spot bool `key:"spot" json:"spot,omitempty"`
+	// MaxNodes is the most machines the pool holds, counting those that are
+	// still booting.
+	MaxNodes int `key:"maxNodes" json:"max_nodes"`
+	// MaxNodeHourlyCents is the most one machine may cost per hour. Zero
+	// means any price.
+	MaxNodeHourlyCents int64 `key:"maxNodeHourlyCents" json:"max_node_hourly_cents,omitempty"`
+	// Regions are the provider's own names for the regions to buy in. Empty
+	// means any region it offers.
+	Regions []string `key:"regions" json:"regions,omitempty"`
+	// IdleTimeout is how long a machine may have nothing to run before it is
+	// released, unless it holds the pool's free capacity. Zero means ten
+	// minutes.
+	IdleTimeout Duration `key:"idleTimeout" json:"idle_timeout,omitempty"`
+	// BootTimeout is how long a machine has to join the pool after it is
+	// bought. One that has not is deleted, and so is one that joined and has
+	// since been without a worker for this long. Zero means twenty minutes.
+	BootTimeout Duration `key:"bootTimeout" json:"boot_timeout,omitempty"`
+}
+
+const (
+	defaultProvisioningIdleTimeout = 10 * time.Minute
+	defaultProvisioningBootTimeout = 20 * time.Minute
+)
+
+// IdleAfter is how long a machine may have nothing to run before it is
+// released.
+func (p WorkerPoolProvisioningConfig) IdleAfter() time.Duration {
+	if p.IdleTimeout > 0 {
+		return time.Duration(p.IdleTimeout)
+	}
+	return defaultProvisioningIdleTimeout
+}
+
+// BootWithin is how long a machine has to join the pool.
+func (p WorkerPoolProvisioningConfig) BootWithin() time.Duration {
+	if p.BootTimeout > 0 {
+		return time.Duration(p.BootTimeout)
+	}
+	return defaultProvisioningBootTimeout
+}
+
+// written reports whether the config file or the API set anything in the
+// block.
+func (p WorkerPoolProvisioningConfig) written() bool {
+	return p.Provider != "" || p.Spot || p.MaxNodes != 0 || p.MaxNodeHourlyCents != 0 ||
+		len(p.Regions) > 0 || p.IdleTimeout != 0 || p.BootTimeout != 0
+}
+
+// Buys reports whether the pool buys its machines from a provider.
+func (c WorkerPoolConfig) Buys() bool {
+	return c.Provisioning.Provider != ""
+}
+
+// ApplyProvisioning fills in what a provisioning block implies. Machines that
+// are bought join through the agent, so the pool needs no mode. Spot machines
+// can be taken back, so the pool takes only work that may be interrupted.
+func (c *WorkerPoolConfig) ApplyProvisioning() {
+	if !c.Buys() {
+		return
+	}
+	if c.Mode == "" {
+		c.Mode = PoolModeExternal
+	}
+	if c.Provisioning.Spot {
+		c.Preemptable = true
+	}
 }
 
 // AgentHosted reports whether this concrete pool uses the agent control path.
 func (c WorkerPoolConfig) AgentHosted() bool {
-	return c.Mode.AgentHosted() || c.Mode == PoolModeExternal
+	return c.Mode.AgentHosted() || c.Mode == PoolModeExternal || c.Buys()
+}
+
+// Serves reports whether the pool lists the GPU type in alsoServes.
+func (c WorkerPoolConfig) Serves(gpu string) bool {
+	return slices.ContainsFunc(c.AlsoServes, func(served string) bool {
+		return strings.EqualFold(served, gpu)
+	})
+}
+
+// Validate reports settings that cannot mean what was intended. It is the
+// one check of a pool's config, whether the pool comes from the config file
+// or the pools API.
+func (c WorkerPoolConfig) Validate() error {
+	if err := c.CPUShareMultiplier.Validate(); err != nil {
+		return err
+	}
+	if err := c.validateAlsoServes(); err != nil {
+		return err
+	}
+	if err := c.validateProvisioning(); err != nil {
+		return err
+	}
+	switch {
+	case c.StalledAfter == 0:
+	case c.Buys():
+		return fmt.Errorf("stalledAfter applies to Kubernetes pools: a pool that buys machines gives each one provisioning.bootTimeout to join")
+	case c.AgentHosted():
+		return fmt.Errorf("stalledAfter applies to Kubernetes pools: a pool in %s mode has no worker Jobs that can stall", c.Mode)
+	}
+	return validateDuration("stalledAfter", c.StalledAfter, "2m")
+}
+
+// validateDuration rejects a duration that cannot be what was meant. A bare
+// number in YAML is read as nanoseconds, so `120` would be 120ns.
+func validateDuration(key string, d Duration, example string) error {
+	switch {
+	case d < 0:
+		return fmt.Errorf("%s cannot be negative", key)
+	case d > 0 && d < Duration(time.Second):
+		return fmt.Errorf("%s is %s: write a duration of at least one second, such as %s", key, d, example)
+	}
+	return nil
+}
+
+// validateProvisioning reports a provisioning block that cannot buy what was
+// intended.
+func (c WorkerPoolConfig) validateProvisioning() error {
+	p := c.Provisioning
+	switch {
+	case !p.written():
+		return nil
+	case strings.TrimSpace(p.Provider) == "":
+		return fmt.Errorf("provisioning needs a provider: the key under providers to buy machines from")
+	case p.MaxNodes < 1:
+		return fmt.Errorf("provisioning.maxNodes must be at least 1: it is the most machines the pool may hold")
+	case p.MaxNodeHourlyCents < 0:
+		return fmt.Errorf("provisioning.maxNodeHourlyCents cannot be negative")
+	case c.Mode != "" && c.Mode != PoolModeExternal:
+		return fmt.Errorf("a pool with a provisioning block buys machines that join through the agent: remove mode %q", c.Mode)
+	}
+	for _, region := range p.Regions {
+		if strings.TrimSpace(region) == "" {
+			return fmt.Errorf("provisioning.regions contains an empty region")
+		}
+	}
+	if err := validateDuration("provisioning.idleTimeout", p.IdleTimeout, "10m"); err != nil {
+		return err
+	}
+	return validateDuration("provisioning.bootTimeout", p.BootTimeout, "20m")
+}
+
+// validateAlsoServes reports alsoServes entries that cannot mean what was
+// intended: a CPU pool serving GPU requests, a name no request asks for, the
+// "any" wildcard, the pool's own GPU type, or a GPU type listed twice.
+func (c WorkerPoolConfig) validateAlsoServes() error {
+	if len(c.AlsoServes) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(c.GPUType) == "" {
+		return fmt.Errorf("alsoServes needs a gpuType: a CPU pool cannot run GPU requests")
+	}
+	seen := map[GpuType]bool{}
+	for _, entry := range c.AlsoServes {
+		written := strings.TrimSpace(entry)
+		gpu := NormalizeGPUType(written)
+		switch {
+		case written == "":
+			return fmt.Errorf("alsoServes contains an empty GPU type")
+		case gpu == GPU_ANY:
+			return fmt.Errorf("alsoServes cannot list %q: requests for any GPU already reach every GPU pool", entry)
+		case !KnownGPUType(gpu):
+			return fmt.Errorf("alsoServes lists %q, which is not a GPU type that requests ask for", entry)
+		case !strings.EqualFold(string(gpu), written):
+			return fmt.Errorf("alsoServes lists %q: requests ask for that GPU as %s", entry, gpu)
+		case gpu == NormalizeGPUType(c.GPUType):
+			return fmt.Errorf("alsoServes lists %s, which is the pool's own gpuType", entry)
+		case seen[gpu]:
+			return fmt.Errorf("alsoServes lists %s twice", entry)
+		}
+		seen[gpu] = true
+	}
+	return nil
 }
 
 type WorkerPoolCacheConfig struct {
@@ -730,78 +950,31 @@ type WorkerPoolCacheDiskConfig struct {
 	MinFreeBytes int64   `key:"minFreeBytes" json:"min_free_bytes"`
 }
 
+// SchedulingConfig holds scheduling.failover, which alsoServes on each pool
+// replaced. The section is still read for one release so a deployed config
+// keeps working: its chains are converted to alsoServes at startup, with a
+// warning that prints the lines to write instead.
 type SchedulingConfig struct {
 	Failover FailoverConfig `key:"failover" json:"failover"`
 }
 
-// FailoverConfig routes container requests to alternate pools when the pools
-// matching the requested GPU have no free capacity. Capacity decides placement,
-// never a clock: a chain is a preference order, not a schedule.
+// FailoverConfig is the deprecated scheduling.failover section.
 type FailoverConfig struct {
 	Enabled bool `key:"enabled" json:"enabled"`
 
-	// Chains is keyed by GPU type (e.g. "A10G"). A request binds to the chain
-	// of the first GPU in its request list that has one.
+	// Chains is keyed by GPU type (e.g. "A10G").
 	Chains map[string]FailoverChain `key:"chains" json:"chains"`
-
-	// Health thresholds drive pool.schedulable/unschedulable events. They are
-	// observability only and are never an input to placement decisions.
-	Health FailoverHealthConfig `key:"health" json:"health"`
-
-	OnDemand OnDemandConfig `key:"onDemand" json:"on_demand"`
 }
 
-// FailoverOnDemandPoolCreator marks pools owned by the failover reconciler.
-const FailoverOnDemandPoolCreator = "scheduling.failover"
-
-// FailoverChain is the failover preference order for one GPU type. Pools
-// matching the requested GPU type are always preferred over any chain entry.
+// FailoverChain lists the pools that requests for one GPU type may overflow
+// into. Each becomes an alsoServes entry on the pool it names.
 type FailoverChain struct {
-	// Pools are tried in order once the requested GPU type lacks free capacity.
 	Pools []string `key:"pools" json:"pools"`
-
-	// OnDemand, when set, is the terminal step: real hardware is reserved only
-	// once every pool in {requested GPU pools ∪ Pools} has refused for capacity.
-	OnDemand *FailoverOnDemandStep `key:"onDemand" json:"on_demand"`
-}
-
-// FailoverOnDemandStep bounds what the control plane may reserve for a chain.
-type FailoverOnDemandStep struct {
-	GPUs      []GpuType         `key:"gpus" json:"gpus"`
-	Providers []MachineProvider `key:"providers" json:"providers"`
-	MaxNodes  int               `key:"maxNodes" json:"max_nodes"`
-}
-
-const failoverOnDemandPoolPrefix = "ondemand-"
-
-// FailoverOnDemandPoolName returns the managed pool name for a GPU chain.
-func FailoverOnDemandPoolName(gpu string) string {
-	return failoverOnDemandPoolPrefix + strings.ToLower(strings.TrimSpace(gpu))
-}
-
-type FailoverHealthConfig struct {
-	MaxPendingWorkers      int64 `key:"maxPendingWorkers" json:"max_pending_workers"`
-	MaxSchedulingLatencyMs int64 `key:"maxSchedulingLatencyMs" json:"max_scheduling_latency_ms"`
-	MinMachinesAvailable   int64 `key:"minMachinesAvailable" json:"min_machines_available"`
-}
-
-type OnDemandConfig struct {
-	Budget             OnDemandBudgetConfig `key:"budget" json:"budget"`
-	ScaleDownAfterIdle time.Duration        `key:"scaleDownAfterIdle" json:"scale_down_after_idle"`
-}
-
-// OnDemandBudgetConfig caps platform spend on failover hardware. Operators type
-// cents; micro-dollars stay internal to the reservation wire format.
-type OnDemandBudgetConfig struct {
-	MaxHourlyCents int64 `key:"maxHourlyCents" json:"max_hourly_cents"`
-	MaxDailyCents  int64 `key:"maxDailyCents" json:"max_daily_cents"`
 }
 
 // MicrosPerCent converts between the operator-facing unit (cents) and the
 // micro-dollars used internally by reservations and offers.
 const MicrosPerCent = 10_000
-
-func CentsToMicros(cents int64) int64 { return cents * MicrosPerCent }
 
 func MicrosToCents(micros int64) int64 {
 	if micros <= 0 {
@@ -810,73 +983,34 @@ func MicrosToCents(micros int64) int64 {
 	return (micros + MicrosPerCent/2) / MicrosPerCent
 }
 
-// Validate reports configuration that can never behave as an operator intends:
-// an empty chain, a pool listed twice, a chain that fails over to a pool
-// already serving the chain's own GPU type, or an on-demand step with no cap.
+// AlsoServes converts the chains to the alsoServes entries that replace them:
+// for each pool a chain names, the GPU types it should list. It is empty when
+// the section is disabled, as the chains had no effect then either.
 //
-// A name that matches no configured pool is not an error: chains may target
-// pools created through the managed-pool API, which are absent from the config
-// file. The scheduler skips chain pools it cannot resolve.
-func (c FailoverConfig) Validate(pools map[string]WorkerPoolConfig) error {
+// The section is not validated: it is on its way out, and a config that the
+// previous release accepted must not stop this one starting. Names that are
+// blank are skipped instead.
+func (c FailoverConfig) AlsoServes() map[string][]string {
+	served := map[string][]string{}
 	if !c.Enabled {
-		return nil
+		return served
 	}
-
-	if c.Health.MaxPendingWorkers < 0 || c.Health.MaxSchedulingLatencyMs < 0 || c.Health.MinMachinesAvailable < 0 {
-		return fmt.Errorf("failover health thresholds cannot be negative")
-	}
-	if c.OnDemand.Budget.MaxHourlyCents < 0 || c.OnDemand.Budget.MaxDailyCents < 0 {
-		return fmt.Errorf("failover onDemand budgets cannot be negative")
-	}
-	if c.OnDemand.ScaleDownAfterIdle < 0 {
-		return fmt.Errorf("failover onDemand scaleDownAfterIdle cannot be negative")
-	}
-
-	chainNames := map[string]string{}
 	for gpu, chain := range c.Chains {
-		normalizedGPU := strings.ToUpper(strings.TrimSpace(gpu))
-		if normalizedGPU == "" {
-			return fmt.Errorf("failover chain GPU cannot be empty")
+		gpu = strings.ToUpper(strings.TrimSpace(gpu))
+		if gpu == "" {
+			continue
 		}
-		if previous, duplicate := chainNames[normalizedGPU]; duplicate {
-			return fmt.Errorf("failover chains %q and %q name the same GPU", previous, gpu)
-		}
-		chainNames[normalizedGPU] = gpu
-
-		if len(chain.Pools) == 0 && chain.OnDemand == nil {
-			return fmt.Errorf("failover chain %s has no pools and no onDemand step", gpu)
-		}
-
-		seen := map[string]bool{}
-		for _, poolName := range chain.Pools {
-			if strings.TrimSpace(poolName) == "" {
-				return fmt.Errorf("failover chain %s contains an empty pool name", gpu)
-			}
-			if seen[poolName] {
-				return fmt.Errorf("failover chain %s lists pool %q twice", gpu, poolName)
-			}
-			seen[poolName] = true
-
-			if pool, ok := pools[poolName]; ok && strings.EqualFold(pool.GPUType, gpu) {
-				return fmt.Errorf("failover chain %s references pool %q, which already serves %s", gpu, poolName, gpu)
-			}
-		}
-
-		if chain.OnDemand != nil && chain.OnDemand.MaxNodes <= 0 {
-			return fmt.Errorf("failover chain %s onDemand step requires maxNodes > 0", gpu)
-		}
-		if chain.OnDemand != nil {
-			poolName := FailoverOnDemandPoolName(gpu)
-			if seen[poolName] {
-				return fmt.Errorf("failover chain %s lists managed onDemand pool %q explicitly", gpu, poolName)
-			}
-			if _, conflict := pools[poolName]; conflict {
-				return fmt.Errorf("failover chain %s onDemand pool %q conflicts with a configured worker pool", gpu, poolName)
+		for _, pool := range chain.Pools {
+			if strings.TrimSpace(pool) != "" {
+				served[pool] = append(served[pool], gpu)
 			}
 		}
 	}
-
-	return nil
+	for pool, gpus := range served {
+		slices.Sort(gpus)
+		served[pool] = slices.Compact(gpus)
+	}
+	return served
 }
 
 type RuntimeConfig struct {
@@ -928,22 +1062,146 @@ type WorkerPoolJobSpecPoolSizingConfig struct {
 	SharedMemoryLimitPct  string `key:"sharedMemoryLimitPct" json:"shared_memory_limit_pct"`
 }
 
-type MachineProvider string
-
+// ProviderConfig holds the credentials and settings of the providers Beam
+// buys machines from.
 type ProviderConfig struct {
 	Vast      VastProviderConfig      `key:"vast" json:"vast"`
 	Shadeform ShadeformProviderConfig `key:"shadeform" json:"shadeform"`
 	Hetzner   HetznerProviderConfig   `key:"hetzner" json:"hetzner"`
+	Verda     VerdaProviderConfig     `key:"verda" json:"verda"`
+	Nebius    NebiusProviderConfig    `key:"nebius" json:"nebius"`
+	AWS       AWSProviderConfig       `key:"aws" json:"aws"`
+	GCP       GCPProviderConfig       `key:"gcp" json:"gcp"`
+
+	// MaxHourlyCents caps what the machines bought for pools cost per hour,
+	// all pools together: a machine that would take the total over it is not
+	// bought. Zero means no cap.
+	MaxHourlyCents int64 `key:"maxHourlyCents" json:"max_hourly_cents"`
+	// MaxDailyCents stops pools buying once this much has been spent on
+	// their machines in the last 24 hours. Machines that are running keep
+	// running. Zero means no cap.
+	MaxDailyCents int64 `key:"maxDailyCents" json:"max_daily_cents"`
 }
 
+// VastProviderConfig is for Vast, from which pools rent interruptible
+// virtual machines. The account needs an SSH key, added in Vast's console:
+// Vast starts no virtual machine without one.
 type VastProviderConfig struct {
 	ApiKey  string `key:"apiKey" json:"api_key"`
 	BaseURL string `key:"baseURL" json:"base_url"`
+	// Image is the VM image a machine boots, one of Vast's
+	// docker.io/vastai/kvm. Empty means Ubuntu 22.04 with the NVIDIA driver.
+	Image string `key:"image" json:"image"`
+	// DiskGB is the size of a machine's disk. Zero means 200.
+	DiskGB int64 `key:"diskGB" json:"disk_gb"`
 }
 
 type ShadeformProviderConfig struct {
 	ApiKey  string `key:"apiKey" json:"api_key"`
 	BaseURL string `key:"baseURL" json:"base_url"`
+}
+
+// VerdaProviderConfig is for Verda, formerly DataCrunch. The client id and
+// secret are the "Cloud API credentials" of a Verda project.
+type VerdaProviderConfig struct {
+	ClientID     string `key:"clientId" json:"client_id"`
+	ClientSecret string `key:"clientSecret" json:"client_secret"`
+	BaseURL      string `key:"baseURL" json:"base_url"`
+	// Images are the OS images a machine may boot, best first. A machine
+	// boots the first that its instance type supports. Empty means Ubuntu
+	// 24.04 with the NVIDIA driver and Docker.
+	Images []string `key:"images" json:"images"`
+	// SSHKeyIDs are the ids of the Verda SSH keys that may log in.
+	SSHKeyIDs []string `key:"sshKeyIds" json:"ssh_key_ids"`
+	// DiskGB is the size of a machine's disk. Zero means 200.
+	DiskGB int64 `key:"diskGB" json:"disk_gb"`
+}
+
+// NebiusProviderConfig is for Nebius, from which pools buy preemptible VMs.
+// The service account needs the editor role. It signs in with an authorized
+// key: publicKeyId is the ID Nebius gave the uploaded public key, and
+// privateKey is the other half, in PEM form.
+type NebiusProviderConfig struct {
+	ServiceAccountID string `key:"serviceAccountId" json:"service_account_id"`
+	PublicKeyID      string `key:"publicKeyId" json:"public_key_id"`
+	PrivateKey       string `key:"privateKey" json:"private_key"`
+	// Projects are where machines are bought. A Nebius project is in one
+	// region, so there is one for each region to buy in.
+	Projects []NebiusProjectConfig `key:"projects" json:"projects"`
+	BaseURL  string                `key:"baseURL" json:"base_url"`
+	TokenURL string                `key:"tokenURL" json:"token_url"`
+	// ImageFamily is the family of the image a machine boots. Empty means
+	// Ubuntu 24.04 with the NVIDIA driver.
+	ImageFamily string `key:"imageFamily" json:"image_family"`
+	// DiskGB is the size of a machine's disk. Zero means 200.
+	DiskGB int64 `key:"diskGB" json:"disk_gb"`
+}
+
+type NebiusProjectConfig struct {
+	ID string `key:"id" json:"id"`
+	// SubnetID is the subnet machines are put in. It may be left out for a
+	// project that has one subnet.
+	SubnetID string `key:"subnetId" json:"subnet_id"`
+}
+
+// AWSProviderConfig is for AWS, from which pools buy EC2 Spot Instances. It
+// is in use once it names a region.
+type AWSProviderConfig struct {
+	// AccessKeyID and SecretAccessKey are an IAM user's. Without them the
+	// gateway uses the credentials of where it runs: its environment, or
+	// the role of its pod or machine.
+	AccessKeyID     string `key:"accessKeyId" json:"access_key_id"`
+	SecretAccessKey string `key:"secretAccessKey" json:"secret_access_key"`
+	// Regions are where machines are bought.
+	Regions []AWSProviderRegionConfig `key:"regions" json:"regions"`
+	// ImageName is the name of the Amazon image a machine boots, which may
+	// end in *; the newest that fits is used. Empty means Amazon's Deep
+	// Learning Base image with the NVIDIA driver, on Ubuntu 22.04.
+	ImageName string `key:"imageName" json:"image_name"`
+	// DiskGB is the size of a machine's disk. Zero means 200.
+	DiskGB int64 `key:"diskGB" json:"disk_gb"`
+	// KeyName is the EC2 key pair that may log in, if any.
+	KeyName string `key:"keyName" json:"key_name"`
+}
+
+type AWSProviderRegionConfig struct {
+	Name string `key:"name" json:"name"`
+	// SubnetIDs are the subnets machines are put in, one for each
+	// availability zone to buy in. Empty means the default subnets of the
+	// region's default VPC.
+	SubnetIDs []string `key:"subnetIds" json:"subnet_ids"`
+	// SecurityGroupIDs are a machine's security groups. Empty means the
+	// default group of its VPC.
+	SecurityGroupIDs []string `key:"securityGroupIds" json:"security_group_ids"`
+	// ImageID is the image a machine boots here, in place of the newest
+	// that fits imageName.
+	ImageID string `key:"imageId" json:"image_id"`
+}
+
+// GCPProviderConfig is for Google Cloud, from which pools buy Compute
+// Engine Spot VMs. The service account needs the roles Compute Instance
+// Admin and Compute Viewer.
+type GCPProviderConfig struct {
+	// ServiceAccountKey is the service account's JSON key file, as text.
+	ServiceAccountKey string `key:"serviceAccountKey" json:"service_account_key"`
+	// Project is where machines are bought. Empty means the service
+	// account's own project.
+	Project string `key:"project" json:"project"`
+	// Regions are where machines are bought.
+	Regions []GCPProviderRegionConfig `key:"regions" json:"regions"`
+	BaseURL string                    `key:"baseURL" json:"base_url"`
+	// Image is the image a machine boots, or the family of it, by its
+	// path. Empty means Ubuntu 24.04 with the NVIDIA driver.
+	Image string `key:"image" json:"image"`
+	// DiskGB is the size of a machine's disk. Zero means 200.
+	DiskGB int64 `key:"diskGB" json:"disk_gb"`
+}
+
+type GCPProviderRegionConfig struct {
+	Name string `key:"name" json:"name"`
+	// Subnetwork is the subnet machines are put in: its name, or its path
+	// when it is another project's. Empty means the network named default.
+	Subnetwork string `key:"subnetwork" json:"subnetwork"`
 }
 
 type HetznerProviderConfig struct {

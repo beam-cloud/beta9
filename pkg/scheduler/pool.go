@@ -9,10 +9,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/clock"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/client-go/kubernetes"
 )
 
 const (
@@ -47,22 +49,52 @@ func workerPodCommand() []string {
 	return []string{defaultWorkerInit, "-g", "--", defaultWorkerEntrypoint}
 }
 
+// WorkerPoolController is the scheduler's only view of a pool.
 type WorkerPoolController interface {
+	// CanAddWorker reports whether the pool could add a worker of this size
+	// now. It starts nothing. The scheduler asks before every AddWorker and
+	// passes over a pool that answers false, so a pool should answer false
+	// whenever AddWorker would fail or would add a worker that cannot start.
+	CanAddWorker(cpu int64, memory int64, gpuCount uint32) (bool, error)
+	// AddWorker adds a worker of at least this size and returns it, usually
+	// still Pending.
 	AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error)
-	AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error)
 	Name() string
 	FreeCapacity() (*WorkerPoolCapacity, error)
 	Context() context.Context
 	IsPreemptable() bool
 	State() (*types.WorkerPoolState, error)
 	RequiresPoolSelector() bool
-	Mode() types.PoolMode
 	ContainerRuntime() string
 }
 
-type WorkerPoolConfig struct {
-	DefaultWorkerCpuRequest    int64
-	DefaultWorkerMemoryRequest int64
+// poolIdentity is what a controller says about its pool that comes straight
+// from the pool's name and config.
+type poolIdentity struct {
+	ctx              context.Context
+	name             string
+	workerPoolConfig types.WorkerPoolConfig
+}
+
+func (p *poolIdentity) Context() context.Context   { return p.ctx }
+func (p *poolIdentity) Name() string               { return p.name }
+func (p *poolIdentity) IsPreemptable() bool        { return p.workerPoolConfig.Preemptable }
+func (p *poolIdentity) RequiresPoolSelector() bool { return p.workerPoolConfig.RequiresPoolSelector }
+
+// pendingWorker is the record of a worker of this size that is not ready
+// yet: all of it is free.
+func pendingWorker(id string, cpu, memory int64, gpu string, gpuCount uint32) *types.Worker {
+	return &types.Worker{
+		Id:            id,
+		Status:        types.WorkerStatusPending,
+		TotalCpu:      cpu,
+		TotalMemory:   memory,
+		TotalGpuCount: gpuCount,
+		FreeCpu:       cpu,
+		FreeMemory:    memory,
+		FreeGpuCount:  gpuCount,
+		Gpu:           gpu,
+	}
 }
 
 type WorkerPoolCapacity struct {
@@ -84,6 +116,10 @@ type WorkerPoolControllerOptions struct {
 	ContainerRepo   repository.ContainerRepository
 	EventRepo       repository.EventRepository
 	PushPoolMetrics func(types.EventComputeSchema)
+	// Clock drives the controller's loops. Nil means the wall clock.
+	Clock clock.Clock
+	// KubeClient creates worker Jobs. Nil means the in-cluster client.
+	KubeClient kubernetes.Interface
 }
 
 func GenerateWorkerId() string {
@@ -157,23 +193,26 @@ func workerPodTerminationGracePeriod(workerStopGraceS int64) int64 {
 	return grace
 }
 
+// MonitorPoolSize keeps the pool's free capacity at its poolSizing.minFree*
+// floor for as long as the controller's context lives. A pool with no floor
+// has nothing to keep free, and is not watched.
 func MonitorPoolSize(wpc WorkerPoolController,
 	config types.AppConfig,
 	workerPoolConfig *types.WorkerPoolConfig,
-	workerPoolRepo repository.WorkerPoolRepository) error {
-	poolSizer, err := NewWorkerPoolSizer(wpc, config, workerPoolConfig, workerPoolRepo)
-	if err != nil {
-		return err
+	workerPoolRepo repository.WorkerPoolRepository,
+	c clock.Clock) {
+	poolSizer := NewWorkerPoolSizer(wpc, config, workerPoolConfig, workerPoolRepo)
+	if !poolSizer.hasFloor() {
+		return
 	}
-
-	go poolSizer.Start()
-	return nil
+	clock.OrReal(c).Every(wpc.Context(), poolMonitoringInterval, poolSizer.tick)
 }
 
-func MonitorPoolHealth(opts PoolHealthMonitorOptions) error {
+// MonitorPoolHealth publishes the pool's state for as long as the
+// controller's context lives.
+func MonitorPoolHealth(opts PoolHealthMonitorOptions) {
 	poolHealthMonitor := NewPoolHealthMonitor(opts)
-	go poolHealthMonitor.Start()
-	return nil
+	poolHealthMonitor.clock.Every(poolHealthMonitor.ctx, poolHealthCheckInterval, poolHealthMonitor.tick)
 }
 
 func freePoolCapacity(workerRepo repository.WorkerRepository, poolName string) (*WorkerPoolCapacity, error) {
@@ -186,11 +225,7 @@ func freePoolCapacity(workerRepo repository.WorkerRepository, poolName string) (
 
 // poolCapacityFromWorkers sums schedulable capacity across a pool's workers.
 func poolCapacityFromWorkers(workers []*types.Worker) *WorkerPoolCapacity {
-	capacity := &WorkerPoolCapacity{
-		FreeCpu:    0,
-		FreeMemory: 0,
-		FreeGpu:    0,
-	}
+	capacity := &WorkerPoolCapacity{}
 
 	for _, worker := range workers {
 		switch worker.Status {
@@ -203,17 +238,23 @@ func poolCapacityFromWorkers(workers []*types.Worker) *WorkerPoolCapacity {
 				capacity.PendingGpu += uint(worker.TotalGpuCount)
 			}
 		default:
-			// Physical idle capacity only: a GPU held by a managed endpoint
-			// replica does not satisfy the minimum-free floor.
-			capacity.FreeCpu += worker.FreeCpu
-			capacity.FreeMemory += worker.FreeMemory
-			if worker.Gpu != "" && (worker.FreeCpu > 0 && worker.FreeMemory > 0) {
-				capacity.FreeGpu += uint(worker.FreeGpuCount)
-			}
+			capacity.addFree(worker)
 		}
 	}
 
 	return capacity
+}
+
+// addFree adds what is idle on a worker that is ready for work. A GPU on a
+// worker with no CPU or memory left cannot be used, so it is not counted.
+// Only physically idle capacity counts: a GPU held by a managed endpoint
+// replica is not free.
+func (c *WorkerPoolCapacity) addFree(worker *types.Worker) {
+	c.FreeCpu += worker.FreeCpu
+	c.FreeMemory += worker.FreeMemory
+	if worker.Gpu != "" && worker.FreeCpu > 0 && worker.FreeMemory > 0 {
+		c.FreeGpu += uint(worker.FreeGpuCount)
+	}
 }
 
 func calculateMemoryQuantity(percentStr string, memoryTotal int64) resource.Quantity {

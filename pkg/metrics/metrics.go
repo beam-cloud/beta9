@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,11 +40,11 @@ const (
 	metricS3PutSpeed                = "s3_put_speed_mbps"
 	metricS3GetSpeed                = "s3_get_speed_mbps"
 	metricDialTime                  = "dial_time_ms"
-	metricContainerStartLatency     = "container_start_latency_ms"
 	metricWorkerStartupLatency      = "worker_startup_latency_ms"
 	metricWorkerStartupPhase        = "worker_startup_phase_duration_ms"
 	metricSchedulerBacklogDepth     = "scheduler_backlog_depth"
 	metricSchedulerWorkerWait       = "scheduler_worker_wait_duration_ms"
+	metricSchedulerPlacements       = "scheduler_container_placements"
 	metricWorkerQueueDepth          = "worker_queue_depth"
 	metricWorkerQueueReceiveLatency = "worker_queue_receive_latency_ms"
 	metricWorkerQueueEmptyPolls     = "worker_queue_empty_polls"
@@ -274,22 +275,6 @@ func RecordDialTime(duration time.Duration, host string) {
 	}
 }
 
-func RecordContainerStartLatency(container *types.ContainerState, duration time.Duration) {
-	gpu := container.Gpu
-	if gpu == "" {
-		gpu = "none"
-	}
-	metricName := fmt.Sprintf("%s{container_id=\"%s\",gpu=\"%s\",gpu_count=\"%d\",cpu=\"%d\",memory=\"%d\"}",
-		metricContainerStartLatency,
-		container.ContainerId,
-		gpu,
-		container.GpuCount,
-		container.Cpu,
-		container.Memory,
-	)
-	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
-}
-
 func RecordWorkerStartupLatency(duration time.Duration, request *types.ContainerRequest) {
 	metricName := metricWithLabels(metricWorkerStartupLatency, requestMetricLabels(request))
 	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
@@ -339,6 +324,22 @@ func RecordSchedulerWorkerWait(duration time.Duration, request *types.ContainerR
 
 	metricName := metricWithLabels(metricSchedulerWorkerWait, labels)
 	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
+}
+
+// RecordContainerPlacement counts a container placed on a pool. requestedGPU
+// is the GPU type the request preferred, or empty for CPU work. routeRank is 0
+// for a pool the request asked for and higher for a pool that only also
+// serves its GPU type.
+func RecordContainerPlacement(requestedGPU, pool string, routeRank int) {
+	if requestedGPU == "" {
+		requestedGPU = "none"
+	}
+	metricName := metricWithLabels(metricSchedulerPlacements, map[string]string{
+		"requested_gpu": requestedGPU,
+		"pool":          pool,
+		"route_rank":    strconv.Itoa(routeRank),
+	})
+	vmetrics.GetDefaultSet().GetOrCreateCounter(metricName).Inc()
 }
 
 func RecordWorkerQueueDepth(workerId string, depth int64) {
@@ -429,15 +430,6 @@ func RecordProxyBackendDialLatency(proxyName, workspaceName, stubId, protocol st
 		"success":   successLabel,
 	})
 	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func RecordSandboxConnectPhase(phase, workspaceId, stubId, containerStatus, errorCode string, success bool, duration time.Duration) {

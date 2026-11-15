@@ -26,9 +26,6 @@ const (
 )
 
 func (s *Service) ListPrivatePools(ctx context.Context, in *pb.ListPrivatePoolsRequest) (*pb.ListPrivatePoolsResponse, error) {
-	if in == nil {
-		in = &pb.ListPrivatePoolsRequest{}
-	}
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	workspaceID := computeWorkspaceID(authInfo)
 	if workspaceID == "" {
@@ -44,11 +41,7 @@ func (s *Service) ListPrivatePools(ctx context.Context, in *pb.ListPrivatePoolsR
 		if !poolStateIsPrivate(state) {
 			continue
 		}
-		machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, state.Name)
-		if err != nil {
-			return &pb.ListPrivatePoolsResponse{Ok: false, ErrMsg: err.Error()}, nil
-		}
-		machines, deleted, err := s.reconcileBYOCPoolMachinesForRead(ctx, workspaceID, state, machines, time.Now().UTC())
+		machines, deleted, err := s.poolMachines(ctx, workspaceID, state)
 		if err != nil {
 			return &pb.ListPrivatePoolsResponse{Ok: false, ErrMsg: err.Error()}, nil
 		}
@@ -66,6 +59,43 @@ func (s *Service) ListPrivatePools(ctx context.Context, in *pb.ListPrivatePoolsR
 
 func poolStateIsPrivate(state *model.PoolState) bool {
 	return state != nil && state.Mode == string(types.PoolModePrivate)
+}
+
+// poolMachines lists a pool's machines for a call that reads them, and
+// reports whether the pool was deleted instead. A BYOC pool is brought up to
+// date first: one whose cloud resource is gone is cleaned up, and the records
+// of disconnected machines beyond the number of nodes it wants are removed.
+func (s *Service) poolMachines(ctx context.Context, workspaceID string, state *model.PoolState) ([]*model.AgentTokenState, bool, error) {
+	machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, state.Name)
+	if err != nil {
+		return nil, false, err
+	}
+	now := time.Now().UTC()
+	deleted, err := s.cleanupDeletedBYOCPoolIfNeeded(ctx, workspaceID, state, machines, now)
+	if err != nil || deleted {
+		return nil, deleted, err
+	}
+	machines, err = s.pruneBYOCPoolMachinesAboveDesired(ctx, workspaceID, state, machines, now)
+	return machines, false, err
+}
+
+// nextPoolState is the record a call saves for a pool. It starts from the
+// pool as it is, so that nothing the call does not set is lost, or from a new
+// pool when there is none, and it takes the pool's settings from config.
+func nextPoolState(existing *model.PoolState, config *pb.PoolConfig, actorTokenID string, now time.Time) *model.PoolState {
+	next := model.PoolState{Name: config.Name, CreatedByTokenID: actorTokenID, CreatedAt: now}
+	if existing != nil {
+		next = *existing
+	}
+	next.Selector = config.Selector
+	next.Config = config
+	next.Status = model.PoolStatusActive
+	next.Mode = config.Mode
+	next.Transport = config.Transport
+	next.Fallback = config.Fallback
+	next.Priority = config.Priority
+	next.UpdatedAt = now
+	return &next
 }
 
 func (s *Service) CreatePool(ctx context.Context, in *pb.CreatePoolRequest) (*pb.CreatePoolResponse, error) {
@@ -106,29 +136,9 @@ func (s *Service) CreatePool(ctx context.Context, in *pb.CreatePoolRequest) (*pb
 			return fmt.Errorf("pool already exists in this workspace")
 		}
 
-		now := time.Now()
-		state = &model.PoolState{
-			Name:             config.Name,
-			Selector:         config.Selector,
-			Config:           config,
-			Status:           types.ComputePoolStatusActive,
-			Source:           model.SourceAttached,
-			Mode:             config.Mode,
-			Transport:        config.Transport,
-			Fallback:         config.Fallback,
-			Priority:         config.Priority,
-			CreatedByTokenID: actorTokenID,
-			CreatedAt:        now,
-			UpdatedAt:        now,
-		}
-		if existing != nil {
-			state.Reservations = existing.Reservations
-			state.ReservedNodes = existing.ReservedNodes
-			state.CommittedSpendMicros = existing.CommittedSpendMicros
-			state.Source = existing.Source
-			state.CreatedByTokenID = existing.CreatedByTokenID
-			state.CreatedAt = existing.CreatedAt
-			state.ExpiresAt = existing.ExpiresAt
+		state = nextPoolState(existing, config, actorTokenID, time.Now())
+		if existing == nil {
+			state.Source = model.SourceAttached
 		}
 		if err := s.savePrivatePoolState(lockCtx, workspaceID, state); err != nil {
 			return err
@@ -174,19 +184,8 @@ func (s *Service) DeletePool(ctx context.Context, in *pb.DeletePoolRequest) (*pb
 			return err
 		}
 
-		vendors := s.computeVendors()
-		for _, reservation := range state.Reservations {
-			if reservation.Source.IsAttached() || reservation.Source == model.SourceAutosolver {
-				continue
-			}
-			if reservation.MachineID != "" {
-				if err := s.computeRepo.DeleteMachineSSHState(lockCtx, workspaceID, state.Name, reservation.MachineID); err != nil {
-					return err
-				}
-			}
-			if vendor := vendors[reservation.Provider]; vendor != nil {
-				_ = vendor.DeleteReservation(lockCtx, computeReservationInstanceID(reservation))
-			}
+		if err := s.deletePoolInstances(lockCtx, workspaceID, state); err != nil {
+			return err
 		}
 		if err := s.deletePrivatePoolState(lockCtx, workspaceID, in.Name); err != nil {
 			return err
@@ -204,6 +203,47 @@ func (s *Service) DeletePool(ctx context.Context, in *pb.DeletePoolRequest) (*pb
 	}
 	s.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolDeleted, "deleted"))
 	return &pb.DeletePoolResponse{Ok: true}, nil
+}
+
+// deletePoolInstances deletes every machine Beam bought for the pool at its
+// provider. The pool's record is the only record of those machines, so when
+// one cannot be deleted the record is kept, with that reservation left
+// terminating for the reconciler to retry, and the pool is not deleted.
+func (s *Service) deletePoolInstances(ctx context.Context, workspaceID string, state *model.PoolState) error {
+	var failures []string
+	for i := range state.Reservations {
+		reservation := &state.Reservations[i]
+		if !reservation.Managed() {
+			continue
+		}
+		if reservation.MachineID != "" {
+			if err := s.computeRepo.DeleteMachineSSHState(ctx, workspaceID, state.Name, reservation.MachineID); err != nil {
+				return err
+			}
+		}
+		switch reservation.Status {
+		case model.ReservationDeleted:
+		case model.ReservationFailed:
+			// A reservation recorded as failed before failed machines were
+			// deleted at the provider may still have one.
+			if err := s.deleteInstance(ctx, *reservation); err != nil {
+				failures = append(failures, fmt.Sprintf("%s: %v", reservation.Name, err))
+			}
+		default:
+			s.terminateReservation(ctx, workspaceID, state, reservation, reconcileReasonMachineReleased, machineReleasedMessage)
+			if reservation.Status == model.ReservationTerminating {
+				failures = append(failures, fmt.Sprintf("%s: %s", reservation.Name, reservation.LastError))
+			}
+		}
+	}
+	if len(failures) == 0 {
+		return nil
+	}
+	state.UpdatedAt = time.Now().UTC()
+	if err := s.savePrivatePoolState(ctx, workspaceID, state); err != nil {
+		return err
+	}
+	return fmt.Errorf("pool %q was not deleted because its machines could not be deleted at the provider (%s); deleting them is being retried, delete the pool again once they are gone", state.Name, strings.Join(failures, "; "))
 }
 
 func (s *Service) releasePrivatePoolMachinesLocked(ctx context.Context, workspaceID string, state *model.PoolState) error {
@@ -255,30 +295,31 @@ func (s *Service) ExtendPoolCapacity(ctx context.Context, in *pb.ExtendPoolCapac
 	lockErr := s.withPoolStateLock(ctx, workspaceID, in.Name, func(lockCtx context.Context) error {
 		state, err := s.getWorkspacePrivatePoolState(lockCtx, authInfo, in.Name)
 		if err != nil {
-			response = &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}
-			return nil
+			return err
 		}
 		if state == nil {
-			response = &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: "pool not found"}
-			return nil
+			return errors.New("pool not found")
 		}
 		if in.Ttl != "" {
-			state.Config.Ttl = in.Ttl
 			ttl, err := model.ParseTTL(in.Ttl)
 			if err != nil {
-				response = &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}
-				return nil
+				return err
 			}
+			// The pool is to end this long from now. A time that is not
+			// ahead would end it, and its machines, at once.
+			if ttl <= 0 {
+				return errors.New("ttl must be positive")
+			}
+			state.Config.Ttl = in.Ttl
 			state.ExpiresAt = time.Now().Add(ttl)
-			s.extendManagedReservations(lockCtx, state, state.ExpiresAt)
+			s.extendManagedReservations(lockCtx, workspaceID, state, state.ExpiresAt)
 		}
 		if in.MaxSpend > 0 {
 			state.Config.MaxSpend = in.MaxSpend
 		}
 		state.UpdatedAt = time.Now()
 		if err := s.savePrivatePoolState(lockCtx, workspaceID, state); err != nil {
-			response = &pb.ExtendPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}
-			return nil
+			return err
 		}
 		s.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolExtended, ""))
 		response = &pb.ExtendPoolCapacityResponse{Ok: true, Pool: s.privatePoolStateToProto(state)}
@@ -293,23 +334,22 @@ func (s *Service) ExtendPoolCapacity(ctx context.Context, in *pb.ExtendPoolCapac
 // extendManagedReservations pushes a new expiry to the pool's open managed
 // reservations and their provider-side auto-delete thresholds, so extending a
 // pool actually extends the instances backing it.
-func (s *Service) extendManagedReservations(ctx context.Context, state *model.PoolState, expiresAt time.Time) {
-	vendors := s.computeVendors()
+func (s *Service) extendManagedReservations(ctx context.Context, workspaceID string, state *model.PoolState, expiresAt time.Time) {
 	for i := range state.Reservations {
 		reservation := &state.Reservations[i]
-		if !reservation.Managed() || reservationClosed(reservation.Status) || reservation.Status == model.ReservationTerminating {
+		if !reservation.Managed() || !reservation.Open() {
 			continue
 		}
 		if !reservation.ExpiresAt.IsZero() && !expiresAt.After(reservation.ExpiresAt) {
 			continue
 		}
-		vendor := vendors[reservation.Provider]
-		if vendor == nil {
-			reservation.LastError = fmt.Sprintf("vendor %q is not configured", reservation.Provider)
+		provider, err := s.provider(reservation.Provider)
+		if err != nil {
+			reservationFailed(workspaceID, state.Name, reservation, "extend", err)
 			continue
 		}
-		if err := vendor.ExtendReservation(ctx, computeReservationInstanceID(*reservation), expiresAt); err != nil {
-			reservation.LastError = fmt.Sprintf("extension failed: %v", err)
+		if err := provider.Extend(ctx, computeReservationInstanceID(*reservation), expiresAt.Add(reservationDeletionGrace)); err != nil {
+			reservationFailed(workspaceID, state.Name, reservation, "extend", fmt.Errorf("extension failed: %w", err))
 			continue
 		}
 		additional := expiresAt.Sub(reservation.ExpiresAt)
@@ -354,16 +394,13 @@ func (s *Service) ListPrivateMachines(ctx context.Context, authInfo *auth.AuthIn
 		}
 	}
 
+	showSSH := auth.HasInteractivePermission(authInfo) && s.appConfig.ManagedCompute.SSH.Enabled
 	out := []*pb.Machine{}
 	for _, state := range states {
 		if !poolStateIsPrivate(state) {
 			continue
 		}
-		machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, state.Name)
-		if err != nil {
-			return nil, err
-		}
-		machines, deleted, err := s.reconcileBYOCPoolMachinesForRead(ctx, workspaceID, state, machines, time.Now().UTC())
+		machines, deleted, err := s.poolMachines(ctx, workspaceID, state)
 		if err != nil {
 			return nil, err
 		}
@@ -372,7 +409,7 @@ func (s *Service) ListPrivateMachines(ctx context.Context, authInfo *auth.AuthIn
 		}
 		for _, machine := range machines {
 			protoMachine := s.agentMachineToProto(machine)
-			if auth.HasInteractivePermission(authInfo) && s.appConfig.ManagedCompute.SSH.Enabled {
+			if showSSH {
 				sshState, err := s.computeRepo.GetMachineSSHState(ctx, workspaceID, state.Name, machine.MachineID)
 				if err != nil {
 					return nil, err
@@ -508,40 +545,24 @@ func (s *Service) DeletePrivateMachine(ctx context.Context, in *pb.DeleteMachine
 	if reconciled {
 		return &pb.DeleteMachineResponse{Ok: true}, nil
 	}
-	released, err := s.releasePrivateReservationForDelete(ctx, workspaceID, poolName, in.MachineId)
-	if err != nil {
+	if err := s.releasePrivateReservationForDelete(ctx, workspaceID, poolName, in.MachineId); err != nil {
 		return &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
-	}
-	if released {
-		return &pb.DeleteMachineResponse{Ok: true}, nil
 	}
 	return &pb.DeleteMachineResponse{Ok: true}, nil
 }
 
 func (s *Service) reconcileMissingBYOCMachineForDelete(ctx context.Context, workspaceID, poolName string) (bool, error) {
-	if poolName == "" {
-		return false, nil
-	}
 	state, err := s.getPrivatePoolState(ctx, workspaceID, poolName)
 	if err != nil || state == nil || !poolStateIsPrivate(state) || state.BYOC == nil {
 		return false, err
 	}
-	machines, err := s.computeRepo.ListAgentTokenStates(ctx, workspaceID, state.Name)
-	if err != nil {
-		return false, err
-	}
-	if _, _, err := s.reconcileBYOCPoolMachinesForRead(ctx, workspaceID, state, machines, time.Now().UTC()); err != nil {
+	if _, _, err := s.poolMachines(ctx, workspaceID, state); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func (s *Service) releasePrivateReservationForDelete(ctx context.Context, workspaceID, poolName, targetID string) (bool, error) {
-	if poolName == "" || targetID == "" {
-		return false, nil
-	}
-
-	found := false
+func (s *Service) releasePrivateReservationForDelete(ctx context.Context, workspaceID, poolName, targetID string) error {
 	machineID := ""
 	err := s.withPoolStateLock(ctx, workspaceID, poolName, func(lockCtx context.Context) error {
 		state, err := s.getPrivatePoolState(lockCtx, workspaceID, poolName)
@@ -553,7 +574,6 @@ func (s *Service) releasePrivateReservationForDelete(ctx context.Context, worksp
 			return nil
 		}
 		reservation := &state.Reservations[reservationIndex]
-		found = true
 		machineID = reservation.MachineID
 		if reservation.Status == model.ReservationFailed {
 			state.Reservations = append(state.Reservations[:reservationIndex], state.Reservations[reservationIndex+1:]...)
@@ -564,17 +584,14 @@ func (s *Service) releasePrivateReservationForDelete(ctx context.Context, worksp
 		}
 		return s.releaseManagedReservation(lockCtx, workspaceID, state, reservation)
 	})
-	if err != nil || !found {
-		return found, err
-	}
-	if machineID == "" {
-		return true, nil
+	if err != nil || machineID == "" {
+		return err
 	}
 	machine, err := s.computeRepo.GetAgentMachineState(ctx, workspaceID, poolName, machineID)
 	if err != nil || machine == nil {
-		return true, err
+		return err
 	}
-	return true, s.removePrivateMachine(ctx, machine)
+	return s.removePrivateMachine(ctx, machine)
 }
 
 // privateMachineForDelete resolves a machine the workspace may delete: one in

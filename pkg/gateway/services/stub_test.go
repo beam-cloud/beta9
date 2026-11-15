@@ -149,12 +149,17 @@ func (r *missingSecretBackendRepo) GetSecretByName(context.Context, *types.Works
 	return nil, sql.ErrNoRows
 }
 
+const functionStub = types.StubType(types.StubTypeFunctionDeployment)
+
+// fakeGpuPoolChecker has pools for the supported GPU types, and pools whose
+// capacity can be taken back for the spot ones.
 type fakeGpuPoolChecker struct {
 	supported map[string]bool
+	spot      map[string]bool
 }
 
-func (f fakeGpuPoolChecker) HasManagedPoolForGPU(gpuType string) bool {
-	return f.supported[gpuType]
+func (f fakeGpuPoolChecker) HasManagedPoolForGPU(gpuType string, preemptable bool) bool {
+	return f.supported[gpuType] || preemptable && f.spot[gpuType]
 }
 
 type fakePrivatePoolFinder struct {
@@ -212,7 +217,7 @@ func TestGetOrCreateStubReportsMissingSecret(t *testing.T) {
 func TestComputeCapacityVerdictAvailableWhenAnyGPUSupported(t *testing.T) {
 	checker := fakeGpuPoolChecker{supported: map[string]bool{"T4": true}}
 
-	verdict, err := computeCapacityVerdict(context.Background(), checker, nil, "ws-1", []types.GpuType{types.GpuType("A6000"), types.GpuType("T4")}, false)
+	verdict, err := computeCapacityVerdict(context.Background(), checker, nil, "ws-1", functionStub, []types.GpuType{types.GpuType("A6000"), types.GpuType("T4")}, false)
 	require.NoError(t, err)
 	require.Equal(t, StubCapacityStatusAvailable, verdict.status)
 	require.Equal(t, []string{"A6000"}, verdict.unsupportedGpus)
@@ -222,7 +227,7 @@ func TestComputeCapacityVerdictAvailableWhenAnyGPUSupported(t *testing.T) {
 func TestComputeCapacityVerdictLowCapacity(t *testing.T) {
 	checker := fakeGpuPoolChecker{supported: map[string]bool{"T4": true}}
 
-	verdict, err := computeCapacityVerdict(context.Background(), checker, nil, "ws-1", []types.GpuType{types.GpuType("T4")}, true)
+	verdict, err := computeCapacityVerdict(context.Background(), checker, nil, "ws-1", functionStub, []types.GpuType{types.GpuType("T4")}, true)
 	require.NoError(t, err)
 	require.Equal(t, StubCapacityStatusLow, verdict.status)
 }
@@ -230,7 +235,7 @@ func TestComputeCapacityVerdictLowCapacity(t *testing.T) {
 func TestComputeCapacityVerdictNoneWhenNoPoolSupportsGPU(t *testing.T) {
 	checker := fakeGpuPoolChecker{supported: map[string]bool{}}
 
-	verdict, err := computeCapacityVerdict(context.Background(), checker, nil, "ws-1", []types.GpuType{types.GpuType("A6000")}, false)
+	verdict, err := computeCapacityVerdict(context.Background(), checker, nil, "ws-1", functionStub, []types.GpuType{types.GpuType("A6000")}, false)
 	require.NoError(t, err)
 	require.Equal(t, StubCapacityStatusNone, verdict.status)
 	require.Equal(t, []string{"A6000"}, verdict.unsupportedGpus)
@@ -240,16 +245,34 @@ func TestComputeCapacityVerdictMatchesReadyPrivatePool(t *testing.T) {
 	checker := fakeGpuPoolChecker{supported: map[string]bool{}}
 	finder := fakePrivatePoolFinder{pool: "ondemand-a6000"}
 
-	verdict, err := computeCapacityVerdict(context.Background(), checker, finder, "ws-1", []types.GpuType{types.GpuType("A6000")}, false)
+	verdict, err := computeCapacityVerdict(context.Background(), checker, finder, "ws-1", functionStub, []types.GpuType{types.GpuType("A6000")}, false)
 	require.NoError(t, err)
 	require.Equal(t, StubCapacityStatusAvailable, verdict.status)
 	require.Equal(t, "ondemand-a6000", verdict.matchedPrivatePool)
 }
 
+// Capacity that can be taken back runs only work that may be stopped at any
+// time. For any other work a GPU type that has nothing else has nothing.
+func TestComputeCapacityVerdictCountsSpotCapacityForWorkThatMayBeInterrupted(t *testing.T) {
+	checker := fakeGpuPoolChecker{spot: map[string]bool{"H100": true}}
+	gpus := []types.GpuType{types.GpuType("H100")}
+
+	verdict, err := computeCapacityVerdict(context.Background(), checker, nil, "ws-1", types.StubType(types.StubTypeEndpointDeployment), gpus, false)
+	require.NoError(t, err)
+	require.Equal(t, StubCapacityStatusAvailable, verdict.status)
+
+	for _, stubType := range []string{types.StubTypeFunction, types.StubTypeTaskQueueDeployment, types.StubTypePodDeployment, types.StubTypeSandbox} {
+		verdict, err = computeCapacityVerdict(context.Background(), checker, nil, "ws-1", types.StubType(stubType), gpus, false)
+		require.NoError(t, err)
+		require.Equal(t, StubCapacityStatusNone, verdict.status, stubType)
+		require.Equal(t, []string{"H100"}, verdict.unsupportedGpus, stubType)
+	}
+}
+
 func TestComputeCapacityVerdictSkipsNoGPU(t *testing.T) {
 	checker := fakeGpuPoolChecker{supported: map[string]bool{}}
 
-	verdict, err := computeCapacityVerdict(context.Background(), checker, nil, "ws-1", []types.GpuType{types.NO_GPU, types.GpuType("A6000")}, false)
+	verdict, err := computeCapacityVerdict(context.Background(), checker, nil, "ws-1", functionStub, []types.GpuType{types.NO_GPU, types.GpuType("A6000")}, false)
 	require.NoError(t, err)
 	require.Equal(t, StubCapacityStatusNone, verdict.status)
 	require.Equal(t, []string{"A6000"}, verdict.unsupportedGpus)

@@ -1,16 +1,17 @@
 package scheduler
 
 import (
-	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/clock"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/bsm/redislock"
 	"github.com/rs/zerolog/log"
 )
 
@@ -28,28 +29,13 @@ func newSchedulingAttempt(scheduler *Scheduler, request *types.ContainerRequest,
 	}
 }
 
-func (a *schedulingAttempt) run() {
-	if !a.runnable() {
-		return
-	}
-	normalizeGPURequest(a.request)
-
-	// Keep the scheduling order explicit: use ready capacity first, wait on
-	// pending capacity second, and only provision when neither path can fit.
-	if a.scheduleOnAvailableWorker() {
-		return
-	}
-
-	a.runWaitingOrProvisioning()
-}
-
 func (a *schedulingAttempt) runWaitingOrProvisioning() {
 	// Opportunistic requests only ever fill idle capacity. They never queue
 	// against pending workers or provision new ones. Spot waits for capacity
 	// to free up; managed endpoint replicas fail at once, and their controller
 	// retries on its own cadence.
 	if a.request.OpportunisticOnly {
-		waited := time.Since(a.request.Timestamp)
+		waited := a.scheduler.since(a.request.Timestamp)
 		if a.request.Borrowed() && waited < maxScheduleRetryDuration {
 			metrics.RecordSchedulerWorkerWait(waited, a.request, "spare_capacity_wait")
 			a.requeueForWorkerWait()
@@ -67,7 +53,7 @@ func (a *schedulingAttempt) runWaitingOrProvisioning() {
 	// A machine-pinned request can only ever run on its machine's worker;
 	// provisioning elsewhere can't help, so wait for capacity to free up.
 	if a.request.MachineId != "" {
-		metrics.RecordSchedulerWorkerWait(time.Since(a.request.Timestamp), a.request, "pinned_machine_busy")
+		metrics.RecordSchedulerWorkerWait(a.scheduler.since(a.request.Timestamp), a.request, "pinned_machine_busy")
 		a.requeueForWorkerWait()
 		return
 	}
@@ -76,35 +62,7 @@ func (a *schedulingAttempt) runWaitingOrProvisioning() {
 		return
 	}
 
-	a.provisionWorker()
-}
-
-func (a *schedulingAttempt) scheduleOnAvailableWorker() bool {
-	selectionStart := time.Now()
-	worker, err := a.scheduler.selectWorkerFromWorkers(a.workers, a.request)
-	a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerWorkerSelection, selectionStart, time.Now(), err == nil && worker != nil, map[string]string{
-		"candidate_workers": fmt.Sprintf("%d", len(a.workers)),
-	})
-	if err != nil || worker == nil {
-		return false
-	}
-
-	if err := a.scheduler.scheduleRequest(worker, a.request); err != nil {
-		workerLog(requestLog(log.Error(), a.request), worker).
-			Err(err).
-			Msg("unable to schedule request on existing worker")
-		a.recordBacklogWait(false, "schedule_failed")
-		metrics.RecordSchedulerWorkerWait(time.Since(a.request.Timestamp), a.request, "schedule_failed")
-		a.retryIfRunnable("schedule_failed")
-		return true
-	}
-
-	duration := time.Since(a.request.Timestamp)
-	a.recordBacklogWait(true, "scheduled")
-	a.scheduler.emitContainerPlaced(worker, a.request, a.scheduler.failoverChainFor(a.request))
-	metrics.RecordRequestSchedulingDuration(duration, a.request)
-	metrics.RecordSchedulerWorkerWait(duration, a.request, "scheduled")
-	return true
+	a.grow()
 }
 
 func (a *schedulingAttempt) runnable() bool {
@@ -113,93 +71,23 @@ func (a *schedulingAttempt) runnable() bool {
 		return pending
 	}
 	requestLog(log.Error(), a.request).Err(err).Msg("failed to verify container request state")
-	a.retrySoon("container_state_lookup_failed")
+	a.retry("container_state_lookup_failed")
 	return false
 }
 
-func (a *schedulingAttempt) retryIfRunnable(reason string) {
-	if a.runnable() {
-		a.retrySoon(reason)
-	}
-}
-
 func (a *schedulingAttempt) reservePendingWorkerCapacity() bool {
-	reservationStart := time.Now()
+	reservationStart := a.scheduler.now()
 	reserved := a.scheduler.provisioning.reserveCapacity(a.scheduler, a.workers, a.request)
-	a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerReservation, reservationStart, time.Now(), reserved, map[string]string{
+	a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerReservation, reservationStart, a.scheduler.now(), reserved, map[string]string{
 		"candidate_workers": fmt.Sprintf("%d", len(a.workers)),
 	})
 	if !reserved {
 		return false
 	}
 
-	metrics.RecordSchedulerWorkerWait(time.Since(a.request.Timestamp), a.request, "waiting_for_worker")
+	metrics.RecordSchedulerWorkerWait(a.scheduler.since(a.request.Timestamp), a.request, "waiting_for_worker")
 	a.requeueForWorkerWait()
 	return true
-}
-
-func (a *schedulingAttempt) provisionWorker() {
-	if a.request.ProvisioningAttempts >= maxWorkerProvisioningAttempts {
-		a.fail(types.ContainerSchedulingFailureProvisioningLimit)
-		return
-	}
-
-	chain := a.scheduler.failoverChainFor(a.request)
-	controllers, err := a.scheduler.getControllers(a.request)
-	if err != nil {
-		// On-demand may be the only capacity source for a retired GPU.
-		if chain != nil && chain.onDemand {
-			a.scheduler.noteFailoverDemand(a.request, chain, nil)
-			a.recordBacklogWait(false, "serverless_capacity_exhausted")
-			a.requeueForWorkerWaitDelay(provisioningWorkerRequeueDelay, "serverless_capacity_exhausted")
-			return
-		}
-
-		requestLog(log.Error(), a.request).
-			Err(err).
-			Msg("no controller found for request")
-		a.fail(types.ContainerSchedulingFailureNoController)
-		return
-	}
-
-	controller, delay, err := a.scheduler.workerProvisioningControllerForRequest(controllers, a.request)
-	if err != nil {
-		requestLog(log.Warn(), a.request).
-			Err(err).
-			Msg("unable to check worker provisioning capacity")
-		a.requeueForWorkerWaitDelay(provisioningWorkerRequeueDelay, "worker_capacity_check_failed")
-		return
-	}
-	if controller == nil {
-		// Every eligible pool, primary and failover alike, recently refused to
-		// provision. That is the serverless estate being exhausted, and the
-		// only trigger for on-demand hardware.
-		a.scheduler.noteFailoverDemand(a.request, chain, controllerNames(controllers))
-		a.recordBacklogWait(false, "worker_provisioning_backoff")
-		a.requeueForWorkerWaitDelay(delay, "worker_provisioning_backoff")
-		return
-	}
-
-	// One provisioning attempt per container across scheduler replicas. A
-	// successful attempt keeps the lock until the pending-worker reservation
-	// expires, so a replica that has not yet seen the new worker cannot add
-	// a second one.
-	lockKey := common.RedisKeys.SchedulerWorkerProvisioningLock(a.request.ContainerId)
-	if err := a.scheduler.workerProvisioningLock.Acquire(a.scheduler.ctx, lockKey, common.RedisLockOptions{TtlS: int(pendingWorkerReservationTTL.Seconds())}); err != nil {
-		if !errors.Is(err, redislock.ErrNotObtained) {
-			requestLog(log.Error(), a.request).Err(err).Msg("unable to acquire worker provisioning lock")
-		}
-		a.recordBacklogWait(false, "worker_provisioning_in_progress")
-		a.requeueForWorkerWaitDelay(provisioningWorkerRequeueDelay, "worker_provisioning_in_progress")
-		return
-	}
-
-	metrics.RecordSchedulerWorkerWait(time.Since(a.request.Timestamp), a.request, "no_worker")
-
-	a.request.ProvisioningAttempts++
-	reservationID := a.scheduler.provisioning.addReservation(a.scheduler, a.request, controller)
-	go newWorkerProvisioningAttempt(a.scheduler, a.request, controller, reservationID).run()
-	a.requeueForWorkerWait()
 }
 
 func (a *schedulingAttempt) requeueForWorkerWait() {
@@ -207,7 +95,7 @@ func (a *schedulingAttempt) requeueForWorkerWait() {
 }
 
 func (a *schedulingAttempt) requeueForWorkerWaitDelay(delay time.Duration, reason string) {
-	if time.Since(a.request.Timestamp) >= maxScheduleRetryDuration {
+	if a.scheduler.since(a.request.Timestamp) >= maxScheduleRetryDuration {
 		a.fail(types.ContainerSchedulingFailureWorkerCapacityTimeout)
 		return
 	}
@@ -219,16 +107,12 @@ func (a *schedulingAttempt) requeueForWorkerWaitDelay(delay time.Duration, reaso
 }
 
 func (a *schedulingAttempt) retry(reason string) {
-	a.retrySoon(reason)
-}
-
-func (a *schedulingAttempt) retrySoon(reason string) {
 	if a.request.RetryCount >= maxScheduleRetryCount {
 		a.fail(types.ContainerSchedulingFailureRetryLimit)
 		return
 	}
 
-	if time.Since(a.request.Timestamp) >= maxScheduleRetryDuration {
+	if a.scheduler.since(a.request.Timestamp) >= maxScheduleRetryDuration {
 		a.fail(types.ContainerSchedulingFailureWorkerCapacityTimeout)
 		return
 	}
@@ -290,149 +174,122 @@ func (a *schedulingAttempt) recordBacklogWait(success bool, reason string) {
 		return
 	}
 
-	a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerBacklogWait, a.request.Timestamp, time.Now(), success, map[string]string{
+	a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerBacklogWait, a.request.Timestamp, a.scheduler.now(), success, map[string]string{
 		"reason":      reason,
 		"retry_count": fmt.Sprintf("%d", a.request.RetryCount),
 	})
 }
 
-type workerProvisioningAttempt struct {
-	scheduler     *Scheduler
-	request       *types.ContainerRequest
-	controller    WorkerPoolController
-	reservationID string
-}
-
-func newWorkerProvisioningAttempt(scheduler *Scheduler, request *types.ContainerRequest, controller WorkerPoolController, reservationID string) *workerProvisioningAttempt {
-	return &workerProvisioningAttempt{
-		scheduler:     scheduler,
-		request:       request,
-		controller:    controller,
-		reservationID: reservationID,
-	}
-}
-
-func (a *workerProvisioningAttempt) run() {
-	releaseOnReturn := true
-	defer func() {
-		if releaseOnReturn {
-			a.scheduler.provisioning.release(a.reservationID)
-			lockKey := common.RedisKeys.SchedulerWorkerProvisioningLock(a.request.ContainerId)
-			if err := a.scheduler.workerProvisioningLock.Release(lockKey); err != nil && !errors.Is(err, redislock.ErrLockNotHeld) {
-				requestLog(log.Error(), a.request).Err(err).Msg("unable to release worker provisioning lock")
-			}
-		}
-	}()
-
-	controller := a.controller
-	if controller == nil {
-		return
-	}
-
-	select {
-	case <-a.scheduler.ctx.Done():
-		return
-	default:
-	}
-
-	provisionStart := time.Now()
-	newWorker, err := controller.AddWorker(
-		a.scheduler.workerCPUForControllerRequest(controller, a.request),
-		a.scheduler.workerMemoryForControllerRequest(controller, a.request),
-		a.scheduler.workerGPUCountForControllerRequest(controller, a.request),
-	)
-	a.scheduler.recordContainerLifecycle(a.request, types.ContainerLifecycleSchedulerProvisionWorker, provisionStart, time.Now(), err == nil, map[string]string{
-		"pool_name": controller.Name(),
-	})
-	if err != nil {
-		a.scheduler.recordWorkerProvisioningFailure(controller, err)
-		a.logAddWorkerFailure(err)
-		metrics.RecordSchedulerWorkerWait(time.Since(a.request.Timestamp), a.request, "add_worker_failed")
-		return
-	}
-
-	workerLog(requestLog(log.Info(), a.request), newWorker).Msg("added new worker")
-	releaseOnReturn = false // the reservation and its lock now belong to the pending worker
-	a.scheduler.provisioning.handoff(a.reservationID, newWorker)
-}
-
-func (a *workerProvisioningAttempt) logAddWorkerFailure(err error) {
-	var capacityErr *AgentPoolCapacityError
-	if errors.As(err, &capacityErr) {
-		requestLog(log.Debug(), a.request).
-			Str("pool_name", capacityErr.PoolName).
-			Int("machines", capacityErr.Machines).
-			Int("schedulable_machines", capacityErr.SchedulableMachines).
-			Int64("max_available_cpu", capacityErr.MaxAvailableCPU).
-			Int64("max_available_memory", capacityErr.MaxAvailableMemory).
-			Uint32("max_available_gpu", capacityErr.MaxAvailableGPU).
-			Err(err).
-			Msg("agent pool capacity unavailable")
-		return
-	}
-
-	requestLog(log.Error(), a.request).
-		Err(err).
-		Msg("unable to add worker")
-}
-
 type provisioningTracker struct {
 	mu                  sync.Mutex
+	clock               clock.Clock
+	sequence            uint64
 	reservations        map[string]*provisioningReservation
 	requestReservations map[string]string
 }
 
+// provisioningReservation is the requests that wait for one worker. worker
+// stands for it: it has the worker's id once the pool has added it, and its
+// free capacity is what the requests have not taken.
 type provisioningReservation struct {
 	worker     *types.Worker
 	requestIDs map[string]struct{}
+	// addedAt is when the worker was known to exist: when its pool had
+	// added it. It is zero while the pool is still being asked.
+	addedAt time.Time
 }
 
-func newProvisioningTracker() *provisioningTracker {
+// workerListLag is how long a worker that was just added may be missing
+// from the workers a pass plans with, which were read before it.
+const workerListLag = 5 * time.Second
+
+// gone reports whether the worker was removed: its pool had added it, and it
+// is not among the workers any more. A machine that was bought and taken
+// back, or that failed to start, leaves its requests waiting like this.
+//
+// A worker that has started is not gone. Placement gives its room to the
+// requests that are first in line, which need not be the ones that waited
+// for it. One that finds it full goes on waiting until the reservation
+// lapses: the request that took its place often asked for a worker of its
+// own, which is still on its way.
+func (r *provisioningReservation) gone(workers []*types.Worker, now time.Time) bool {
+	if r.addedAt.IsZero() || now.Sub(r.addedAt) < workerListLag {
+		return false
+	}
+	return !slices.ContainsFunc(workers, func(worker *types.Worker) bool { return worker.Id == r.worker.Id })
+}
+
+func newProvisioningTracker(c clock.Clock) *provisioningTracker {
 	return &provisioningTracker{
+		clock:               clock.OrReal(c),
 		reservations:        map[string]*provisioningReservation{},
 		requestReservations: map[string]string{},
 	}
 }
 
+// reserveCapacity has the request wait for a worker that is on its way, and
+// reports whether there is one with room for it.
 func (p *provisioningTracker) reserveCapacity(s *Scheduler, workers []*types.Worker, request *types.ContainerRequest) bool {
+	reserved, free := p.reserve(s, workers, request)
+	// The requests that stopped waiting may ask for another worker at once,
+	// this one in the pass it is in.
+	s.releaseGrowLocks(free)
+	return reserved
+}
+
+// reserve is reserveCapacity. Next to its answer it returns the requests
+// that stopped waiting for the worker they waited for.
+func (p *provisioningTracker) reserve(s *Scheduler, workers []*types.Worker, request *types.ContainerRequest) (reserved bool, free []string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.ensureMaps()
 
 	if reservationID, ok := p.requestReservations[request.ContainerId]; ok {
-		if _, exists := p.reservations[reservationID]; exists {
-			return true
+		reservation, exists := p.reservations[reservationID]
+		switch {
+		case exists && reservation.gone(workers, p.clock.Now()):
+			// Nothing can wait for it any more.
+			free = p.releaseLocked(reservationID)
+		case exists && !s.stalled(reservation.worker, s.now()):
+			return true, nil
+		default:
+			// The worker has stalled: this request stops waiting for it.
+			delete(p.requestReservations, request.ContainerId)
+			if exists {
+				delete(reservation.requestIDs, request.ContainerId)
+			}
+			free = []string{request.ContainerId}
 		}
-		delete(p.requestReservations, request.ContainerId)
 	}
 
 	if worker := p.selectInFlightWorkerLocked(s, request); worker != nil {
 		if s.reserveWorkerCapacity(worker, request) {
 			p.trackRequestLocked(worker.Id, request.ContainerId)
-			return true
+			return true, free
 		}
 	}
 
 	worker, err := s.selectWorkerFromWorkersByStatus(p.unreservedWorkersLocked(workers), request, types.WorkerStatusPending)
 	if err != nil || worker == nil {
-		return false
+		return false, free
 	}
 
 	if !s.reserveWorkerCapacity(worker, request) {
-		return false
+		return false, free
 	}
 
-	p.trackPendingWorkerLocked(worker, request)
-	return true
+	p.trackPendingWorkerLocked(s, worker, request)
+	return true, free
 }
 
-func (p *provisioningTracker) addReservation(s *Scheduler, request *types.ContainerRequest, controller WorkerPoolController) string {
+// addReservation holds room for the request on a worker the pool is about to
+// be asked for, and returns the reservation's id.
+func (p *provisioningTracker) addReservation(s *Scheduler, request *types.ContainerRequest, pool *WorkerPool, size workerSize) string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.ensureMaps()
 	normalizeGPURequest(request)
 
-	reservation := s.newProvisioningReservation(request, controller)
+	p.sequence++
+	reservation := s.newProvisioningReservation(request, pool, size, p.sequence)
 	s.reserveWorkerCapacity(reservation.worker, request)
 	reservation.requestIDs[request.ContainerId] = struct{}{}
 
@@ -441,27 +298,40 @@ func (p *provisioningTracker) addReservation(s *Scheduler, request *types.Contai
 	return reservation.worker.Id
 }
 
-func (p *provisioningTracker) release(reservationID string) {
+// release ends a reservation. Its requests stop waiting, and may ask a pool
+// for a worker again.
+func (p *provisioningTracker) release(s *Scheduler, reservationID string) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	free := p.releaseLocked(reservationID)
+	p.mu.Unlock()
+	s.releaseGrowLocks(free)
+}
 
+// releaseLocked ends a reservation and returns the requests that waited on
+// it.
+func (p *provisioningTracker) releaseLocked(reservationID string) []string {
 	reservation, ok := p.reservations[reservationID]
 	if !ok {
-		return
+		return nil
 	}
 
 	for requestID := range reservation.requestIDs {
 		delete(p.requestReservations, requestID)
 	}
 	delete(p.reservations, reservationID)
+	return slices.Collect(maps.Keys(reservation.requestIDs))
 }
 
-func (p *provisioningTracker) handoff(reservationID string, worker *types.Worker) {
-	if worker == nil || worker.Id == "" {
-		p.release(reservationID)
-		return
-	}
+// expireAfterTTL ends a reservation that has lasted as long as a worker may
+// take to start.
+func (p *provisioningTracker) expireAfterTTL(s *Scheduler, reservationID string) {
+	p.clock.AfterFunc(pendingWorkerReservationTTL, func() { p.release(s, reservationID) })
+}
 
+// handoff gives a reservation to the worker its pool added. A pool of
+// machines that joined by hand answers with the machine's worker, which other
+// requests may be waiting for already: they go on waiting with this one.
+func (p *provisioningTracker) handoff(s *Scheduler, reservationID string, worker *types.Worker) {
 	p.mu.Lock()
 	reservation, ok := p.reservations[reservationID]
 	if !ok {
@@ -472,24 +342,39 @@ func (p *provisioningTracker) handoff(reservationID string, worker *types.Worker
 	reservation.worker.Id = worker.Id
 	reservation.worker.MachineId = worker.MachineId
 	reservation.worker.Runtime = worker.Runtime
+	reservation.worker.CreatedAt = worker.CreatedAt
+	reservation.addedAt = p.clock.Now()
+	takeCapacityOf(reservation.worker, worker)
+	if waiting, ok := p.reservations[worker.Id]; ok {
+		maps.Copy(reservation.requestIDs, waiting.requestIDs)
+	}
 	p.reservations[worker.Id] = reservation
 	for requestID := range reservation.requestIDs {
 		p.requestReservations[requestID] = worker.Id
 	}
 	p.mu.Unlock()
 
-	workerID := worker.Id
-	time.AfterFunc(pendingWorkerReservationTTL, func() {
-		p.release(workerID)
-	})
+	p.expireAfterTTL(s, worker.Id)
 }
 
-func (p *provisioningTracker) ensureMaps() {
-	if p.reservations == nil {
-		p.reservations = map[string]*provisioningReservation{}
-	}
-	if p.requestReservations == nil {
-		p.requestReservations = map[string]string{}
+// takeCapacityOf gives a placeholder the capacity of the worker the pool
+// added, less what the requests waiting on the placeholder already hold. The
+// pool may add a bigger worker than it was asked for: a machine that is
+// bought has the size it is sold in. The room that is left over is then there
+// for other requests to wait on, instead of each buying a machine of its own.
+func takeCapacityOf(placeholder, worker *types.Worker) {
+	heldCPU := placeholder.TotalCpu - placeholder.FreeCpu
+	heldMemory := placeholder.TotalMemory - placeholder.FreeMemory
+	heldGPU := placeholder.TotalGpuCount - placeholder.FreeGpuCount
+
+	placeholder.TotalCpu = worker.TotalCpu
+	placeholder.TotalMemory = worker.TotalMemory
+	placeholder.TotalGpuCount = worker.TotalGpuCount
+	placeholder.FreeCpu = max(worker.FreeCpu-heldCPU, 0)
+	placeholder.FreeMemory = max(worker.FreeMemory-heldMemory, 0)
+	placeholder.FreeGpuCount = worker.FreeGpuCount - min(worker.FreeGpuCount, heldGPU)
+	if worker.Gpu != "" {
+		placeholder.Gpu = worker.Gpu
 	}
 }
 
@@ -521,17 +406,15 @@ func (p *provisioningTracker) trackRequestLocked(reservationID string, requestID
 	p.requestReservations[requestID] = reservationID
 }
 
-func (p *provisioningTracker) trackPendingWorkerLocked(worker *types.Worker, request *types.ContainerRequest) {
+func (p *provisioningTracker) trackPendingWorkerLocked(s *Scheduler, worker *types.Worker, request *types.ContainerRequest) {
 	reservationID := worker.Id
 	if _, ok := p.reservations[reservationID]; !ok {
 		p.reservations[reservationID] = &provisioningReservation{
 			worker:     worker,
 			requestIDs: map[string]struct{}{},
+			addedAt:    p.clock.Now(),
 		}
-
-		time.AfterFunc(pendingWorkerReservationTTL, func() {
-			p.release(reservationID)
-		})
+		p.expireAfterTTL(s, reservationID)
 	}
 
 	p.trackRequestLocked(reservationID, request.ContainerId)
@@ -548,141 +431,37 @@ func (p *provisioningTracker) unreservedWorkersLocked(workers []*types.Worker) [
 	return unreservedWorkers
 }
 
-func (s *Scheduler) newProvisioningReservation(request *types.ContainerRequest, controller WorkerPoolController) *provisioningReservation {
-	cpu := s.workerCPUForControllerRequest(controller, request)
-	memory := s.workerMemoryForControllerRequest(controller, request)
-
+// newProvisioningReservation builds the placeholder worker that stands for a
+// worker being added. sequence keeps placeholder ids unique within a tracker.
+func (s *Scheduler) newProvisioningReservation(request *types.ContainerRequest, pool *WorkerPool, size workerSize, sequence uint64) *provisioningReservation {
 	gpu := ""
-	gpuCount := s.workerGPUCountForControllerRequest(controller, request)
 	if request.RequiresGPU() {
-		if pool, ok := s.poolForController(controller); ok {
-			gpu = pool.Config.GPUType
-		}
+		gpu = pool.Config.GPUType
 	}
 
-	worker := &types.Worker{
-		Id:                   fmt.Sprintf("provisioning-%s-%d", controller.Name(), time.Now().UnixNano()),
-		Status:               types.WorkerStatusPending,
-		TotalCpu:             cpu,
-		TotalMemory:          memory,
-		TotalGpuCount:        gpuCount,
-		FreeCpu:              cpu,
-		FreeMemory:           memory,
-		FreeGpuCount:         gpuCount,
-		Gpu:                  gpu,
-		PoolName:             controller.Name(),
-		RequiresPoolSelector: controller.RequiresPoolSelector(),
-		Runtime:              controller.ContainerRuntime(),
-		BuildVersion:         s.config.Worker.ImageTag,
-		Preemptable:          controller.IsPreemptable(),
+	// An agent placeholder is the size of the request: what the pool will
+	// add is not known before it answers, a machine that joined by hand or
+	// one that is bought in the size it is sold in. Requests that arrive
+	// before the answer find no room on it, and each asks for a worker of its
+	// own. A Kubernetes placeholder matches the worker it stands for, whose
+	// CPU the pool may overcommit.
+	cpu := size.cpu
+	if !pool.Config.AgentHosted() {
+		cpu = pool.Config.CPUShareMultiplier.Schedulable(size.cpu)
 	}
-
-	if pool, ok := s.poolForController(controller); ok {
-		worker.Priority = pool.Config.Priority
-		// Agent placeholders are sized to the request. Local ones match the worker they stand for.
-		if !controllerUsesAgentCapacity(controller) {
-			worker.TotalCpu = pool.Config.CPUShareMultiplier.Schedulable(cpu)
-			worker.FreeCpu = worker.TotalCpu
-		}
-	}
+	worker := pendingWorker(fmt.Sprintf("provisioning-%s-%d", pool.Name, sequence), cpu, size.memory, gpu, size.gpuCount)
+	worker.PoolName = pool.Name
+	worker.RequiresPoolSelector = pool.Controller.RequiresPoolSelector()
+	worker.Runtime = pool.Controller.ContainerRuntime()
+	worker.BuildVersion = s.config.Worker.ImageTag
+	worker.Preemptable = pool.Controller.IsPreemptable()
+	worker.Priority = pool.Config.Priority
+	worker.CreatedAt = s.now().Unix()
 
 	return &provisioningReservation{
 		worker:     worker,
 		requestIDs: map[string]struct{}{},
 	}
-}
-
-func (s *Scheduler) workerCPUForRequest(request *types.ContainerRequest) int64 {
-	cpu := request.Cpu
-	if s.config.Worker.DefaultWorkerCPURequest > cpu {
-		cpu = s.config.Worker.DefaultWorkerCPURequest
-	}
-	return cpu
-}
-
-func (s *Scheduler) workerCPUForControllerRequest(controller WorkerPoolController, request *types.ContainerRequest) int64 {
-	if controllerUsesAgentCapacity(controller) {
-		return request.Cpu
-	}
-
-	cpu := s.workerCPUForRequest(request)
-	sizing, ok := s.workerPoolSizingForController(controller)
-	if !ok {
-		return cpu
-	}
-	if sizing.DefaultWorkerCpu > cpu {
-		return sizing.DefaultWorkerCpu
-	}
-	return cpu
-}
-
-func (s *Scheduler) workerMemoryForRequest(request *types.ContainerRequest) int64 {
-	memory := capacityMemoryForScheduling(request)
-	if s.config.Worker.DefaultWorkerMemoryRequest > memory {
-		memory = s.config.Worker.DefaultWorkerMemoryRequest
-	}
-	return memory
-}
-
-func (s *Scheduler) workerMemoryForControllerRequest(controller WorkerPoolController, request *types.ContainerRequest) int64 {
-	if controllerUsesAgentCapacity(controller) {
-		return capacityMemoryForScheduling(request)
-	}
-
-	memory := s.workerMemoryForRequest(request)
-	sizing, ok := s.workerPoolSizingForController(controller)
-	if !ok {
-		return memory
-	}
-	if sizing.DefaultWorkerMemory > memory {
-		return sizing.DefaultWorkerMemory
-	}
-	return memory
-}
-
-func (s *Scheduler) workerGPUCountForRequest(request *types.ContainerRequest) uint32 {
-	return gpuCountForScheduling(request)
-}
-
-func (s *Scheduler) workerGPUCountForControllerRequest(controller WorkerPoolController, request *types.ContainerRequest) uint32 {
-	if controllerUsesAgentCapacity(controller) {
-		return gpuCountForScheduling(request)
-	}
-
-	gpuCount := s.workerGPUCountForRequest(request)
-	sizing, ok := s.workerPoolSizingForController(controller)
-	if !ok {
-		return gpuCount
-	}
-	if sizing.DefaultWorkerGpuCount > gpuCount {
-		return sizing.DefaultWorkerGpuCount
-	}
-	return gpuCount
-}
-
-func controllerUsesAgentCapacity(controller WorkerPoolController) bool {
-	if controller == nil {
-		return false
-	}
-	if _, ok := controller.(*AgentWorkerPoolController); ok {
-		return true
-	}
-	return controller.Mode().AgentHosted()
-}
-
-func (s *Scheduler) workerPoolSizingForController(controller WorkerPoolController) (*types.WorkerPoolSizingConfig, bool) {
-	if controller == nil {
-		return nil, false
-	}
-	pool, ok := s.poolForController(controller)
-	if !ok {
-		return nil, false
-	}
-	sizing, err := parsePoolSizingConfig(pool.Config.PoolSizing)
-	if err != nil {
-		return nil, false
-	}
-	return sizing, true
 }
 
 func normalizeGPURequest(request *types.ContainerRequest) {

@@ -8,9 +8,10 @@ import (
 )
 
 // GPUPoolChecker answers whether any serverless pool config supports a GPU
-// type. Implemented by *scheduler.Scheduler.
+// type, for work that may or may not be stopped at any time. Implemented by
+// *scheduler.Scheduler.
 type GPUPoolChecker interface {
-	HasManagedPoolForGPU(gpuType string) bool
+	HasManagedPoolForGPU(gpuType string, preemptable bool) bool
 }
 
 // StubSchedulable reports whether a stub's containers could ever be placed by
@@ -20,7 +21,7 @@ type GPUPoolChecker interface {
 //
 // Pool-selector-bound stubs are always treated as schedulable: their pools
 // are registered lazily during scheduling, so absence here proves nothing.
-func StubSchedulable(s GPUPoolChecker, stubConfig *types.StubConfigV1) (bool, string) {
+func StubSchedulable(s GPUPoolChecker, stubType types.StubType, stubConfig *types.StubConfigV1) (bool, string) {
 	if s == nil || stubConfig == nil {
 		return true, ""
 	}
@@ -33,7 +34,7 @@ func StubSchedulable(s GPUPoolChecker, stubConfig *types.StubConfigV1) (bool, st
 
 	unsupported := []string{}
 	for _, gpu := range stubGPUTypes(stubConfig) {
-		if s.HasManagedPoolForGPU(gpu) {
+		if s.HasManagedPoolForGPU(gpu, stubType.Preemptable()) {
 			return true, ""
 		}
 		unsupported = append(unsupported, gpu)
@@ -77,10 +78,10 @@ func stubGPUTypes(stubConfig *types.StubConfigV1) []string {
 // moment capacity joins (a pool is added or a machine comes online) the
 // check passes again with no redeploy needed.
 func (i *AutoscaledInstance) UnschedulableReason() string {
-	if i.Scheduler == nil {
+	if i.Scheduler == nil || i.Stub == nil {
 		return ""
 	}
-	ok, reason := StubSchedulable(i.Scheduler, i.StubConfig)
+	ok, reason := StubSchedulable(i.Scheduler, i.Stub.Type, i.StubConfig)
 	if ok {
 		return ""
 	}

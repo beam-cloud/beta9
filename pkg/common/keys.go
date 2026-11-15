@@ -132,9 +132,16 @@ var (
 	computeMachineSSHStateLock  string = "compute:{%s}:pool:%s:machine:%s:ssh:lock"
 	computeAgentSlot            string = "compute:{%s}:pool:%s:machine:%s:worker:%s"
 	computeAgentSlotIndex       string = "compute:{%s}:pool:%s:machine:%s:workers"
-	computeFailoverDemand       string = "compute:failover:demand:%s"
-	computeFailoverDemandIndex  string = "compute:failover:demand"
-	computeOnDemandSpend        string = "compute:ondemand:spend:%s"
+	// The keys of the machines bought for pools share one hash tag, which
+	// puts them in one slot of a Redis cluster: a machine's record and what
+	// it cost are written in one transaction, and a day of spend is read in
+	// one command.
+	computeProvisionedMachines  string = "compute:{provisioned}:machines"
+	computeProvisionedSpend     string = "compute:{provisioned}:spend:%s"
+	computeProvisionedLock      string = "compute:{provisioned}:lock"
+	computeProvisionedReconcile string = "compute:{provisioned}:reconcile"
+	computeProvisionedSoldOut   string = "compute:{provisioned}:sold_out"
+	computeProviderOwner        string = "compute:provider_owner"
 )
 
 var (
@@ -457,18 +464,46 @@ func (rk *redisKeys) ComputeAgentSlotIndex(workspaceID, poolName, machineID stri
 	return fmt.Sprintf(computeAgentSlotIndex, workspaceID, poolName, machineID)
 }
 
-func (rk *redisKeys) ComputeFailoverDemand(gpu string) string {
-	return fmt.Sprintf(computeFailoverDemand, gpu)
+// ComputeProvisionedMachines holds the record of every machine bought for a
+// pool, by machine ID.
+func (rk *redisKeys) ComputeProvisionedMachines() string {
+	return computeProvisionedMachines
 }
 
-func (rk *redisKeys) ComputeFailoverDemandIndex() string {
-	return computeFailoverDemandIndex
+// ComputeProvisionedSpend holds what the machines bought for pools cost in
+// one hour (bucket format "2006010215"), so a rolling window is a small key
+// read.
+func (rk *redisKeys) ComputeProvisionedSpend(hourBucket string) string {
+	return fmt.Sprintf(computeProvisionedSpend, hourBucket)
 }
 
-// ComputeOnDemandSpend buckets platform spend on failover hardware by hour
-// (bucket format "2006010215"), so a rolling window is a small key scan.
-func (rk *redisKeys) ComputeOnDemandSpend(hourBucket string) string {
-	return fmt.Sprintf(computeOnDemandSpend, hourBucket)
+// ComputeProvisionedLock is held while a record is written. One lock covers
+// every pool, because the spend cap is shared by all of them.
+func (rk *redisKeys) ComputeProvisionedLock() string {
+	return computeProvisionedLock
+}
+
+// ComputeProvisionedReconcile holds when the machines were last checked
+// against their providers. Its lock is held by the replica checking them.
+func (rk *redisKeys) ComputeProvisionedReconcile() string {
+	return computeProvisionedReconcile
+}
+
+func (rk *redisKeys) ComputeProvisionedReconcileLock() string {
+	return computeProvisionedReconcile + ":lock"
+}
+
+// ComputeProvisionedSoldOut holds the offers that are not bought for now,
+// and until when, by offer.
+func (rk *redisKeys) ComputeProvisionedSoldOut() string {
+	return computeProvisionedSoldOut
+}
+
+// ComputeProviderOwner holds the name this control plane puts on the
+// machines it buys. It lives next to the records of those machines, so
+// whoever reads the records knows which machines at a provider are theirs.
+func (rk *redisKeys) ComputeProviderOwner() string {
+	return computeProviderOwner
 }
 
 // Task keys

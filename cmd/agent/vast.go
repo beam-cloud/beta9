@@ -11,7 +11,7 @@ import (
 
 func runVast(ctx context.Context, args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: %s vast <install|sentinel|host|gpu-agent>", os.Args[0])
+		return vastUsage()
 	}
 	switch args[0] {
 	case agentvast.CommandInstall:
@@ -22,13 +22,15 @@ func runVast(ctx context.Context, args []string) error {
 		return runVastController(ctx, args[1:])
 	case agentvast.CommandGPUAgent:
 		return runVastGPUAgent(ctx, args[1:])
-	case agentvast.LegacyCommandHost:
-		return runVastController(ctx, args[1:])
-	case agentvast.LegacyCommandAgent:
-		return runVastGPUAgent(ctx, args[1:])
 	default:
-		return fmt.Errorf("usage: %s vast <install|sentinel|host|gpu-agent>", os.Args[0])
+		return vastUsage()
 	}
+}
+
+// vastUsage names the commands a person runs. The installed services run
+// the other two.
+func vastUsage() error {
+	return fmt.Errorf("usage: %s vast <install|sentinel>", os.Args[0])
 }
 
 func runVastInstall(ctx context.Context, args []string) error {

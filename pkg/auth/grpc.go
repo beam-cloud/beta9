@@ -95,6 +95,8 @@ func NewAuthInterceptor(config types.AppConfig, backendRepo repository.BackendRe
 			pb.GatewayService_StreamAgentTelemetry_FullMethodName:                      true,
 			pb.GatewayService_UpdateAgentRouteStatus_FullMethodName:                    true,
 			pb.GatewayService_UpdateAgentSSHStatus_FullMethodName:                      true,
+			pb.GatewayService_UpdateAgentAvailability_FullMethodName:                   true,
+			pb.GatewayService_ReportAgentInterruption_FullMethodName:                   true,
 			"/grpc.health.v1.Health/Check":                                             true,
 			"/grpc.reflection.v1.ServerReflection/ServerReflectionInfo":                config.DebugMode,
 			pb.WorkerRepositoryService_RegisterCacheHost_FullMethodName:                true,

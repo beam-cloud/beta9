@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
+	"github.com/beam-cloud/beta9/pkg/clock"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/redislock"
 	"github.com/rs/zerolog/log"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -24,91 +26,75 @@ import (
 	"k8s.io/utils/ptr"
 )
 
+const (
+	// workerJobCreateTimeout is how long the cluster is given to accept a
+	// worker Job.
+	workerJobCreateTimeout = 30 * time.Second
+	// workerTokenRevokeTimeout is how long the database is given to revoke
+	// the token of a worker that was not added.
+	workerTokenRevokeTimeout = 10 * time.Second
+)
+
 // A "local" k8s worker pool controller means
 // the pool is local to the control plane / in-cluster
 type LocalKubernetesWorkerPoolController struct {
-	ctx              context.Context
-	name             string
-	config           types.AppConfig
-	kubeClient       *kubernetes.Clientset
-	workerPoolConfig types.WorkerPoolConfig
-	workerRepo       repository.WorkerRepository
-	workerPoolRepo   repository.WorkerPoolRepository
-	backendRepo      repository.BackendRepository
-	containerRepo    repository.ContainerRepository
-	eventRepo        repository.EventRepository
-	workspace        *types.Workspace
+	poolIdentity
+	config         types.AppConfig
+	kubeClient     kubernetes.Interface
+	clock          clock.Clock
+	workerRepo     repository.WorkerRepository
+	workerPoolRepo repository.WorkerPoolRepository
+	backendRepo    repository.BackendRepository
+	containerRepo  repository.ContainerRepository
+	eventRepo      repository.EventRepository
+	stall          stallCheck
 }
 
 func NewLocalKubernetesWorkerPoolController(opts WorkerPoolControllerOptions) (WorkerPoolController, error) {
-	kubeConfig, err := rest.InClusterConfig()
-	if err != nil {
-		return nil, err
-	}
+	kubeClient := opts.KubeClient
+	if kubeClient == nil {
+		kubeConfig, err := rest.InClusterConfig()
+		if err != nil {
+			return nil, err
+		}
 
-	kubeClient, err := kubernetes.NewForConfig(kubeConfig)
-	if err != nil {
-		return nil, err
+		kubeClient, err = kubernetes.NewForConfig(kubeConfig)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	workerPoolName := opts.Name
 	workerPoolConfig := opts.Config.Worker.Pools[workerPoolName]
 	wpc := &LocalKubernetesWorkerPoolController{
-		ctx:              opts.Context,
-		name:             opts.Name,
-		config:           opts.Config,
-		kubeClient:       kubeClient,
-		workerPoolConfig: workerPoolConfig,
-		workerRepo:       opts.WorkerRepo,
-		backendRepo:      opts.BackendRepo,
-		workerPoolRepo:   opts.WorkerPoolRepo,
-		containerRepo:    opts.ContainerRepo,
-		eventRepo:        opts.EventRepo,
+		poolIdentity:   poolIdentity{ctx: opts.Context, name: opts.Name, workerPoolConfig: workerPoolConfig},
+		config:         opts.Config,
+		kubeClient:     kubeClient,
+		clock:          clock.OrReal(opts.Clock),
+		workerRepo:     opts.WorkerRepo,
+		backendRepo:    opts.BackendRepo,
+		workerPoolRepo: opts.WorkerPoolRepo,
+		containerRepo:  opts.ContainerRepo,
+		eventRepo:      opts.EventRepo,
 	}
 
-	// Start monitoring worker pool size
-	err = MonitorPoolSize(wpc, opts.Config, &workerPoolConfig, wpc.workerPoolRepo)
-	if err != nil {
-		log.Error().Str("pool_name", wpc.name).Err(err).Msg("unable to monitor pool size")
-	}
-
-	// Start monitoring worker pool health
-	err = MonitorPoolHealth(PoolHealthMonitorOptions{
+	MonitorPoolSize(wpc, opts.Config, &workerPoolConfig, wpc.workerPoolRepo, wpc.clock)
+	MonitorPoolHealth(PoolHealthMonitorOptions{
 		Controller:       wpc,
 		WorkerPoolConfig: workerPoolConfig,
-		FailoverHealth:   wpc.config.Scheduling.Failover.Health,
 		WorkerRepo:       wpc.workerRepo,
 		WorkerPoolRepo:   wpc.workerPoolRepo,
 		ContainerRepo:    wpc.containerRepo,
 		PushMetrics:      opts.PushPoolMetrics,
+		Clock:            wpc.clock,
 	})
-	if err != nil {
-		log.Error().Str("pool_name", wpc.name).Err(err).Msg("unable to monitor pool health")
-	}
-
-	go wpc.monitorAndCleanupWorkers()
+	wpc.monitorAndCleanupWorkers()
 
 	return wpc, nil
 }
 
-func (wpc *LocalKubernetesWorkerPoolController) Context() context.Context {
-	return wpc.ctx
-}
-
-func (wpc *LocalKubernetesWorkerPoolController) IsPreemptable() bool {
-	return wpc.workerPoolConfig.Preemptable
-}
-
-func (wpc *LocalKubernetesWorkerPoolController) Name() string {
-	return wpc.name
-}
-
 func (wpc *LocalKubernetesWorkerPoolController) ContainerRuntime() string {
 	return wpc.workerPoolConfig.ContainerRuntime
-}
-
-func (wpc *LocalKubernetesWorkerPoolController) RequiresPoolSelector() bool {
-	return wpc.workerPoolConfig.RequiresPoolSelector
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error) {
@@ -119,8 +105,11 @@ func (wpc *LocalKubernetesWorkerPoolController) State() (*types.WorkerPoolState,
 	return wpc.workerPoolRepo.GetWorkerPoolState(wpc.ctx, wpc.name)
 }
 
-func (wpc *LocalKubernetesWorkerPoolController) Mode() types.PoolMode {
-	return wpc.workerPoolConfig.Mode
+// CanAddWorker is false while the pool is stalled: a worker Job added now
+// would wait for a node behind the ones that already are.
+func (wpc *LocalKubernetesWorkerPoolController) CanAddWorker(cpu int64, memory int64, gpuCount uint32) (bool, error) {
+	stalled, err := wpc.stalled()
+	return !stalled, err
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
@@ -128,21 +117,17 @@ func (wpc *LocalKubernetesWorkerPoolController) AddWorker(cpu int64, memory int6
 	return wpc.addWorkerWithId(workerId, cpu, memory, wpc.workerPoolConfig.GPUType, gpuCount)
 }
 
-func (wpc *LocalKubernetesWorkerPoolController) AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {
-	return nil, errors.New("unimplemented")
-}
-
 func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
-	if wpc.workspace == nil {
-		adminWorkspace, err := wpc.backendRepo.GetAdminWorkspace(wpc.ctx)
-		if err != nil {
-			return nil, errors.New("workspace not configured for pool: " + wpc.name)
-		}
-
-		wpc.workspace = adminWorkspace
+	// A worker's token is the admin workspace's. The backend remembers the
+	// workspace, so it is asked each time: the pool's sizer and the requests
+	// that grow the pool add workers at the same time, and would race for a
+	// copy kept here.
+	workspace, err := wpc.backendRepo.GetAdminWorkspace(wpc.ctx)
+	if err != nil {
+		return nil, fmt.Errorf("unable to look up the admin workspace for pool %s: %w", wpc.name, err)
 	}
 
-	token, err := wpc.backendRepo.CreateWorkerToken(wpc.ctx, wpc.workspace.Id, types.TokenTypeWorker, workerId)
+	token, err := wpc.backendRepo.CreateWorkerToken(wpc.ctx, workspace.Id, types.TokenTypeWorker, workerId)
 	if err != nil {
 		return nil, err
 	}
@@ -152,6 +137,7 @@ func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string,
 
 	// Create the job in the cluster
 	if err := wpc.createJobInCluster(job); err != nil {
+		wpc.revokeWorkerToken(workerId, token)
 		return nil, err
 	}
 
@@ -161,10 +147,32 @@ func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string,
 	// Add the worker state
 	if err := wpc.workerRepo.AddWorker(worker); err != nil {
 		workerLog(log.Error(), worker).Err(err).Msg("unable to create worker")
+		// The Job of a worker that is not on record is removed by the
+		// cleaner, so its token goes now. But the error may have come after
+		// the record was written: when the lock that guards the write could
+		// not be released, say. That worker is one the scheduler waits for.
+		// It has to be able to start, and keeps its token.
+		var notFound *types.ErrWorkerNotFound
+		if _, lookupErr := wpc.workerRepo.GetWorkerById(workerId); errors.As(lookupErr, &notFound) {
+			wpc.revokeWorkerToken(workerId, token)
+		}
 		return nil, err
 	}
 
 	return worker, nil
+}
+
+// revokeWorkerToken ends the token made for a worker that was not added, so
+// that a pool which fails to add workers does not leave a working credential
+// behind for each one it tried. It may be the pool's context that ended the
+// attempt, so the token is revoked on one that outlives it.
+func (wpc *LocalKubernetesWorkerPoolController) revokeWorkerToken(workerId string, token types.Token) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(wpc.ctx), workerTokenRevokeTimeout)
+	defer cancel()
+
+	if _, err := wpc.backendRepo.RevokeTokenByExternalId(ctx, token.ExternalId); err != nil {
+		log.Error().Err(err).Str("pool_name", wpc.name).Str("worker_id", workerId).Msg("unable to revoke the token of a worker that was not added")
+	}
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) (*batchv1.Job, *types.Worker) {
@@ -283,22 +291,12 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		},
 	}
 
-	schedulableCpu := wpc.workerPoolConfig.CPUShareMultiplier.Schedulable(workerCpu)
-	return job, &types.Worker{
-		Id:            workerId,
-		FreeCpu:       schedulableCpu,
-		FreeMemory:    workerMemory,
-		FreeGpuCount:  workerGpuCount,
-		TotalCpu:      schedulableCpu,
-		TotalMemory:   workerMemory,
-		TotalGpuCount: workerGpuCount,
-		Gpu:           workerGpuType,
-		Status:        types.WorkerStatusPending,
-		Priority:      wpc.workerPoolConfig.Priority,
-		Runtime:       wpc.workerPoolConfig.ContainerRuntime,
-		BuildVersion:  wpc.config.Worker.ImageTag,
-		Preemptable:   wpc.workerPoolConfig.Preemptable,
-	}
+	worker := pendingWorker(workerId, wpc.workerPoolConfig.CPUShareMultiplier.Schedulable(workerCpu), workerMemory, workerGpuType, workerGpuCount)
+	worker.Priority = wpc.workerPoolConfig.Priority
+	worker.Runtime = wpc.workerPoolConfig.ContainerRuntime
+	worker.BuildVersion = wpc.config.Worker.ImageTag
+	worker.Preemptable = wpc.workerPoolConfig.Preemptable
+	return job, worker
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) workerPodConfig() types.AppConfig {
@@ -343,8 +341,15 @@ func (wpc *LocalKubernetesWorkerPoolController) workerPodConfig() types.AppConfi
 	return config
 }
 
+// createJobInCluster asks the cluster for the Job. The wait for its answer
+// ends with the pool, or after workerJobCreateTimeout: workers are added one
+// at a time by the pool's sizer, which a cluster that does not answer would
+// otherwise hold for good.
 func (wpc *LocalKubernetesWorkerPoolController) createJobInCluster(job *batchv1.Job) error {
-	_, err := wpc.kubeClient.BatchV1().Jobs(wpc.config.Worker.Namespace).Create(context.Background(), job, metav1.CreateOptions{})
+	ctx, cancel := context.WithTimeout(wpc.ctx, workerJobCreateTimeout)
+	defer cancel()
+
+	_, err := wpc.kubeClient.BatchV1().Jobs(wpc.config.Worker.Namespace).Create(ctx, job, metav1.CreateOptions{})
 	return err
 }
 
@@ -591,10 +596,6 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 			Name:  "CACHE_HOST_NETWORK",
 			Value: strconv.FormatBool(wpc.config.Worker.HostNetwork),
 		},
-		{
-			Name:  "PREEMPTABLE",
-			Value: strconv.FormatBool(wpc.workerPoolConfig.Preemptable),
-		},
 	}
 
 	if wpc.config.Worker.UseGatewayServiceHostname {
@@ -652,32 +653,30 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 	return envVars
 }
 
+// monitorAndCleanupWorkers binds the tokens of workers that are already
+// running, then removes finished, stale and stuck worker Jobs on an interval.
 func (wpc *LocalKubernetesWorkerPoolController) monitorAndCleanupWorkers() {
-	cleaner := WorkerResourceCleaner{
+	cleaner := &WorkerResourceCleaner{
 		PoolName:    wpc.name,
 		Config:      wpc.config.Worker,
 		KubeClient:  wpc.kubeClient,
 		EventRepo:   wpc.eventRepo,
 		WorkerRepo:  wpc.workerRepo,
 		BackendRepo: wpc.backendRepo,
+		Now:         wpc.clock.Now,
 	}
-	cleaner.BindWorkerTokens(wpc.ctx)
+	// Binding lists every Job in the pool, so it stays off the caller's path.
+	go cleaner.BindWorkerTokens(wpc.ctx)
 
-	ticker := time.NewTicker(wpc.config.Worker.CleanupWorkerInterval)
-	defer ticker.Stop()
+	wpc.clock.Every(wpc.ctx, wpc.config.Worker.CleanupWorkerInterval, func() { wpc.cleanupTick(cleaner) })
+}
 
-	for {
-		select {
-		case <-wpc.ctx.Done():
-			return
-		case <-ticker.C:
-			if err := wpc.workerPoolRepo.SetWorkerCleanerLock(wpc.name); err != nil {
-				continue
-			}
-
-			cleaner.Clean(wpc.ctx)
-			wpc.workerPoolRepo.RemoveWorkerCleanerLock(wpc.name)
-		}
+// cleanupTick runs one cleanup pass. Only one scheduler replica cleans a pool
+// at a time.
+func (wpc *LocalKubernetesWorkerPoolController) cleanupTick(cleaner *WorkerResourceCleaner) {
+	err := wpc.workerPoolRepo.WithWorkerPoolCleanerLock(wpc.name, func() { cleaner.Clean(wpc.ctx) })
+	if err != nil && !errors.Is(err, redislock.ErrNotObtained) {
+		log.Error().Str("pool_name", wpc.name).Err(err).Msg("failed to hold worker pool cleaner lock")
 	}
 }
 

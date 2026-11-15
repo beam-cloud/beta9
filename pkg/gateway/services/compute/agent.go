@@ -120,22 +120,9 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 	}
 	var bootstrap *pb.AgentBootstrapConfig
 	if agentState.ManagedPoolInstanceID == "" {
-		poolState, bootstrap, err = s.commitPrivateAgentJoin(ctx, tokenState, agentState)
+		poolState, bootstrap, err = s.commitPrivateAgentJoin(ctx, tokenState, agentState, existing)
 	} else {
-		if err = s.enforcePoolGPUType(ctx, poolState, agentState); err == nil {
-			bootstrap, err = s.agentBootstrapConfig(ctx, tokenState.WorkspaceID, poolState)
-		}
-		if err == nil {
-			bootstrap.Executor = agentState.Executor
-			err = s.saveJoinedAgentState(ctx, poolState, agentState)
-		}
-		if err == nil {
-			err = s.ensureAgentMachine(ctx, agentState, poolState)
-		}
-		if err != nil {
-			_ = s.removePrivateMachineWorker(agentState)
-			_ = s.computeRepo.DeleteAgentMachineState(ctx, agentState.WorkspaceID, agentState.PoolName, agentState.MachineID)
-		}
+		bootstrap, err = s.commitManagedAgentJoin(ctx, poolState, agentState, existing)
 	}
 	if err != nil {
 		return &pb.JoinAgentResponse{Ok: false, ErrMsg: err.Error()}, nil
@@ -173,7 +160,50 @@ func (s *Service) JoinAgent(ctx context.Context, in *pb.JoinAgentRequest) (*pb.J
 	}, nil
 }
 
-func (s *Service) commitPrivateAgentJoin(ctx context.Context, token *model.JoinTokenState, agent *model.AgentTokenState) (*model.PoolState, *pb.AgentBootstrapConfig, error) {
+// commitManagedAgentJoin saves a machine that joins a pool the control plane
+// manages, and makes its worker. existing is the machine as it was, if it
+// had joined before.
+func (s *Service) commitManagedAgentJoin(ctx context.Context, pool *model.PoolState, agent, existing *model.AgentTokenState) (*pb.AgentBootstrapConfig, error) {
+	if err := s.enforcePoolGPUType(ctx, pool, agent); err != nil {
+		return nil, err
+	}
+	bootstrap, err := s.agentBootstrapConfig(ctx, agent.WorkspaceID, pool)
+	if err != nil {
+		return nil, err
+	}
+	bootstrap.Executor = agent.Executor
+
+	hadWorker := s.agentMachineStatusWorker(agent) != nil
+	if err := s.saveJoinedAgentState(ctx, pool, agent); err != nil {
+		return nil, err
+	}
+	if err := s.ensureAgentMachine(ctx, agent, pool); err != nil {
+		return nil, errors.Join(err, s.undoJoin(ctx, pool, agent, existing, hadWorker))
+	}
+	return bootstrap, nil
+}
+
+// undoJoin takes back a join that failed after the machine was saved. It
+// removes what the join added and nothing that was there before. An agent
+// that is refused goes on with the token it has: a machine that had joined is
+// put back as it was, and one the pool bought keeps the worker that has stood
+// for it since.
+func (s *Service) undoJoin(ctx context.Context, pool *model.PoolState, agent, existing *model.AgentTokenState, hadWorker bool) error {
+	var errs []error
+	if !hadWorker {
+		errs = append(errs, s.removePrivateMachineWorker(agent))
+	}
+	if existing == nil {
+		errs = append(errs, s.computeRepo.DeleteAgentMachineState(ctx, agent.WorkspaceID, agent.PoolName, agent.MachineID))
+	} else {
+		errs = append(errs, s.saveJoinedAgentState(ctx, pool, existing))
+	}
+	return errors.Join(errs...)
+}
+
+// commitPrivateAgentJoin is commitManagedAgentJoin for a workspace's own
+// pool, which it reads and holds while the machine joins.
+func (s *Service) commitPrivateAgentJoin(ctx context.Context, token *model.JoinTokenState, agent, existing *model.AgentTokenState) (*model.PoolState, *pb.AgentBootstrapConfig, error) {
 	var pool *model.PoolState
 	var bootstrap *pb.AgentBootstrapConfig
 	err := s.withPoolStateLock(ctx, agent.WorkspaceID, agent.PoolName, func(lockCtx context.Context) error {
@@ -200,17 +230,20 @@ func (s *Service) commitPrivateAgentJoin(ctx context.Context, token *model.JoinT
 			return err
 		}
 		bootstrap.Executor = agent.Executor
+
+		hadWorker := s.agentMachineStatusWorker(agent) != nil
 		if err := s.saveComputeAgentTokenState(lockCtx, agent); err != nil {
 			return err
 		}
-		if err := s.assignManagedReservationToMachineLocked(lockCtx, pool, token, agent); err != nil {
-			return errors.Join(err, s.computeRepo.DeleteAgentMachineState(lockCtx, agent.WorkspaceID, agent.PoolName, agent.MachineID))
+		err = s.assignManagedReservationToMachineLocked(lockCtx, pool, token, agent)
+		if err == nil {
+			err = s.ensureMachineSSHStateForJoin(lockCtx, pool, agent)
 		}
-		if err := s.ensureMachineSSHStateForJoin(lockCtx, pool, agent); err != nil {
-			return errors.Join(err, s.computeRepo.DeleteAgentMachineState(lockCtx, agent.WorkspaceID, agent.PoolName, agent.MachineID))
+		if err == nil {
+			err = s.ensureAgentMachine(lockCtx, agent, pool)
 		}
-		if err := s.ensureAgentMachine(lockCtx, agent, pool); err != nil {
-			return errors.Join(err, s.removePrivateMachineWorker(agent), s.computeRepo.DeleteAgentMachineState(lockCtx, agent.WorkspaceID, agent.PoolName, agent.MachineID))
+		if err != nil {
+			return errors.Join(err, s.undoJoin(lockCtx, pool, agent, existing, hadWorker))
 		}
 		return nil
 	})
@@ -388,15 +421,16 @@ func (s *Service) agentBelongsToServerlessPool(ctx context.Context, agentState *
 		return false
 	}
 	pool, err := s.managedPoolRepo.GetManagedPoolState(ctx, agentState.WorkspaceID, agentState.PoolName)
-	if err != nil || pool == nil || pool.Status != types.ComputePoolStatusActive ||
+	if err != nil || pool == nil || pool.Status != model.PoolStatusActive ||
 		pool.WorkspaceID != agentState.WorkspaceID || pool.Name != agentState.PoolName ||
 		pool.ManagedInstanceID != agentState.ManagedPoolInstanceID ||
-		pool.CreatedByTokenID == types.FailoverOnDemandPoolCreator ||
 		pool.BYOC != nil || pool.ReservedNodes != 0 || len(pool.Reservations) != 0 {
 		return false
 	}
 	// Check the original definition before activeManagedPoolState normalizes
 	// selector requirements. A selector-bound pool must never receive SSH.
+	// Its mode needs no check here: activeManagedPoolState takes only an
+	// external pool, which is also what a pool that buys its machines is.
 	config := pool.WorkerConfig
 	if pool.ManagementSource == types.WorkerPoolManagementSourceConfig {
 		configured, ok := s.appConfig.Worker.Pools[pool.Name]
@@ -405,7 +439,7 @@ func (s *Service) agentBelongsToServerlessPool(ctx context.Context, agentState *
 		}
 		config = &configured
 	}
-	if config == nil || config.Mode != types.PoolModeExternal || config.RequiresPoolSelector {
+	if config == nil || config.RequiresPoolSelector {
 		return false
 	}
 	active, err := s.activeManagedPoolState(pool)

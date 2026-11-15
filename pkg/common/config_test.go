@@ -2,6 +2,7 @@ package common
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -75,6 +76,50 @@ func TestEmbeddedDefaultConfigLoads(t *testing.T) {
 	manager, err := NewConfigManager[types.AppConfig]()
 	require.NoError(t, err)
 	require.Equal(t, 0, manager.GetConfig().Database.Postgres.MaxOpenConns, "the pool stays unbounded unless configured")
+	require.NoError(t, manager.GetConfig().Validate())
+}
+
+// The built-in config's example of a pool that buys machines is what gets
+// copied, so it has to load as it is written, without its comment marks.
+func TestSpotPoolExampleInTheDefaultConfigLoads(t *testing.T) {
+	commentedKey := regexp.MustCompile(`^(\s*)# (\s*(- )?[A-Za-z][A-Za-z0-9-]*:( .*)?)$`)
+	example := func(from, to string) string {
+		_, rest, found := strings.Cut(string(defaultConfig), from)
+		require.True(t, found, "the built-in config has no %q", from)
+		body, _, found := strings.Cut(rest, to)
+		require.True(t, found, "the built-in config has no %q", to)
+
+		var lines []string
+		for _, line := range strings.Split(from+body, "\n") {
+			if parts := commentedKey.FindStringSubmatch(line); parts != nil {
+				lines = append(lines, parts[1]+parts[2])
+			}
+		}
+		return strings.Join(lines, "\n")
+	}
+	overlay := "worker:\n  pools:\n" + example("    # spot-l40s:", "  # global pool attributes") +
+		"\nproviders:\n" + example("  # maxHourlyCents:", "  hetzner:")
+
+	manager, err := NewConfigManager[types.AppConfig]()
+	require.NoError(t, err)
+	require.NoError(t, manager.load(YAMLConfigFormat, rawbytes.Provider([]byte(overlay)), "example"), overlay)
+	require.Empty(t, manager.UnknownKeys(), overlay)
+
+	config := manager.GetConfig()
+	require.NoError(t, config.Validate())
+	pool := config.Worker.Pools["spot-l40s"]
+	require.True(t, pool.Buys())
+	require.Equal(t, "verda", pool.Provisioning.Provider)
+	require.True(t, pool.Provisioning.Spot)
+	require.Equal(t, 4, pool.Provisioning.MaxNodes)
+	require.EqualValues(t, 150, pool.Provisioning.MaxNodeHourlyCents)
+	require.Equal(t, 10*time.Minute, pool.Provisioning.IdleAfter())
+	require.Equal(t, 20*time.Minute, pool.Provisioning.BootWithin())
+	require.Equal(t, []string{"A10G"}, pool.AlsoServes)
+	require.Equal(t, "1", pool.PoolSizing.MinFreeGPU)
+	require.EqualValues(t, 2000, config.Providers.MaxHourlyCents)
+	require.EqualValues(t, 20000, config.Providers.MaxDailyCents)
+	require.Len(t, config.Providers.Nebius.Projects, 1)
 }
 
 func TestCompletionBudgetsAreLoadedForYAMLAndJSONConfig(t *testing.T) {
@@ -101,4 +146,129 @@ func TestMinimalConfigEnabled(t *testing.T) {
 
 	t.Setenv(types.WorkerMinimalConfigEnv, "false")
 	require.False(t, minimalConfigEnabled())
+}
+
+func TestUnknownConfigKeysAreReportedWithTheirSource(t *testing.T) {
+	manager, err := NewConfigManager[types.AppConfig]()
+	require.NoError(t, err)
+	require.Empty(t, manager.UnknownKeys(), "the built-in config sets keys that nothing reads")
+
+	require.NoError(t, manager.load(YAMLConfigFormat, rawbytes.Provider([]byte(`
+debugMode: true
+wroker:
+  namespace: beta9
+worker:
+  failover:
+    enabled: true
+  pools:
+    a10g:
+      gpuTyp: A10G
+      GPUTYPE: A10G
+      poolSizing:
+        minFreeCpu: 1000m
+      jobSpec:
+        nodeSelector:
+          any-label: is-fine
+        env:
+          - name: A
+            value: b
+            valu: c
+`)), "/etc/beta9.d/extra.yaml"))
+
+	require.Equal(t, []UnknownConfigKey{
+		{Source: "/etc/beta9.d/extra.yaml", Key: "worker.failover"},
+		{Source: "/etc/beta9.d/extra.yaml", Key: "worker.pools[a10g].gpuTyp"},
+		{Source: "/etc/beta9.d/extra.yaml", Key: "worker.pools[a10g].jobSpec.env[0].valu"},
+		{Source: "/etc/beta9.d/extra.yaml", Key: "wroker"},
+	}, manager.UnknownKeys())
+
+	// The misspelt key changed nothing; the one spelt in another case did.
+	require.Equal(t, "A10G", manager.GetConfig().Worker.Pools["a10g"].GPUType)
+}
+
+func TestUnknownConfigKeysInConfigJSONUseJSONNames(t *testing.T) {
+	t.Setenv("CONFIG_JSON", `{"debug_mode": true, "debugMode": true, "worker": {"namespace": "beta9", "name_space": "x"}}`)
+
+	manager, err := NewConfigManager[types.AppConfig]()
+	require.NoError(t, err)
+
+	require.Equal(t, []UnknownConfigKey{
+		{Source: "CONFIG_JSON", Key: "debugMode"},
+		{Source: "CONFIG_JSON", Key: "worker.name_space"},
+	}, manager.UnknownKeys())
+}
+
+// A pool's durations are text in the config file, and in CONFIG_JSON either
+// text or the number of nanoseconds a marshalled config carries.
+func TestPoolDurationsLoadFromYAMLAndJSON(t *testing.T) {
+	want := types.WorkerPoolProvisioningConfig{Provider: "verda", MaxNodes: 2,
+		IdleTimeout: types.Duration(5 * time.Minute), BootTimeout: types.Duration(15 * time.Minute)}
+
+	t.Run("yaml", func(t *testing.T) {
+		manager, err := NewConfigManager[types.AppConfig]()
+		require.NoError(t, err)
+		require.NoError(t, manager.load(YAMLConfigFormat, rawbytes.Provider([]byte(`
+worker:
+  pools:
+    spot:
+      provisioning:
+        provider: verda
+        maxNodes: 2
+        idleTimeout: 5m
+        bootTimeout: 15m
+    patient:
+      stalledAfter: 90s
+`)), "config.yaml"))
+		require.Empty(t, manager.UnknownKeys())
+		pools := manager.GetConfig().Worker.Pools
+		require.Equal(t, want, pools["spot"].Provisioning)
+		require.Equal(t, types.Duration(90*time.Second), pools["patient"].StalledAfter)
+	})
+
+	for name, overlay := range map[string]string{
+		"json text":        `{"worker":{"pools":{"spot":{"provisioning":{"provider":"verda","max_nodes":2,"idle_timeout":"5m","boot_timeout":"15m0s"}}}}}`,
+		"json nanoseconds": `{"worker":{"pools":{"spot":{"provisioning":{"provider":"verda","max_nodes":2,"idle_timeout":300000000000,"boot_timeout":900000000000}}}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("CONFIG_JSON", overlay)
+			manager, err := NewConfigManager[types.AppConfig]()
+			require.NoError(t, err)
+			require.Empty(t, manager.UnknownKeys())
+			require.Equal(t, want, manager.GetConfig().Worker.Pools["spot"].Provisioning)
+		})
+	}
+}
+
+func TestRemovedConfigKeysSayWhatReplacedThem(t *testing.T) {
+	manager, err := NewConfigManager[types.AppConfig]()
+	require.NoError(t, err)
+	require.NoError(t, manager.load(YAMLConfigFormat, rawbytes.Provider([]byte(`
+scheduling:
+  failover:
+    enabled: true
+    health:
+      maxPendingWorkers: 5
+    onDemand:
+      budget:
+        maxHourlyCents: 100
+    chains:
+      A10G:
+        pools: [l40s]
+        onDemand:
+          gpus: [A10G]
+          maxNodes: 2
+`)), "config.yaml"))
+
+	hints := map[string]string{}
+	for _, unknown := range manager.UnknownKeys() {
+		hints[unknown.Key] = removedKeyHint(unknown.Key)
+	}
+	require.Len(t, hints, 3)
+	require.Contains(t, hints["scheduling.failover.health"], "were removed")
+	require.Contains(t, hints["scheduling.failover.onDemand"], "worker.pools.<name>.provisioning")
+	require.Contains(t, hints["scheduling.failover.chains[A10G].onDemand"], "worker.pools.<name>.provisioning")
+
+	require.Empty(t, removedKeyHint("worker.pools[a10g].gpuTyp"), "a key no release read gets the spelling advice")
+	// The chain itself still converts.
+	require.Equal(t, []string{"l40s"}, manager.GetConfig().Scheduling.Failover.Chains["A10G"].Pools)
 }

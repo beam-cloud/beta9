@@ -31,7 +31,7 @@ func (s *Scheduler) serverlessGPUAvailability(workers []*types.Worker) map[strin
 		if pool.Config.Mode == types.PoolModeProvider || pool.Config.Mode == types.PoolModePrivate {
 			continue
 		}
-		if worker.WorkspaceId != "" && !worker.ControlPlaneManaged {
+		if workspaceOwned(worker) {
 			continue
 		}
 		availability[worker.Gpu] = true
@@ -49,40 +49,16 @@ func emptyGPUAvailability() map[string]bool {
 	return availability
 }
 
-// HasManagedPoolForGPU reports whether any registered pool that is usable
-// without a pool selector could serve the given GPU type. The check is
-// pool-config-based rather than live-worker-based, so scale-to-zero pools
-// still count as supported. gpuType may be types.GPU_ANY. Provider pools never
-// count: they only host managed endpoint replicas.
-func (s *Scheduler) HasManagedPoolForGPU(gpuType string) bool {
-	if s == nil || s.workerPoolManager == nil {
-		return false
-	}
-	pools := s.workerPoolManager.GetPoolByFilters(poolFilters{GPUType: gpuType})
-	for _, pool := range pools {
-		if pool.Controller == nil || pool.Controller.RequiresPoolSelector() {
-			continue
-		}
-		if pool.Controller.Mode() == types.PoolModeProvider {
-			continue
-		}
-		return true
-	}
-	return false
-}
-
-type CapacityCheckResult struct {
-	CanSchedule bool
-	WorkerId    string
-	Err         error
-}
-
-func (s *Scheduler) CheckCapacity(request *types.ContainerRequest, replicas uint, ignoreStubId string, activeContainers []types.ContainerState) CapacityCheckResult {
+// CheckCapacity reports whether the workers that run now have room for
+// replicas containers like the request. The room that the containers of
+// replacedStubID hold counts as free: a rollout stops them. No worker is
+// added and nothing is reserved.
+func (s *Scheduler) CheckCapacity(request *types.ContainerRequest, replicas uint, replacedStubID string, activeContainers []types.ContainerState) bool {
 	return (&capacityCheck{
 		scheduler:        s,
 		request:          request,
 		replicas:         replicas,
-		replacedStubID:   ignoreStubId,
+		replacedStubID:   replacedStubID,
 		activeContainers: activeContainers,
 	}).run()
 }
@@ -96,15 +72,15 @@ type capacityCheck struct {
 	workers          []*types.Worker
 }
 
-func (c *capacityCheck) run() CapacityCheckResult {
+func (c *capacityCheck) run() bool {
 	if c.scheduler == nil || c.scheduler.workerRepo == nil {
-		return CapacityCheckResult{Err: &types.ErrNoSuitableWorkerFound{}}
+		return false
 	}
 	if c.replicas == 0 {
 		c.replicas = 1
 	}
 	if err := c.loadWorkers(); err != nil {
-		return CapacityCheckResult{Err: err}
+		return false
 	}
 	c.restoreReplacedCapacity()
 	return c.placeReplicas()
@@ -161,25 +137,17 @@ func containerRequestFromState(container types.ContainerState) *types.ContainerR
 	}
 }
 
-func (c *capacityCheck) placeReplicas() CapacityCheckResult {
-	var selected *types.Worker
+// placeReplicas places the replicas one after another, as a scheduling pass
+// would, each on what the ones before it left.
+func (c *capacityCheck) placeReplicas() bool {
 	for i := uint(0); i < c.replicas; i++ {
-		worker, err := c.scheduler.selectWorkerFromWorkers(c.workers, c.request.Clone())
-		if err != nil {
-			return CapacityCheckResult{Err: err}
+		request := c.request.Clone()
+		worker, err := c.scheduler.selectWorkerFromWorkers(c.workers, request)
+		if err != nil || worker == nil || !c.scheduler.reserveWorkerCapacity(worker, request) {
+			return false
 		}
-		c.reserve(worker)
-		selected = worker
 	}
-	return CapacityCheckResult{CanSchedule: true, WorkerId: selected.Id}
-}
-
-func (c *capacityCheck) reserve(worker *types.Worker) {
-	worker.FreeCpu -= c.scheduler.cpuReservation(worker, c.request)
-	worker.FreeMemory -= capacityMemoryForScheduling(c.request)
-	if c.request.RequiresGPU() {
-		worker.FreeGpuCount -= gpuCountForScheduling(c.request)
-	}
+	return true
 }
 
 func (c *capacityCheck) capFreeCapacity(worker *types.Worker) {

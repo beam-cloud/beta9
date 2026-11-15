@@ -32,28 +32,65 @@ import (
 // A worker that is not available (cordoned, draining, or still pending) is
 // never headroom: the scheduler will not place on it, so keeping it changes
 // nothing for the pool and only pins a pod the operator asked to retire.
-func WorkerHoldsPoolHeadroom(workerRepo repository.WorkerRepository, config types.AppConfig, worker *types.Worker) bool {
-	if worker == nil || worker.PoolName == "" || worker.Status != types.WorkerStatusAvailable {
+func (s *Scheduler) WorkerHoldsPoolHeadroom(worker *types.Worker) bool {
+	if s == nil || worker == nil {
 		return false
 	}
-	poolConfig, ok := config.Worker.Pools[worker.PoolName]
+	pool, ok := s.poolOf(worker)
 	if !ok {
 		return false
 	}
-	sizing, err := parsePoolSizingConfig(poolConfig.PoolSizing)
-	if err != nil || sizing == nil {
-		return false
-	}
-	applyBuildPoolSizingMinimums(worker.PoolName, config, sizing)
-	if sizing.MinFreeCpu <= 0 && sizing.MinFreeMemory <= 0 && sizing.MinFreeGpu <= 0 {
-		return false
-	}
+	return workerHoldsPoolHeadroom(s.workerRepo, pool.Config, worker)
+}
 
+func workerHoldsPoolHeadroom(workerRepo repository.WorkerRepository, pool types.WorkerPoolConfig, worker *types.Worker) bool {
+	if worker == nil || worker.PoolName == "" || worker.Status != types.WorkerStatusAvailable || poolFloor(pool) == nil {
+		return false
+	}
 	workers, err := workerRepo.GetAllWorkersInPool(worker.PoolName)
 	if err != nil {
 		return true
 	}
-	return freeCapacityAhead(workers, worker.Id).belowMinimum(sizing)
+	return HoldsHeadroom(pool, workers, worker)
+}
+
+// HoldsHeadroom is the rule of WorkerHoldsPoolHeadroom for a caller that has
+// the pool's config and its workers at hand: it reports whether worker is one
+// of the workers that keep the pool's free capacity at its floor.
+func HoldsHeadroom(pool types.WorkerPoolConfig, workers []*types.Worker, worker *types.Worker) bool {
+	if worker == nil || worker.Status != types.WorkerStatusAvailable {
+		return false
+	}
+	floor := poolFloor(pool)
+	if floor == nil {
+		return false
+	}
+	return freeCapacityAhead(workers, worker.Id).belowMinimum(floor)
+}
+
+// poolFloor returns the free capacity the pool keeps (poolSizing.minFree*),
+// or nil when it keeps none. It reads the config the pool runs with, so a
+// pool created through the pools API has a floor like one from the config
+// file.
+func poolFloor(pool types.WorkerPoolConfig) *types.WorkerPoolSizingConfig {
+	sizing, _ := readPoolSizing(pool)
+	if sizing.MinFreeCpu <= 0 && sizing.MinFreeMemory <= 0 && sizing.MinFreeGpu <= 0 {
+		return nil
+	}
+	return sizing
+}
+
+// poolOf returns the pool the worker belongs to. A workspace's own pool may
+// share its name with a shared pool, so it is looked up first.
+func (s *Scheduler) poolOf(worker *types.Worker) (*WorkerPool, bool) {
+	if s.workerPoolManager == nil {
+		return nil, false
+	}
+	name := workerPoolSelector(worker)
+	if pool, ok := s.privateAgentPool(worker.WorkspaceId, name); ok {
+		return pool, true
+	}
+	return s.workerPoolManager.GetPool(name)
 }
 
 // freeCapacityAhead sums the free capacity of the ready workers in workers
@@ -64,19 +101,27 @@ func freeCapacityAhead(workers []*types.Worker, id string) *WorkerPoolCapacity {
 		if w.Id >= id || w.Status == types.WorkerStatusDisabled || w.Status == types.WorkerStatusPending {
 			continue
 		}
-		capacity.FreeCpu += w.FreeCpu
-		capacity.FreeMemory += w.FreeMemory
-		if w.Gpu != "" && w.FreeCpu > 0 && w.FreeMemory > 0 {
-			capacity.FreeGpu += uint(w.FreeGpuCount)
-		}
+		capacity.addFree(w)
 	}
 	return capacity
 }
 
+// belowMinimum reports whether the free capacity is under the pool's floor.
 func (c *WorkerPoolCapacity) belowMinimum(sizing *types.WorkerPoolSizingConfig) bool {
 	return c.FreeCpu < sizing.MinFreeCpu ||
 		c.FreeMemory < sizing.MinFreeMemory ||
 		(sizing.MinFreeGpu > 0 && c.FreeGpu < sizing.MinFreeGpu)
+}
+
+// withPending counts the capacity of the workers that are starting as free.
+// The sizer does, so that it adds one worker for a shortfall and not one on
+// every tick until the first has started.
+func (c *WorkerPoolCapacity) withPending() *WorkerPoolCapacity {
+	return &WorkerPoolCapacity{
+		FreeCpu:    c.FreeCpu + c.PendingCpu,
+		FreeMemory: c.FreeMemory + c.PendingMemory,
+		FreeGpu:    c.FreeGpu + c.PendingGpu,
+	}
 }
 
 // filterWorkersByPoolHeadroom drops, for an opportunistic request, every worker
@@ -100,23 +145,22 @@ func (s *Scheduler) filterWorkersByPoolHeadroom(workers []*types.Worker, request
 			c = &WorkerPoolCapacity{}
 			ready[w.PoolName] = c
 		}
-		c.FreeCpu += w.FreeCpu
-		c.FreeMemory += w.FreeMemory
-		if w.Gpu != "" {
-			c.FreeGpu += uint(w.FreeGpuCount)
-		}
+		c.addFree(w)
 	}
 	tier := request.CPUTier()
 	keep := map[string]bool{}
 	sizings := map[string]*types.WorkerPoolSizingConfig{}
 	for name, c := range ready {
-		sizing := s.poolSizing(name)
+		var pool types.WorkerPoolConfig
+		if loaded, ok := s.poolOf(pools[name][0]); ok {
+			pool = loaded.Config
+		}
+		sizing := poolFloor(pool)
 		if sizing == nil {
 			keep[name] = true
 			continue
 		}
 		sizings[name] = sizing
-		pool, _ := s.PoolConfig(name)
 		after := WorkerPoolCapacity{
 			FreeCpu:    c.FreeCpu - tier.CPUReservation(pool, request.Cpu),
 			FreeMemory: c.FreeMemory - capacityMemoryForScheduling(request),
@@ -136,17 +180,4 @@ func (s *Scheduler) filterWorkersByPoolHeadroom(workers []*types.Worker, request
 		filtered = append(filtered, w)
 	}
 	return filtered
-}
-
-func (s *Scheduler) poolSizing(poolName string) *types.WorkerPoolSizingConfig {
-	poolConfig, ok := s.config.Worker.Pools[poolName]
-	if !ok {
-		return nil
-	}
-	sizing, err := parsePoolSizingConfig(poolConfig.PoolSizing)
-	if err != nil {
-		return nil
-	}
-	applyBuildPoolSizingMinimums(poolName, s.config, sizing)
-	return sizing
 }

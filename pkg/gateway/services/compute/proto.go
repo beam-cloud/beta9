@@ -6,6 +6,7 @@ import (
 	"time"
 
 	model "github.com/beam-cloud/beta9/pkg/compute"
+	"github.com/beam-cloud/beta9/pkg/providers"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/protobuf/proto"
@@ -77,7 +78,7 @@ func computePoolFromProto(in *pb.PoolConfig, nodeCount uint32, requireReservatio
 		Nodes:          firstNonZeroUint32(nodeCount, in.Nodes),
 		OfferID:        in.OfferId,
 		TTL:            ttl,
-		MaxSpendMicros: model.DollarsToMicros(in.MaxSpend),
+		MaxSpendMicros: providers.DollarsToMicros(in.MaxSpend),
 		Providers:      in.Providers,
 		Regions:        in.Regions,
 		MinReliability: in.MinReliability,
@@ -92,7 +93,9 @@ func computePoolFromProto(in *pb.PoolConfig, nodeCount uint32, requireReservatio
 	return pool, nil
 }
 
-func poolOfferToProto(offer model.Offer) *pb.PoolOffer {
+func poolOfferToProto(offer providers.Offer) *pb.PoolOffer {
+	// An offer is one machine that is in stock. A provider that does not say
+	// how many it has is shown as having one.
 	return &pb.PoolOffer{
 		Id:                offer.ID,
 		Provider:          offer.Provider,
@@ -101,13 +104,13 @@ func poolOfferToProto(offer model.Offer) *pb.PoolOffer {
 		Region:            offer.Region,
 		Gpu:               offer.GPU,
 		GpuCount:          offer.GPUCount,
-		NodeCount:         offer.NodeCount,
+		NodeCount:         1,
 		CpuMillicores:     offer.CPUMillicores,
 		MemoryMb:          offer.MemoryMB,
 		StorageMb:         offer.StorageMB,
 		HourlyCostMicros:  offer.HourlyCostMicros,
 		Reliability:       offer.Reliability,
-		Available:         offer.Available,
+		Available:         max(offer.Available, 1),
 		DisplayName:       offer.DisplayName,
 		Category:          offer.Category,
 		RegionDisplayName: offer.RegionDisplayName,
@@ -328,7 +331,7 @@ func agentMachineMetrics(state *model.AgentTokenState, worker *types.Worker) *pb
 		totalMemory = firstNonZeroInt64(worker.TotalMemory, totalMemory)
 		cpuPct = capacityUtilizationPct(worker.TotalCpu, worker.FreeCpu)
 		memoryPct = capacityUtilizationPct(worker.TotalMemory, worker.FreeMemory)
-		usedMemory = maxInt64(worker.TotalMemory-worker.FreeMemory, 0)
+		usedMemory = max(worker.TotalMemory-worker.FreeMemory, 0)
 		freeGPU = worker.FreeGpuCount
 		containerCount = uint32(len(worker.ActiveContainers))
 		workerCount = 1
@@ -380,7 +383,7 @@ func capacityUtilizationPct(total, free int64) float32 {
 	if total <= 0 {
 		return 0
 	}
-	used := maxInt64(total-free, 0)
+	used := max(total-free, 0)
 	return float32(used) * 100 / float32(total)
 }
 
@@ -435,13 +438,6 @@ func firstNonZeroInt64(values ...int64) int64 {
 		}
 	}
 	return 0
-}
-
-func maxInt64(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func firstNonZeroUint64(values ...uint64) uint64 {

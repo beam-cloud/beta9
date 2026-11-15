@@ -198,5 +198,5 @@ func rolloutContainerRequest(in deploymentRolloutInput) *types.ContainerRequest 
 
 func (gws *GatewayService) rolloutCapacityAvailable(request *types.ContainerRequest, replicas uint, replacedStubID string, activeContainers []types.ContainerState) bool {
 	return gws != nil && gws.scheduler != nil &&
-		gws.scheduler.CheckCapacity(request, replicas, replacedStubID, activeContainers).CanSchedule
+		gws.scheduler.CheckCapacity(request, replicas, replacedStubID, activeContainers)
 }

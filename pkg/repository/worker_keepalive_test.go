@@ -57,7 +57,7 @@ func TestServingWorkerIsUsableAgainAfterKeepAliveOnItsRecreatedRecord(t *testing
 	require.Equal(t, types.WorkerStatusPending, worker.Status)
 	sandbox := &types.ContainerRequest{ContainerId: "sandbox", Cpu: 1000, Memory: 800}
 	setPendingContainerRequests(t, rdb, sandbox)
-	require.Error(t, repo.ScheduleContainerRequest(worker, sandbox), "a pending worker takes no work")
+	require.Error(t, repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{sandbox}), "a pending worker takes no work")
 
 	// The worker's next keepalive makes it available again.
 	require.NoError(t, repo.SetWorkerKeepAlive("worker", servingKeepAlive))
@@ -66,7 +66,7 @@ func TestServingWorkerIsUsableAgainAfterKeepAliveOnItsRecreatedRecord(t *testing
 	require.Equal(t, types.WorkerStatusAvailable, worker.Status)
 	require.EqualValues(t, 3000, worker.FreeCpu, "the running container still holds its cpu")
 
-	require.NoError(t, repo.ScheduleContainerRequest(worker, sandbox))
+	require.NoError(t, repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{sandbox}))
 	delivered, err := repo.GetNextContainerRequests("worker", 1)
 	require.NoError(t, err)
 	require.Len(t, delivered, 1)

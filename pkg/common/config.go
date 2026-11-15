@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/providers/rawbytes"
 	"github.com/knadh/koanf/v2"
+	"github.com/mitchellh/mapstructure"
 	"github.com/rs/zerolog/log"
 )
 
@@ -33,6 +35,19 @@ type ConfigLoaderFunc func(k *koanf.Koanf) error
 type ConfigManager[T any] struct {
 	kf  *koanf.Koanf
 	tag string
+	// unknown lists the keys that were loaded but match no field of T.
+	unknown []UnknownConfigKey
+}
+
+// UnknownConfigKey is a key in a config source that no field of the config
+// type reads, so setting it has no effect. It is usually a typo or a setting
+// that has since been removed.
+type UnknownConfigKey struct {
+	// Source is where the key was set: a file path, "CONFIG_JSON", or
+	// "defaults" for the built-in config.
+	Source string
+	// Key is the key's path, such as "worker.pools[default].gpuTyp".
+	Key string
 }
 
 // NewConfigManager creates a new instance of the ConfigManager[T].
@@ -50,7 +65,7 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 	}
 
 	// Load default configuration from embedded variable
-	err := cm.LoadConfig(YAMLConfigFormat, rawbytes.Provider(defaultConfig))
+	err := cm.load(YAMLConfigFormat, rawbytes.Provider(defaultConfig), "defaults")
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +74,7 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 	cp := os.Getenv("CONFIG_PATH")
 	ce := filepath.Ext(cp)
 	if cp != "" && ce != "" {
-		if err := cm.LoadConfig(ConfigFormat(ce), file.Provider(cp)); err != nil {
+		if err := cm.load(ConfigFormat(ce), file.Provider(cp), cp); err != nil {
 			return nil, err
 		}
 	}
@@ -73,7 +88,7 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 		if matches, err := filepath.Glob(fmt.Sprintf("/etc/beta9.d/*%s", ext)); err == nil {
 			sort.Strings(matches)
 			for _, path := range matches {
-				if err := cm.LoadConfig(ext, file.Provider(path)); err != nil {
+				if err := cm.load(ext, file.Provider(path), path); err != nil {
 					log.Error().Str("path", path).Err(err).Msg("failed to load config")
 				}
 			}
@@ -93,13 +108,15 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := cm.LoadConfig(JSONConfigFormat, rawbytes.Provider(baseline)); err != nil {
+		// The baseline is written from the config type, so it has no keys
+		// of its own to check.
+		if err := cm.load(JSONConfigFormat, rawbytes.Provider(baseline), ""); err != nil {
 			return nil, err
 		}
-		if err := cm.LoadConfig(JSONConfigFormat, rawbytes.Provider([]byte(configJson))); err != nil {
+		cm.tag = "json"
+		if err := cm.load(JSONConfigFormat, rawbytes.Provider([]byte(configJson)), "CONFIG_JSON"); err != nil {
 			log.Error().Err(err).Msg("failed to load config from CONFIG_JSON")
-		} else {
-			cm.tag = "json"
+			cm.tag = "key"
 		}
 	}
 
@@ -145,13 +162,60 @@ func (cm *ConfigManager[T]) GetConfig() T {
 // configuration data. If any errors occur during the loading process, they are
 // returned as an error.
 func (cm *ConfigManager[T]) LoadConfig(format ConfigFormat, provider koanf.Provider) error {
+	return cm.load(format, provider, "config")
+}
+
+// UnknownKeys returns the keys that were loaded but that no field of the
+// config type reads, in the order their sources were loaded.
+func (cm *ConfigManager[T]) UnknownKeys() []UnknownConfigKey {
+	return append([]UnknownConfigKey(nil), cm.unknown...)
+}
+
+// WarnUnknownKeys logs each key that was loaded but has no effect.
+func (cm *ConfigManager[T]) WarnUnknownKeys() {
+	for _, unknown := range cm.unknown {
+		warning := log.Warn().Str("source", unknown.Source).Str("key", unknown.Key)
+		if hint := removedKeyHint(unknown.Key); hint != "" {
+			warning.Msg("config key was removed and has no effect: " + hint)
+			continue
+		}
+		warning.Msg("config key is not recognised and has no effect; check its spelling or remove it")
+	}
+}
+
+// removedKeys are keys that the previous release read, with what to do about
+// each now. Map keys and list indexes are left out of the paths. An entry
+// goes once no deployed config can still hold its key.
+var removedKeys = map[string]string{
+	"scheduling.failover.onDemand":        onDemandRemoved,
+	"scheduling.failover.chains.onDemand": onDemandRemoved,
+	"scheduling.failover.health":          "the pool health thresholds were removed, with the pool.schedulable and pool.unschedulable events they produced",
+}
+
+const onDemandRemoved = "on-demand failover was removed; a pool now buys its own machines with worker.pools.<name>.provisioning"
+
+var keyIndex = regexp.MustCompile(`\[[^\]]*\]`)
+
+// removedKeyHint says what became of a key that the previous release read.
+// It is empty for a key that no release knew.
+func removedKeyHint(key string) string {
+	return removedKeys[keyIndex.ReplaceAllString(key, "")]
+}
+
+// load merges one source over the current config. A source with a name also
+// has its keys checked against the config type.
+func (cm *ConfigManager[T]) load(format ConfigFormat, provider koanf.Provider, source string) error {
 	parser, err := GetConfigParser(format)
 	if err != nil {
 		return err
 	}
 
+	layer := koanf.New(".")
+	if err := layer.Load(provider, parser); err != nil {
+		return err
+	}
 	config := cm.kf.Copy()
-	if err := config.Load(provider, parser); err != nil {
+	if err := config.Merge(layer); err != nil {
 		return err
 	}
 
@@ -186,7 +250,37 @@ func (cm *ConfigManager[T]) LoadConfig(format ConfigFormat, provider koanf.Provi
 	}
 
 	cm.kf = config
+	if source != "" {
+		for _, key := range unknownKeys[T](layer.Raw(), cm.tag) {
+			cm.unknown = append(cm.unknown, UnknownConfigKey{Source: source, Key: key})
+		}
+	}
 	return nil
+}
+
+// unknownKeys decodes one source's keys into the config type the way
+// GetConfig does and returns the ones the decoder had no field for. A source
+// that does not decode reports nothing here: GetConfig reports that error.
+func unknownKeys[T any](raw map[string]interface{}, tag string) []string {
+	var target T
+	var metadata mapstructure.Metadata
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		DecodeHook: mapstructure.ComposeDecodeHookFunc(
+			mapstructure.StringToTimeDurationHookFunc(),
+			mapstructure.TextUnmarshallerHookFunc()),
+		Metadata:         &metadata,
+		Result:           &target,
+		WeaklyTypedInput: true,
+		TagName:          tag,
+	})
+	if err != nil {
+		return nil
+	}
+	if err := decoder.Decode(raw); err != nil {
+		return nil
+	}
+	sort.Strings(metadata.Unused)
+	return metadata.Unused
 }
 
 var (

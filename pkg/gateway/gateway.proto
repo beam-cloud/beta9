@@ -328,6 +328,10 @@ service GatewayService {
       body : "*"
     };
   }
+  // A machine's agent passes on its provider's notice that the machine is
+  // about to be taken back.
+  rpc ReportAgentInterruption(ReportAgentInterruptionRequest)
+      returns (ReportAgentInterruptionResponse);
   rpc StreamAgent(StreamAgentRequest) returns (stream StreamAgentResponse);
   rpc StreamAgentTelemetry(stream AgentTelemetryRequest)
       returns (AgentTelemetryResponse);
@@ -1817,4 +1821,20 @@ message GetCPUTierCatalogResponse {
   // the hosted CPU pools and the tier each sells (pools: {name: {cpu_class,
   // ready, ready_runtimes}}) and the gateway's tier features (capabilities).
   string catalog = 1;
+}
+
+message ReportAgentInterruptionRequest {
+  string agent_token = 1;
+  // The provider that gave the notice, as the agent names it: aws, gcp.
+  string source = 2;
+  // What the provider said, for the machine's events.
+  string detail = 3;
+  int64 observed_at_unix_nano = 4;
+  // When the provider takes the machine. Zero if it did not say.
+  int64 expected_at_unix_nano = 5;
+}
+
+message ReportAgentInterruptionResponse {
+  bool ok = 1;
+  string err_msg = 2;
 }

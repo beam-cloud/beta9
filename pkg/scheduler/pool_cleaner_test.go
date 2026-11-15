@@ -3,17 +3,22 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/stretchr/testify/require"
 	"github.com/tj/assert"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func TestWorkerResourceCleanerRemovesWorkerStateWithoutJobAndRequeuesRequests(t *testing.T) {
@@ -166,7 +171,7 @@ func scheduleCleanerRequest(t *testing.T, rdb *common.RedisClient, workerRepo re
 		ContainerId: request.ContainerId,
 		Status:      types.ContainerStatusPending,
 	}))
-	assert.NoError(t, workerRepo.ScheduleContainerRequest(worker, request))
+	assert.NoError(t, workerRepo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request}))
 }
 
 func cleanerTestWorkerJob(name, workerId, poolName, machineId string) *batchv1.Job {
@@ -216,4 +221,289 @@ func assertBacklogContainsContainer(t *testing.T, rdb *common.RedisClient, conta
 	}
 
 	t.Fatalf("container %s was not requeued into scheduler backlog", containerId)
+}
+
+// A cleanup pass that cannot do its work leaves it for the next pass. That is
+// safe, and it is also how a pool comes to hold Jobs and worker records that
+// nobody removes: every failure has to be in the log.
+
+// failingWorkerRepo is a worker repository whose calls fail with the errors
+// that are set.
+type failingWorkerRepo struct {
+	repo.WorkerRepository
+	getWorker, listPool, removeWorker error
+}
+
+func (r *failingWorkerRepo) GetWorkerById(workerId string) (*types.Worker, error) {
+	if r.getWorker != nil {
+		return nil, r.getWorker
+	}
+	return r.WorkerRepository.GetWorkerById(workerId)
+}
+
+func (r *failingWorkerRepo) GetAllWorkersInPool(poolName string) ([]*types.Worker, error) {
+	if r.listPool != nil {
+		return nil, r.listPool
+	}
+	return r.WorkerRepository.GetAllWorkersInPool(poolName)
+}
+
+func (r *failingWorkerRepo) RemoveWorker(workerId string) error {
+	if r.removeWorker != nil {
+		return r.removeWorker
+	}
+	return r.WorkerRepository.RemoveWorker(workerId)
+}
+
+// cleanerFixture is a cleaner for a pool with one worker Job and its pod.
+type cleanerFixture struct {
+	cleaner *WorkerResourceCleaner
+	kube    *fake.Clientset
+	workers *failingWorkerRepo
+}
+
+func newCleanerFixture(t *testing.T, phase corev1.PodPhase) *cleanerFixture {
+	t.Helper()
+	rdb, err := repo.NewRedisClientForTest()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	job := cleanerTestWorkerJob("worker-default-w1", "w1", "default", "")
+	pod := cleanerTestWorkerPod("worker-default-w1-pod", job.Name, "w1", "default", "", phase)
+	pod.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
+	f := &cleanerFixture{
+		kube:    fake.NewSimpleClientset(job, pod),
+		workers: &failingWorkerRepo{WorkerRepository: repo.NewWorkerRedisRepositoryForTest(rdb)},
+	}
+	f.cleaner = &WorkerResourceCleaner{
+		PoolName:   "default",
+		Config:     types.WorkerConfig{Namespace: "beta9", CleanupPendingWorkerAgeLimit: 10 * time.Minute},
+		KubeClient: f.kube,
+		WorkerRepo: f.workers,
+	}
+	return f
+}
+
+// fail makes the cluster refuse a verb on a resource.
+func (f *cleanerFixture) fail(verb, resource string, err error) {
+	f.kube.PrependReactor(verb, resource, func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, err
+	})
+}
+
+// addWorker puts a worker of the pool on record.
+func (f *cleanerFixture) addWorker(t *testing.T, id string) {
+	t.Helper()
+	require.NoError(t, f.workers.AddWorker(cleanerTestWorker(id, "default", "")))
+}
+
+func TestACleanupPassReportsWhatItCouldNotDo(t *testing.T) {
+	refused := errors.New("the cluster said no")
+	redisDown := errors.New("redis is down")
+
+	tests := []struct {
+		name  string
+		phase corev1.PodPhase
+		// arrange sets up what goes wrong.
+		arrange func(t *testing.T, f *cleanerFixture)
+		// reported is the message that has to be logged, with cause.
+		reported string
+		cause    error
+	}{
+		{
+			name:     "the pool's jobs cannot be listed",
+			phase:    corev1.PodRunning,
+			arrange:  func(t *testing.T, f *cleanerFixture) { f.fail("list", "jobs", refused) },
+			reported: "unable to list worker jobs to clean up",
+			cause:    refused,
+		},
+		{
+			name:     "a job's pods cannot be listed",
+			phase:    corev1.PodRunning,
+			arrange:  func(t *testing.T, f *cleanerFixture) { f.fail("list", "pods", refused) },
+			reported: "unable to list the pods of a worker job",
+			cause:    refused,
+		},
+		{
+			name:  "a job that has finished cannot be deleted",
+			phase: corev1.PodSucceeded,
+			arrange: func(t *testing.T, f *cleanerFixture) {
+				f.addWorker(t, "w1")
+				f.fail("delete", "jobs", refused)
+			},
+			reported: "unable to delete worker",
+			cause:    refused,
+		},
+		{
+			name:     "whether a job's worker is on record cannot be read",
+			phase:    corev1.PodRunning,
+			arrange:  func(t *testing.T, f *cleanerFixture) { f.workers.getWorker = redisDown },
+			reported: "unable to read the worker of a job",
+			cause:    redisDown,
+		},
+		{
+			name:     "a job whose worker is not on record cannot be deleted",
+			phase:    corev1.PodRunning,
+			arrange:  func(t *testing.T, f *cleanerFixture) { f.fail("delete", "jobs", refused) },
+			reported: "unable to delete worker",
+			cause:    refused,
+		},
+		{
+			name:  "a job that has been pending for too long cannot be deleted",
+			phase: corev1.PodPending,
+			arrange: func(t *testing.T, f *cleanerFixture) {
+				f.addWorker(t, "w1")
+				f.fail("delete", "jobs", refused)
+			},
+			reported: "unable to delete worker",
+			cause:    refused,
+		},
+		{
+			name:     "the pool's workers cannot be listed",
+			phase:    corev1.PodRunning,
+			arrange:  func(t *testing.T, f *cleanerFixture) { f.workers.listPool = redisDown },
+			reported: "unable to list the pool's workers",
+			cause:    redisDown,
+		},
+		{
+			name:  "whether a worker on record has a job cannot be read",
+			phase: corev1.PodRunning,
+			arrange: func(t *testing.T, f *cleanerFixture) {
+				f.addWorker(t, "w1")
+				f.addWorker(t, "no-job")
+				f.fail("get", "jobs", refused)
+			},
+			reported: "unable to read the job of a worker",
+			cause:    refused,
+		},
+		{
+			name:  "a worker on record that has no job cannot be removed",
+			phase: corev1.PodRunning,
+			arrange: func(t *testing.T, f *cleanerFixture) {
+				f.addWorker(t, "w1")
+				f.addWorker(t, "no-job")
+				f.workers.removeWorker = redisDown
+			},
+			reported: "unable to remove the record of a worker that has no job",
+			cause:    redisDown,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			f := newCleanerFixture(t, test.phase)
+			test.arrange(t, f)
+			logged := captureLog(t)
+
+			f.cleaner.Clean(context.Background())
+
+			require.Contains(t, logged.String(), `"level":"error"`)
+			require.Contains(t, logged.String(), test.reported)
+			require.Contains(t, logged.String(), test.cause.Error())
+			require.Contains(t, logged.String(), `"pool_name":"default"`)
+		})
+	}
+}
+
+// What a pass leaves undone, it leaves as it found it.
+func TestACleanupPassThatFailsRemovesNothing(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a job stays when it cannot be told whether its worker is on record", func(t *testing.T) {
+		f := newCleanerFixture(t, corev1.PodRunning)
+		f.workers.getWorker = errors.New("redis is down")
+
+		f.cleaner.Clean(ctx)
+
+		_, err := f.kube.BatchV1().Jobs("beta9").Get(ctx, "worker-default-w1", metav1.GetOptions{})
+		require.NoError(t, err)
+	})
+
+	t.Run("a worker stays on record when it cannot be told whether it has a job", func(t *testing.T) {
+		f := newCleanerFixture(t, corev1.PodRunning)
+		f.addWorker(t, "w1")
+		f.addWorker(t, "no-job")
+		f.fail("get", "jobs", errors.New("the cluster said no"))
+
+		f.cleaner.Clean(ctx)
+
+		_, err := f.workers.GetWorkerById("no-job")
+		require.NoError(t, err)
+	})
+
+	t.Run("and goes once it can", func(t *testing.T) {
+		f := newCleanerFixture(t, corev1.PodRunning)
+		f.addWorker(t, "w1")
+		f.addWorker(t, "no-job")
+		logged := captureLog(t)
+
+		f.cleaner.Clean(ctx)
+
+		_, err := f.workers.GetWorkerById("no-job")
+		var notFound *types.ErrWorkerNotFound
+		require.ErrorAs(t, err, &notFound)
+		_, err = f.kube.BatchV1().Jobs("beta9").Get(ctx, "worker-default-w1", metav1.GetOptions{})
+		require.NoError(t, err, "a job whose worker is on record stays")
+		require.NotContains(t, logged.String(), `"level":"error"`, "a pass that does its work reports no failure")
+	})
+}
+
+// Every scheduler replica runs the cleanup tick for a pool. One cleans up
+// after its workers at a time: a replica that finds another at it leaves the
+// pass to that one, which is no failure.
+
+// cleanupFixture is a Kubernetes pool with a finished worker Job to clean
+// up, and the tick that does it.
+type cleanupFixture struct {
+	*cleanerFixture
+	rdb  *common.RedisClient
+	tick func()
+}
+
+func newCleanupFixture(t *testing.T) *cleanupFixture {
+	t.Helper()
+	f := &cleanupFixture{cleanerFixture: newCleanerFixture(t, corev1.PodSucceeded)}
+	rdb, err := repo.NewRedisClientForTest()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+	f.rdb = rdb
+
+	controller := &LocalKubernetesWorkerPoolController{
+		poolIdentity:   poolIdentity{ctx: context.Background(), name: f.cleaner.PoolName},
+		workerPoolRepo: repo.NewWorkerPoolRedisRepositoryForTest(rdb),
+	}
+	f.tick = func() { controller.cleanupTick(f.cleaner) }
+	return f
+}
+
+func (f *cleanupFixture) jobCleanedUp(t *testing.T) bool {
+	t.Helper()
+	jobs, err := f.kube.BatchV1().Jobs("beta9").List(context.Background(), metav1.ListOptions{})
+	require.NoError(t, err)
+	return len(jobs.Items) == 0
+}
+
+func TestTheCleanupTickLeavesThePassToTheReplicaThatIsAtIt(t *testing.T) {
+	f := newCleanupFixture(t)
+	other := repo.NewWorkerPoolRedisRepositoryForTest(f.rdb)
+	logged := captureLog(t)
+
+	require.NoError(t, other.WithWorkerPoolCleanerLock(f.cleaner.PoolName, f.tick))
+	require.False(t, f.jobCleanedUp(t))
+	require.Empty(t, logged.String())
+
+	f.tick()
+	require.True(t, f.jobCleanedUp(t))
+}
+
+func TestTheCleanupTickReportsALockItCouldNotAskFor(t *testing.T) {
+	f := newCleanupFixture(t)
+	require.NoError(t, f.rdb.HSet(context.Background(), common.RedisKeys.WorkerPoolCleanerLock(f.cleaner.PoolName), "not", "a lock").Err())
+	logged := captureLog(t)
+
+	f.tick()
+
+	require.False(t, f.jobCleanedUp(t))
+	require.Contains(t, logged.String(), `"level":"error"`)
+	require.Contains(t, logged.String(), `"pool_name":"default"`)
 }

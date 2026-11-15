@@ -50,7 +50,7 @@ type ContainerGroup struct {
 	routerGroup   *echo.Group
 	config        types.AppConfig
 	backendRepo   repository.BackendRepository
-	scheduler     scheduler.Scheduler
+	scheduler     *scheduler.Scheduler
 	containerRepo repository.ContainerRepository
 	lists         containerListCache
 }
@@ -302,7 +302,7 @@ func NewContainerGroup(
 	g *echo.Group,
 	backendRepo repository.BackendRepository,
 	containerRepo repository.ContainerRepository,
-	scheduler scheduler.Scheduler,
+	scheduler *scheduler.Scheduler,
 	config types.AppConfig,
 ) *ContainerGroup {
 	group := &ContainerGroup{routerGroup: g,

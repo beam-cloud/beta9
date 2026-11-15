@@ -3,7 +3,7 @@ package compute
 import (
 	"math"
 
-	model "github.com/beam-cloud/beta9/pkg/compute"
+	"github.com/beam-cloud/beta9/pkg/providers"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -17,7 +17,7 @@ func (s *Service) providerBudgetMicros(billableMaxMicros int64) int64 {
 	return providerBudgetMicros(billableMaxMicros, s.appConfig.ManagedCompute.BillableMarginPctOrDefault())
 }
 
-func (s *Service) billableOffer(offer model.Offer) model.Offer {
+func (s *Service) billableOffer(offer providers.Offer) providers.Offer {
 	offer.HourlyCostMicros = s.billableMicros(offer.HourlyCostMicros)
 	return offer
 }

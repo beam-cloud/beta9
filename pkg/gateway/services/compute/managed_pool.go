@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -86,6 +87,7 @@ func normalizeManagedPoolConfig(config types.WorkerPoolConfig) (types.WorkerPool
 	if config.Mode != types.PoolModeExternal {
 		return types.WorkerPoolConfig{}, fmt.Errorf("managed pools must use mode %q", types.PoolModeExternal)
 	}
+	config.ApplyProvisioning()
 	// Selector-bound agent capacity uses private pool state, not managed pools.
 	config.RequiresPoolSelector = false
 	// Runtime is the Kubernetes RuntimeClass used by local workers.
@@ -103,7 +105,7 @@ func normalizeManagedPoolConfig(config types.WorkerPoolConfig) (types.WorkerPool
 	default:
 		return types.WorkerPoolConfig{}, fmt.Errorf("unsupported container runtime %q", config.ContainerRuntime)
 	}
-	if err := config.CPUShareMultiplier.Validate(); err != nil {
+	if err := config.Validate(); err != nil {
 		return types.WorkerPoolConfig{}, err
 	}
 	for field, path := range map[string]string{
@@ -142,7 +144,7 @@ func newManagedPoolState(workspaceID, name string, source types.WorkerPoolManage
 		Name:              name,
 		Selector:          name,
 		Config:            managedPoolConfig(name, config),
-		Status:            types.ComputePoolStatusActive,
+		Status:            model.PoolStatusActive,
 		Source:            model.SourceAttached,
 		Mode:              string(types.PoolModeExternal),
 		Transport:         defaultPrivateTransport,
@@ -203,9 +205,6 @@ func (s *Service) activeManagedPoolState(state *model.PoolState) (*model.PoolSta
 	normalized, err := normalizeManagedPoolConfig(config)
 	if err != nil {
 		return nil, err
-	}
-	if state.CreatedByTokenID == types.FailoverOnDemandPoolCreator {
-		normalized.RequiresPoolSelector = true
 	}
 	return managedPoolStateWithConfig(state, normalized), nil
 }
@@ -560,6 +559,9 @@ func (s *Service) CreateManagedPool(ctx context.Context, authInfo *auth.AuthInfo
 		return nil, model.ErrManagedPoolConflict
 	}
 	config, err = normalizeManagedPoolConfig(config)
+	if err == nil {
+		err = s.validateProvisioning(config)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", model.ErrInvalidManagedPoolConfig, err)
 	}
@@ -585,9 +587,8 @@ func (s *Service) CreateManagedPool(ctx context.Context, authInfo *auth.AuthInfo
 }
 
 func (s *Service) managedPoolHasInventory(ctx context.Context, state *model.PoolState) (bool, error) {
-	for i := range state.Reservations {
-		reservation := &state.Reservations[i]
-		if reservation.Managed() && !reservationClosed(reservation.Status) {
+	for _, reservation := range state.Reservations {
+		if reservation.Managed() && !reservation.Closed() {
 			return true, nil
 		}
 	}
@@ -608,7 +609,9 @@ func (s *Service) managedPoolHasInventory(ctx context.Context, state *model.Pool
 	if err != nil {
 		return false, err
 	}
-	return len(workers) > 0, nil
+	// A workspace can give a pool of its own this pool's name. The workers of
+	// that pool are not this one's.
+	return slices.ContainsFunc(workers, func(worker *types.Worker) bool { return worker.ControlPlaneManaged }), nil
 }
 
 func (s *Service) UpdateManagedPool(ctx context.Context, authInfo *auth.AuthInfo, name string, config types.WorkerPoolConfig) (*model.ManagedPool, error) {
@@ -620,6 +623,9 @@ func (s *Service) UpdateManagedPool(ctx context.Context, authInfo *auth.AuthInfo
 		return nil, err
 	}
 	config, err = normalizeManagedPoolConfig(config)
+	if err == nil {
+		err = s.validateProvisioning(config)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", model.ErrInvalidManagedPoolConfig, err)
 	}
@@ -641,6 +647,16 @@ func (s *Service) UpdateManagedPool(ctx context.Context, authInfo *auth.AuthInfo
 		if reflect.DeepEqual(*existing.WorkerConfig, config) {
 			updated = existing
 			return nil
+		}
+		if config.Buys() && !existing.WorkerConfig.Buys() {
+			inUse, err := s.managedPoolHasInventory(lockCtx, existing)
+			if err != nil {
+				return err
+			}
+			if inUse {
+				return fmt.Errorf("%w: %q has machines that were joined by hand; remove them first, or create a new pool",
+					model.ErrManagedPoolBuysMachines, name)
+			}
 		}
 		updated = managedPoolStateWithConfig(existing, config)
 		updated.UpdatedAt = time.Now().UTC()
@@ -677,12 +693,18 @@ func (s *Service) DeleteManagedPool(ctx context.Context, authInfo *auth.AuthInfo
 		if state.ManagementSource != types.WorkerPoolManagementSourceAPI {
 			return model.ErrManagedPoolImmutable
 		}
-		inUse, err := s.managedPoolHasInventory(lockCtx, state)
-		if err != nil {
-			return err
-		}
-		if inUse {
-			return model.ErrManagedPoolInUse
+		// A pool that buys its machines can be deleted while it has some:
+		// the provisioner drains them and gives them back. Machines that
+		// were joined by hand have nobody to take them away, and such a pool
+		// has none.
+		if state.WorkerConfig == nil || !state.WorkerConfig.Buys() {
+			inUse, err := s.managedPoolHasInventory(lockCtx, state)
+			if err != nil {
+				return err
+			}
+			if inUse {
+				return model.ErrManagedPoolInUse
+			}
 		}
 		if s.workerPoolRepo != nil {
 			if err := s.workerPoolRepo.DeleteWorkerPoolState(lockCtx, name); err != nil {
@@ -714,23 +736,20 @@ func (s *Service) CreateManagedMachine(ctx context.Context, authInfo *auth.AuthI
 			return nil, model.ErrManagedPoolNotFound
 		}
 	}
+	if state.WorkerConfig != nil && state.WorkerConfig.Buys() {
+		return nil, fmt.Errorf("%w: %q gets its machines from %s; raise provisioning.maxNodes for more",
+			model.ErrManagedPoolBuysMachines, state.Name, state.WorkerConfig.Provisioning.Provider)
+	}
 	machineID := "machine-" + uuid.NewString()
-	token, tokenState, err := newPoolJoinToken(state.WorkspaceID, state.Name, time.Time{}, defaultPrivateJoinTTL, machineID)
+	token, _, err := s.createManagedMachineJoinToken(ctx, state, machineID, defaultPrivateJoinTTL)
 	if err != nil {
 		return nil, err
 	}
-	tokenState.Mode = string(types.PoolModeExternal)
-	tokenState.ManagedPoolInstanceID = state.ManagedInstanceID
-	if err := s.savePoolJoinToken(ctx, tokenState, defaultPrivateJoinTTL); err != nil {
-		return nil, err
-	}
-	gatewayURL := strings.TrimRight(s.appConfig.GatewayService.HTTP.GetExternalURL(), "/")
-	command := agentInstallCommand(gatewayURL, token, isLocalGatewayURL(gatewayURL), agentWorkerImage(s.appConfig))
 	return &ManagedMachineBootstrap{
 		MachineID:      machineID,
 		PoolName:       state.Name,
 		Token:          token,
-		InstallCommand: command,
+		InstallCommand: s.joinCommandForToken(token),
 	}, nil
 }
 
@@ -787,6 +806,12 @@ func (s *Service) DeleteManagedMachine(ctx context.Context, authInfo *auth.AuthI
 	if machine == nil {
 		return model.ErrManagedPoolNotFound
 	}
+	// A machine the pool bought is the provisioner's to give back. Removed
+	// here it would be paid for until the provisioner missed its worker, and
+	// could join again in the meantime.
+	if state.WorkerConfig != nil && state.WorkerConfig.Buys() {
+		return fmt.Errorf("%w: %q gives its machines back itself, once they are idle", model.ErrManagedPoolBuysMachines, state.Name)
+	}
 	if s.containerRepo != nil {
 		containers, err := s.containerRepo.GetActiveContainersByWorkerId(model.AgentMachineWorkerID(machine.MachineID))
 		if err != nil {
@@ -812,15 +837,22 @@ func (s *Service) SetAgentWorkerCordon(ctx context.Context, worker *types.Worker
 	if worker.Id != model.AgentMachineWorkerID(machine.MachineID) {
 		return false, nil
 	}
+	return true, s.setAgentMachineCordon(ctx, machine, cordoned)
+}
+
+// setAgentMachineCordon records a cordon on the machine, where it outlives
+// the machine's worker, and then on the worker.
+func (s *Service) setAgentMachineCordon(ctx context.Context, machine *model.AgentTokenState, cordoned bool) error {
+	workerID := model.AgentMachineWorkerID(machine.MachineID)
 	machine.Cordoned = cordoned
 	if err := s.saveComputeAgentTokenState(ctx, machine); err != nil {
-		return true, err
+		return err
 	}
-	if err = s.workerRepo.SetWorkerCordon(worker.Id, cordoned); err != nil {
-		return true, err
+	if err := s.workerRepo.SetWorkerCordon(workerID, cordoned); err != nil {
+		return err
 	}
-	if err = s.notifyAgentPool(ctx, machine.WorkspaceID, machine.PoolName); err != nil {
-		log.Warn().Err(err).Str("worker_id", worker.Id).Msg("failed to notify cordoned agent; periodic refresh remains active")
+	if err := s.notifyAgentPool(ctx, machine.WorkspaceID, machine.PoolName); err != nil {
+		log.Warn().Err(err).Str("worker_id", workerID).Msg("failed to notify cordoned agent; periodic refresh remains active")
 	}
-	return true, nil
+	return nil
 }

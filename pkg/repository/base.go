@@ -14,22 +14,21 @@ import (
 type SchedulerRepository interface{}
 
 type WorkerRepository interface {
-	GetId() string
 	GetWorkerById(workerId string) (*types.Worker, error)
 	GetAllWorkers() ([]*types.Worker, error)
 	GetAllWorkersInPool(poolName string) ([]*types.Worker, error)
 	AddWorker(w *types.Worker) error
 	ToggleWorkerAvailable(workerId, generation string) error
 	SetWorkerCordon(workerId string, cordoned bool) error
+	CordonWorkerIfIdle(workerId string) (bool, error)
+	KeepPendingWorker(workerId string) (bool, error)
 	PrepareWorkerRollout(workerId, generation string) (bool, error)
 	CancelWorkerRollout(workerId, generation string) error
 	UpdateWorkerStatus(workerId string, status types.WorkerStatus) error
 	RemoveWorker(workerId string) error
 	SetWorkerKeepAlive(workerId string, keepAlive types.WorkerKeepAlive) error
 	UpdateWorkerCapacity(w *types.Worker, cr *types.ContainerRequest, ut types.CapacityUpdateType) error
-	ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error
 	ScheduleContainerRequests(worker *types.Worker, requests []*types.ContainerRequest) error
-	GetNextContainerRequest(workerId string) (*types.ContainerRequest, error)
 	GetNextContainerRequests(workerId string, limit int) ([]*types.ContainerRequest, error)
 	RecoverPendingContainerRequests(workerId string) error
 	RequeueContainerRequests(workerId string, requests []*types.ContainerRequest) error
@@ -110,12 +109,9 @@ type WorkerPoolRepository interface {
 	SetWorkerPoolState(ctx context.Context, poolName string, state *types.WorkerPoolState) error
 	GetWorkerPoolState(ctx context.Context, poolName string) (*types.WorkerPoolState, error)
 	DeleteWorkerPoolState(ctx context.Context, poolName string) error
-	SetWorkerPoolStateLock(poolName string) error
-	RemoveWorkerPoolStateLock(poolName string) error
-	SetWorkerPoolSizerLock(poolName string) error
-	RemoveWorkerPoolSizerLock(poolName string) error
-	SetWorkerCleanerLock(poolName string) error
-	RemoveWorkerCleanerLock(poolName string) error
+	WithWorkerPoolSizerLock(poolName string, size func()) error
+	WithWorkerPoolStateLock(poolName string, report func()) error
+	WithWorkerPoolCleanerLock(poolName string, clean func()) error
 }
 
 type ComputeRepository interface {
@@ -141,11 +137,7 @@ type ComputeRepository interface {
 	SaveAgentWorkerSlotState(ctx context.Context, state *compute.AgentWorkerSlotState) error
 	ListAgentWorkerSlotStates(ctx context.Context, workspaceID, poolName, machineID string) ([]*compute.AgentWorkerSlotState, error)
 	DeleteAgentWorkerSlotState(ctx context.Context, workspaceID, poolName, machineID, workerID string) error
-	PushFailoverDemand(ctx context.Context, demand *compute.FailoverDemand, ttl time.Duration) error
-	ListFailoverDemand(ctx context.Context) ([]*compute.FailoverDemand, error)
-	DeleteFailoverDemand(ctx context.Context, gpu string) error
-	RecordOnDemandSpend(ctx context.Context, at time.Time, cents float64) error
-	OnDemandSpendCents(ctx context.Context, window time.Duration) (float64, error)
+	ProviderOwner(ctx context.Context) (string, error)
 }
 
 // ManagedPoolRepository keeps managed pool definitions separate from

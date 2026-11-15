@@ -2,11 +2,8 @@ package compute
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
@@ -19,10 +16,12 @@ import (
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/common"
 	model "github.com/beam-cloud/beta9/pkg/compute"
+	"github.com/beam-cloud/beta9/pkg/providers"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAgentBootstrapUsesConfiguredPublishingRegistry(t *testing.T) {
@@ -2858,20 +2857,9 @@ func TestCheckManagedLaunchCreditBuildsBillingRequest(t *testing.T) {
 		},
 	}
 
-	plan := model.SolvePlan{
-		Actions: []model.SolveAction{
-			{
-				Type:  model.ActionCreate,
-				Count: 2,
-				Offer: model.Offer{HourlyCostMicros: 1_500_000},
-			},
-			{
-				Type:  model.ActionKeep,
-				Count: 1,
-				Offer: model.Offer{HourlyCostMicros: 9_000_000},
-			},
-		},
-		CommittedCostMicros: 42_000_000,
+	plan := model.Plan{
+		Purchases:  []model.Purchase{{Count: 2, Offer: providers.Offer{HourlyCostMicros: 1_500_000}}},
+		CostMicros: 42_000_000,
 	}
 
 	decision, err := service.checkManagedLaunchCredit(context.Background(), "workspace-1", "pool-1", plan, nil)
@@ -2902,53 +2890,56 @@ func TestCheckManagedLaunchCreditBuildsBillingRequest(t *testing.T) {
 	}
 }
 
-func TestListPoolOffersReturnsHetznerCPUOffers(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/locations":
-			_, _ = w.Write([]byte(`{
-				"locations": [{"id":1,"name":"ash","description":"Ashburn, VA","country":"US","city":"Ashburn","latitude":39.0438,"longitude":-77.4874,"network_zone":"us-east"}],
-				"meta":{"pagination":{"page":1,"per_page":50,"previous_page":null,"next_page":null,"last_page":1,"total_entries":1}}
-			}`))
-		case "/server_types":
-			_, _ = w.Write([]byte(`{
-				"server_types": [{
-					"id":45,
-					"name":"cpx31",
-					"description":"CPX31",
-					"cores":4,
-					"memory":8,
-					"disk":160,
-					"deprecated":false,
-					"category":"Shared vCPU",
-					"cpu_type":"shared",
-					"storage_type":"local",
-					"architecture":"x86",
-					"locations":[{"id":1,"name":"ash","available":true,"deprecation":null}],
-					"prices":[{"location":"ash","price_hourly":{"net":"0.0312","gross":"0.0248"}}]
-				}],
-				"meta":{"pagination":{"page":1,"per_page":50,"previous_page":null,"next_page":null,"last_page":1,"total_entries":1}}
-			}`))
-		default:
-			t.Fatalf("unexpected Hetzner path %s", r.URL.Path)
-		}
-	}))
-	defer server.Close()
+// reconcileManagedComputeAt runs one reconcile at a set time.
+func (s *Service) reconcileManagedComputeAt(ctx context.Context, now time.Time) error {
+	return s.reconcileManagedComputeWithClock(ctx, func() time.Time { return now })
+}
 
-	service := &Service{
+// testOwner is the name the fake providers put on what a test service buys.
+const testOwner = "beam-test"
+
+var (
+	a10gOffer = providers.Offer{
+		ID: "A10G", Cloud: "lambda", InstanceType: "A10G", Region: "us-east",
+		GPU: "A10G", GPUCount: 1, CPUMillicores: 4000, MemoryMB: 16 * 1024, StorageMB: 128 * 1024,
+		HourlyCostMicros: 1_500_000,
+	}
+	cpx31Offer = providers.Offer{
+		ID: "cpx31", Cloud: "hetzner", InstanceType: "cpx31", Region: "ash",
+		CPUMillicores: 4000, MemoryMB: 8192, StorageMB: 163840, HourlyCostMicros: 31_200,
+		DisplayName: "CPX31", Category: "shared", RegionDisplayName: "Ashburn", Latitude: 39.0438, Longitude: -77.4874,
+	}
+)
+
+// fakeProvider is a provider that sells the given offers.
+func fakeProvider(name string, offers ...providers.Offer) *providers.Fake {
+	fake := providers.NewFake(name, testOwner)
+	fake.SetOffers(offers...)
+	return fake
+}
+
+// launchService is a service that can launch machines from the providers.
+func launchService(repo *fakeComputeRepo, from ...providers.Provider) *Service {
+	return &Service{
+		computeRepo: repo,
+		providers:   providers.RegistryOf(from...),
+		billing: &fakeManagedBilling{
+			launchDecision: billingDecision{OK: true, AvailableCents: 5000, RequiredCents: 2500},
+		},
 		appConfig: types.AppConfig{
-			Providers: types.ProviderConfig{
-				Hetzner: types.HetznerProviderConfig{
-					ApiToken:             "hetzner-token",
-					BaseURL:              server.URL,
-					ServerTypeCategories: map[string]string{"cpx31": "shared"},
-					RegionMetadata: map[string]types.HetznerRegionConfig{
-						"ash": {DisplayName: "Ashburn", Latitude: 39.0438, Longitude: -77.4874},
-					},
-				},
+			GatewayService: types.GatewayServiceConfig{
+				HTTP: types.HTTPConfig{ExternalHost: "app.beam.test", ExternalPort: 443, TLS: true},
+			},
+			Tailscale: types.TailscaleConfig{Enabled: true, AuthKey: "gateway-key", AgentAuthKey: "agent-key"},
+			ManagedCompute: types.ManagedComputeConfig{
+				Billing: types.ManagedComputeBillingConfig{MinimumCreditCents: 2500},
 			},
 		},
 	}
+}
+
+func TestListPoolOffersReturnsCPUOffers(t *testing.T) {
+	service := &Service{providers: providers.RegistryOf(fakeProvider("hetzner", cpx31Offer), fakeProvider("shadeform", a10gOffer))}
 
 	res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{
 		Pool: &pb.PoolConfig{Providers: []string{"hetzner"}},
@@ -2967,8 +2958,10 @@ func TestListPoolOffersReturnsHetznerCPUOffers(t *testing.T) {
 	if offer.Provider != "hetzner" || offer.Cloud != "hetzner" {
 		t.Fatalf("offer provider/cloud = %s/%s, want hetzner/hetzner", offer.Provider, offer.Cloud)
 	}
-	if offer.NodeCount != 1 || offer.GpuCount != 0 {
-		t.Fatalf("offer node/gpu count = %d/%d, want 1/0", offer.NodeCount, offer.GpuCount)
+	// An offer is one machine, and a provider that does not count its stock
+	// is shown as having one.
+	if offer.NodeCount != 1 || offer.GpuCount != 0 || offer.Available != 1 {
+		t.Fatalf("offer node/gpu/available = %d/%d/%d, want 1/0/1", offer.NodeCount, offer.GpuCount, offer.Available)
 	}
 	if offer.CpuMillicores != 4000 || offer.MemoryMb != 8192 || offer.StorageMb != 163840 {
 		t.Fatalf("offer resources = %d/%d/%d", offer.CpuMillicores, offer.MemoryMb, offer.StorageMb)
@@ -2979,53 +2972,75 @@ func TestListPoolOffersReturnsHetznerCPUOffers(t *testing.T) {
 	if offer.Latitude != 39.0438 || offer.Longitude != -77.4874 {
 		t.Fatalf("offer coordinates = %f/%f", offer.Latitude, offer.Longitude)
 	}
+	// The tenant is shown the price they pay, which carries the margin.
+	if got, want := offer.HourlyCostMicros, int64(34_320); got != want {
+		t.Fatalf("offer hourly cost = %d, want %d", got, want)
+	}
+}
+
+func TestListPoolOffersAsksEveryProviderWhenThePoolNamesNone(t *testing.T) {
+	service := &Service{providers: providers.RegistryOf(
+		fakeProvider("shadeform", a10gOffer),
+		fakeProvider("hetzner", cpx31Offer),
+	)}
+
+	res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{}})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	listed := []string{}
+	for _, offer := range res.Offers {
+		listed = append(listed, offer.Provider+"/"+offer.Id)
+	}
+	require.Equal(t, []string{"hetzner/cpx31", "shadeform/A10G"}, listed, "cheapest first")
+
+	res, err = service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{Gpu: []string{"A10G"}, Regions: []string{"us-west"}}})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Empty(t, res.Offers, "the pool's regions narrow what is listed")
+}
+
+// A reservation is sold for a term. A spot machine costs less and can be
+// taken back at any time, so it is neither shown nor bought as one.
+func TestReservationsAreNeverSpotMachines(t *testing.T) {
+	spot := a10gOffer
+	spot.Spot = true
+	spot.HourlyCostMicros = a10gOffer.HourlyCostMicros / 4
+	shadeform := fakeProvider("shadeform", spot, a10gOffer)
+	service := &Service{providers: providers.RegistryOf(shadeform)}
+
+	res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{}})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Len(t, res.Offers, 1)
+	require.Equal(t, service.billableOffer(a10gOffer).HourlyCostMicros, res.Offers[0].HourlyCostMicros, "the on-demand machine, at its price")
+
+	// These are the offers a launch chooses from.
+	offers, err := service.collectPoolOffers(context.Background(), model.Pool{})
+	require.NoError(t, err)
+	require.Len(t, offers, 1)
+	require.False(t, offers[0].Spot)
+	require.Equal(t, a10gOffer.HourlyCostMicros, offers[0].HourlyCostMicros)
+}
+
+func TestListPoolOffersNeedsAProvider(t *testing.T) {
+	res, err := (&Service{}).ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{}})
+	require.NoError(t, err)
+	require.False(t, res.Ok)
+	require.Equal(t, "no compute providers are configured", res.ErrMsg)
 }
 
 func TestLaunchPoolCapacityCreatesProviderReservation(t *testing.T) {
-	var createCalls int
-	var createBody map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/instances/types":
-			_, _ = w.Write([]byte(`{"instance_types":[{"id":"sf-a10g-1","cloud":"lambda","shade_instance_type":"A10Gx1","hourly_price":150,"deployment_type":"vm","configuration":{"gpu_type":"A10G","num_gpus":1,"vcpus":4,"memory_in_gb":16,"storage_in_gb":128},"availability":[{"region":"us-east","available":true}]}]}`))
-		case "/instances/create":
-			createCalls++
-			if err := json.NewDecoder(r.Body).Decode(&createBody); err != nil {
-				t.Fatalf("decode create body: %v", err)
-			}
-			_, _ = w.Write([]byte(`{"id":"reservation-1"}`))
-		default:
-			t.Fatalf("unexpected shadeform path %s", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
+	shadeform := fakeProvider("shadeform", a10gOffer)
 	repo := &fakeComputeRepo{}
-	service := &Service{
-		computeRepo: repo,
-		billing: &fakeManagedBilling{
-			launchDecision: billingDecision{OK: true, AvailableCents: 5000, RequiredCents: 2500},
-		},
-		appConfig: types.AppConfig{
-			GatewayService: types.GatewayServiceConfig{
-				HTTP: types.HTTPConfig{ExternalHost: "app.beam.test", ExternalPort: 443, TLS: true},
-			},
-			Tailscale: types.TailscaleConfig{Enabled: true, AuthKey: "gateway-key", AgentAuthKey: "agent-key"},
-			Providers: types.ProviderConfig{
-				Shadeform: types.ShadeformProviderConfig{ApiKey: "shadeform-key", BaseURL: server.URL},
-			},
-			ManagedCompute: types.ManagedComputeConfig{
-				Billing: types.ManagedComputeBillingConfig{MinimumCreditCents: 2500},
-			},
-		},
-	}
+	service := launchService(repo, shadeform)
+	started := time.Now()
 
 	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
 		Pool: &pb.PoolConfig{
 			Name:      "pool-1",
 			Gpu:       []string{"A10G"},
 			Nodes:     1,
-			OfferId:   "sf-a10g-1",
+			OfferId:   "A10G",
 			Ttl:       "1h",
 			MaxSpend:  2,
 			Providers: []string{"shadeform"},
@@ -3038,97 +3053,126 @@ func TestLaunchPoolCapacityCreatesProviderReservation(t *testing.T) {
 	if !res.Ok {
 		t.Fatalf("LaunchPoolCapacity() not ok: code=%s msg=%s", res.ErrorCode, res.ErrMsg)
 	}
-	if createCalls != 1 {
-		t.Fatalf("shadeform create calls = %d, want 1", createCalls)
-	}
+
+	creates := shadeform.Creates()
+	require.Len(t, creates, 1)
 	state := repo.pools["workspace-1"][0]
-	if got, want := len(state.Reservations), 1; got != want {
-		t.Fatalf("reservation count = %d, want %d", got, want)
-	}
+	require.Len(t, state.Reservations, 1)
 	reservation := state.Reservations[0]
-	if got, want := reservation.ID, "reservation-1"; got != want {
-		t.Fatalf("reservation id = %q, want %q", got, want)
-	}
-	if reservation.MachineID == "" {
-		t.Fatal("reservation missing managed machine id")
-	}
-	if !strings.Contains(createBody["name"].(string), reservation.MachineID) {
-		t.Fatalf("provider name %q does not include machine id %q", createBody["name"], reservation.MachineID)
+	require.NotEmpty(t, reservation.MachineID, "reservation missing managed machine id")
+
+	// The provider is given the machine's name, the command that joins it to
+	// the pool, a tag that says which machine it is, and a time well past its
+	// term at which to delete it should Beam not have done so.
+	create := creates[0]
+	require.Equal(t, a10gOffer.ID, create.Offer.ID)
+	require.Contains(t, create.Name, reservation.MachineID)
+	require.Equal(t, reservation.Name, create.Name)
+	require.Contains(t, create.StartupScript, "app.beam.test")
+	require.Equal(t, map[string]string{"beam-machine": reservation.MachineID}, create.Tags)
+	require.WithinDuration(t, started.Add(time.Hour).Add(reservationDeletionGrace), create.Until, time.Minute)
+
+	// The record says what was bought, from the offer, and on what terms.
+	instances, err := shadeform.List(context.Background())
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	require.Equal(t, instances[0].ID, reservation.ID)
+	require.Equal(t, instances[0].ID, reservation.InstanceID)
+	require.Equal(t, "pool-1", reservation.PoolName)
+	require.Equal(t, "pool-1", reservation.Selector)
+	require.Equal(t, "shadeform", reservation.Provider)
+	require.Equal(t, "lambda", reservation.Cloud)
+	require.Equal(t, "us-east", reservation.Region)
+	require.Equal(t, "A10G", reservation.OfferID)
+	require.Equal(t, "A10G", reservation.InstanceType)
+	require.Equal(t, "A10G", reservation.GPU)
+	require.Equal(t, uint32(1), reservation.GPUCount)
+	require.Equal(t, uint32(1), reservation.NodeCount)
+	require.Equal(t, int64(4000), reservation.CPUMillicores)
+	require.Equal(t, int64(16*1024), reservation.MemoryMB)
+	require.Equal(t, int64(128*1024), reservation.StorageMB)
+	require.Equal(t, int64(1_500_000), reservation.HourlyCostMicros)
+	require.Equal(t, int64(1_500_000), reservation.CommittedMicros, "one hour at the provider's price")
+	require.Equal(t, model.SourceCLIReservation, reservation.Source)
+	require.Equal(t, model.ReservationPending, reservation.Status)
+	require.Equal(t, time.Hour, reservation.ExpiresAt.Sub(reservation.CreatedAt))
+	require.Equal(t, time.Hour, reservation.BillingRenewalAt.Sub(reservation.CreatedAt))
+	require.NotEmpty(t, reservation.RegistrationTokenHash)
+}
+
+func TestLaunchPoolCapacityBuysTheOfferInTheRegionAsked(t *testing.T) {
+	// One instance type is sold in several regions and by several clouds.
+	paris := a10gOffer
+	paris.Cloud, paris.Region, paris.HourlyCostMicros = "scaleway", "paris", 1_000_000
+	shadeform := fakeProvider("shadeform", paris, a10gOffer)
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, shadeform)
+
+	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		Pool: &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: 1, OfferId: "A10G", Ttl: "1h", MaxSpend: 2, Providers: []string{"shadeform"}, Regions: []string{"us-east"}},
+	})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+
+	creates := shadeform.Creates()
+	require.Len(t, creates, 1)
+	require.Equal(t, "us-east", creates[0].Offer.Region)
+	require.Equal(t, "lambda", creates[0].Offer.Cloud)
+	reservation := repo.pools["workspace-1"][0].Reservations[0]
+	require.Equal(t, "us-east", reservation.Region)
+	require.Equal(t, "lambda", reservation.Cloud)
+}
+
+func TestLaunchPoolCapacityBuysNothingWhenTheProviderIsOutOfStock(t *testing.T) {
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	shadeform.RefuseCreates(fmt.Errorf("%w: none left in us-east", providers.ErrOutOfStock))
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, shadeform)
+
+	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		Pool: &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: 1, Ttl: "1h", MaxSpend: 2},
+	})
+	require.NoError(t, err)
+	require.False(t, res.Ok)
+	require.Equal(t, launchErrorProviderFailure, res.ErrorCode)
+	require.Contains(t, res.ErrMsg, "out of stock")
+	require.Empty(t, repo.pools["workspace-1"], "no pool is left behind")
+	for _, token := range repo.joinTokens {
+		require.True(t, token.Revoked, "the join token of a machine that was not bought is revoked")
 	}
 }
 
-func TestLaunchPoolCapacityCreatesHetznerCPUNodeReservation(t *testing.T) {
-	var createCalls int
-	var createBody map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/locations":
-			_, _ = w.Write([]byte(`{
-				"locations": [{"id":1,"name":"ash","description":"Ashburn","network_zone":"us-east"}],
-				"meta":{"pagination":{"page":1,"per_page":50,"previous_page":null,"next_page":null,"last_page":1,"total_entries":1}}
-			}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/server_types":
-			_, _ = w.Write([]byte(`{
-				"server_types": [{
-					"id":45,
-					"name":"cpx31",
-					"description":"CPX31",
-					"cores":4,
-					"memory":8,
-					"disk":160,
-					"deprecated":false,
-					"category":"Shared vCPU",
-					"cpu_type":"shared",
-					"storage_type":"local",
-					"architecture":"x86",
-					"locations":[{"id":1,"name":"ash","available":true,"deprecation":null}],
-					"prices":[{"location":"ash","price_hourly":{"net":"0.0312","gross":"0.0248"}}]
-				}],
-				"meta":{"pagination":{"page":1,"per_page":50,"previous_page":null,"next_page":null,"last_page":1,"total_entries":1}}
-			}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/networks":
-			_, _ = w.Write([]byte(`{
-				"networks": [{"id":456,"name":"beam-workers","subnets":[{"type":"cloud","ip_range":"10.42.0.0/24","network_zone":"us-east"}]}],
-				"meta":{"pagination":{"page":1,"per_page":50,"previous_page":null,"next_page":null,"last_page":1,"total_entries":1}}
-			}`))
-		case r.Method == http.MethodPost && r.URL.Path == "/servers":
-			createCalls++
-			if err := json.NewDecoder(r.Body).Decode(&createBody); err != nil {
-				t.Fatalf("decode create body: %v", err)
-			}
-			_, _ = w.Write([]byte(`{"server":{"id":42,"status":"initializing","location":{"name":"ash"},"server_type":{"id":45,"name":"cpx31","cores":4,"memory":8,"disk":160}}}`))
-		default:
-			t.Fatalf("unexpected Hetzner request %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
+func TestLaunchPoolCapacityDeletesWhatItBoughtWhenALaterMachineFails(t *testing.T) {
+	// The catalogue says the offer is in stock, and the provider has one.
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	shadeform.RefuseCreatesAfter(1, fmt.Errorf("%w: none left in us-east", providers.ErrOutOfStock))
 	repo := &fakeComputeRepo{}
-	service := &Service{
-		computeRepo: repo,
-		billing: &fakeManagedBilling{
-			launchDecision: billingDecision{OK: true, AvailableCents: 5000, RequiredCents: 2500},
-		},
-		appConfig: types.AppConfig{
-			GatewayService: types.GatewayServiceConfig{
-				HTTP: types.HTTPConfig{ExternalHost: "app.beam.test", ExternalPort: 443, TLS: true},
-			},
-			Tailscale: types.TailscaleConfig{Enabled: true, AuthKey: "gateway-key", AgentAuthKey: "agent-key"},
-			Providers: types.ProviderConfig{
-				Hetzner: types.HetznerProviderConfig{
-					ApiToken: "hetzner-token",
-					BaseURL:  server.URL,
-					Image:    "ubuntu-24.04",
-					PrivateNetwork: types.HetznerPrivateNetworkConfig{
-						Name: "beam-workers",
-					},
-				},
-			},
-			ManagedCompute: types.ManagedComputeConfig{
-				Billing: types.ManagedComputeBillingConfig{MinimumCreditCents: 2500},
-			},
-		},
+	service := launchService(repo, shadeform)
+
+	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		Pool: &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: 2, Ttl: "1h", MaxSpend: 10},
+	})
+	require.NoError(t, err)
+	require.False(t, res.Ok)
+	require.Equal(t, launchErrorProviderFailure, res.ErrorCode)
+	require.Contains(t, res.ErrMsg, "out of stock")
+
+	creates := shadeform.Creates()
+	require.Len(t, creates, 1)
+	left, err := shadeform.List(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, left, "the machine that was bought is deleted again")
+	require.Empty(t, repo.pools["workspace-1"], "no pool is left behind")
+	require.Len(t, repo.joinTokens, 2)
+	for _, token := range repo.joinTokens {
+		require.True(t, token.Revoked, "no join token outlives a launch that failed")
 	}
+}
+
+func TestLaunchPoolCapacityCreatesCPUNodeReservation(t *testing.T) {
+	hetzner := fakeProvider("hetzner", cpx31Offer)
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, hetzner)
 
 	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
 		Nodes: 1,
@@ -3147,15 +3191,10 @@ func TestLaunchPoolCapacityCreatesHetznerCPUNodeReservation(t *testing.T) {
 	if !res.Ok {
 		t.Fatalf("LaunchPoolCapacity() not ok: code=%s msg=%s", res.ErrorCode, res.ErrMsg)
 	}
-	if createCalls != 1 {
-		t.Fatalf("Hetzner create calls = %d, want 1", createCalls)
-	}
-	if createBody["server_type"] != "cpx31" || createBody["image"] != "ubuntu-24.04" || createBody["location"] != "ash" {
-		t.Fatalf("unexpected Hetzner create body: %#v", createBody)
-	}
-	if got := createBody["networks"]; fmt.Sprint(got) != "[456]" {
-		t.Fatalf("Hetzner networks = %#v, want [456]", got)
-	}
+	creates := hetzner.Creates()
+	require.Len(t, creates, 1)
+	require.Equal(t, "cpx31", creates[0].Offer.ID)
+	require.Equal(t, "ash", creates[0].Offer.Region)
 
 	state := repo.pools["workspace-1"][0]
 	if got, want := state.ReservedNodes, uint32(1); got != want {
@@ -3173,20 +3212,23 @@ func TestLaunchPoolCapacityCreatesHetznerCPUNodeReservation(t *testing.T) {
 	}
 }
 
+func TestLaunchPoolCapacityBuysSeveralMachinesOfAnOfferTheProviderDoesNotCount(t *testing.T) {
+	hetzner := fakeProvider("hetzner", cpx31Offer)
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, hetzner)
+
+	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		Nodes: 3,
+		Pool:  &pb.PoolConfig{Name: "cpu-pool", Ttl: "1h", MaxSpend: 1},
+	})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Len(t, hetzner.Creates(), 3)
+	require.Len(t, repo.pools["workspace-1"][0].Reservations, 3)
+}
+
 func TestLaunchPoolCapacityAddsReservationToExistingPool(t *testing.T) {
-	var createCalls int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/instances/types":
-			_, _ = w.Write([]byte(`{"instance_types":[{"id":"sf-a10g-1","cloud":"lambda","shade_instance_type":"A10Gx1","hourly_price":150,"deployment_type":"vm","configuration":{"gpu_type":"A10G","num_gpus":1,"vcpus":4,"memory_in_gb":16,"storage_in_gb":128},"availability":[{"region":"us-east","available":true}]}]}`))
-		case "/instances/create":
-			createCalls++
-			_, _ = w.Write([]byte(`{"id":"reservation-2"}`))
-		default:
-			t.Fatalf("unexpected shadeform path %s", r.URL.Path)
-		}
-	}))
-	defer server.Close()
+	shadeform := fakeProvider("shadeform", a10gOffer)
 
 	now := time.Now().UTC()
 	repo := &fakeComputeRepo{
@@ -3205,7 +3247,7 @@ func TestLaunchPoolCapacityAddsReservationToExistingPool(t *testing.T) {
 							PoolName:         "pool-1",
 							Selector:         "pool-1",
 							Provider:         "shadeform",
-							OfferID:          "sf-a10g-1",
+							OfferID:          "A10G",
 							MachineID:        "machine-1",
 							GPU:              "A10G",
 							GPUCount:         1,
@@ -3220,31 +3262,14 @@ func TestLaunchPoolCapacityAddsReservationToExistingPool(t *testing.T) {
 			},
 		},
 	}
-	service := &Service{
-		computeRepo: repo,
-		billing: &fakeManagedBilling{
-			launchDecision: billingDecision{OK: true, AvailableCents: 5000, RequiredCents: 2500},
-		},
-		appConfig: types.AppConfig{
-			GatewayService: types.GatewayServiceConfig{
-				HTTP: types.HTTPConfig{ExternalHost: "app.beam.test", ExternalPort: 443, TLS: true},
-			},
-			Tailscale: types.TailscaleConfig{Enabled: true, AuthKey: "gateway-key", AgentAuthKey: "agent-key"},
-			Providers: types.ProviderConfig{
-				Shadeform: types.ShadeformProviderConfig{ApiKey: "shadeform-key", BaseURL: server.URL},
-			},
-			ManagedCompute: types.ManagedComputeConfig{
-				Billing: types.ManagedComputeBillingConfig{MinimumCreditCents: 2500},
-			},
-		},
-	}
+	service := launchService(repo, shadeform)
 
 	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
 		Pool: &pb.PoolConfig{
 			Name:      "pool-1",
 			Gpu:       []string{"A10G"},
 			Nodes:     1,
-			OfferId:   "sf-a10g-1",
+			OfferId:   "A10G",
 			Ttl:       "1h",
 			MaxSpend:  2,
 			Providers: []string{"shadeform"},
@@ -3257,14 +3282,17 @@ func TestLaunchPoolCapacityAddsReservationToExistingPool(t *testing.T) {
 	if !res.Ok {
 		t.Fatalf("LaunchPoolCapacity() not ok: code=%s msg=%s", res.ErrorCode, res.ErrMsg)
 	}
-	if createCalls != 1 {
-		t.Fatalf("shadeform create calls = %d, want 1", createCalls)
+	if got := len(shadeform.Creates()); got != 1 {
+		t.Fatalf("shadeform create calls = %d, want 1", got)
 	}
 	state := repo.pools["workspace-1"][0]
 	if got, want := len(state.Reservations), 2; got != want {
 		t.Fatalf("reservation count = %d, want %d", got, want)
 	}
-	if got, want := state.Reservations[1].ID, "reservation-2"; got != want {
+	bought, err := shadeform.List(context.Background())
+	require.NoError(t, err)
+	require.Len(t, bought, 1)
+	if got, want := state.Reservations[1].ID, bought[0].ID; got != want {
 		t.Fatalf("new reservation id = %q, want %q", got, want)
 	}
 	if got, want := state.ReservedNodes, uint32(2); got != want {
@@ -3386,32 +3414,13 @@ func TestValidatePoolLaunchCompatibleRejectsGPUMismatch(t *testing.T) {
 	}
 }
 
-type fakeVendor struct {
-	extended  map[string]time.Time
-	deleted   []string
-	deleteErr error
-}
-
-func (v *fakeVendor) Name() string { return "shadeform" }
-func (v *fakeVendor) ListOffers(context.Context, model.OfferRequest) ([]model.Offer, error) {
-	return nil, nil
-}
-func (v *fakeVendor) CreateReservation(context.Context, model.ReservationRequest) (*model.Reservation, error) {
-	return nil, nil
-}
-func (v *fakeVendor) GetReservation(context.Context, string) (*model.Reservation, error) {
-	return nil, nil
-}
-func (v *fakeVendor) ExtendReservation(_ context.Context, id string, expiresAt time.Time) error {
-	if v.extended == nil {
-		v.extended = map[string]time.Time{}
-	}
-	v.extended[id] = expiresAt
-	return nil
-}
-func (v *fakeVendor) DeleteReservation(_ context.Context, id string) error {
-	v.deleted = append(v.deleted, id)
-	return v.deleteErr
+// boughtFrom plants a machine at a fake provider and points the state's first
+// reservation at it, as if the service had bought it there.
+func boughtFrom(fake *providers.Fake, state *model.PoolState) string {
+	id := fake.Plant(testOwner, providers.StatusActive, nil)
+	state.Reservations[0].Provider = fake.Name()
+	state.Reservations[0].InstanceID = id
+	return id
 }
 
 func TestRenewManagedReservationsExtendsExpiringReservation(t *testing.T) {
@@ -3433,12 +3442,13 @@ func TestRenewManagedReservationsExtendsExpiringReservation(t *testing.T) {
 			},
 		},
 	}
-	vendor := &fakeVendor{}
-	service := &Service{}
+	shadeform := fakeProvider("shadeform")
+	instanceID := boughtFrom(shadeform, state)
+	service := &Service{providers: providers.RegistryOf(shadeform)}
 
 	// Plenty of balance: renew for another hour
 	decision := billingDecision{OK: true, AvailableCents: 10_000}
-	if !service.renewManagedReservations(context.Background(), "workspace-1", state, decision, 5, now, map[string]model.Vendor{"shadeform": vendor}) {
+	if !service.renewManagedReservations(context.Background(), "workspace-1", state, decision, 5, now) {
 		t.Fatal("renewManagedReservations() did not report a state change")
 	}
 	if got, want := state.Reservations[0].ExpiresAt, expiresAt.Add(time.Hour); !got.Equal(want) {
@@ -3450,8 +3460,8 @@ func TestRenewManagedReservationsExtendsExpiringReservation(t *testing.T) {
 	if got, want := state.CommittedSpendMicros, int64(1_650_000); got != want {
 		t.Fatalf("pool committed spend = %d, want %d", got, want)
 	}
-	if got, want := vendor.extended["instance-1"], expiresAt.Add(time.Hour); !got.Equal(want) {
-		t.Fatalf("vendor extended to %s, want %s", got, want)
+	if got, want := shadeform.Until(instanceID), expiresAt.Add(time.Hour).Add(reservationDeletionGrace); !got.Equal(want) {
+		t.Fatalf("provider extended to %s, want %s", got, want)
 	}
 }
 
@@ -3473,19 +3483,20 @@ func TestRenewManagedReservationsSkipsWhenBalanceInsufficient(t *testing.T) {
 			},
 		},
 	}
-	vendor := &fakeVendor{}
-	service := &Service{}
+	shadeform := fakeProvider("shadeform")
+	instanceID := boughtFrom(shadeform, state)
+	service := &Service{providers: providers.RegistryOf(shadeform)}
 
 	// 16.5 cents/hr billable but only 10 cents headroom: do not renew
 	decision := billingDecision{OK: true, AvailableCents: 15}
-	if service.renewManagedReservations(context.Background(), "workspace-1", state, decision, 5, now, map[string]model.Vendor{"shadeform": vendor}) {
+	if service.renewManagedReservations(context.Background(), "workspace-1", state, decision, 5, now) {
 		t.Fatal("renewManagedReservations() renewed without sufficient balance")
 	}
 	if !state.Reservations[0].ExpiresAt.Equal(expiresAt) {
 		t.Fatal("reservation expiry should be unchanged")
 	}
-	if len(vendor.extended) != 0 {
-		t.Fatal("vendor should not have been called")
+	if !shadeform.Until(instanceID).IsZero() {
+		t.Fatal("provider should not have been called")
 	}
 }
 
@@ -3506,11 +3517,12 @@ func TestRenewManagedReservationsIgnoresDistantExpiry(t *testing.T) {
 			},
 		},
 	}
-	vendor := &fakeVendor{}
-	service := &Service{}
+	shadeform := fakeProvider("shadeform")
+	boughtFrom(shadeform, state)
+	service := &Service{providers: providers.RegistryOf(shadeform)}
 
 	decision := billingDecision{OK: true, AvailableCents: 10_000}
-	if service.renewManagedReservations(context.Background(), "workspace-1", state, decision, 0, now, map[string]model.Vendor{"shadeform": vendor}) {
+	if service.renewManagedReservations(context.Background(), "workspace-1", state, decision, 0, now) {
 		t.Fatal("renewManagedReservations() should not renew a reservation far from expiry")
 	}
 }
@@ -4253,14 +4265,13 @@ func TestReconcileManagedComputeChecksBalanceAfterFreshUsageTick(t *testing.T) {
 		Name:        "pool-1",
 		Reservations: []model.Reservation{
 			{
-				ID:                 "reservation-1",
-				Source:             model.SourceCLIReservation,
-				Status:             model.ReservationActive,
-				CreatedAt:          now.Add(-time.Hour),
-				BillingCursorAt:    now.Add(-time.Minute),
-				LastBillingCheckAt: now.Add(-time.Second),
-				ExpiresAt:          now.Add(time.Hour),
-				HourlyCostMicros:   1_000_000,
+				ID:               "reservation-1",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationActive,
+				CreatedAt:        now.Add(-time.Hour),
+				BillingCursorAt:  now.Add(-time.Minute),
+				ExpiresAt:        now.Add(time.Hour),
+				HourlyCostMicros: 1_000_000,
 			},
 		},
 	}
@@ -4283,14 +4294,13 @@ func TestReconcileManagedComputeChecksBalanceWhenUsageCursorIsFresh(t *testing.T
 		Name:        "pool-1",
 		Reservations: []model.Reservation{
 			{
-				ID:                 "reservation-1",
-				Source:             model.SourceCLIReservation,
-				Status:             model.ReservationActive,
-				CreatedAt:          now.Add(-time.Hour),
-				BillingCursorAt:    now,
-				LastBillingCheckAt: now,
-				ExpiresAt:          now.Add(time.Hour),
-				HourlyCostMicros:   1_000_000,
+				ID:               "reservation-1",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationActive,
+				CreatedAt:        now.Add(-time.Hour),
+				BillingCursorAt:  now,
+				ExpiresAt:        now.Add(time.Hour),
+				HourlyCostMicros: 1_000_000,
 			},
 		},
 	}
@@ -4330,7 +4340,9 @@ func TestReconcileManagedComputeBillsExpiredReservationBeforeTerminating(t *test
 		},
 	}
 	repo := &fakeComputeRepo{pools: map[string][]*model.PoolState{"workspace-1": {state}}}
-	billing := &fakeManagedBilling{balanceDecision: billingDecision{OK: true, RequiredCents: 1, AvailableCents: 1000}}
+	// The balance does not cover another hour, so the reservation is not
+	// renewed and ends at its expiry.
+	billing := &fakeManagedBilling{balanceDecision: billingDecision{OK: true, RequiredCents: 1, AvailableCents: 50}}
 	service := &Service{computeRepo: repo, billing: billing}
 
 	if err := service.ReconcileManagedCompute(context.Background()); err != nil {
@@ -4612,8 +4624,8 @@ func TestReleasePrivateMachineTransitionsManagedReservation(t *testing.T) {
 	if got, want := saved.Reservations[0].MachineID, "machine-1"; got != want {
 		t.Fatalf("reservation machine id = %q, want %q", got, want)
 	}
-	if !strings.Contains(saved.Reservations[0].LastError, "vendor \"shadeform\" is not configured") {
-		t.Fatalf("reservation last error = %q, want missing vendor error", saved.Reservations[0].LastError)
+	if !strings.Contains(saved.Reservations[0].LastError, "provider \"shadeform\" is not configured") {
+		t.Fatalf("reservation last error = %q, want missing provider error", saved.Reservations[0].LastError)
 	}
 	if machine.Schedulable {
 		t.Fatal("releasePrivateMachine() did not mark the machine unschedulable before deleting it")
@@ -4765,7 +4777,7 @@ func TestReleasePrivateMachineCleansMachineScopedRedisState(t *testing.T) {
 	}
 }
 
-func TestTerminateReservationTreatsProviderNotFoundAsDeleted(t *testing.T) {
+func TestTerminateReservationClosesAReservationWhoseMachineIsAlreadyGone(t *testing.T) {
 	now := time.Now().UTC()
 	state := &model.PoolState{
 		WorkspaceID: "workspace-1",
@@ -4783,32 +4795,25 @@ func TestTerminateReservationTreatsProviderNotFoundAsDeleted(t *testing.T) {
 			},
 		},
 	}
-	vendor := &fakeVendor{deleteErr: &model.HTTPStatusError{
-		Method:     http.MethodDelete,
-		Path:       "/servers/42",
-		StatusCode: http.StatusNotFound,
-		Body:       "not found",
-	}}
-	service := &Service{}
+	// The provider has no machine 42 any more, and deleting it succeeds.
+	hetzner := fakeProvider("hetzner")
+	service := &Service{providers: providers.RegistryOf(hetzner)}
 
-	if !service.terminateReservation(
+	service.terminateReservation(
 		context.Background(),
 		"workspace-1",
 		state,
 		&state.Reservations[0],
-		map[string]model.Vendor{"hetzner": vendor},
 		reconcileReasonMachineReleased,
 		machineReleasedMessage,
-	) {
-		t.Fatal("terminateReservation() did not report a change")
-	}
+	)
 	if got, want := state.Reservations[0].Status, model.ReservationDeleted; got != want {
 		t.Fatalf("reservation status = %q, want %q", got, want)
 	}
 	if got := state.Reservations[0].LastError; got != "" {
 		t.Fatalf("reservation last error = %q, want empty", got)
 	}
-	if got, want := vendor.deleted, []string{"42"}; !sameStrings(got, want) {
+	if got, want := hetzner.Deletes(), []string{"42"}; !sameStrings(got, want) {
 		t.Fatalf("deleted reservations = %v, want %v", got, want)
 	}
 }
@@ -4961,8 +4966,8 @@ func TestDeletePrivateMachineReleasesManagedReservationID(t *testing.T) {
 	if got, want := state.Reservations[0].TerminatingReason, reconcileReasonMachineReleased; got != want {
 		t.Fatalf("terminating reason = %q, want %q", got, want)
 	}
-	if !strings.Contains(state.Reservations[0].LastError, "vendor \"shadeform\" is not configured") {
-		t.Fatalf("reservation last error = %q, want missing vendor error", state.Reservations[0].LastError)
+	if !strings.Contains(state.Reservations[0].LastError, "provider \"shadeform\" is not configured") {
+		t.Fatalf("reservation last error = %q, want missing provider error", state.Reservations[0].LastError)
 	}
 }
 
@@ -5342,18 +5347,18 @@ func TestAssignManagedReservationToMachineUsesJoinTokenHash(t *testing.T) {
 	}
 	service := &Service{computeRepo: repo}
 
-	err := service.assignManagedReservationToMachine(
+	err := service.assignManagedReservationToMachineLocked(
 		context.Background(),
 		state,
 		&model.JoinTokenState{TokenHash: "token-hash"},
 		&model.AgentTokenState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1"},
 	)
 	if err != nil {
-		t.Fatalf("assignManagedReservationToMachine() error = %v", err)
+		t.Fatalf("assignManagedReservationToMachineLocked() error = %v", err)
 	}
 
 	if !repo.savedPool {
-		t.Fatal("assignManagedReservationToMachine() did not persist the pool state")
+		t.Fatal("assignManagedReservationToMachineLocked() did not persist the pool state")
 	}
 	if got, want := state.Reservations[0].MachineID, "machine-1"; got != want {
 		t.Fatalf("reservation machine id = %q, want %q", got, want)
@@ -5381,27 +5386,9 @@ func TestAssignManagedReservationToMachineRejectsClosedManagedJoinToken(t *testi
 	}
 	machine := &model.AgentTokenState{MachineID: "machine-1"}
 
-	err := (&Service{}).assignManagedReservationToMachine(context.Background(), state, token, machine)
+	err := (&Service{}).assignManagedReservationToMachineLocked(context.Background(), state, token, machine)
 	if err == nil {
-		t.Fatal("assignManagedReservationToMachine() accepted a closed managed reservation")
-	}
-}
-
-func TestAssignManagedReservationToMachineRequiresRepository(t *testing.T) {
-	state := &model.PoolState{Reservations: []model.Reservation{{
-		Source:                model.SourceCLIReservation,
-		Status:                model.ReservationPending,
-		RegistrationTokenHash: "join-token-hash",
-	}}}
-	token := &model.JoinTokenState{TokenHash: "join-token-hash"}
-	machine := &model.AgentTokenState{MachineID: "machine-1"}
-
-	err := (&Service{}).assignManagedReservationToMachine(context.Background(), state, token, machine)
-	if err == nil || !strings.Contains(err.Error(), "compute repository is unavailable") {
-		t.Fatalf("assignManagedReservationToMachine() error = %v", err)
-	}
-	if state.Reservations[0].MachineID != "" {
-		t.Fatal("reservation was mutated without a repository")
+		t.Fatal("assignManagedReservationToMachineLocked() accepted a closed managed reservation")
 	}
 }
 
@@ -5466,39 +5453,11 @@ type fakeComputeRepo struct {
 	joinTokens map[string]*model.JoinTokenState
 	sshStates  map[string]*model.MachineSSHState
 	sshMu      sync.Mutex
-	demand     map[string]*model.FailoverDemand
-	spendCents float64
 	savedPool  bool
 }
 
-func (r *fakeComputeRepo) PushFailoverDemand(ctx context.Context, demand *model.FailoverDemand, ttl time.Duration) error {
-	if r.demand == nil {
-		r.demand = map[string]*model.FailoverDemand{}
-	}
-	r.demand[demand.GPU] = demand
-	return nil
-}
-
-func (r *fakeComputeRepo) ListFailoverDemand(ctx context.Context) ([]*model.FailoverDemand, error) {
-	out := []*model.FailoverDemand{}
-	for _, demand := range r.demand {
-		out = append(out, demand)
-	}
-	return out, nil
-}
-
-func (r *fakeComputeRepo) DeleteFailoverDemand(ctx context.Context, gpu string) error {
-	delete(r.demand, gpu)
-	return nil
-}
-
-func (r *fakeComputeRepo) RecordOnDemandSpend(ctx context.Context, at time.Time, cents float64) error {
-	r.spendCents += cents
-	return nil
-}
-
-func (r *fakeComputeRepo) OnDemandSpendCents(ctx context.Context, window time.Duration) (float64, error) {
-	return r.spendCents, nil
+func (r *fakeComputeRepo) ProviderOwner(ctx context.Context) (string, error) {
+	return testOwner, nil
 }
 
 func (r *fakeComputeRepo) WithPoolStateLock(ctx context.Context, workspaceID, name string, fn func(context.Context) error) error {
