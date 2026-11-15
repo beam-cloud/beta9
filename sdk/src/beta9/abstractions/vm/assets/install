@@ -187,11 +187,15 @@ if [ "$desktop" = true ] && [ "$kiosk" != true ]; then
   apt_repository github-cli https://cli.github.com/packages/githubcli-archive-keyring.asc \
     https://cli.github.com/packages stable main
   apt-get update
+  rdp_viewer=freerdp3-x11
+  if [ "$VERSION_CODENAME" = jammy ]; then
+    rdp_viewer=freerdp2-x11
+  fi
   apt_install "$browser" gh ubuntu-session ubuntu-settings gnome-shell gnome-terminal \
     gnome-control-center gnome-software nautilus gvfs fonts-ubuntu yaru-theme-gtk yaru-theme-icon \
     gnome-shell-extension-ubuntu-dock gnome-shell-extension-appindicator \
     gnome-shell-extension-desktop-icons-ng librsvg2-common xdg-user-dirs \
-    xdg-utils shared-mime-info at-spi2-core file-roller unzip
+    xdg-utils shared-mime-info at-spi2-core file-roller unzip tigervnc-viewer "$rdp_viewer"
   # Native defaults remain overridable in each user's desktop settings.
   pixel_ratio=$(PYTHONPATH=/opt/beam-vm python3 -c 'from kiosk_config import DesktopRuntime; print(DesktopRuntime().pixel_ratio)')
   sed "s/@PIXEL_RATIO@/$pixel_ratio/g" "$assets/desktop.gschema.override" \

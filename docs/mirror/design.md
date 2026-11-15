@@ -366,6 +366,32 @@ to return to that same VM, its edits, and its browser profile. On macOS,
 Use `beam vm new --mirror` to create a VM from the currently uploaded
 generation.
 
+### Use an existing signed-in browser from a VM
+
+Start an authenticated local sharing server for the desktop that runs your
+browser. On macOS, Screen Sharing can accept VNC connections. On Linux,
+GNOME Desktop Sharing uses RDP, and other desktop environments can supply
+a VNC server. Start or open your private Beam desktop VM and run one of:
+
+```sh
+beam mirror share-desktop NAME --protocol vnc
+beam mirror share-desktop NAME --protocol rdp
+```
+
+The default local ports are 5900 for VNC and 3389 for RDP. Use
+`--local-port PORT` for a different loopback listener. Enter the sharing
+server's credentials in the viewer prompts. Each VM can connect to the same
+running browser, with its existing tabs and site sign-ins. The source machine
+keeps its browser profile. The viewer has visibility and input control over
+the display exposed by the sharing server, which can be your whole desktop.
+Use a dedicated display to limit the share to a browser.
+
+The connection uses the VM's existing authenticated SSH tunnel and a guest
+loopback port. Closing the viewer or pressing Ctrl+C disconnects it. Keep
+the local browser and the command running while you use the share. Older
+guest images may need `tigervnc-viewer`, `freerdp3-x11` on Ubuntu 24.04, or
+`freerdp2-x11` on Ubuntu 22.04.
+
 ### The tray application
 
 Both source platforms can use `beam-mirror suggest` to review shell, Git,
@@ -397,9 +423,6 @@ clean VM when publishing a template.
 `beam vm ssh --forward-agent NAME` lets the guest use the local SSH agent
 during the SSH session. `--agent-socket PATH` selects a dedicated agent
 socket, including an agent set up with destination-constrained keys.
-
-Live access to already signed-in source browser tabs and automatic account
-authorization for newly created VMs require their own integrations.
 
 ### Credential scanning
 

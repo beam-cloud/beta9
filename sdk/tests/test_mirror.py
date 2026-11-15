@@ -3,6 +3,7 @@ import io
 import json
 import tarfile
 import threading
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -353,6 +354,67 @@ def test_mirror_launch_opens_the_created_desktop(monkeypatch, new_vm):
     assert result.exit_code == 0, result.output
     assert result.return_value is None
     opener.assert_called_once_with(vm, 8080, vm.info["desktop_url"])
+
+
+@pytest.mark.parametrize("protocol,local_port", [("vnc", 5900), ("rdp", 3389)])
+def test_mirror_desktop_share_uses_the_private_vm_and_loopback(
+    monkeypatch, new_vm, protocol, local_port
+):
+    vm = MagicMock(name="vm")
+    vm.name = "dev"
+    vm.info = {"spec": {"desktop": True, "desktop_transport": "webrtc", "protected_ports": [8080]}}
+    vm._guest_output.side_effect = ["gatewayports no", "/usr/bin/viewer"]
+    vm.desktop.launch.return_value.status.return_value = (0, "exited")
+    monkeypatch.setattr(vm_cli, "_vm", lambda *args: vm)
+    monkeypatch.setattr(vm_cli, "_ssh_options", lambda vm: ["beam-ssh-options"])
+    check = MagicMock()
+    monkeypatch.setattr(mirror_cli.socket, "create_connection", check)
+    desktop_url = MagicMock()
+    monkeypatch.setattr(vm_cli, "_url", desktop_url)
+    closed = []
+
+    @contextmanager
+    def forward(options, target, port):
+        assert (options, target, port) == (["beam-ssh-options"], "root@dev", local_port)
+        try:
+            yield 40123, SimpleNamespace(poll=lambda: None)
+        finally:
+            closed.append(True)
+
+    monkeypatch.setattr(mirror_cli, "share_desktop", forward)
+    result = CliRunner().invoke(
+        mirror_cli.mirror_group, ["share-desktop", "dev", "--protocol", protocol, "--no-open"]
+    )
+    assert result.exit_code == 0, result.output
+    check.assert_called_once_with(("127.0.0.1", local_port), timeout=3)
+    assert closed == [True]
+    desktop_url.assert_called_once_with(vm, "desktop_url", False)
+    command = vm.desktop.launch.call_args.args
+    if protocol == "vnc":
+        assert command[0] == "/usr/bin/viewer" and command[-1] == "127.0.0.1::40123"
+        assert "-AcceptClipboard=0" in command and "-SendClipboard=0" in command
+    else:
+        assert command == (
+            "/usr/bin/gnome-terminal",
+            "--wait",
+            "--",
+            "/usr/bin/viewer",
+            "-clipboard",
+            "/v:127.0.0.1:40123",
+        )
+
+
+def test_mirror_desktop_share_rejects_a_public_vm_before_opening_a_connection(monkeypatch, new_vm):
+    spec = {"desktop": True, "desktop_transport": "webrtc", "protected_ports": [7681]}
+    monkeypatch.setattr(vm_cli, "_vm", lambda *args: SimpleNamespace(info={"spec": spec}))
+    check = MagicMock()
+    monkeypatch.setattr(mirror_cli.socket, "create_connection", check)
+    result = CliRunner().invoke(
+        mirror_cli.mirror_group, ["share-desktop", "dev", "--protocol", "vnc"]
+    )
+    assert result.exit_code == 1
+    assert "protected port 8080" in result.output
+    check.assert_not_called()
 
 
 def test_mirror_add_preserves_arguments_and_utility_exit(monkeypatch):
