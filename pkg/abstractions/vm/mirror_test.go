@@ -200,6 +200,37 @@ func TestSeededVMsKeepTheirMirrorGeneration(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, err.(*echo.HTTPError).Code)
 }
 
+// A published template shares the whole root disk, which holds every
+// mirrored file the VM changed. Private artifacts keep the pin.
+func TestMirroredVMsCannotBePublished(t *testing.T) {
+	s, v, info, _, _ := fixture()
+	mirrors := &fakeMirrors{mirrors: map[string][]types.VMMirror{}}
+	s.mirrors = mirrors
+	pin := mirrors.commit("laptop")
+	pin.Home = "/Users/luke"
+	v.Spec.Mirror = &pin
+	ctx := context.Background()
+
+	_, err := s.capture(ctx, v, types.VMArtifactTemplate, "shared", "", true)
+	require.ErrorContains(t, err, "publish from a VM that never had a mirror")
+	response := vmRequest(managementAPI(s, info), "POST", "/"+info.Workspace.ExternalId+"/"+v.Name+"/template", `{"name":"shared","public":true}`)
+	require.Equal(t, http.StatusBadRequest, response.Code, response.Body.String())
+	require.Empty(t, s.repo.(*vmStore).artifacts)
+	for _, kind := range []string{types.VMArtifactTemplate, types.VMArtifactSnapshot} {
+		a, err := s.capture(ctx, v, kind, "private-"+kind, "", false)
+		require.NoError(t, err)
+		require.Equal(t, &pin, a.Spec.Mirror)
+	}
+
+	v.Spec.Mirror = nil
+	a, err := s.capture(ctx, v, types.VMArtifactTemplate, "clean", "", true)
+	require.NoError(t, err)
+	require.True(t, a.Public)
+
+	// Where the tree goes is the gateway's to say, not the caller's.
+	require.Equal(t, &types.VMMirror{Name: "laptop", Generation: 1}, requestedMirror(&types.VMMirror{Name: "laptop", Generation: 1, ID: pin.ID, Home: "/Users/someone"}))
+}
+
 func TestPurgedMirrorLeavesVMsRunningWithoutTheLayer(t *testing.T) {
 	s, v, info, runtime, _ := fixture()
 	mirrors := &fakeMirrors{mirrors: map[string][]types.VMMirror{}}

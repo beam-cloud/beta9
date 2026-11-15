@@ -190,6 +190,65 @@ func (s *CachedSource) fetch(ctx context.Context, object Object) ([]byte, error)
 	}
 	defer downloadBudget.Release(weight)
 
+	data, err := s.retrieve(ctx, object)
+	if err != nil {
+		return nil, err
+	}
+	s.remember(object.Digest, data)
+	if s.Cache != nil {
+		_ = s.Cache.StoreObject(ctx, object, data)
+	}
+	return data, nil
+}
+
+// prefetchPoll is how often a prefetch looks for room in the download budget.
+const prefetchPoll = 50 * time.Millisecond
+
+// Prefetch puts an object in the cache ahead of any read of it, unless the
+// cache has it already, and reports whether it downloaded it. It takes room
+// in the download budget only while no read is waiting for some, and keeps
+// nothing in memory.
+func (s *CachedSource) Prefetch(ctx context.Context, object Object) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if s.Cache == nil || s.cached(ctx, object) {
+		return false, nil
+	}
+	weight := min(int64(object.Size)+1, downloadBudgetBytes)
+	for !downloadBudget.TryAcquire(weight) {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(prefetchPoll):
+		}
+	}
+	defer downloadBudget.Release(weight)
+	// A read may have fetched it in the meantime.
+	if s.cached(ctx, object) {
+		return false, nil
+	}
+	data, err := s.retrieve(ctx, object)
+	if err != nil {
+		return false, err
+	}
+	if err := s.Cache.StoreObject(ctx, object, data); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// cached reports whether a read would find the object without downloading
+// it.
+func (s *CachedSource) cached(ctx context.Context, object Object) bool {
+	s.mu.Lock()
+	_, recent := s.recent[object.Digest]
+	s.mu.Unlock()
+	return recent || s.Cache.ReadObject(ctx, object, int64(object.Size)-1, make([]byte, 1))
+}
+
+// retrieve downloads an object and checks it, retrying failed attempts.
+func (s *CachedSource) retrieve(ctx context.Context, object Object) ([]byte, error) {
 	attempts := max(s.Attempts, 1)
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
@@ -197,10 +256,6 @@ func (s *CachedSource) fetch(ctx context.Context, object Object) ([]byte, error)
 		data, err := s.download(attemptCtx, object)
 		cancel()
 		if err == nil {
-			s.remember(object.Digest, data)
-			if s.Cache != nil {
-				_ = s.Cache.StoreObject(ctx, object, data)
-			}
 			return data, nil
 		}
 		lastErr = err

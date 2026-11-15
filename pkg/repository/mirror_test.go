@@ -50,6 +50,7 @@ func TestMirrorRepositoryIntegration(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(1), first.Number)
 	require.False(t, first.CreatedAt.IsZero())
+	require.Empty(t, first.Home)
 	_, err = commit(0, "bb")
 	require.ErrorIs(t, err, ErrMirrorGenerationConflict, "a parent that already has a child")
 
@@ -74,13 +75,15 @@ func TestMirrorRepositoryIntegration(t *testing.T) {
 	writers.Wait()
 	require.Equal(t, 1, wins)
 	require.Equal(t, 7, conflicts)
-	third, err := commit(2, "dd")
-	require.NoError(t, err)
+	third := &types.MirrorGeneration{MirrorID: mirror.ID, Parent: 2, ManifestDigest: digest("dd"), ManifestSize: 10, Entries: 2, Objects: 1, TotalSize: 100, TokenID: "token", Home: "/Users/luke"}
+	require.NoError(t, repo.CommitMirrorGeneration(ctx, third))
 	require.Equal(t, int64(3), third.Number)
+	require.Equal(t, "/Users/luke", third.Home)
 
 	latest, err := repo.GetMirrorGeneration(ctx, mirror.ID, 0)
 	require.NoError(t, err)
 	require.Equal(t, int64(3), latest.Number)
+	require.Equal(t, "/Users/luke", latest.Home)
 	loaded, err := repo.GetMirror(ctx, ws, name)
 	require.NoError(t, err)
 	require.Equal(t, int64(3), loaded.Latest.Number)

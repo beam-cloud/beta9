@@ -5,9 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"maps"
+	"math/rand"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,6 +31,10 @@ type fakeMirrorBucket struct {
 	downloads map[string]int
 	outage    bool
 	corrupt   map[string]bool
+	// hold keeps downloads of the keys it names open until their context
+	// ends; inflight and peak count them.
+	hold           func(key string) bool
+	inflight, peak int
 }
 
 func (b *fakeMirrorBucket) Exists(_ context.Context, key string) (bool, error) {
@@ -39,7 +47,7 @@ func (b *fakeMirrorBucket) Exists(_ context.Context, key string) (bool, error) {
 	return ok, nil
 }
 
-func (b *fakeMirrorBucket) DownloadWithReader(_ context.Context, key string) (io.ReadCloser, error) {
+func (b *fakeMirrorBucket) DownloadWithReader(ctx context.Context, key string) (io.ReadCloser, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	data, ok := b.objects[key]
@@ -47,10 +55,32 @@ func (b *fakeMirrorBucket) DownloadWithReader(_ context.Context, key string) (io
 		return nil, errors.New("no such object")
 	}
 	b.downloads[key]++
+	if b.hold != nil && b.hold(key) {
+		b.inflight++
+		b.peak = max(b.peak, b.inflight)
+		b.mu.Unlock()
+		<-ctx.Done()
+		b.mu.Lock()
+		b.inflight--
+		return nil, ctx.Err()
+	}
 	if b.corrupt[key] {
 		data = append([]byte("x"), data[1:]...)
 	}
 	return io.NopCloser(bytes.NewReader(data)), nil
+}
+
+// state reports the downloads in progress, the most there were at once, and
+// how many content objects (everything but the manifest) were ever asked for.
+func (b *fakeMirrorBucket) state(manifestKey string) (inflight, peak, asked int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for key := range b.downloads {
+		if key != manifestKey {
+			asked++
+		}
+	}
+	return b.inflight, b.peak, asked
 }
 
 // memoryMirrorCache is a node content cache: like the real one it takes
@@ -79,6 +109,12 @@ func (c *memoryMirrorCache) StoreContent(_ context.Context, key string, content 
 	defer c.mu.Unlock()
 	c.objects[key] = bytes.Clone(content)
 	return nil
+}
+
+func (c *memoryMirrorCache) len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.objects)
 }
 
 type fakeMirrorMount struct{ unmounted *atomic.Int32 }
@@ -294,6 +330,14 @@ func TestMirrorLayersMountPerSetOfHomes(t *testing.T) {
 	}
 	require.Len(t, paths, 3)
 	require.Len(t, h.mounts, 3)
+
+	// A home of its own is another set.
+	source := []mirror.Placement{{Path: "/Users/luke", UID: 1001, GID: 1001, Mode: 0o750}}
+	path, release, err := h.layers.acquire(ctx, mirrorRequest(7), pin, source)
+	require.NoError(t, err)
+	defer release()
+	require.False(t, paths[path])
+	require.Equal(t, source, h.mounts[path].Placements())
 }
 
 func TestMirrorPlacementsAreTheImagesHomes(t *testing.T) {
@@ -323,12 +367,21 @@ func TestMirrorPlacementsAreTheImagesHomes(t *testing.T) {
 	require.NoError(t, os.Symlink(outside, filepath.Join(linked, "etc/passwd")))
 	notAFile := image(map[string]string{"etc/passwd": passwd}, map[string]os.FileMode{imageDesktopUserFile: 0o755})
 
+	desktopImage := image(map[string]string{"etc/passwd": passwd, imageDesktopUserFile: "beam\n"}, map[string]os.FileMode{"home/beam": 0o755})
 	for _, test := range []struct {
 		name    string
 		rootfs  string
+		home    string
 		want    []mirror.Placement
 		wantErr string
 	}{
+		// A home from the source machine is the only placement, the desktop
+		// user's, with a fixed mode.
+		{name: "source home", rootfs: desktopImage, home: "/Users/luke", want: []mirror.Placement{{Path: "/Users/luke", UID: 1001, GID: 1002, Mode: 0o750}}},
+		{name: "source home over the image's", rootfs: desktopImage, home: "/home/beam", want: []mirror.Placement{{Path: "/home/beam", UID: 1001, GID: 1002, Mode: 0o750}}},
+		{name: "source home without a desktop", rootfs: image(map[string]string{"etc/passwd": passwd}, nil), home: "/Users/luke", want: []mirror.Placement{{Path: "/Users/luke", Mode: 0o750}}},
+		{name: "source home with a root desktop", rootfs: image(map[string]string{"etc/passwd": passwd, imageDesktopUserFile: "root\n"}, nil), home: "/home/luke", want: []mirror.Placement{{Path: "/home/luke", Mode: 0o750}}},
+		{name: "source home still reads the image", rootfs: notAFile, home: "/Users/luke", wantErr: "not a regular file"},
 		{name: "no desktop", rootfs: image(map[string]string{"etc/passwd": passwd}, nil), want: []mirror.Placement{root}},
 		{name: "desktop user", rootfs: image(map[string]string{"etc/passwd": passwd, imageDesktopUserFile: "beam\n"}, nil), want: []mirror.Placement{root, beam}},
 		{
@@ -346,7 +399,7 @@ func TestMirrorPlacementsAreTheImagesHomes(t *testing.T) {
 		{name: "no image", rootfs: filepath.Join(t.TempDir(), "missing"), wantErr: "no such file"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			placements, err := mirrorPlacements(test.rootfs)
+			placements, err := mirrorPlacements(test.rootfs, test.home)
 			if test.wantErr != "" {
 				require.ErrorContains(t, err, test.wantErr)
 				return
@@ -532,6 +585,159 @@ func TestPurgedMirrorLayerStopsServing(t *testing.T) {
 	require.Equal(t, int32(1), h.unmounted.Load(), "unmounted when its last VM stops")
 }
 
+// incompressible is content zstd cannot shrink, so that it is stored as is.
+func incompressible(seed int64, size int) string {
+	data := make([]byte, size)
+	rand.New(rand.NewSource(seed)).Read(data)
+	return string(data)
+}
+
+func TestPrefetchOrder(t *testing.T) {
+	writer, err := mirror.NewWriter(mirror.DefaultWriterOptions(), func(mirror.Object, []byte) error { return nil })
+	require.NoError(t, err)
+	for _, dir := range []string{"projects", "projects/app", "projects/app/src"} {
+		require.NoError(t, writer.AddDir(dir, 0o755, 0))
+	}
+	// Deep small files fill a pack before the home's own dotfile is added,
+	// which lands in the next; a large file is chunked.
+	for i := range 6 {
+		require.NoError(t, writer.AddFile(fmt.Sprintf("projects/app/src/file%d", i), 0o644, 0, strings.NewReader(incompressible(int64(i), 200<<10))))
+	}
+	require.NoError(t, writer.AddFile(".zshrc", 0o644, 0, strings.NewReader("export EDITOR=vim\n")))
+	require.NoError(t, writer.AddFile("projects/model.bin", 0o644, 0, strings.NewReader(incompressible(9, 5<<20))))
+	_, manifest, err := writer.Finish(nil)
+	require.NoError(t, err)
+	objects := func(path string) []mirror.Object {
+		t.Helper()
+		index, ok := manifest.Find(path)
+		require.True(t, ok, path)
+		entry := manifest.Entry(index)
+		var held []mirror.Object
+		for i := entry.First; i < entry.First+entry.Count; i++ {
+			held = append(held, manifest.Object(manifest.Extent(i).Object))
+		}
+		return held
+	}
+	dotfile, deep, chunks := objects(".zshrc"), objects("projects/app/src/file0"), objects("projects/model.bin")
+	require.NotEqual(t, dotfile, deep)
+	require.Greater(t, len(chunks), 1)
+
+	// Packs come first, the shallow file's first, and every object once.
+	require.Equal(t, slices.Concat(dotfile, deep, chunks), prefetchOrder(manifest))
+	require.Len(t, prefetchOrder(manifest), int(manifest.Objects()))
+}
+
+func TestMirrorLayerPrefetchesIntoTheNodeCache(t *testing.T) {
+	h := newMirrorLayerHarness(t)
+	h.layers.prefetchBytes = 1 << 30
+	files := map[string]string{"model.bin": incompressible(1, 5<<20)}
+	for i := range 8 {
+		files[fmt.Sprintf("file%d", i)] = incompressible(int64(10+i), 200<<10)
+	}
+	pin := h.generation(t, 1, files)
+	objects := len(h.bucket.objects) - 1
+	downloads := func() map[string]int {
+		h.bucket.mu.Lock()
+		defer h.bucket.mu.Unlock()
+		return maps.Clone(h.bucket.downloads)
+	}
+
+	path, release, err := h.layers.acquire(context.Background(), mirrorRequest(7), pin, nil)
+	require.NoError(t, err)
+	defer release()
+	require.Eventually(t, func() bool { return h.cache.len() == 1+objects }, 10*time.Second, 5*time.Millisecond, "every object and the manifest are in the node cache")
+	fetched := downloads()
+	require.Len(t, fetched, 1+objects)
+	for key, count := range fetched {
+		require.Equal(t, 1, count, key)
+	}
+
+	// The guest then reads every file without a download.
+	for name, content := range files {
+		read, err := readMirrorFile(t, h.mounts[path], name)
+		require.NoError(t, err)
+		require.Equal(t, content, read, name)
+	}
+	require.Equal(t, fetched, downloads())
+}
+
+func TestMirrorLayerPrefetchStops(t *testing.T) {
+	files := map[string]string{}
+	for i := range 10 {
+		files[fmt.Sprintf("file%d", i)] = incompressible(int64(i), 300<<10)
+	}
+	ctx := context.Background()
+	setup := func(t *testing.T, prefetchBytes int64, hold bool) (*mirrorLayerHarness, *types.VMMirror, string) {
+		h := newMirrorLayerHarness(t)
+		h.layers.prefetchBytes = prefetchBytes
+		pin := h.generation(t, 1, files)
+		manifestKey := types.MirrorObjectKey(h.mirrorID, pin.ManifestDigest)
+		require.Greater(t, len(h.bucket.objects)-1, mirrorPrefetchConcurrency+1)
+		if hold {
+			h.bucket.hold = func(key string) bool { return key != manifestKey }
+		}
+		return h, pin, manifestKey
+	}
+	// Downloads held open fill every slot and no more; once stopped, no
+	// other object is asked for.
+	stopped := func(t *testing.T, h *mirrorLayerHarness, manifestKey string, stop func()) {
+		require.Eventually(t, func() bool {
+			inflight, _, _ := h.bucket.state(manifestKey)
+			return inflight == mirrorPrefetchConcurrency
+		}, 5*time.Second, time.Millisecond)
+		stop()
+		require.Never(t, func() bool {
+			_, _, asked := h.bucket.state(manifestKey)
+			return asked > mirrorPrefetchConcurrency
+		}, time.Second, 10*time.Millisecond)
+		require.Eventually(t, func() bool {
+			inflight, _, _ := h.bucket.state(manifestKey)
+			return inflight == 0
+		}, 5*time.Second, time.Millisecond)
+		_, peak, asked := h.bucket.state(manifestKey)
+		require.Equal(t, mirrorPrefetchConcurrency, peak)
+		require.Equal(t, mirrorPrefetchConcurrency, asked)
+	}
+
+	t.Run("at the byte cap", func(t *testing.T) {
+		h, pin, manifestKey := setup(t, 1, false)
+		_, release, err := h.layers.acquire(ctx, mirrorRequest(7), pin, nil)
+		require.NoError(t, err)
+		defer release()
+		require.Eventually(t, func() bool {
+			_, _, asked := h.bucket.state(manifestKey)
+			return asked > 0
+		}, 5*time.Second, time.Millisecond)
+		require.Never(t, func() bool {
+			_, _, asked := h.bucket.state(manifestKey)
+			return asked > mirrorPrefetchConcurrency
+		}, 200*time.Millisecond, 5*time.Millisecond)
+	})
+
+	t.Run("when unmounted", func(t *testing.T) {
+		h, pin, manifestKey := setup(t, 1<<30, true)
+		_, release, err := h.layers.acquire(ctx, mirrorRequest(7), pin, nil)
+		require.NoError(t, err, "the mount does not wait for the prefetch")
+		stopped(t, h, manifestKey, func() {
+			release()
+			require.Equal(t, 1, h.layers.pruneIdle(time.Now().Add(time.Hour)))
+		})
+	})
+
+	t.Run("when revoked", func(t *testing.T) {
+		h, pin, manifestKey := setup(t, 1<<30, true)
+		_, release, err := h.layers.acquire(ctx, mirrorRequest(7), pin, nil)
+		require.NoError(t, err)
+		defer release()
+		stopped(t, h, manifestKey, func() {
+			h.bucket.mu.Lock()
+			delete(h.bucket.objects, manifestKey)
+			h.bucket.mu.Unlock()
+			require.Equal(t, 1, h.layers.revokePurged(ctx))
+		})
+	})
+}
+
 func TestAttachMirrorLayer(t *testing.T) {
 	h := newMirrorLayerHarness(t)
 	pin := h.generation(t, 1, map[string]string{"a.txt": "alpha"})
@@ -549,8 +755,9 @@ func TestAttachMirrorLayer(t *testing.T) {
 	// Nothing happens for containers without a mirror.
 	plain := stub(types.StubConfigV1{})
 	overlay := common.NewContainerOverlay(plain, t.TempDir(), t.TempDir())
-	release, err := worker.attachMirrorLayer(context.Background(), plain, overlay)
+	home, release, err := worker.attachMirrorLayer(context.Background(), plain, overlay)
 	require.NoError(t, err)
+	require.Empty(t, home)
 	release()
 	require.Empty(t, h.mounts)
 
@@ -561,8 +768,9 @@ func TestAttachMirrorLayer(t *testing.T) {
 	pinned := stub(types.StubConfigV1{Mirror: pin})
 	image := t.TempDir()
 	overlay = common.NewContainerOverlay(pinned, image, t.TempDir())
-	release, err = worker.attachMirrorLayer(context.Background(), pinned, overlay)
+	home, release, err = worker.attachMirrorLayer(context.Background(), pinned, overlay)
 	require.NoError(t, err)
+	require.Empty(t, home, "a pin without a home leaves the guest's homes as they are")
 	require.Len(t, h.mounts, 1)
 	require.NoError(t, overlay.Setup())
 	var layer string
@@ -575,11 +783,35 @@ func TestAttachMirrorLayer(t *testing.T) {
 	release()
 	require.Equal(t, 1, h.layers.pruneIdle(time.Now().Add(time.Hour)))
 
+	// A pin with a home has the tree there, and says so for the launch.
+	located := *pin
+	located.Home = "/Users/luke"
+	overlay = common.NewContainerOverlay(pinned, image, t.TempDir())
+	home, release, err = worker.attachMirrorLayer(context.Background(), stub(types.StubConfigV1{Mirror: &located}), overlay)
+	require.NoError(t, err)
+	require.Equal(t, "/Users/luke", home)
+	require.Len(t, h.mounts, 2)
+	for path, fsys := range h.mounts {
+		if path != layer {
+			require.Equal(t, []mirror.Placement{{Path: "/Users/luke", Mode: 0o750}}, fsys.Placements(), "the image has no desktop user")
+		}
+	}
+	release()
+	require.Equal(t, 1, h.layers.pruneIdle(time.Now().Add(time.Hour)))
+
+	// The home came from a laptop: anything but a home is refused.
+	for _, invalid := range []string{"/etc", "/root", "/Users/luke/..", "/Users/../etc", "Users/luke", "/home/a:b"} {
+		located.Home = invalid
+		_, _, err = worker.attachMirrorLayer(context.Background(), stub(types.StubConfigV1{Mirror: &located}), overlay)
+		require.ErrorContains(t, err, "invalid mirror home", invalid)
+	}
+	require.Len(t, h.mounts, 2)
+
 	// A VM whose generation cannot be mounted does not start without it.
 	h.bucket.objects = map[string][]byte{}
 	overlay = common.NewContainerOverlay(pinned, image, t.TempDir())
-	_, err = worker.attachMirrorLayer(context.Background(), pinned, overlay)
+	_, _, err = worker.attachMirrorLayer(context.Background(), pinned, overlay)
 	require.ErrorContains(t, err, "no longer in the store")
-	_, err = (&Worker{}).attachMirrorLayer(context.Background(), pinned, overlay)
+	_, _, err = (&Worker{}).attachMirrorLayer(context.Background(), pinned, overlay)
 	require.Error(t, err)
 }

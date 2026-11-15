@@ -50,7 +50,7 @@ type MirrorRepository interface {
 	LockVM(context.Context, string) (func(), error)
 }
 
-const mirrorGenerationColumns = `mirror_id,number,parent,manifest_digest,manifest_size,entries,objects,total_size,token_id,created_at,expired_at`
+const mirrorGenerationColumns = `mirror_id,number,parent,manifest_digest,manifest_size,entries,objects,total_size,home,token_id,created_at,expired_at`
 const selectMirrorGeneration = `SELECT ` + mirrorGenerationColumns + ` FROM mirror_generation `
 
 type mirrorGenerationRow struct {
@@ -62,6 +62,7 @@ type mirrorGenerationRow struct {
 	Entries        int64      `db:"entries"`
 	Objects        int64      `db:"objects"`
 	TotalSize      int64      `db:"total_size"`
+	Home           string     `db:"home"`
 	TokenID        string     `db:"token_id"`
 	CreatedAt      time.Time  `db:"created_at"`
 	ExpiredAt      *time.Time `db:"expired_at"`
@@ -72,7 +73,7 @@ func (row mirrorGenerationRow) generation() types.MirrorGeneration {
 		MirrorID: row.MirrorID, Number: row.Number, Parent: row.Parent,
 		ManifestDigest: row.ManifestDigest, ManifestSize: row.ManifestSize,
 		Entries: row.Entries, Objects: row.Objects, TotalSize: row.TotalSize,
-		TokenID: row.TokenID, CreatedAt: row.CreatedAt, ExpiredAt: row.ExpiredAt,
+		Home: row.Home, TokenID: row.TokenID, CreatedAt: row.CreatedAt, ExpiredAt: row.ExpiredAt,
 	}
 }
 
@@ -148,13 +149,13 @@ func (r *PostgresBackendRepository) ListMirrorIDs(ctx context.Context) ([]types.
 func (r *PostgresBackendRepository) CommitMirrorGeneration(ctx context.Context, generation *types.MirrorGeneration) error {
 	var row mirrorGenerationRow
 	err := r.client.GetContext(ctx, &row, `
-INSERT INTO mirror_generation (mirror_id,number,parent,manifest_digest,manifest_size,entries,objects,total_size,token_id)
-SELECT m.id,$2+1,$2,$3,$4,$5,$6,$7,$8 FROM mirror m
+INSERT INTO mirror_generation (mirror_id,number,parent,manifest_digest,manifest_size,entries,objects,total_size,token_id,home)
+SELECT m.id,$2+1,$2,$3,$4,$5,$6,$7,$8,$9 FROM mirror m
 WHERE m.id=$1 AND m.purged_at IS NULL
  AND COALESCE((SELECT MAX(number) FROM mirror_generation WHERE mirror_id=m.id),0)=$2
 RETURNING `+mirrorGenerationColumns,
 		generation.MirrorID, generation.Parent, generation.ManifestDigest, generation.ManifestSize,
-		generation.Entries, generation.Objects, generation.TotalSize, generation.TokenID)
+		generation.Entries, generation.Objects, generation.TotalSize, generation.TokenID, generation.Home)
 	var pg *pq.Error
 	if errors.Is(err, sql.ErrNoRows) || errors.As(err, &pg) && pg.Code == "23505" {
 		return ErrMirrorGenerationConflict

@@ -302,6 +302,10 @@ func (s *Service) capture(ctx context.Context, v *types.VM, kind, name, descript
 		if kind != types.VMArtifactTemplate {
 			return nil, fmt.Errorf("only templates can be published")
 		}
+		// A published template drops the pin but shares the whole root.
+		if v.Spec.Mirror != nil {
+			return nil, fmt.Errorf("a VM with a mirror cannot be published: its disk holds the mirrored files it changed; publish from a VM that never had a mirror")
+		}
 	}
 
 	id := uuid.NewString()

@@ -549,6 +549,7 @@ func (s *Service) commit(c echo.Context) error {
 		Entries:        int64(manifest.Entries()),
 		Objects:        int64(manifest.Objects()),
 		TotalSize:      int64(manifest.TotalSize()),
+		Home:           store.SourceHome(manifest.Meta()),
 		TokenID:        info.Token.ExternalId,
 	}
 	if err := s.repo.CommitMirrorGeneration(ctx, generation); err != nil {
@@ -609,7 +610,8 @@ func (s *Service) purge(c echo.Context) error {
 // latest one, or the one the request numbers. A request that already carries
 // a pin, as a VM made from a snapshot or template does, gets that pin back
 // only if it still names a generation of this workspace's mirror, so nothing
-// in a pin is taken from the caller on trust.
+// in a pin is taken from the caller on trust. Such a pin keeps its home,
+// where its root disk holds the files it changed.
 func (s *Service) Resolve(ctx context.Context, workspaceID uint, requested *types.VMMirror) (*types.VMMirror, error) {
 	if requested == nil {
 		return nil, nil
@@ -646,12 +648,17 @@ func (s *Service) Resolve(ctx context.Context, workspaceID uint, requested *type
 	if requested.ManifestDigest != "" && requested.ManifestDigest != generation.ManifestDigest {
 		return nil, echo.NewHTTPError(http.StatusConflict, "mirror "+name+" was purged after this snapshot was taken")
 	}
+	home := generation.Home
+	if requested.ID != "" {
+		home = requested.Home
+	}
 	return &types.VMMirror{
 		Name:           mirror.Name,
 		ID:             mirror.ID,
 		Generation:     generation.Number,
 		ManifestDigest: generation.ManifestDigest,
 		ManifestSize:   generation.ManifestSize,
+		Home:           home,
 	}, nil
 }
 

@@ -80,7 +80,7 @@ sections in this order, with no padding:
 | 40 | 24 | reserved, zero |
 
 1. **meta**: opaque bytes, by convention a JSON object describing the source
-   (see [Meta](#meta)). Readers do not interpret it.
+   (see [Meta](#meta)). Readers need not interpret it.
 2. **objects**: 40 bytes each: SHA-256 (32), object size (u64). Sorted by
    digest, unique, each between 1 byte and 64 MiB, and each referenced by at
    least one extent.
@@ -163,7 +163,7 @@ do not know. Current members:
 | member | meaning |
 | --- | --- |
 | `client` | name and version of the writer |
-| `source` | `os`, `arch` and `host` of the machine the files came from |
+| `source` | `os`, `arch` and `host` of the machine the files came from; `home`, the absolute path of the home directory they came from, such as `/Users/luke`; and `user`, the login name that owns it |
 | `chunker` | `min`, `avg`, `max` used for this generation |
 | `adapters` | which source-specific rewrites produced paths in this tree |
 
@@ -172,6 +172,13 @@ as, not to where the files were on the source machine. A writer that takes a
 file from `~/Library/Application Support/X` on macOS and wants it at
 `~/.config/X` in a Linux VM writes it as `.config/X` and records the rewrite
 in `adapters`.
+
+A reader may present the tree at `source.home`, so that absolute paths the
+source machine wrote into its files resolve the same way. The gateway keeps
+`source.home` with a generation only when it is `/Users/<name>` or
+`/home/<name>`, where `<name>` is 1 to 32 letters, digits, `_`, `.` or `-`
+and does not begin with `.` or `-`. Meta that is not JSON, or names no such
+home, records none; it never fails a commit.
 
 ## Committing a generation
 
@@ -189,7 +196,8 @@ A generation exists once the gateway has committed it. Against
 The gateway checks `parent` first. It then downloads the manifest, parses it
 as a reader would, and checks that every object it names which the parent
 generation did not is in the store at the stated size. It then records
-generation `parent + 1`. Replies:
+generation `parent + 1`, with the `home` its meta names (see [Meta](#meta)).
+Replies:
 
 - `201` with the generation.
 - `409` with `latest`: another writer committed first. Start again from

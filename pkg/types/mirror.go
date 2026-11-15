@@ -44,6 +44,9 @@ type MirrorGeneration struct {
 	// Set once nothing keeps the generation. Its objects are deleted a grace
 	// period later, unless something pinned to it turns up first.
 	ExpiredAt *time.Time `json:"-"`
+	// Home is where the files were on the machine they came from, when the
+	// manifest says so and it is a home the tree can be presented at.
+	Home string `json:"home,omitempty"`
 }
 
 // VMMirror pins a VM to one generation of a mirror. A request names the
@@ -55,6 +58,11 @@ type VMMirror struct {
 	Generation     int64  `json:"generation,omitempty"`
 	ManifestDigest string `json:"manifest_digest,omitempty"`
 	ManifestSize   int64  `json:"manifest_size,omitempty"`
+	// Home is where the tree is presented, as the desktop user's home; when
+	// empty, it is presented as root's home and the desktop user's own. The
+	// VM's disk holds its changes at those paths, so a pin keeps the home it
+	// was made with.
+	Home string `json:"home,omitempty"`
 }
 
 // Pinned reports whether the gateway has resolved the mirror to a generation.

@@ -654,6 +654,111 @@ func TestCachedSourcesShareDownloadBudget(t *testing.T) {
 	}
 }
 
+func TestCachedSourcePrefetch(t *testing.T) {
+	ctx := context.Background()
+	data := pseudoRandom(5, 3000)
+	object := Object{Digest: DigestOf(data), Size: uint64(len(data))}
+	downloads := 0
+	store := contentStore{}
+	download := func(context.Context, Digest) (io.ReadCloser, error) {
+		downloads++
+		return io.NopCloser(bytes.NewReader(data)), nil
+	}
+	source := &CachedSource{Cache: ScopedCache{Store: store, Scope: []byte("mirror a")}, Download: download}
+
+	// Without a cache there is nowhere to put it.
+	fetched, err := (&CachedSource{Download: download}).Prefetch(ctx, object)
+	require.NoError(t, err)
+	require.False(t, fetched)
+	require.Zero(t, downloads)
+
+	// It lands in the cache and not in memory, once, and a read then
+	// downloads nothing.
+	fetched, err = source.Prefetch(ctx, object)
+	require.NoError(t, err)
+	require.True(t, fetched)
+	require.Len(t, store, 1)
+	require.Empty(t, source.recent)
+	fetched, err = source.Prefetch(ctx, object)
+	require.NoError(t, err)
+	require.False(t, fetched)
+	dest := make([]byte, 10)
+	require.NoError(t, source.ReadObject(ctx, object, 100, dest))
+	require.Equal(t, data[100:110], dest)
+	require.Equal(t, 1, downloads)
+
+	// Bytes that do not match their name are not kept.
+	other := pseudoRandom(6, 3000)
+	mismatched := Object{Digest: DigestOf(other), Size: uint64(len(other))}
+	fetched, err = source.Prefetch(ctx, mismatched)
+	require.ErrorIs(t, err, ErrObjectMismatch)
+	require.False(t, fetched)
+	require.Len(t, store, 1)
+
+	// It waits for room in the download budget, and gives up when asked to.
+	reserved := int64(downloadBudgetBytes - 1000)
+	require.NoError(t, downloadBudget.Acquire(ctx, reserved))
+	full, cancel := context.WithTimeout(ctx, 3*prefetchPoll)
+	defer cancel()
+	before := downloads
+	_, err = source.Prefetch(full, mismatched)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, before, downloads)
+
+	// Room there is goes to a read that waits for more before a prefetch.
+	large := pseudoRandom(7, 2000)
+	reader := &CachedSource{Download: func(context.Context, Digest) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(large)), nil
+	}}
+	read := make(chan error, 1)
+	go func() {
+		read <- reader.ReadObject(ctx, Object{Digest: DigestOf(large), Size: uint64(len(large))}, 0, make([]byte, len(large)))
+	}()
+	require.Eventually(t, func() bool {
+		if downloadBudget.TryAcquire(1) {
+			downloadBudget.Release(1)
+			return false
+		}
+		return true
+	}, 5*time.Second, time.Millisecond, "the read waits for the budget")
+	small := pseudoRandom(8, 500)
+	waiting, cancelWaiting := context.WithTimeout(ctx, 3*prefetchPoll)
+	defer cancelWaiting()
+	_, err = (&CachedSource{Cache: source.Cache, Download: func(context.Context, Digest) (io.ReadCloser, error) {
+		downloads++
+		return io.NopCloser(bytes.NewReader(small)), nil
+	}}).Prefetch(waiting, Object{Digest: DigestOf(small), Size: uint64(len(small))})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, before, downloads)
+	downloadBudget.Release(reserved)
+	require.NoError(t, <-read)
+}
+
+func TestSourceHome(t *testing.T) {
+	meta := func(home string) []byte {
+		data, err := json.Marshal(map[string]any{"client": "beam-mirror", "source": map[string]any{"os": "macos", "arch": "aarch64", "host": "mbp", "home": home, "user": "luke"}})
+		require.NoError(t, err)
+		return data
+	}
+	longest := strings.Repeat("a", 32)
+	for _, home := range []string{"/Users/luke", "/home/dev.user-1", "/home/_svc", "/home/" + longest} {
+		require.Equal(t, home, SourceHome(meta(home)), home)
+	}
+	for _, home := range []string{
+		"", "/", "/root", "/Users", "/Users/", "/Users/luke/", "/Users/luke/code", "/Users//luke",
+		"//Users/luke", "/Users/./luke", "/Users/.", "/Users/..", "/home/.hidden", "/home/-x",
+		"/home/a b", "/home/a:b", "/home/a\nb", "/var/luke", "Users/luke", "/home/" + longest + "a",
+	} {
+		require.Empty(t, SourceHome(meta(home)), home)
+	}
+
+	// Meta is the client's to fill: what it holds can only fail to name a home.
+	for _, malformed := range []string{`{"source":{"home":7}}`, `{"source":"/Users/luke"}`, `{"client":"beam-mirror"}`, `["/Users/luke"]`, `not json`, ``} {
+		require.Empty(t, SourceHome([]byte(malformed)), malformed)
+	}
+	require.Equal(t, "/Users/luke", SourceHome([]byte(`{"source":{"home":"/Users/luke","user":7},"chunker":"fast"}`)), "members it does not read are not checked")
+}
+
 func TestPlacements(t *testing.T) {
 	manifest, _, store := writeTree(t, map[string][]byte{"a": []byte("a")}, DefaultWriterOptions())
 	for _, bad := range [][]Placement{

@@ -297,6 +297,8 @@ type harness struct {
 	server  *echo.Echo
 	token   *types.Token
 	now     time.Time
+	// meta is what push writes into the manifests it builds.
+	meta []byte
 }
 
 func newHarness(t *testing.T, config Config) *harness {
@@ -365,7 +367,7 @@ func (h *harness) push(name string, parent int64, files map[string]string) (int,
 	for _, path := range paths {
 		require.NoError(h.t, writer.AddFile(path, 0o644, 0, strings.NewReader(files[path])))
 	}
-	stored, manifest, err := writer.Finish(nil)
+	stored, manifest, err := writer.Finish(h.meta)
 	require.NoError(h.t, err)
 	objects[manifest.Digest().String()] = stored
 
@@ -538,6 +540,55 @@ func TestPushCommitsOnlyCompleteGenerations(t *testing.T) {
 	require.True(t, active)
 	active, _ = h.service.Active(context.Background(), 8, pin)
 	require.False(t, active)
+}
+
+// A generation records the home its files came from when its meta names one
+// the tree can be presented at. Meta is the client's: whatever it holds, the
+// commit does not fail because of it.
+func TestCommitRecordsTheSourceHome(t *testing.T) {
+	h := newHarness(t, Config{KeepGenerations: 10})
+	require.Equal(t, http.StatusCreated, h.call(http.MethodPost, "", map[string]string{"name": "laptop"}, nil))
+	parent := int64(0)
+	for _, test := range []struct{ meta, home string }{
+		{`{"client":"beam-mirror 1.0","source":{"os":"macos","arch":"aarch64","host":"mbp","home":"/Users/luke","user":"luke"}}`, "/Users/luke"},
+		{`{"source":{"home":"/etc"}}`, ""},
+		{`{"source":{"home":"/Users/luke/../root"}}`, ""},
+		{`{"source":"/Users/luke"}`, ""},
+		{`not json`, ""},
+		{``, ""},
+		{`{"source":{"home":"/home/dev"}}`, "/home/dev"},
+	} {
+		h.meta = []byte(test.meta)
+		status, generation, failure := h.push("laptop", parent, map[string]string{"a.txt": "one"})
+		require.Equal(t, http.StatusCreated, status, "%s: %v", test.meta, failure)
+		require.Equal(t, test.home, generation.Home, test.meta)
+		parent = generation.Number
+	}
+	var generations []types.MirrorGeneration
+	require.Equal(t, http.StatusOK, h.call(http.MethodGet, "/laptop/generations", nil, &generations))
+	require.Equal(t, "/home/dev", generations[0].Home)
+	require.Empty(t, generations[1].Home)
+	require.Equal(t, "/Users/luke", generations[len(generations)-1].Home)
+
+	// A new pin takes its generation's home; an inherited one keeps its own,
+	// where its root disk holds what it changed, even none from before homes.
+	pin, err := h.service.Resolve(context.Background(), 7, &types.VMMirror{Name: "laptop"})
+	require.NoError(t, err)
+	require.Equal(t, "/home/dev", pin.Home)
+	first, err := h.service.Resolve(context.Background(), 7, &types.VMMirror{Name: "laptop", Generation: 1})
+	require.NoError(t, err)
+	require.Equal(t, "/Users/luke", first.Home)
+	second, err := h.service.Resolve(context.Background(), 7, &types.VMMirror{Name: "laptop", Generation: 2})
+	require.NoError(t, err)
+	require.Empty(t, second.Home)
+	inherited, err := h.service.Resolve(context.Background(), 7, first)
+	require.NoError(t, err)
+	require.Equal(t, first, inherited)
+	old := *first
+	old.Home = ""
+	inherited, err = h.service.Resolve(context.Background(), 7, &old)
+	require.NoError(t, err)
+	require.Equal(t, &old, inherited)
 }
 
 func TestRetentionAndSweep(t *testing.T) {

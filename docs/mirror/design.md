@@ -15,18 +15,27 @@ store format has its own specification in [format.md](format.md).
    PUT URLs for missing objects, and commits a generation only after parsing
    the manifest and finding in the bucket every object the generation adds
    over its parent.
-3. `beam vm new --mirror [NAME]` pins the new VM to the mirror's latest
-   generation. The pin is part of the VM's spec for its whole life. A fork,
-   and a VM made from a snapshot or template of a pinned VM, keeps the pin;
-   a published template drops it.
+3. `beam vm new --mirror` pins the new VM to the latest generation of this
+   machine's mirror, and `--mirror-name NAME` to that of mirror NAME. The
+   pin is part of the VM's spec for its whole life. A fork, and a VM made
+   from a snapshot or private template of a pinned VM, keeps the pin. A
+   pinned VM cannot be published as a public template (see the security
+   review).
 4. The worker mounts the pinned generation as a FUSE filesystem and puts it
    above the image and below the VM's own disk: `lowerdir=<mirror>:<image>`.
-   The tree appears as `/root`, owned by root, and in a desktop VM also as
-   the desktop user's home, owned by that user. The worker reads that account
-   from the image (`/opt/beam-vm/desktop-user` and `/etc/passwd`), because
-   its uid is whatever the image had free: 1001 on Ubuntu 24.04, where
-   `ubuntu` holds 1000. VMs on a worker pinned to the same generation share
-   one mount when their images have the same homes.
+   A generation whose meta records the home its files came from,
+   `/Users/<name>` or `/home/<name>`, appears at that path, so that absolute
+   paths from the laptop work in the VM. It is owned by the desktop user, or
+   by root in an image without one. The gateway checks the path when it
+   commits the generation and the worker again when it mounts it. A pin
+   keeps the home it was made with, since the VM's disk holds its changes at
+   those paths; older pins have none. Without a home, the tree appears as
+   `/root`, owned by root, and in a desktop VM also as the desktop user's
+   home, owned by that user. The worker reads that account from the image
+   (`/opt/beam-vm/desktop-user` and `/etc/passwd`), because its uid is
+   whatever the image had free: 1001 on Ubuntu 24.04, where `ubuntu` holds
+   1000. VMs on a worker pinned to the same generation share one mount when
+   their images have the same homes.
 5. In the VM the mirrored files are ordinary files. Root and the desktop user
    can edit, move, delete and add to them. A change is written to the VM's
    disk, as a change to a file of the image is: it survives a stop and
@@ -44,6 +53,14 @@ the CLIP image. It keeps no state per inode: a node ID is a position in the
 manifest, so the server's memory is the manifest's decoded size however much
 of the tree a guest walks, and the IDs are the same on every mount, which is
 what lets a guest overlay survive a remount.
+
+Once a generation is mounted, the worker reads its objects into the node
+cache ahead of the guest, four at a time and at most 4 GiB of them: packs
+first, since they hold the small files a session opens, in the order of the
+shallowest file each holds, then the chunks of large files. A read waiting
+for the shared download budget goes before the prefetch. The prefetch never
+holds up or fails the mount, stops at the first object it cannot fetch, and
+stops when the layer is unmounted or revoked.
 
 The pin is fixed at create because the VM's root disk records changes
 relative to the generation under it. A running VM is never moved to a newer
@@ -173,7 +190,7 @@ and trees of six files:
 
 - Two generations were pushed. The second uploaded 3 of its 5 objects, and a
   commit on a stale parent got `409` with `latest`.
-- `beam vm new --mirror laptop` reported the pinned generation, and every
+- `beam vm new --mirror-name laptop` reported the pinned generation, and every
   file read in the guest had the SHA-256 of its source. Guest writes landed
   in the upper layer and survived a stop and start.
 - A VM created after the second generation saw it. The earlier VM and a fork
@@ -270,6 +287,8 @@ Everything a client uploads is untrusted, including the manifest.
 | Node cache | The cache is shared by every workspace on a node and a manifest can name any digest. Mirror objects are cached under a key that includes the workspace and the mirror, so a manifest finds only what its own mirror's mounts stored. |
 | Mount | `ro,nosuid,nodev` with `default_permissions`. Ownership comes from the placement, not from the client. |
 | Purge | The store decides whether a generation exists: a purged one is not mounted from the cache. Mounted layers are checked every minute, stop returning contents and have their kernel cache dropped. |
+| Home | A manifest's `source.home` becomes a path in the guest and in its `/etc/passwd`. The gateway records it only as `/Users/<name>` or `/home/<name>` for a conservative account name, and the worker checks it again before mounting. Callers cannot set it on a pin. |
+| Export | A VM's disk holds a copy of every mirrored file it changed. A pinned VM cannot be published as a public template, which would share that disk with everyone. A VM running with its layer cannot be archived as an image, from its merged root or its writable layer. Private snapshots, templates and forks stay in the workspace and keep the pin. |
 
 What it does not cover:
 
@@ -363,8 +382,8 @@ VM with the mirror's latest uploaded generation. Run `beam mirror open NAME`
 to return to that same VM, its edits, and its browser profile. On macOS,
 `beam mirror tray` adds these controls to the menu bar. On either platform,
 `beam mirror run` uploads changes to the selected paths while it runs.
-Use `beam vm new --mirror` to create a VM from the currently uploaded
-generation.
+Use `beam vm new NAME --mirror` to create a VM from the currently uploaded
+generation, or `--mirror-name MIRROR` for another machine's mirror.
 
 ### Use an existing signed-in browser from a VM
 
@@ -408,6 +427,18 @@ VM after a stop.
 
 ### A familiar login
 
+When the mirror is at the laptop's home path, that path is the desktop
+user's home. vminit points the account at it in `/etc/passwd` on every boot.
+The desktop session runs there with `HOME` and `XDG_CONFIG_HOME` set to it,
+after copying in the image's launchers and defaults that the home lacks. An
+interactive root login, in the browser terminal or from `beam vm ssh`,
+continues as the desktop user in that home, with any agent it forwarded;
+`sudo -i` returns to root. SSH accepts the VM's key for the desktop user too,
+so an editor can connect as the account that owns the files. Root keeps
+`/root`, so that `beam vm exec`, services and root's own files stay out of
+the user's home. In a VM without a desktop user the tree is root's, at the
+same path, and root's logins start in `/root` as before.
+
 Interactive logins in current mirrored VM images start in the guest home.
 A mirrored `.zshrc` or `.zprofile` selects Zsh. Fish is picked when its config
 is mirrored and the Zsh files are absent. Bash reads its normal login files
@@ -442,6 +473,13 @@ credential the utility recognises is its own sign-in.
   `run` to commit a generation that differs only in the manifest.
 - The homes are read from the image when a VM starts. An account whose uid is
   changed inside a VM afterwards is not followed.
+- A VM that starts without its layer, after a purge, keeps the desktop
+  user's home at the laptop's path, where it finds only what the VM wrote.
+  The worker no longer sees its pin then, so it can be archived as an image
+  with the mirrored files it changed.
+- The prefetch downloads up to 4 GiB of a generation whether or not the
+  guest reads it, and takes the reference pack limit to tell packs from
+  chunks.
 - `beam vm get` still shows the pin of a mirror that was purged.
 - A fork's internal snapshot appears in a mirror's references under its
   UUID.

@@ -1971,7 +1971,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 	// Declared before the overlay's cleanup so that it runs after it: the
 	// layer is released once nothing is mounted over it.
-	releaseMirrorLayer, err := s.attachMirrorLayer(ctx, request, containerInstance.Overlay)
+	mirrorHome, releaseMirrorLayer, err := s.attachMirrorLayer(ctx, request, containerInstance.Overlay)
 	if err != nil {
 		exitCode = int(types.ContainerExitCodeStartupFailed)
 		outputLogger.Error(fmt.Sprintf("Failed to mount the mirror: %v\n", err))
@@ -1979,6 +1979,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 	defer releaseMirrorLayer()
+	if mirrorHome != "" {
+		// Per launch, not in the stub: a guest started without the layer
+		// must not look for the tree.
+		spec.Process.Env = append(spec.Process.Env, "BEAM_VM_MIRROR_HOME="+mirrorHome)
+	}
 	phaseStart := time.Now()
 	if rootDisk := qcowRootDiskMount(request); rootDisk != nil && !s.runtimeOwnsBlockRoot() {
 		// The whole machine filesystem persists: the overlay's writable layer
