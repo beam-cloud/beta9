@@ -1299,8 +1299,13 @@ def ssh_vm(service, name, command, forward_agent, agent_socket):
         argv += [shlex.join(command)]
     process_kwargs = local_process_kwargs(argv[0])
     if socket_path is not None:
-        # Pass the forwarding path separately from the agent used for VM authentication.
-        process_kwargs["env"] = {**os.environ, "BEAM_VM_SSH_AGENT_SOCKET": socket_path}
+        # OpenSSH checks SSH_AUTH_SOCK before requesting forwarding, even with
+        # an explicit ForwardAgent path. Keep the caller's environment intact.
+        process_kwargs["env"] = {
+            **os.environ,
+            "SSH_AUTH_SOCK": socket_path,
+            "BEAM_VM_SSH_AGENT_SOCKET": socket_path,
+        }
     raise click.exceptions.Exit(subprocess.call(argv, **process_kwargs))
 
 

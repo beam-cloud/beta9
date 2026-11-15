@@ -1694,9 +1694,9 @@ def test_ssh_preserves_remote_arguments_and_exit_status(cli_service, monkeypatch
     ]
 
 
-@pytest.mark.parametrize("explicit", [False, True])
+@pytest.mark.parametrize("mode", ["default", "explicit", "explicit_only"])
 @pytest.mark.skipif(sys.platform not in ("darwin", "linux"), reason="Unix agent socket")
-def test_ssh_forwards_only_the_selected_agent(cli_service, monkeypatch, explicit):
+def test_ssh_forwards_only_the_selected_agent(cli_service, monkeypatch, mode):
     vm = SimpleNamespace(name="dev")
     monkeypatch.setattr(vm_cli, "_vm", lambda *args: vm)
     monkeypatch.setattr(vm_cli, "_ssh_options", lambda vm: ["-i", "/beam/identity"])
@@ -1710,10 +1710,13 @@ def test_ssh_forwards_only_the_selected_agent(cli_service, monkeypatch, explicit
             path = str(Path(directory) / 'agent %h ${USER} "socket"')
             agent.bind(path)
             agent.listen()
-            default = "/unused/default-agent" if explicit else path
-            monkeypatch.setenv("SSH_AUTH_SOCK", default)
+            inherited = {"default": path, "explicit": "/unused/default-agent"}.get(mode)
+            if inherited is None:
+                monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+            else:
+                monkeypatch.setenv("SSH_AUTH_SOCK", inherited)
             args = ["ssh", "--forward-agent"]
-            if explicit:
+            if mode != "default":
                 args += ["--agent-socket", path]
             args += ["dev", "--", "echo", "a b;$USER"]
             result = CliRunner().invoke(vm_cli.management, args)
@@ -1736,8 +1739,8 @@ def test_ssh_forwards_only_the_selected_agent(cli_service, monkeypatch, explicit
         "echo 'a b;$USER'",
     ]
     assert call.call_args.kwargs["env"]["BEAM_VM_SSH_AGENT_SOCKET"] == path
-    assert call.call_args.kwargs["env"]["SSH_AUTH_SOCK"] == default
-    assert os.environ["SSH_AUTH_SOCK"] == default
+    assert call.call_args.kwargs["env"]["SSH_AUTH_SOCK"] == path
+    assert os.environ.get("SSH_AUTH_SOCK") == inherited
     assert "BEAM_VM_SSH_AGENT_SOCKET" not in os.environ
 
 
