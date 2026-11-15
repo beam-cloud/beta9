@@ -8,6 +8,10 @@ if [ -f /run/beam-mirrored-home ]; then
     export SHELL=/usr/bin/zsh
     exec "$SHELL" -il
   fi
+  if [ -f "$HOME/.config/fish/config.fish" ]; then
+    export SHELL=/usr/bin/fish
+    exec "$SHELL" -il
+  fi
   exec /bin/bash -il
 fi
 

@@ -22,6 +22,7 @@ import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import click
 import grpc
 import pytest
 from click.testing import CliRunner
@@ -2446,10 +2447,12 @@ def test_image_build_json_is_clean(cli_service, monkeypatch, tmp_path, mode, kio
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS browser fork regression")
-def test_browser_opener_does_not_fork_and_preserves_url(monkeypatch, tmp_path):
+@pytest.mark.parametrize("opened", [True, False])
+def test_browser_opener_does_not_fork_and_preserves_url(monkeypatch, tmp_path, opened):
     (tmp_path / "webbrowser.py").write_text(
         "import os\nfrom pathlib import Path\n"
-        "def open(url):\n Path(os.environ['BROWSER_RESULT']).write_text(url)\n return True\n"
+        "def open(url):\n Path(os.environ['BROWSER_RESULT']).write_text(url)\n"
+        f" return {opened}\n"
     )
     output = tmp_path / "opened-url"
     monkeypatch.setenv("PYTHONPATH", str(tmp_path))
@@ -2460,8 +2463,43 @@ def test_browser_opener_does_not_fork_and_preserves_url(monkeypatch, tmp_path):
 
     monkeypatch.setattr(subprocess, "_fork_exec", forbidden)
     url = "https://vm.example/?beam_vm_session=literal&x=$VALUE"
-    vm_cli._launch_browser(url)
+    if opened:
+        vm_cli._launch_browser(url)
+    else:
+        with pytest.raises(click.ClickException, match="Could not open a browser") as error:
+            vm_cli._launch_browser(url)
+        assert "beam_vm_session" not in str(error.value)
     assert output.read_text() == url
+
+
+@pytest.mark.parametrize("url_only", [False, True])
+def test_linux_without_browser_keeps_stable_desktop_url(cli_service, monkeypatch, url_only):
+    url = "https://vm.example/"
+    cli_service.http.json.return_value = {
+        "id": "vm-id",
+        "name": "dev",
+        "desktop_url": url,
+        "browser_auth": True,
+        "spec": {"protected_ports": [8080]},
+    }
+    monkeypatch.setattr(vm_cli.sys, "platform", "linux")
+    opened = MagicMock(return_value=False)
+    monkeypatch.setattr(vm_cli.webbrowser, "open", opened)
+    warned = MagicMock()
+    monkeypatch.setattr(vm_cli.terminal, "warn", warned)
+    args = ["desktop", "dev", *(["--url"] if url_only else [])]
+
+    result = CliRunner().invoke(vm_cli.management, args)
+
+    assert result.exit_code == 0, result.output
+    assert result.output == f"{url}\n"
+    if url_only:
+        opened.assert_not_called()
+        warned.assert_not_called()
+    else:
+        opened.assert_called_once_with(url)
+        warned.assert_called_once()
+        assert "URL printed above" in warned.call_args.args[0]
 
 
 @pytest.mark.parametrize("background", [False, True])

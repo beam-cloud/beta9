@@ -34,7 +34,7 @@ fi
 apt-get update
 # Runtime libraries required by native coding-agent binaries.
 apt_install systemd systemd-sysv dbus ca-certificates curl openssh-server rsync git \
-  sudo procps python3 python3-pip zsh libatomic1 libstdc++6 libgcc-s1
+  sudo procps python3 python3-pip zsh fish libatomic1 libstdc++6 libgcc-s1
 
 arch=$(dpkg --print-architecture)
 case "$arch" in

@@ -36,6 +36,8 @@ def connect(vm):
         or spec.get("kiosk") is not None
     ):
         raise ValueError("GitHub sign-in requires a VM with the current desktop")
+    if 8080 not in (spec.get("protected_ports") or ()):
+        raise ValueError("GitHub sign-in requires a private desktop. Protect port 8080 and retry.")
     if vm.info.get("status") in ("stopped", "paused"):
         vm.start()
     return vm.desktop.launch("/usr/bin/gnome-terminal", "--wait", "--", "/bin/sh", "-c", _SIGN_IN)

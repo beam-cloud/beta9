@@ -139,17 +139,25 @@ def _open_browser(vm, port, url):
 
 
 def _launch_browser(url):
+    hint = "Could not open a browser. Check your default browser or open the URL printed above."
     if sys.platform == "darwin":
         # The stdlib macOS opener forks osascript; isolate it from gRPC.
-        subprocess.run(
-            [sys.executable, "-c", "import sys, webbrowser; webbrowser.open(sys.stdin.read())"],
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys, webbrowser; sys.exit(not webbrowser.open(sys.stdin.read()))",
+            ],
             input=url,
             text=True,
-            check=True,
+            check=False,
             **local_process_kwargs(sys.executable),
         )
-    else:
-        webbrowser.open(url)
+        if result.returncode:
+            raise click.ClickException(hint)
+    elif not webbrowser.open(url):
+        # A headless Linux client can still use the stable URL printed to stdout.
+        terminal.warn(hint)
 
 
 def _show(info, as_json):

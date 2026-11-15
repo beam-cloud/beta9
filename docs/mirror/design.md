@@ -367,9 +367,11 @@ VM after a stop.
 ### A familiar login
 
 Interactive logins in current mirrored VM images start in the guest home.
-A mirrored `.zshrc` or `.zprofile` selects Zsh. Bash is the default and reads
-its normal login files. The source home remains the place to maintain the
-settings, while the VM runs Linux programs.
+A mirrored `.zshrc` or `.zprofile` selects Zsh. Fish is picked when its config
+is mirrored and the Zsh files are absent. Bash reads its normal login files
+as the fallback. Keep shell files for the shell you want to open in the VM.
+For symlinked dotfiles, include the home-relative link and its target in
+the selected sync paths.
 
 `beam vm github NAME` opens the official GitHub device sign-in in a full
 desktop VM and sets up its Git HTTPS credential helper. The same private

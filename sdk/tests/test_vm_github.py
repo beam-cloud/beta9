@@ -8,7 +8,7 @@ from beta9.abstractions.vm.github import connect
 
 def desktop_vm():
     vm = Mock()
-    vm.info = {"spec": {"desktop": True, "desktop_transport": "webrtc"}}
+    vm.info = {"spec": {"desktop": True, "desktop_transport": "webrtc", "protected_ports": [8080]}}
     return vm
 
 
@@ -26,6 +26,19 @@ def test_github_sign_in_requires_current_desktop(spec):
     with pytest.raises(ValueError, match="requires a VM with the current desktop"):
         connect(vm)
     vm.refresh.assert_called_once()
+    vm.desktop.launch.assert_not_called()
+
+
+@pytest.mark.parametrize("ports", [None, [7681], []])
+def test_github_sign_in_refuses_public_desktop_before_starting(ports):
+    vm = desktop_vm()
+    vm.info["spec"].update(protected_ports=ports, public_ports=[8080])
+    vm.info["status"] = "stopped"
+
+    with pytest.raises(ValueError, match="requires a private desktop"):
+        connect(vm)
+
+    vm.start.assert_not_called()
     vm.desktop.launch.assert_not_called()
 
 
