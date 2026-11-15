@@ -80,7 +80,7 @@ func TestCheckCapacityRestoresPaddedMemoryForReplacement(t *testing.T) {
 		}},
 	)
 
-	assert.True(t, result)
+	assert.True(t, result.CanSchedule)
 }
 
 func TestCheckCapacityRestoresDefaultSingleGPUForReplacement(t *testing.T) {
@@ -114,7 +114,7 @@ func TestCheckCapacityRestoresDefaultSingleGPUForReplacement(t *testing.T) {
 		}},
 	)
 
-	assert.True(t, result)
+	assert.True(t, result.CanSchedule)
 }
 
 // A GPU that an evictable container holds is room for one replica, not for
@@ -129,7 +129,7 @@ func TestCheckCapacityCountsReclaimableRoomOnce(t *testing.T) {
 			scheduler: s, request: request, replicas: replicas,
 			workers: []*types.Worker{evictableWorker("worker", "beta9-a10g", 0, 1)},
 		}
-		return check.placeReplicas()
+		return check.placeReplicas().CanSchedule
 	}
 	assert.True(t, fits(1))
 	assert.False(t, fits(2))

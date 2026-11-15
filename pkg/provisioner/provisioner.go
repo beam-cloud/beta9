@@ -20,18 +20,27 @@
 package provisioner
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/clock"
+	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/providers"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/redislock"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 )
 
@@ -525,4 +534,1267 @@ func (s snapshot) buys(machine Machine) (types.WorkerPoolConfig, bool) {
 		return types.WorkerPoolConfig{}, false
 	}
 	return config, true
+}
+
+// MachineTag is the tag an instance bought for a pool carries at its
+// provider. Its value is the machine's ID. An instance with the tag and no
+// record is deleted, so nothing else may use the tag.
+const MachineTag = "beam-pool-machine"
+
+// Machine is the record of one machine bought for a pool. It is written
+// before the provider is asked for the machine and removed once the provider
+// has confirmed that the machine is gone, so everything that costs money has
+// a record.
+type Machine struct {
+	// ID is the ID the machine joins its pool with, and its MachineTag.
+	ID   string `json:"id"`
+	Pool string `json:"pool"`
+	// What it was bought as, and from which provider.
+	offerKey
+	// InstanceID is the provider's ID for the machine. It is empty until the
+	// provider has answered the request to create it.
+	InstanceID string `json:"instance_id,omitempty"`
+	// TokenHash names the credential the machine joins with.
+	TokenHash string `json:"token_hash,omitempty"`
+
+	// What it has, and costs.
+	GPUCount      uint32 `json:"gpu_count,omitempty"`
+	CPUMillicores int64  `json:"cpu_millicores"`
+	MemoryMB      int64  `json:"memory_mb"`
+	HourlyMicros  int64  `json:"hourly_micros"`
+
+	CreatedAt time.Time `json:"created_at"`
+	// ReadyAt is when the machine's worker first became available. It is
+	// zero while the machine boots.
+	ReadyAt time.Time `json:"ready_at,omitzero"`
+	// Until is when a provider that can delete a machine by itself deletes
+	// this one, unless that is put off again. It is set, and put off, for
+	// every machine: a provider that cannot does nothing with it.
+	Until time.Time `json:"until,omitzero"`
+	// BilledUntil is the time up to which the machine's cost has been added
+	// to what was spent.
+	BilledUntil time.Time `json:"billed_until,omitzero"`
+
+	// IdleSince is since when the machine has had nothing to run.
+	IdleSince time.Time `json:"idle_since,omitzero"`
+	// DownSince is since when a machine that had joined has had no usable
+	// worker.
+	DownSince time.Time `json:"down_since,omitzero"`
+	// PoolGoneSince is since when no gateway replica has had a pool that
+	// buys this machine.
+	PoolGoneSince time.Time `json:"pool_gone_since,omitzero"`
+
+	// Release is set once the machine is to be given back. It is not unset.
+	Release *Release `json:"release,omitempty"`
+}
+
+// Release is why a machine is given back, and how.
+type Release struct {
+	Reason string `json:"reason"`
+	// DrainUntil is how long the machine's work is waited for before it is
+	// given back anyway. Zero means it is given back at once.
+	DrainUntil time.Time `json:"drain_until,omitzero"`
+	// SoldOut is set when the provider could not start what it sold. What
+	// the machine was bought as is then passed over for a while, like an
+	// offer the provider refused to sell.
+	SoldOut bool `json:"sold_out,omitempty"`
+}
+
+// newMachine is the record of a machine about to be bought from offer.
+func newMachine(id, pool string, offer providers.Offer, now time.Time) Machine {
+	return Machine{
+		ID:            id,
+		Pool:          pool,
+		offerKey:      keyOf(offer),
+		GPUCount:      offer.GPUCount,
+		CPUMillicores: offer.CPUMillicores,
+		MemoryMB:      offer.MemoryMB,
+		HourlyMicros:  offer.HourlyCostMicros,
+		CreatedAt:     now,
+	}
+}
+
+// booting reports whether the machine has been bought and has not run a
+// worker yet.
+func (m Machine) booting() bool {
+	return m.InstanceID != "" && m.ReadyAt.IsZero() && m.Release == nil
+}
+
+// workerID is the ID of the worker that stands for the machine.
+func (m Machine) workerID() string {
+	return compute.AgentMachineWorkerID(m.ID)
+}
+
+// billedFrom is the time from which the machine's cost has yet to be
+// counted as spent.
+func (m Machine) billedFrom() time.Time {
+	if m.BilledUntil.IsZero() {
+		return m.CreatedAt
+	}
+	return m.BilledUntil
+}
+
+// cost is what the machine cost from one time to another, in cents. A
+// machine without an instance is not known to have been bought, and has cost
+// nothing.
+func (m Machine) cost(from, to time.Time) float64 {
+	if m.InstanceID == "" || !to.After(from) {
+		return 0
+	}
+	return float64(m.HourlyMicros) / microsPerCent * to.Sub(from).Hours()
+}
+
+// usableMemoryShare is how much of the memory a machine is sold with can be
+// counted on. A machine reports less than its nominal size, because firmware
+// and the kernel keep some.
+const usableMemoryShare = 0.9
+
+func usableMemoryMB(nominal int64) int64 {
+	return int64(float64(nominal) * usableMemoryShare)
+}
+
+// provisioned is the machine as the scheduler is told about it.
+func (m Machine) provisioned() scheduler.ProvisionedMachine {
+	return scheduler.ProvisionedMachine{
+		MachineID: m.ID,
+		CPU:       m.CPUMillicores,
+		Memory:    usableMemoryMB(m.MemoryMB),
+		GPUCount:  m.GPUCount,
+	}
+}
+
+// Limits cap what all pools together spend on machines. Zero means no cap.
+type Limits struct {
+	// MaxHourlyCents is the most the machines held may cost per hour.
+	MaxHourlyCents int64
+	// MaxDailyCents is the most that may be spent in any 24 hours.
+	MaxDailyCents int64
+}
+
+// dailySpent reports whether what was spent in the last 24 hours, in cents,
+// has reached MaxDailyCents.
+func (l Limits) dailySpent(spentToday float64) bool {
+	return l.MaxDailyCents > 0 && spentToday >= float64(l.MaxDailyCents)
+}
+
+// purchase is everything that decides whether a pool may buy a machine, and
+// which.
+type purchase struct {
+	pool   string
+	config types.WorkerPoolConfig
+	need   scheduler.MachineNeed
+	// offers is what the pool's provider has in stock.
+	offers []providers.Offer
+	// held is every machine there is a record of, for every pool.
+	held   []Machine
+	limits Limits
+	// spentToday is what machines have cost in the last 24 hours, in cents.
+	spentToday float64
+}
+
+// Why a pool cannot buy a machine. When it is for want of an offer, noOffer
+// says what stands in the way.
+var (
+	errAtMaxNodes = errors.New("the pool holds as many machines as provisioning.maxNodes allows")
+	errHourlyCap  = errors.New("one more machine would take the hourly cost of all machines over providers.maxHourlyCents")
+	errDailyCap   = errors.New("providers.maxDailyCents has been spent in the last 24 hours")
+)
+
+// microsPerCent converts the cents limits are written in to the millionths
+// of a dollar offers are priced in.
+const microsPerCent = 10_000
+
+// choose picks the machine to buy: the cheapest one in stock that the pool
+// may buy and that has room for what is needed. It fails when the pool is at
+// maxNodes, when a spend cap would be passed, and when nothing in stock is
+// such a machine. It changes nothing.
+func choose(p purchase) (providers.Offer, error) {
+	machines := 0
+	hourlyMicros := int64(0)
+	for _, machine := range p.held {
+		// A machine counts until its record is gone: until then it may still
+		// exist, and cost money.
+		hourlyMicros += machine.HourlyMicros
+		if machine.Pool == p.pool {
+			machines++
+		}
+	}
+	if machines >= p.config.Provisioning.MaxNodes {
+		return providers.Offer{}, errAtMaxNodes
+	}
+	if p.limits.dailySpent(p.spentToday) {
+		return providers.Offer{}, errDailyCap
+	}
+
+	var fitting []providers.Offer
+	for _, offer := range p.offers {
+		if sells(offer, p.config) && holds(offer, p.need) {
+			fitting = append(fitting, offer)
+		}
+	}
+	if len(fitting) == 0 {
+		return providers.Offer{}, noOffer(p)
+	}
+	offer := cheapest(fitting)
+
+	if p.limits.MaxHourlyCents > 0 && hourlyMicros+offer.HourlyCostMicros > p.limits.MaxHourlyCents*microsPerCent {
+		return providers.Offer{}, errHourlyCap
+	}
+	return offer, nil
+}
+
+// cheapest returns the offer that costs least. Of several at one price, it
+// is always the same one.
+func cheapest(offers []providers.Offer) providers.Offer {
+	return slices.MinFunc(offers, func(a, b providers.Offer) int {
+		return cmp.Or(
+			cmp.Compare(a.HourlyCostMicros, b.HourlyCostMicros),
+			cmp.Compare(a.Region, b.Region),
+			cmp.Compare(a.ID, b.ID),
+			cmp.Compare(a.Cloud, b.Cloud),
+		)
+	})
+}
+
+// obstacle is what stands between a pool and a machine to buy. The detail is
+// how it stands this time: the room that was needed, a price, the regions on
+// offer. It differs from one request and one listing to the next, and what
+// stands in the way does not.
+type obstacle struct {
+	what   string
+	detail string
+}
+
+func (o obstacle) Error() string { return o.what + o.detail }
+
+// noOffer says why nothing in stock is a machine to buy. It lets go of what
+// is asked for one thing at a time, from the room that is needed back to
+// spot or on-demand, until the provider has something: the last thing let go
+// of is what stands in the way.
+func noOffer(p purchase) error {
+	buying := p.config.Provisioning
+	// What the pool buys, as one of them and as many.
+	one, many := strings.TrimSpace(p.config.GPUType), strings.TrimSpace(p.config.GPUType)
+	if one == "" {
+		one, many = "CPU machine", "CPU machines"
+	}
+
+	asked := p.config
+	if len(selling(p.offers, asked)) > 0 {
+		return obstacle{
+			what:   fmt.Sprintf("no %s that %s has for the pool has room for what is needed", one, buying.Provider),
+			detail: fmt.Sprintf(" (cpu %dm, memory %d MiB, gpus %d)", p.need.CPU, p.need.Memory, p.need.GPUCount),
+		}
+	}
+	asked.Provisioning.MaxNodeHourlyCents = 0
+	if atAnyPrice := selling(p.offers, asked); len(atAnyPrice) > 0 {
+		return obstacle{
+			what:   fmt.Sprintf("%s has no %s within provisioning.maxNodeHourlyCents %d", buying.Provider, one, buying.MaxNodeHourlyCents),
+			detail: fmt.Sprintf(": the cheapest costs %s cents an hour", cents(cheapest(atAnyPrice).HourlyCostMicros)),
+		}
+	}
+	asked.Provisioning.Regions = nil
+	if anywhere := selling(p.offers, asked); len(anywhere) > 0 {
+		return obstacle{
+			what:   fmt.Sprintf("%s offers no %s in regions %v", buying.Provider, many, buying.Regions),
+			detail: "; it offers them in " + strings.Join(regionsOf(anywhere), ", "),
+		}
+	}
+	asked.Provisioning.Spot = !buying.Spot
+	switch theOtherWay := selling(p.offers, asked); {
+	case len(theOtherWay) > 0 && buying.Spot:
+		return fmt.Errorf("%s sells %s only on demand: remove provisioning.spot", buying.Provider, many)
+	case len(theOtherWay) > 0:
+		return fmt.Errorf("%s sells %s only as spot: set provisioning.spot", buying.Provider, many)
+	case len(p.offers) > 0:
+		return fmt.Errorf("%s has no %s in stock", buying.Provider, one)
+	}
+	return fmt.Errorf("%s is not known to have anything in stock", buying.Provider)
+}
+
+// selling returns what of the stock a pool that asks for this buys.
+func selling(stock []providers.Offer, asked types.WorkerPoolConfig) []providers.Offer {
+	var sold []providers.Offer
+	for _, offer := range stock {
+		if sells(offer, asked) {
+			sold = append(sold, offer)
+		}
+	}
+	return sold
+}
+
+// regionsOf lists the regions the offers are in, in a fixed order.
+func regionsOf(offers []providers.Offer) []string {
+	var regions []string
+	for _, offer := range offers {
+		if !slices.Contains(regions, offer.Region) {
+			regions = append(regions, offer.Region)
+		}
+	}
+	slices.Sort(regions)
+	return regions
+}
+
+// cents writes a price in cents, with as many decimals as it has.
+func cents(micros int64) string {
+	return strconv.FormatFloat(float64(micros)/microsPerCent, 'f', -1, 64)
+}
+
+// sells reports whether the offer is something the pool buys: its GPU type,
+// spot or on-demand as configured, in its regions, within its price limit.
+func sells(offer providers.Offer, pool types.WorkerPoolConfig) bool {
+	buying := pool.Provisioning
+	switch {
+	case offer.Spot != buying.Spot:
+		return false
+	case !strings.EqualFold(offer.GPU, strings.TrimSpace(pool.GPUType)):
+		return false
+	case (offer.GPUCount > 0) != (offer.GPU != ""):
+		return false
+	case len(buying.Regions) > 0 && !slices.Contains(buying.Regions, offer.Region):
+		return false
+	case offer.HourlyCostMicros <= 0:
+		// Without a price there is no telling what it does to the caps.
+		return false
+	case buying.MaxNodeHourlyCents > 0 && offer.HourlyCostMicros > buying.MaxNodeHourlyCents*microsPerCent:
+		return false
+	}
+	return true
+}
+
+// holds reports whether a machine bought from the offer has room for need.
+func holds(offer providers.Offer, need scheduler.MachineNeed) bool {
+	return offer.CPUMillicores >= need.CPU &&
+		usableMemoryMB(offer.MemoryMB) >= need.Memory &&
+		offer.GPUCount >= need.GPUCount
+}
+
+const (
+	// tickInterval is how often every replica refreshes what it knows, and
+	// how often one of them checks the machines against their providers.
+	tickInterval = 15 * time.Second
+
+	// launchGrace is how long after its purchase a machine that its provider
+	// does not have is waited for before it is given up. The provider may
+	// still be acting on a request it never answered, and may take a moment
+	// to know of a machine it has just sold.
+	launchGrace = 2 * time.Minute
+	// poolGoneGrace is how long no replica may have had a machine's pool
+	// before the machine is drained. It covers a rolling deployment, during
+	// which replicas disagree about which pools exist.
+	poolGoneGrace = 5 * time.Minute
+	// drainFor is how long the work on a machine of a pool that is gone is
+	// waited for before the machine is given back anyway.
+	drainFor = 10 * time.Minute
+	// billEvery is how often a machine's cost is added to what was spent.
+	billEvery = time.Minute
+	// sweepAllEvery is how often providers that no pool buys from are
+	// searched for instances that have no record.
+	sweepAllEvery = 10 * time.Minute
+)
+
+// Start runs Tick now and then every tickInterval, until ctx is done.
+func (p *Provisioner) Start(ctx context.Context) {
+	p.clock.AfterFunc(0, func() { p.Tick(ctx) })
+	p.clock.Every(ctx, tickInterval, func() { p.Tick(ctx) })
+}
+
+// Tick refreshes what this replica knows about pools, offers and spend.
+// Then, unless another replica did so within the interval, it checks every
+// machine against its provider and its worker.
+func (p *Provisioner) Tick(ctx context.Context) {
+	p.refresh(ctx)
+	p.vouch(ctx)
+
+	if err := p.store.Reconcile(ctx, p.clock.Now(), tickInterval-time.Second, p.reconcile); err != nil {
+		log.Error().Err(err).Msg("provisioner: could not check the machines held")
+	}
+}
+
+// refresh loads the pools that buy machines, what their providers sell and
+// what has been spent.
+func (p *Provisioner) refresh(ctx context.Context) {
+	now := p.clock.Now()
+
+	p.refreshPools(ctx)
+	for _, provider := range providersOf(p.snapshot().pools) {
+		p.refreshOffers(ctx, provider, now)
+	}
+	p.refreshSoldOut(ctx, now)
+
+	if p.limits.MaxDailyCents > 0 {
+		spent, err := p.store.Spent(ctx, now)
+		if err != nil {
+			log.Warn().Err(err).Msg("provisioner: could not read what was spent on machines")
+			return
+		}
+		p.mu.Lock()
+		p.spentToday = spent
+		p.mu.Unlock()
+	}
+}
+
+// refreshPools loads the pools that buy machines. While they cannot be
+// read, what was read last stands.
+func (p *Provisioner) refreshPools(ctx context.Context) {
+	pools, unloaded, err := p.controlPlane.BuyingPools(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("provisioner: could not read the pools that buy machines")
+		return
+	}
+	if pools == nil {
+		pools = map[string]types.WorkerPoolConfig{} // read, and there are none
+	}
+	p.mu.Lock()
+	before := p.unloaded
+	p.pools, p.unloaded = pools, unloaded
+	p.mu.Unlock()
+
+	// Said once for each pool and reason, not on every tick.
+	for pool, why := range unloaded {
+		if was, ok := before[pool]; !ok || was.Error() != why.Error() {
+			log.Warn().Err(why).Str("pool_name", pool).Msg("provisioner: a pool could not be loaded; the machines it may have bought are kept as they are")
+		}
+	}
+}
+
+// providersOf lists the providers the pools buy from, in a fixed order.
+func providersOf(pools map[string]types.WorkerPoolConfig) []string {
+	var names []string
+	for _, config := range pools {
+		if name := config.Provisioning.Provider; !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
+func (p *Provisioner) refreshOffers(ctx context.Context, name string, now time.Time) {
+	p.mu.Lock()
+	list, fetched := p.offers[name]
+	p.mu.Unlock()
+	if fetched && now.Sub(list.fetchedAt) < offersMaxAge {
+		return
+	}
+
+	provider, ok := p.providers.Get(name)
+	if !ok {
+		p.mu.Lock()
+		warned := p.unconfigured[name]
+		p.unconfigured[name] = true
+		p.mu.Unlock()
+		if !warned {
+			log.Error().Str("provider", name).Msg("provisioner: a pool buys from a provider that is not configured under providers; it will not grow")
+		}
+		return
+	}
+	offers, err := provider.Offers(ctx, providers.OfferFilter{})
+	if err != nil {
+		// The last list is bought from until it is offersStaleAfter old.
+		log.Warn().Err(err).Str("provider", name).Msg("provisioner: could not list what the provider sells")
+		return
+	}
+	p.mu.Lock()
+	p.offers[name] = offerList{offers: offers, fetchedAt: now}
+	p.mu.Unlock()
+}
+
+// refreshSoldOut loads the offers that any replica found sold out.
+func (p *Provisioner) refreshSoldOut(ctx context.Context, now time.Time) {
+	soldOut, err := p.store.SoldOut(ctx, now)
+	if err != nil {
+		// What this replica found itself is kept.
+		log.Warn().Err(err).Msg("provisioner: could not read which offers are sold out")
+		return
+	}
+	p.mu.Lock()
+	p.soldOut = soldOut
+	p.mu.Unlock()
+}
+
+// vouch clears the mark on machines that another replica found without a
+// pool and that this replica has the pool of. Replicas disagree about pools
+// while a deployment rolls out; a machine is drained only when none of them
+// has had its pool for poolGoneGrace.
+func (p *Provisioner) vouch(ctx context.Context) {
+	machines, err := p.store.List(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("provisioner: could not read the machines held to vouch for those whose pool exists")
+		return
+	}
+	known := p.snapshot()
+	for _, machine := range machines {
+		if machine.PoolGoneSince.IsZero() || machine.Release != nil {
+			continue
+		}
+		if _, buys := known.buys(machine); !buys {
+			continue
+		}
+		if _, err := p.store.Update(ctx, machine.ID, func(record *Machine) { record.PoolGoneSince = time.Time{} }); err != nil && !errors.Is(err, errNoRecord) {
+			log.Warn().Err(err).Str("machine_id", machine.ID).Msg("provisioner: could not keep a machine whose pool exists")
+		}
+	}
+}
+
+// reconcile is one pass over every machine.
+func (p *Provisioner) reconcile(ctx context.Context) {
+	now := p.clock.Now()
+	known := p.snapshot()
+
+	// The providers are asked before the records are read. A machine bought
+	// while this runs then has its record by the time records are read, and
+	// is not taken for an instance nobody recorded.
+	recordedBefore, err := p.store.List(ctx)
+	if err != nil {
+		log.Error().Err(err).Msg("provisioner: could not read the machines held")
+		return
+	}
+	instances := p.listInstances(ctx, known, recordedBefore, now)
+	machines, err := p.store.List(ctx)
+	if err != nil {
+		log.Error().Err(err).Msg("provisioner: could not read the machines held")
+		return
+	}
+
+	workers := poolWorkers{source: p.workers, byPool: map[string]*workersOfPool{}}
+	recorded := make(map[string]string, len(machines))
+	for _, machine := range machines {
+		recorded[machine.ID] = machine.InstanceID
+		p.reconcileMachine(ctx, machine, p.sight(ctx, machine, now, known, instances, &workers))
+	}
+	p.deleteUnrecorded(ctx, instances, recorded)
+	p.forgetRecentRecords()
+}
+
+// listInstances asks each provider what it has. A provider that could not be
+// asked is left out of the result, which is different from one that has
+// nothing. Providers that no pool buys from and no machine is at are only
+// asked every sweepAllEvery.
+func (p *Provisioner) listInstances(ctx context.Context, known snapshot, machines []Machine, now time.Time) map[string][]providers.Instance {
+	inUse := providersOf(known.pools)
+	for _, machine := range machines {
+		if !slices.Contains(inUse, machine.Provider) {
+			inUse = append(inUse, machine.Provider)
+		}
+	}
+	p.mu.Lock()
+	sweepAll := now.Sub(p.sweptAll) >= sweepAllEvery
+	if sweepAll {
+		p.sweptAll = now
+	}
+	p.mu.Unlock()
+
+	listed := map[string][]providers.Instance{}
+	for _, name := range p.providers.Names() {
+		if !sweepAll && !slices.Contains(inUse, name) {
+			continue
+		}
+		provider, _ := p.providers.Get(name)
+		instances, err := provider.List(ctx)
+		if err != nil {
+			log.Warn().Err(err).Str("provider", name).Msg("provisioner: could not list the provider's instances")
+			continue
+		}
+		listed[name] = instances
+	}
+	return listed
+}
+
+// providerSays is what a machine's provider says about it.
+type providerSays int
+
+const (
+	// notAsked: the provider could not be asked, so nothing is known.
+	notAsked providerSays = iota
+	// present: the provider has the instance.
+	present
+	// gone: the provider has no such instance.
+	gone
+)
+
+// sighting is what can be seen of one machine during a pass.
+type sighting struct {
+	now time.Time
+
+	provider providerSays
+	// instance is the provider's account of the machine, when present.
+	instance providers.Instance
+
+	// workersKnown is false when the pool's workers could not be read.
+	// worker is then nil whether or not the machine has one.
+	workersKnown bool
+	// worker is the worker that stands for the machine, or nil.
+	worker *types.Worker
+	// holdsFloor reports whether the worker is one of those keeping the
+	// pool's free capacity at its floor.
+	holdsFloor bool
+
+	// pool is the config of the machine's pool, or nil when this replica
+	// has no pool that buys it.
+	pool *types.WorkerPoolConfig
+	// poolKnown is false when this replica cannot tell whether the machine's
+	// pool exists: the pool could not be loaded, or no pool has been read
+	// yet. pool is then nil whether or not a pool buys the machine.
+	poolKnown bool
+	// overBudget reports whether providers.maxDailyCents has been spent.
+	overBudget bool
+}
+
+// available reports whether the machine's worker is up and takes work.
+func (s sighting) available() bool {
+	return s.worker != nil && s.worker.Status == types.WorkerStatusAvailable
+}
+
+// bootTimeout is how long the machine has to join its pool, and how long it
+// may be without a worker after that. A machine whose pool is gone has the
+// timeout of a pool that sets none.
+func (s sighting) bootTimeout() time.Duration {
+	if s.pool == nil {
+		return types.WorkerPoolProvisioningConfig{}.BootWithin()
+	}
+	return s.pool.Provisioning.BootWithin()
+}
+
+func (p *Provisioner) sight(ctx context.Context, machine Machine, now time.Time, known snapshot, instances map[string][]providers.Instance, workers *poolWorkers) sighting {
+	s := sighting{now: now, poolKnown: known.knows(machine.Pool), overBudget: known.overBudget}
+	if config, buys := known.buys(machine); buys {
+		s.pool = &config
+	}
+	s.provider, s.instance = p.instanceOf(ctx, machine, instances)
+
+	if pool := workers.of(machine.Pool); pool.err == nil {
+		s.workersKnown = true
+		s.worker = pool.byID[machine.workerID()]
+		if s.pool != nil {
+			s.holdsFloor = scheduler.HoldsHeadroom(*s.pool, pool.all, s.worker)
+		}
+	}
+	return s
+}
+
+// instanceOf finds what the provider says about a machine. A machine whose
+// purchase was never answered has no instance ID and is known by its tag.
+func (p *Provisioner) instanceOf(ctx context.Context, machine Machine, instances map[string][]providers.Instance) (providerSays, providers.Instance) {
+	listed, asked := instances[machine.Provider]
+	if !asked {
+		return notAsked, providers.Instance{}
+	}
+	for _, instance := range listed {
+		if machine.InstanceID != "" && instance.ID == machine.InstanceID {
+			return present, instance
+		}
+		if machine.InstanceID == "" && instance.Tags[MachineTag] == machine.ID {
+			return present, instance
+		}
+	}
+	if machine.InstanceID == "" {
+		return gone, providers.Instance{}
+	}
+
+	// A list can be behind a purchase. The instance itself is asked for
+	// before it is believed gone. Its provider has just listed, so it is one
+	// this gateway has.
+	provider, _ := p.providers.Get(machine.Provider)
+	instance, err := provider.Get(ctx, machine.InstanceID)
+	switch {
+	case errors.Is(err, providers.ErrNotFound):
+		return gone, providers.Instance{}
+	case err != nil:
+		log.Warn().Err(err).Str("machine_id", machine.ID).Str("provider", machine.Provider).Str("instance_id", machine.InstanceID).
+			Msg("provisioner: could not ask the provider about a machine it does not list")
+		return notAsked, providers.Instance{}
+	}
+	return present, instance
+}
+
+// poolWorkers reads each pool's workers once per pass.
+type poolWorkers struct {
+	source Workers
+	byPool map[string]*workersOfPool
+}
+
+type workersOfPool struct {
+	all  []*types.Worker
+	byID map[string]*types.Worker
+	err  error
+}
+
+func (w *poolWorkers) of(pool string) *workersOfPool {
+	if loaded, ok := w.byPool[pool]; ok {
+		return loaded
+	}
+	loaded := &workersOfPool{byID: map[string]*types.Worker{}}
+	loaded.all, loaded.err = w.source.GetAllWorkersInPool(pool)
+	if loaded.err != nil {
+		// Whether its machines have a worker, or work, is not known in this
+		// pass: none is given back for want of one.
+		log.Warn().Err(loaded.err).Str("pool_name", pool).Msg("provisioner: could not read a pool's workers")
+	}
+	for _, worker := range loaded.all {
+		loaded.byID[worker.Id] = worker
+	}
+	w.byPool[pool] = loaded
+	return loaded
+}
+
+// decide returns the machine's record as it should be after this sighting.
+// A machine that is to be given back comes back with Release set. It is
+// asked, in this order, whether its provider still runs it, whether it
+// joined its pool and stayed, whether its pool still buys it, and whether it
+// has anything to run.
+//
+// releaseIfIdle is true for a machine that has had nothing to run for the
+// pool's idle timeout and does not hold the floor. Whether it still has
+// nothing to run only its worker's lock can tell, so the caller asks, and
+// releases the machine if so.
+//
+// decide changes nothing but the record it returns.
+func decide(m Machine, s sighting) (next Machine, releaseIfIdle bool) {
+	if m.Release != nil {
+		return m, false
+	}
+	if s.provider == gone && s.now.Sub(m.CreatedAt) < launchGrace {
+		return m, false // its provider may yet come to know of it
+	}
+	if reason := atProvider(&m, s); reason != "" {
+		m.Release = &Release{Reason: reason, SoldOut: reason == failedToStart}
+		return m, false
+	}
+	if m.InstanceID == "" {
+		return m, false // nothing is known to have been bought
+	}
+	if reason := withoutWorker(&m, s); reason != "" {
+		m.Release = &Release{Reason: reason}
+		return m, false
+	}
+	if s.pool == nil {
+		m.Release = withoutPool(&m, s)
+		return m, false
+	}
+	m.PoolGoneSince = time.Time{}
+	releaseIfIdle = withoutWork(&m, s)
+	return m, releaseIfIdle
+}
+
+// failedToStart is why a machine is given back that its provider gave up on
+// before it ever ran a worker. What it was bought as is then passed over for
+// a while.
+const failedToStart = "its provider failed to start it"
+
+// lostStatus is why a machine is given back whose provider reports it in
+// this status: the provider no longer runs it.
+var lostStatus = map[providers.Status]string{
+	providers.StatusDeleted:     "its provider is deleting it",
+	providers.StatusInterrupted: "its provider took it back",
+	providers.StatusFailed:      "its provider says it failed",
+}
+
+// atProvider returns why the machine's provider no longer runs it, or "".
+// A purchase whose answer never arrived is known by its tag: its instance is
+// recorded first, whatever state it is in, so that giving the machine back
+// deletes it.
+func atProvider(m *Machine, s sighting) string {
+	switch s.provider {
+	case gone:
+		if m.InstanceID == "" {
+			return "its provider never created it"
+		}
+		return "its provider no longer has it"
+	case present:
+		if m.InstanceID == "" {
+			m.InstanceID = s.instance.ID
+		}
+		// A machine that failed after it had run was started: what it was
+		// bought as can be run.
+		if s.instance.Status == providers.StatusFailed && m.ReadyAt.IsZero() {
+			return failedToStart
+		}
+		return lostStatus[s.instance.Status]
+	}
+	return ""
+}
+
+// withoutWorker keeps ReadyAt and DownSince, and returns why a machine that
+// did not join its pool, or did not stay, is given back, or "".
+func withoutWorker(m *Machine, s sighting) string {
+	timeout := s.bootTimeout()
+	switch {
+	case !s.workersKnown:
+	case s.available():
+		if m.ReadyAt.IsZero() {
+			m.ReadyAt = s.now
+		}
+		m.DownSince = time.Time{}
+	case m.ReadyAt.IsZero():
+		if s.now.Sub(m.CreatedAt) >= timeout {
+			return fmt.Sprintf("it did not join its pool within %s", timeout)
+		}
+	case heldBack(s.worker):
+		m.DownSince = time.Time{}
+	case m.DownSince.IsZero():
+		m.DownSince = s.now
+	case s.now.Sub(m.DownSince) >= timeout:
+		return fmt.Sprintf("it has had no worker for %s", timeout)
+	}
+	return ""
+}
+
+// withoutPool keeps PoolGoneSince for a machine that no pool of this replica
+// buys, and returns its release once no replica has had its pool for
+// poolGoneGrace: the machine is given back when its work is done.
+func withoutPool(m *Machine, s sighting) *Release {
+	switch {
+	case !s.poolKnown:
+	case m.PoolGoneSince.IsZero():
+		m.PoolGoneSince = s.now
+	case s.now.Sub(m.PoolGoneSince) >= poolGoneGrace:
+		return &Release{Reason: "its pool no longer buys machines", DrainUntil: s.now.Add(drainFor)}
+	}
+	return nil
+}
+
+// withoutWork keeps IdleSince, and reports whether the machine has had
+// nothing to run for its pool's idle timeout and does not hold the floor.
+func withoutWork(m *Machine, s sighting) bool {
+	switch {
+	case !s.workersKnown:
+		return false
+	case !(s.available() || heldBack(s.worker)) || !unused(s.worker):
+		m.IdleSince = time.Time{}
+		return false
+	case m.IdleSince.IsZero():
+		m.IdleSince = s.now
+	}
+	// A pool that has spent its budget for the day does not pay for a floor.
+	return s.now.Sub(m.IdleSince) >= s.pool.Provisioning.IdleAfter() && (!s.holdsFloor || s.overBudget)
+}
+
+// heldBack reports whether the worker is kept from taking work on purpose:
+// cordoned, or being moved to another worker image. Such a machine is up.
+func heldBack(worker *types.Worker) bool {
+	return worker != nil && worker.Status == types.WorkerStatusDisabled &&
+		(worker.CordonRequested || worker.RolloutGeneration != "")
+}
+
+// unused reports whether none of the worker's capacity is taken.
+func unused(worker *types.Worker) bool {
+	return worker.FreeCpu >= worker.TotalCpu &&
+		worker.FreeMemory >= worker.TotalMemory &&
+		worker.FreeGpuCount >= worker.TotalGpuCount
+}
+
+// reconcileMachine carries out what decide found for one machine.
+func (p *Provisioner) reconcileMachine(ctx context.Context, machine Machine, s sighting) {
+	next, releaseIfIdle := decide(machine, s)
+	if releaseIfIdle {
+		// The worker is cordoned in the same step that finds it without
+		// work, so nothing can be placed on it from here on.
+		idle, err := p.workers.CordonWorkerIfIdle(machine.workerID())
+		switch {
+		case err != nil:
+			log.Warn().Err(err).Str("machine_id", machine.ID).Msg("provisioner: could not check whether a machine is idle")
+		case idle:
+			next.Release = &Release{Reason: fmt.Sprintf("it had nothing to run for %s", s.pool.Provisioning.IdleAfter())}
+		default:
+			next.IdleSince = time.Time{}
+		}
+	}
+	next = billed(next, s.now)
+	if next.Release == nil {
+		next = p.renewLease(ctx, next, s.now)
+	}
+
+	if !reflect.DeepEqual(next, machine) {
+		if _, err := p.store.Update(ctx, machine.ID, func(record *Machine) { record.take(next) }); err != nil {
+			log.Warn().Err(err).Str("machine_id", machine.ID).Msg("provisioner: could not update a machine's record")
+			return
+		}
+		if next.Release != nil && machine.Release == nil {
+			giving := log.Info().
+				Str("pool_name", machine.Pool).
+				Str("machine_id", machine.ID).
+				Str("provider", machine.Provider).
+				Str("instance_id", next.InstanceID).
+				Str("reason", next.Release.Reason)
+			if _, lost := lostStatus[s.instance.Status]; lost {
+				// Why, only the provider knows: what it said goes with it.
+				giving = giving.Str("status_detail", s.instance.StatusDetail)
+			}
+			giving.Msg("provisioner: giving a machine back")
+			if next.Release.SoldOut {
+				// The next machine is bought as something else, if anything
+				// else is on offer.
+				p.markSoldOut(ctx, next.offerKey)
+			}
+		}
+	}
+	if next.Release != nil {
+		p.finishRelease(ctx, next, s.now)
+	}
+}
+
+// take records what a pass found out about the machine. The purchase may
+// have written the machine's instance in the meantime, which the pass did
+// not see and must not undo.
+func (m *Machine) take(found Machine) {
+	instanceID := m.InstanceID
+	*m = found
+	if m.InstanceID == "" {
+		m.InstanceID = instanceID
+	}
+}
+
+// finishRelease gives a machine back: the gateway forgets it, its provider
+// deletes it, and its record is removed. Each step can be repeated, and the
+// record stays until the provider has confirmed the machine gone, so a step
+// that fails is tried again on the next pass.
+func (p *Provisioner) finishRelease(ctx context.Context, machine Machine, now time.Time) {
+	if now.Before(machine.Release.DrainUntil) && p.stillWorking(machine) {
+		return
+	}
+	if !p.forget(ctx, machine) {
+		return
+	}
+	if machine.InstanceID != "" {
+		provider, ok := p.providers.Get(machine.Provider)
+		if !ok {
+			log.Error().Str("machine_id", machine.ID).Str("provider", machine.Provider).Str("instance_id", machine.InstanceID).
+				Msg("provisioner: cannot delete a machine at a provider that is not configured; it may still be running")
+			return
+		}
+		if err := provider.Delete(ctx, machine.InstanceID); err != nil {
+			log.Warn().Err(err).Str("machine_id", machine.ID).Str("provider", machine.Provider).Str("instance_id", machine.InstanceID).
+				Msg("provisioner: could not delete a machine at its provider")
+			return
+		}
+	}
+	// The machine is paid for until now. Should its record stay, it is paid
+	// for until the record goes: there is no telling since when it is gone.
+	if err := p.store.Remove(ctx, machine.ID, now); err != nil {
+		log.Warn().Err(err).Str("machine_id", machine.ID).Msg("provisioner: could not remove the record of a machine that is gone")
+	}
+}
+
+// stillWorking cordons a machine that is being drained and reports whether
+// it has work left.
+func (p *Provisioner) stillWorking(machine Machine) bool {
+	idle, err := p.workers.CordonWorkerIfIdle(machine.workerID())
+	var noWorker *types.ErrWorkerNotFound
+	switch {
+	case errors.As(err, &noWorker):
+		return false
+	case err != nil:
+		return true
+	case idle:
+		return false
+	}
+	if err := p.workers.SetWorkerCordon(machine.workerID(), true); err != nil {
+		log.Warn().Err(err).Str("machine_id", machine.ID).Msg("provisioner: could not cordon a machine that is being drained")
+	}
+	return true
+}
+
+// billed returns the machine billed up to now, once billEvery has passed
+// since it last was. The store counts what that comes to as spent when it
+// writes the record, and what is left when it removes it.
+func billed(machine Machine, now time.Time) Machine {
+	if machine.InstanceID == "" {
+		return machine // nothing is known to have been bought
+	}
+	if now.Sub(machine.billedFrom()) >= billEvery {
+		machine.BilledUntil = now
+	}
+	return machine
+}
+
+// renewLease puts off the time at which the provider deletes the machine by
+// itself, once that time comes close.
+func (p *Provisioner) renewLease(ctx context.Context, machine Machine, now time.Time) Machine {
+	if machine.InstanceID == "" || machine.Until.Sub(now) > renewLeaseWithin {
+		return machine
+	}
+	provider, ok := p.providers.Get(machine.Provider)
+	if !ok {
+		return machine
+	}
+	until := now.Add(leaseFor)
+	if err := provider.Extend(ctx, machine.InstanceID, until); err != nil {
+		log.Warn().Err(err).Str("machine_id", machine.ID).Str("instance_id", machine.InstanceID).Msg("provisioner: could not put off the machine's deletion at its provider")
+		return machine
+	}
+	machine.Until = until
+	return machine
+}
+
+// deleteUnrecorded deletes instances that were bought for a pool and that no
+// record accounts for: what a purchase leaves behind when the gateway dies
+// in the middle of it, and the second of two instances that carry one
+// machine's tag. Without this they would run, and cost, for ever.
+//
+// recorded is the instance that each machine's record names, by machine ID.
+// A record that has yet to learn its instance names none, and accounts for
+// whichever carries its tag.
+func (p *Provisioner) deleteUnrecorded(ctx context.Context, instances map[string][]providers.Instance, recorded map[string]string) {
+	for name, listed := range instances {
+		provider, _ := p.providers.Get(name) // it has just listed them
+		for _, instance := range listed {
+			machineID := instance.Tags[MachineTag]
+			if machineID == "" || instance.Status == providers.StatusDeleted {
+				continue
+			}
+			if named, ok := recorded[machineID]; ok && (named == "" || named == instance.ID) {
+				continue
+			}
+			log.Warn().Str("provider", name).Str("instance_id", instance.ID).Str("machine_id", machineID).
+				Msg("provisioner: deleting an instance that was bought for a pool and that no record accounts for")
+			if err := provider.Delete(ctx, instance.ID); err != nil {
+				log.Warn().Err(err).Str("provider", name).Str("instance_id", instance.ID).Msg("provisioner: could not delete an instance that has no record")
+			}
+		}
+	}
+}
+
+// errNoRecord: the machine's record was removed while it was being changed.
+var errNoRecord = errors.New("the machine has no record")
+
+// Store keeps the records, and what their machines have cost, in Redis,
+// where every gateway replica sees them. Records are written one at a time
+// under one lock.
+type Store struct {
+	rdb  *common.RedisClient
+	lock *common.RedisLock
+}
+
+func NewStore(rdb *common.RedisClient) *Store {
+	return &Store{rdb: rdb, lock: common.NewRedisLock(rdb)}
+}
+
+// Writes are a few Redis commands, so a writer that finds the lock taken
+// waits for it rather than giving up.
+var writeLock = common.RedisLockOptions{TtlS: 10, Retries: 100, RetryInterval: 50 * time.Millisecond}
+
+// List returns every record, ordered by machine ID.
+func (s *Store) List(ctx context.Context) ([]Machine, error) {
+	stored, err := s.rdb.HGetAll(ctx, common.RedisKeys.ComputeProvisionedMachines()).Result()
+	if err != nil {
+		return nil, fmt.Errorf("list bought machines: %w", err)
+	}
+	machines := make([]Machine, 0, len(stored))
+	for id, data := range stored {
+		var machine Machine
+		if err := json.Unmarshal([]byte(data), &machine); err != nil {
+			return nil, fmt.Errorf("read the record of machine %s: %w", id, err)
+		}
+		machines = append(machines, machine)
+	}
+	slices.SortFunc(machines, func(a, b Machine) int { return strings.Compare(a.ID, b.ID) })
+	return machines, nil
+}
+
+// Reserve adds the record newRecord returns. newRecord sees every record
+// there is and nothing can be added while it looks, so a limit it checks
+// holds across replicas. When newRecord fails, nothing is added.
+func (s *Store) Reserve(ctx context.Context, newRecord func(held []Machine) (Machine, error)) (Machine, error) {
+	var reserved Machine
+	err := s.lock.WithLease(ctx, common.RedisKeys.ComputeProvisionedLock(), writeLock, func(ctx context.Context) error {
+		held, err := s.List(ctx)
+		if err != nil {
+			return err
+		}
+		if reserved, err = newRecord(held); err != nil {
+			return err
+		}
+		return s.save(ctx, reserved, 0)
+	})
+	return reserved, err
+}
+
+// Update changes one record and returns it as it is now. It fails with
+// errNoRecord when the record is gone.
+//
+// A change that moves BilledUntil on counts what the machine cost in between
+// as spent. The record and the spend are written in one transaction: a write
+// that fails has counted nothing, and one that succeeds has counted it once.
+func (s *Store) Update(ctx context.Context, id string, change func(*Machine)) (Machine, error) {
+	var updated Machine
+	err := s.lock.WithLease(ctx, common.RedisKeys.ComputeProvisionedLock(), writeLock, func(ctx context.Context) error {
+		stored, err := s.get(ctx, id)
+		if err != nil {
+			return err
+		}
+		updated = stored
+		change(&updated)
+		return s.save(ctx, updated, updated.cost(stored.billedFrom(), updated.BilledUntil))
+	})
+	return updated, err
+}
+
+// Remove deletes a record and, in the same transaction, counts what its
+// machine cost since it was last billed, up to until, as spent. Removing a
+// record that is gone is not an error, and counts nothing.
+func (s *Store) Remove(ctx context.Context, id string, until time.Time) error {
+	return s.lock.WithLease(ctx, common.RedisKeys.ComputeProvisionedLock(), writeLock, func(ctx context.Context) error {
+		machine, err := s.get(ctx, id)
+		if errors.Is(err, errNoRecord) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		_, err = s.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+			pipe.HDel(ctx, common.RedisKeys.ComputeProvisionedMachines(), id)
+			addSpend(ctx, pipe, until, machine.cost(machine.billedFrom(), until))
+			return nil
+		})
+		return err
+	})
+}
+
+func (s *Store) get(ctx context.Context, id string) (Machine, error) {
+	data, err := s.rdb.HGet(ctx, common.RedisKeys.ComputeProvisionedMachines(), id).Result()
+	if errors.Is(err, redis.Nil) {
+		return Machine{}, errNoRecord
+	}
+	if err != nil {
+		return Machine{}, err
+	}
+	var machine Machine
+	if err := json.Unmarshal([]byte(data), &machine); err != nil {
+		return Machine{}, fmt.Errorf("read the record of machine %s: %w", id, err)
+	}
+	return machine, nil
+}
+
+// save writes a record and, in the same transaction, counts cents as spent
+// at the time the record is billed to.
+func (s *Store) save(ctx context.Context, machine Machine, cents float64) error {
+	data, err := json.Marshal(machine)
+	if err != nil {
+		return err
+	}
+	_, err = s.rdb.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.HSet(ctx, common.RedisKeys.ComputeProvisionedMachines(), machine.ID, data)
+		addSpend(ctx, pipe, machine.BilledUntil, cents)
+		return nil
+	})
+	return err
+}
+
+const (
+	// spendHour names the hour whose spend a moment's cost is added to.
+	spendHour = "2006010215"
+	// spendHours is how many hours of spend make a day's: the hour of now
+	// and the 23 before it.
+	spendHours = 24
+	// spendKept is how long an hour's spend is kept: an hour longer than it
+	// is counted, so that it is still there while it is.
+	spendKept = 25 * time.Hour
+)
+
+func spendKey(at time.Time) string {
+	return common.RedisKeys.ComputeProvisionedSpend(at.UTC().Format(spendHour))
+}
+
+// addSpend has the transaction count cents as spent in the hour of at.
+func addSpend(ctx context.Context, tx redis.Pipeliner, at time.Time, cents float64) {
+	if cents <= 0 {
+		return
+	}
+	tx.IncrByFloat(ctx, spendKey(at), cents)
+	tx.Expire(ctx, spendKey(at), spendKept)
+}
+
+// Spent returns what the machines have cost in the day up to now, in cents.
+func (s *Store) Spent(ctx context.Context, now time.Time) (float64, error) {
+	hours := make([]string, spendHours)
+	for i := range hours {
+		hours[i] = spendKey(now.Add(-time.Duration(i) * time.Hour))
+	}
+	spent, err := s.rdb.MGet(ctx, hours...).Result()
+	if err != nil {
+		return 0, fmt.Errorf("read what was spent: %w", err)
+	}
+	total := 0.0
+	for i, value := range spent {
+		text, ok := value.(string)
+		if !ok {
+			continue // nothing was spent in that hour
+		}
+		cents, err := strconv.ParseFloat(text, 64)
+		if err != nil {
+			return 0, fmt.Errorf("read what was spent (%s): %w", hours[i], err)
+		}
+		total += cents
+	}
+	return total, nil
+}
+
+// MarkSoldOut records, for every replica, that an offer is not to be bought
+// until the given time.
+func (s *Store) MarkSoldOut(ctx context.Context, offer offerKey, until time.Time) error {
+	field, err := json.Marshal(offer)
+	if err != nil {
+		return err
+	}
+	return s.rdb.HSet(ctx, common.RedisKeys.ComputeProvisionedSoldOut(), string(field), until.UnixNano()).Err()
+}
+
+// SoldOut returns the offers that are not to be bought now, and until when.
+// It removes the marks that have lapsed.
+func (s *Store) SoldOut(ctx context.Context, now time.Time) (map[offerKey]time.Time, error) {
+	stored, err := s.rdb.HGetAll(ctx, common.RedisKeys.ComputeProvisionedSoldOut()).Result()
+	if err != nil {
+		return nil, fmt.Errorf("read what is sold out: %w", err)
+	}
+	marks := make(map[offerKey]time.Time, len(stored))
+	var lapsed []string
+	for field, value := range stored {
+		var offer offerKey
+		nanos, err := strconv.ParseInt(value, 10, 64)
+		if err == nil {
+			err = json.Unmarshal([]byte(field), &offer)
+		}
+		if until := time.Unix(0, nanos); err == nil && now.Before(until) {
+			marks[offer] = until
+			continue
+		}
+		lapsed = append(lapsed, field)
+	}
+	if len(lapsed) > 0 {
+		// Whoever reads next removes what this could not.
+		_ = s.rdb.HDel(ctx, common.RedisKeys.ComputeProvisionedSoldOut(), lapsed...).Err()
+	}
+	return marks, nil
+}
+
+// reconcileLock is held by the replica that runs a pass, which renews it for
+// as long as the pass runs. Its TTL is how long the other replicas wait
+// before one of them runs a pass when that replica is gone.
+var reconcileLock = common.RedisLockOptions{TtlS: 60}
+
+// Reconcile runs pass unless another replica is running one, or one started
+// less than every ago. Either way another replica has it, which is no error.
+// Passes delete machines and add up what was spent, so two must never run at
+// once, and there is no use in every replica asking the providers the same
+// questions.
+func (s *Store) Reconcile(ctx context.Context, now time.Time, every time.Duration, pass func(context.Context)) error {
+	err := s.lock.WithLease(ctx, common.RedisKeys.ComputeProvisionedReconcileLock(), reconcileLock, func(ctx context.Context) error {
+		last, err := s.rdb.Get(ctx, common.RedisKeys.ComputeProvisionedReconcile()).Result()
+		if err != nil && !errors.Is(err, redis.Nil) {
+			return err
+		}
+		if nanos, err := strconv.ParseInt(last, 10, 64); err == nil && now.Sub(time.Unix(0, nanos)) < every {
+			return nil
+		}
+		if err := s.rdb.Set(ctx, common.RedisKeys.ComputeProvisionedReconcile(), now.UnixNano(), 0).Err(); err != nil {
+			return err
+		}
+		pass(ctx)
+		return nil
+	})
+	if errors.Is(err, redislock.ErrNotObtained) {
+		return nil
+	}
+	return err
 }

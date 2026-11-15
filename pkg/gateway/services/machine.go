@@ -56,8 +56,7 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 }
 
 // supportedServerlessGpus reports pool-config-based serverless support per
-// GPU type, so scale-to-zero pools still show as available. A type counts if
-// any kind of work can use it, so one that only spot capacity has does.
+// GPU type, so scale-to-zero pools still show as available.
 func (gws *GatewayService) supportedServerlessGpus() map[string]bool {
 	supported := map[string]bool{}
 	if gws.scheduler == nil {
@@ -67,7 +66,7 @@ func (gws *GatewayService) supportedServerlessGpus() map[string]bool {
 		if gpu == types.GPU_ANY {
 			continue
 		}
-		supported[gpu.String()] = gws.scheduler.HasManagedPoolForGPU(gpu.String(), true)
+		supported[gpu.String()] = gws.scheduler.HasManagedPoolForGPU(gpu.String())
 	}
 	return supported
 }

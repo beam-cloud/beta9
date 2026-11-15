@@ -242,7 +242,7 @@ func (p *routeProxy) waitForRouteReady(ctx context.Context, routeID, localTarget
 
 		dialLatency, err := checkLocalTargetReady(localTarget)
 		if err != nil {
-			if !sleepContext(ctx, routeProxyReadyPollInterval) {
+			if !waitForRouteRetry(ctx, routeProxyReadyPollInterval) {
 				return
 			}
 			continue
@@ -258,7 +258,7 @@ func (p *routeProxy) waitForRouteReady(ctx context.Context, routeID, localTarget
 				return
 			}
 			fmt.Fprintf(p.stderr, "route %s ready status update failed: %v\n", routeID, err)
-			if !sleepContext(ctx, statusRetry) {
+			if !waitForRouteRetry(ctx, statusRetry) {
 				return
 			}
 			statusRetry = nextBackoff(statusRetry, time.Second)
@@ -266,6 +266,18 @@ func (p *routeProxy) waitForRouteReady(ctx context.Context, routeID, localTarget
 		}
 
 		return
+	}
+}
+
+func waitForRouteRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 

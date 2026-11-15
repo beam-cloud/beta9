@@ -1921,6 +1921,10 @@ func workerCapacityResultFromWorker(worker *types.Worker) workerCapacityResult {
 	}
 }
 
+func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error {
+	return r.ScheduleContainerRequests(worker, []*types.ContainerRequest{request})
+}
+
 type queuedContainerRequest struct {
 	request    *types.ContainerRequest
 	payload    []byte

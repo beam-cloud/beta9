@@ -9,9 +9,12 @@ import (
 	"testing"
 	"time"
 
+	vmetrics "github.com/VictoriaMetrics/metrics"
+	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/redislock"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 	"github.com/tj/assert"
@@ -140,7 +143,7 @@ func TestRemoveWorkerRequeuesPendingWorkerRequests(t *testing.T) {
 	for _, request := range requests {
 		currentWorker, err := repo.GetWorkerById(worker.Id)
 		assert.Nil(t, err)
-		assert.Nil(t, repo.ScheduleContainerRequests(currentWorker, []*types.ContainerRequest{request}))
+		assert.Nil(t, repo.ScheduleContainerRequest(currentWorker, request))
 	}
 	staleRequest, err := json.Marshal(&types.ContainerRequest{ContainerId: "expired-container"})
 	assert.NoError(t, err)
@@ -191,7 +194,7 @@ func TestRemoveWorkerRequeuesPendingWorkerRequests(t *testing.T) {
 	}
 	assert.NoError(t, repo.AddWorker(replacement))
 	for _, request := range requeuedRequests {
-		assert.NoError(t, repo.ScheduleContainerRequests(replacement, []*types.ContainerRequest{request}))
+		assert.NoError(t, repo.ScheduleContainerRequest(replacement, request))
 		assert.Equal(t, replacement.Id, rdb.HGet(context.TODO(), common.RedisKeys.SchedulerContainerState(request.ContainerId), "worker_id").Val())
 	}
 }
@@ -646,7 +649,7 @@ func TestStaleWorkerHeartbeatCannotRestoreScheduledCapacity(t *testing.T) {
 	setPendingContainerRequests(t, rdb, request)
 
 	heartbeat := *worker
-	assert.NoError(t, repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request}))
+	assert.NoError(t, repo.ScheduleContainerRequest(worker, request))
 	assert.NoError(t, repo.AddWorker(&heartbeat))
 
 	updated, err := repo.GetWorkerById(worker.Id)
@@ -686,7 +689,7 @@ func TestUpdateWorkerCapacityReconcilesCompletedGPURequestExactlyOnce(t *testing
 	}
 	assert.NoError(t, repo.AddWorker(worker))
 	setPendingContainerRequests(t, rdb, request)
-	assert.NoError(t, repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request}))
+	assert.NoError(t, repo.ScheduleContainerRequest(worker, request))
 	assert.NoError(t, rdb.Del(context.TODO(), common.RedisKeys.SchedulerContainerState(request.ContainerId)).Err())
 	assert.NoError(t, rdb.Del(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Err())
 	assert.NoError(t, rdb.SRem(context.TODO(), common.RedisKeys.SchedulerContainerWorkerIndex(worker.Id), common.RedisKeys.SchedulerContainerState(request.ContainerId)).Err())
@@ -987,7 +990,7 @@ func TestScheduleContainerRequestRestoresCapacityWhenQueuePushFails(t *testing.T
 	}
 	setPendingContainerRequests(t, rdb, request)
 
-	err = repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request})
+	err = repo.ScheduleContainerRequest(worker, request)
 	assert.Error(t, err)
 
 	updatedWorker, err := repo.GetWorkerById(worker.Id)
@@ -1028,7 +1031,7 @@ func TestScheduleContainerRequestRemovesQueuedRequestWhenMetadataWriteFails(t *t
 	err = rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerState(request.ContainerId), "wrong-type", 0).Err()
 	assert.Nil(t, err)
 
-	err = repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request})
+	err = repo.ScheduleContainerRequest(worker, request)
 	assert.Error(t, err)
 
 	queueDepth, err := rdb.LLen(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Result()
@@ -1069,7 +1072,7 @@ func TestScheduleContainerRequestRejectsDisabledWorker(t *testing.T) {
 		Cpu:         100,
 		Memory:      100,
 	}
-	err = repo.ScheduleContainerRequests(selectedWorker, []*types.ContainerRequest{request})
+	err = repo.ScheduleContainerRequest(selectedWorker, request)
 	assert.Error(t, err)
 
 	queueDepth, err := rdb.LLen(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Result()
@@ -1096,7 +1099,7 @@ func TestScheduleContainerRequestRejectsNegativeResources(t *testing.T) {
 			assert.NoError(t, repo.AddWorker(worker))
 			setPendingContainerRequests(t, rdb, request)
 
-			assert.Error(t, repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request}))
+			assert.Error(t, repo.ScheduleContainerRequest(worker, request))
 			updated, err := repo.GetWorkerById(worker.Id)
 			assert.NoError(t, err)
 			assert.Equal(t, int64(100), updated.FreeCpu)
@@ -1132,7 +1135,7 @@ func TestScheduleContainerRequestRejectsNonPendingState(t *testing.T) {
 				).Err())
 			}
 
-			assert.Error(t, repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request}))
+			assert.Error(t, repo.ScheduleContainerRequest(worker, request))
 			updated, err := repo.GetWorkerById(worker.Id)
 			assert.NoError(t, err)
 			assert.Equal(t, int64(100), updated.FreeCpu)
@@ -1175,10 +1178,10 @@ func TestScheduleContainerRequestRejectsStaleWorkerReservation(t *testing.T) {
 	}
 	setPendingContainerRequests(t, rdb, firstRequest, secondRequest)
 
-	err = repo.ScheduleContainerRequests(firstWorkerCopy, []*types.ContainerRequest{firstRequest})
+	err = repo.ScheduleContainerRequest(firstWorkerCopy, firstRequest)
 	assert.Nil(t, err)
 
-	err = repo.ScheduleContainerRequests(secondWorkerCopy, []*types.ContainerRequest{secondRequest})
+	err = repo.ScheduleContainerRequest(secondWorkerCopy, secondRequest)
 	assert.True(t, errors.Is(err, ErrWorkerCapacityChanged), err)
 	assert.True(t, errors.Is(err, ErrInsufficientEvictableCapacity), err)
 
@@ -1214,7 +1217,7 @@ func TestScheduleContainerRequestSharesWorkerMaintenanceLock(t *testing.T) {
 	}
 	setPendingContainerRequests(t, rdb, request)
 	done := make(chan error, 1)
-	go func() { done <- repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request}) }()
+	go func() { done <- repo.ScheduleContainerRequest(worker, request) }()
 	select {
 	case err := <-done:
 		t.Fatalf("schedule completed before worker lock was released: %v", err)
@@ -1256,10 +1259,10 @@ func TestScheduleContainerRequestUsesCurrentCapacityForStaleWorkerReservation(t 
 	}
 	setPendingContainerRequests(t, rdb, firstRequest, secondRequest)
 
-	err = repo.ScheduleContainerRequests(firstWorkerCopy, []*types.ContainerRequest{firstRequest})
+	err = repo.ScheduleContainerRequest(firstWorkerCopy, firstRequest)
 	assert.Nil(t, err)
 
-	err = repo.ScheduleContainerRequests(secondWorkerCopy, []*types.ContainerRequest{secondRequest})
+	err = repo.ScheduleContainerRequest(secondWorkerCopy, secondRequest)
 	assert.Nil(t, err)
 
 	queuedFirstRequest, err := repo.GetNextContainerRequests(worker.Id, 1)
@@ -1396,7 +1399,7 @@ func TestContainerRequestDeliverySkipsExpiredState(t *testing.T) {
 				require.Equal(t, worker.TotalCpu, worker.FreeCpu)
 				fresh := &types.ContainerRequest{ContainerId: "delivery-fresh", Cpu: 100, Memory: 100}
 				setPendingContainerRequests(t, rdb, fresh)
-				require.NoError(t, repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{fresh}))
+				require.NoError(t, repo.ScheduleContainerRequest(worker, fresh))
 				delivered, err := repo.GetNextContainerRequests(worker.Id, 1)
 				require.NoError(t, err)
 				require.Len(t, delivered, 1)
@@ -1442,7 +1445,7 @@ func TestContainerRequestRemainsRecoverableUntilWorkerAcknowledgesIt(t *testing.
 	request := &types.ContainerRequest{ContainerId: "container-pending-delivery", Cpu: 100, Memory: 100}
 	assert.NoError(t, repo.AddWorker(worker))
 	setPendingContainerRequests(t, rdb, request)
-	assert.NoError(t, repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request}))
+	assert.NoError(t, repo.ScheduleContainerRequest(worker, request))
 
 	delivered, err := repo.GetNextContainerRequests(worker.Id, 1)
 	assert.NoError(t, err)
@@ -1464,7 +1467,7 @@ func TestContainerRequestRemainsRecoverableUntilWorkerAcknowledgesIt(t *testing.
 	assert.NoError(t, json.Unmarshal([]byte(backlog[0]), &requeued))
 	replacement := &types.Worker{Id: "worker-pending-delivery-replacement", Status: types.WorkerStatusAvailable, FreeCpu: 100, FreeMemory: 125}
 	assert.NoError(t, repo.AddWorker(replacement))
-	assert.NoError(t, repo.ScheduleContainerRequests(replacement, []*types.ContainerRequest{&requeued}))
+	assert.NoError(t, repo.ScheduleContainerRequest(replacement, &requeued))
 }
 
 func TestAcknowledgedContainerRequestIsNotReplayedWhenWorkerIsRemoved(t *testing.T) {
@@ -1484,7 +1487,7 @@ func TestAcknowledgedContainerRequestIsNotReplayedWhenWorkerIsRemoved(t *testing
 	request := &types.ContainerRequest{ContainerId: "container-acknowledged-delivery", Cpu: 100, Memory: 100}
 	assert.NoError(t, repo.AddWorker(worker))
 	setPendingContainerRequests(t, rdb, request)
-	assert.NoError(t, repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request}))
+	assert.NoError(t, repo.ScheduleContainerRequest(worker, request))
 	delivered, err := repo.GetNextContainerRequests(worker.Id, 1)
 	assert.NoError(t, err)
 
@@ -1514,7 +1517,7 @@ func TestContainerRequestAcknowledgementRejectsCancelledContainer(t *testing.T) 
 			request := &types.ContainerRequest{ContainerId: "container-cancelled-delivery", Cpu: 100, Memory: 100}
 			assert.NoError(t, repo.AddWorker(worker))
 			setPendingContainerRequests(t, rdb, request)
-			assert.NoError(t, repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request}))
+			assert.NoError(t, repo.ScheduleContainerRequest(worker, request))
 			delivered, err := repo.GetNextContainerRequests(worker.Id, 1)
 			assert.NoError(t, err)
 			assert.Len(t, delivered, 1)
@@ -1543,7 +1546,7 @@ func TestRecoveredContainerRequestRejectsStaleAcknowledgement(t *testing.T) {
 	request := &types.ContainerRequest{ContainerId: "container-reconnect", Cpu: 100, Memory: 100}
 	assert.NoError(t, repo.AddWorker(worker))
 	setPendingContainerRequests(t, rdb, request)
-	assert.NoError(t, repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request}))
+	assert.NoError(t, repo.ScheduleContainerRequest(worker, request))
 	first, err := repo.GetNextContainerRequests(worker.Id, 1)
 	assert.NoError(t, err)
 
@@ -1565,7 +1568,7 @@ func TestSendFailureDoesNotRequeueAcknowledgedDelivery(t *testing.T) {
 	request := &types.ContainerRequest{ContainerId: "container-ack-race", Cpu: 100, Memory: 100}
 	assert.NoError(t, repo.AddWorker(worker))
 	setPendingContainerRequests(t, rdb, request)
-	assert.NoError(t, repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request}))
+	assert.NoError(t, repo.ScheduleContainerRequest(worker, request))
 	delivered, err := repo.GetNextContainerRequests(worker.Id, 1)
 	assert.NoError(t, err)
 	assert.NoError(t, repo.AddContainerToWorker(worker.Id, request.ContainerId, delivered[0].DeliveryToken))
@@ -1700,14 +1703,14 @@ func TestScheduleContainerRequestTreatsLostCommitReplyAsSuccess(t *testing.T) {
 	hook := &lostRedisScriptReplyHook{hash: scheduleContainerRequestsScript.Hash()}
 	rdb.AddHook(hook)
 
-	assert.NoError(t, repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request}))
+	assert.NoError(t, repo.ScheduleContainerRequest(worker, request))
 	assert.True(t, hook.lost.Load())
 	assert.Equal(t, int64(1), rdb.LLen(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Val())
 	updated, err := repo.GetWorkerById(worker.Id)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(0), updated.FreeCpu)
 	assert.Equal(t, int64(0), updated.FreeMemory)
-	assert.Error(t, repo.ScheduleContainerRequests(updated, []*types.ContainerRequest{request}))
+	assert.Error(t, repo.ScheduleContainerRequest(updated, request))
 	assert.Equal(t, int64(1), rdb.LLen(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Val())
 }
 
@@ -1733,7 +1736,7 @@ func TestScheduleContainerRequestReconcilesWhenLostReplyHasNoCommitEvidence(t *t
 	}
 	rdb.AddHook(hook)
 
-	assert.Error(t, repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request}))
+	assert.Error(t, repo.ScheduleContainerRequest(worker, request))
 	assert.True(t, hook.lost.Load())
 	updated, err := repo.GetWorkerById(worker.Id)
 	assert.NoError(t, err)
@@ -1753,7 +1756,7 @@ func TestDelayedCapacityReleaseCannotOvercreditRecreatedWorker(t *testing.T) {
 	request := &types.ContainerRequest{ContainerId: "container-recreated", Cpu: 100, Memory: 100, Gpu: worker.Gpu}
 	assert.NoError(t, repo.AddWorker(worker))
 	setPendingContainerRequests(t, rdb, request)
-	assert.NoError(t, repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request}))
+	assert.NoError(t, repo.ScheduleContainerRequest(worker, request))
 	assert.NoError(t, repo.RemoveWorker(worker.Id))
 	replacement := *worker
 	replacement.Id = "worker-recreated-replacement"
@@ -2061,4 +2064,782 @@ func TestGpusOfSpotPoolsCountAsAvailable(t *testing.T) {
 	require.True(t, available["A10G"])
 	require.True(t, available["L40S"])
 	require.False(t, available["T4"], "a pool that is not on spot capacity has what its workers have")
+}
+
+// workerWithRequests adds a worker that is up, with the requests on its queue
+// and room for more.
+func workerWithRequests(t *testing.T, rdb *common.RedisClient, repo WorkerRepository, id string, requests ...*types.ContainerRequest) *types.Worker {
+	t.Helper()
+
+	worker := &types.Worker{
+		Id: id, Status: types.WorkerStatusAvailable, PoolName: "default",
+		FreeCpu: 10_000, FreeMemory: 10_000, TotalCpu: 10_000, TotalMemory: 10_000,
+	}
+	require.NoError(t, repo.AddWorker(worker))
+	setPendingContainerRequests(t, rdb, requests...)
+	require.NoError(t, repo.ScheduleContainerRequests(worker, requests))
+	return worker
+}
+
+// lostWorkerWithRequests returns a worker whose state has expired with one
+// request still on its queue and one it had taken off its queue but not
+// claimed. (For one it had claimed, see claimedOnWorker.)
+func lostWorkerWithRequests(t *testing.T, rdb *common.RedisClient, repo WorkerRepository) *types.Worker {
+	t.Helper()
+
+	worker := workerWithRequests(t, rdb, repo, "lost-worker",
+		&types.ContainerRequest{ContainerId: "taken", WorkspaceId: "workspace", StubId: "stub", Cpu: 100, Memory: 100},
+		&types.ContainerRequest{ContainerId: "queued", WorkspaceId: "workspace", StubId: "stub", Cpu: 100, Memory: 100},
+	)
+	taken, err := repo.GetNextContainerRequests(worker.Id, 1)
+	require.NoError(t, err)
+	require.Len(t, taken, 1)
+
+	// The worker stops sending heartbeats and its state expires.
+	require.NoError(t, rdb.Del(context.TODO(), common.RedisKeys.SchedulerWorkerState(worker.Id)).Err())
+	return worker
+}
+
+// backlogRequests returns the requests that wait in a lane of the backlog, in
+// the order they wait in.
+func backlogRequests(t *testing.T, rdb *common.RedisClient, lane string) []types.ContainerRequest {
+	t.Helper()
+
+	members, err := rdb.ZRange(context.TODO(), lane, 0, -1).Result()
+	require.NoError(t, err)
+	requests := make([]types.ContainerRequest, len(members))
+	for i, raw := range members {
+		require.NoError(t, json.Unmarshal([]byte(raw), &requests[i]))
+	}
+	return requests
+}
+
+// laneContainerIDs names the containers whose requests wait in a lane.
+func laneContainerIDs(t *testing.T, rdb *common.RedisClient, lane string) []string {
+	t.Helper()
+
+	requests := backlogRequests(t, rdb, lane)
+	ids := make([]string, len(requests))
+	for i, request := range requests {
+		ids[i] = request.ContainerId
+	}
+	return ids
+}
+
+// backlogContainerIDs names those in the lane of requests that wait for
+// capacity of their own.
+func backlogContainerIDs(t *testing.T, rdb *common.RedisClient) []string {
+	t.Helper()
+	return laneContainerIDs(t, rdb, common.RedisKeys.SchedulerContainerRequests())
+}
+
+func requireNothingLeftOnWorker(t *testing.T, rdb *common.RedisClient, workerID string) {
+	t.Helper()
+
+	ctx := context.TODO()
+	require.Zero(t, rdb.LLen(ctx, common.RedisKeys.SchedulerWorkerRequests(workerID)).Val())
+	require.Zero(t, rdb.HLen(ctx, common.RedisKeys.SchedulerWorkerPendingRequests(workerID)).Val())
+	for _, containerID := range []string{"taken", "queued"} {
+		require.Empty(t, rdb.HGet(ctx, common.RedisKeys.SchedulerContainerState(containerID), "worker_id").Val())
+	}
+}
+
+func TestListingWorkersRequeuesTheRequestsOfALostWorker(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := lostWorkerWithRequests(t, rdb, repo)
+
+	workers, err := repo.GetAllWorkers()
+	require.NoError(t, err)
+	require.Empty(t, workers)
+
+	require.ElementsMatch(t, []string{"taken", "queued"}, backlogContainerIDs(t, rdb))
+	requireNothingLeftOnWorker(t, rdb, worker.Id)
+
+	// The worker is forgotten, so a second read has nothing to do.
+	indexed, err := rdb.SMembers(context.TODO(), common.RedisKeys.SchedulerWorkerIndex()).Result()
+	require.NoError(t, err)
+	require.Empty(t, indexed)
+	_, err = repo.GetAllWorkers()
+	require.NoError(t, err)
+	require.Len(t, backlogContainerIDs(t, rdb), 2)
+}
+
+func TestListingAPoolRequeuesTheRequestsOfALostWorker(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := lostWorkerWithRequests(t, rdb, repo)
+
+	workers, err := repo.GetAllWorkersInPool("default")
+	require.NoError(t, err)
+	require.Empty(t, workers)
+
+	require.ElementsMatch(t, []string{"taken", "queued"}, backlogContainerIDs(t, rdb))
+	requireNothingLeftOnWorker(t, rdb, worker.Id)
+}
+
+func TestRemovingALostWorkerRequeuesItsRequests(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := lostWorkerWithRequests(t, rdb, repo)
+
+	// The pool cleaner removes a worker whose Job outlived its state. There
+	// is no state left to delete, and the requests still have to move.
+	err = repo.RemoveWorker(worker.Id)
+	var notFound *types.ErrWorkerNotFound
+	require.True(t, errors.As(err, &notFound), "got %v", err)
+
+	require.ElementsMatch(t, []string{"taken", "queued"}, backlogContainerIDs(t, rdb))
+	requireNothingLeftOnWorker(t, rdb, worker.Id)
+}
+
+func TestALostWorkerCannotStartARequestThatWasRequeued(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+
+	request := &types.ContainerRequest{ContainerId: "taken", WorkspaceId: "workspace", StubId: "stub", Cpu: 100, Memory: 100}
+	worker := workerWithRequests(t, rdb, repo, "slow-worker", request)
+	taken, err := repo.GetNextContainerRequests(worker.Id, 1)
+	require.NoError(t, err)
+	require.Len(t, taken, 1)
+
+	require.NoError(t, rdb.Del(context.TODO(), common.RedisKeys.SchedulerWorkerState(worker.Id)).Err())
+	_, err = repo.GetAllWorkers()
+	require.NoError(t, err)
+	require.Equal(t, []string{"taken"}, backlogContainerIDs(t, rdb))
+
+	// The worker was only slow. It must not start a container that is
+	// already on its way to another worker.
+	require.Error(t, repo.AddContainerToWorker(worker.Id, "taken", taken[0].DeliveryToken))
+}
+
+// A worker claims a request before it starts the container, and the claim
+// takes the request off the worker for good: from then on there is nothing
+// to return to the backlog. If the worker is lost before the container has
+// started, the container's state says PENDING until its lease runs out, half
+// an hour later, and for all that time its owner counts a container that is
+// starting. So when the worker is forgotten or removed, the container is
+// ended as a stop request would end it, and its owner starts another.
+
+// claimedOnWorker is a worker with four containers on its index:
+//
+//	claimed  the worker claimed it and has not started it
+//	running  the worker started it
+//	queued   the worker has not taken it off its queue
+//	moved    another worker's by now, and still listed here
+type claimedOnWorker struct {
+	rdb    *common.RedisClient
+	repo   *WorkerRedisRepository
+	worker *types.Worker
+}
+
+func newClaimedOnWorker(t *testing.T) *claimedOnWorker {
+	t.Helper()
+	ctx := context.TODO()
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+	f := &claimedOnWorker{rdb: rdb, repo: NewWorkerRedisRepositoryForTest(rdb).(*WorkerRedisRepository)}
+
+	f.worker = workerWithRequests(t, rdb, f.repo, "worker",
+		&types.ContainerRequest{ContainerId: "claimed", WorkspaceId: "workspace", StubId: "stub", Cpu: 100, Memory: 100},
+		&types.ContainerRequest{ContainerId: "running", WorkspaceId: "workspace", StubId: "stub", Cpu: 100, Memory: 100},
+	)
+	taken, err := f.repo.GetNextContainerRequests(f.worker.Id, 2)
+	require.NoError(t, err)
+	require.Len(t, taken, 2)
+	for _, request := range taken {
+		require.NoError(t, f.repo.AddContainerToWorker(f.worker.Id, request.ContainerId, request.DeliveryToken))
+	}
+	require.NoError(t, rdb.HSet(ctx, common.RedisKeys.SchedulerContainerState("running"), "status", string(types.ContainerStatusRunning)).Err())
+
+	queued := &types.ContainerRequest{ContainerId: "queued", WorkspaceId: "workspace", StubId: "stub", Cpu: 100, Memory: 100}
+	setPendingContainerRequests(t, rdb, queued)
+	require.NoError(t, f.repo.ScheduleContainerRequests(f.worker, []*types.ContainerRequest{queued}))
+
+	moved := common.RedisKeys.SchedulerContainerState("moved")
+	require.NoError(t, rdb.HSet(ctx, moved, "container_id", "moved", "status", string(types.ContainerStatusPending), "worker_id", "another-worker").Err())
+	require.NoError(t, rdb.SAdd(ctx, common.RedisKeys.SchedulerContainerWorkerIndex(f.worker.Id), moved).Err())
+
+	// Each state has the lease of a container that is starting.
+	for _, id := range []string{"claimed", "running", "queued", "moved"} {
+		require.NoError(t, rdb.Expire(ctx, common.RedisKeys.SchedulerContainerState(id), time.Duration(types.ContainerStateTtlSWhilePending)*time.Second).Err())
+	}
+	return f
+}
+
+func (f *claimedOnWorker) state(t *testing.T, containerID string) (status types.ContainerStatus, workerID string, lease time.Duration) {
+	t.Helper()
+	ctx := context.TODO()
+	key := common.RedisKeys.SchedulerContainerState(containerID)
+	fields, err := f.rdb.HGetAll(ctx, key).Result()
+	require.NoError(t, err)
+	return types.ContainerStatus(fields["status"]), fields["worker_id"], f.rdb.TTL(ctx, key).Val()
+}
+
+// requireClaimedContainerEnded checks what became of each container once the
+// worker was forgotten or removed.
+func (f *claimedOnWorker) requireClaimedContainerEnded(t *testing.T) {
+	t.Helper()
+	pendingLease := time.Duration(types.ContainerStateTtlSWhilePending) * time.Second
+	stoppingLease := time.Duration(types.ContainerStateTtlSWhileStopping) * time.Second
+
+	status, owner, lease := f.state(t, "claimed")
+	require.Equal(t, types.ContainerStatusStopping, status, "its owner no longer counts it as starting")
+	require.Equal(t, f.worker.Id, owner)
+	require.Equal(t, stoppingLease, lease, "and it is gone once a stopping container's time is up")
+	// The index of container states says when each expires.
+	requireLease(t, f.rdb, "claimed", types.ContainerStateTtlSWhileStopping)
+
+	// A container that had started lives and dies by its own lease.
+	status, owner, lease = f.state(t, "running")
+	require.Equal(t, types.ContainerStatusRunning, status)
+	require.Equal(t, f.worker.Id, owner)
+	require.Equal(t, pendingLease, lease)
+
+	// A request the worker never claimed goes back to the backlog.
+	status, owner, _ = f.state(t, "queued")
+	require.Equal(t, types.ContainerStatusPending, status)
+	require.Empty(t, owner)
+	require.Equal(t, []string{"queued"}, backlogContainerIDs(t, f.rdb), "what was claimed cannot be placed again: its request is gone")
+
+	// Another worker's container is not this worker's to end.
+	status, owner, lease = f.state(t, "moved")
+	require.Equal(t, types.ContainerStatusPending, status)
+	require.Equal(t, "another-worker", owner)
+	require.Equal(t, pendingLease, lease)
+}
+
+func TestAContainerClaimedByAWorkerThatIsForgottenIsEnded(t *testing.T) {
+	f := newClaimedOnWorker(t)
+
+	// The worker stops sending keepalives and its state expires.
+	require.NoError(t, f.rdb.Del(context.TODO(), common.RedisKeys.SchedulerWorkerState(f.worker.Id)).Err())
+	workers, err := f.repo.GetAllWorkers()
+	require.NoError(t, err)
+	require.Empty(t, workers)
+
+	f.requireClaimedContainerEnded(t)
+
+	// Looking again changes nothing.
+	_, err = f.repo.GetAllWorkers()
+	require.NoError(t, err)
+	f.requireClaimedContainerEnded(t)
+}
+
+func TestAContainerClaimedByAWorkerThatIsRemovedIsEnded(t *testing.T) {
+	f := newClaimedOnWorker(t)
+
+	require.NoError(t, f.repo.RemoveWorker(f.worker.Id))
+
+	f.requireClaimedContainerEnded(t)
+}
+
+// A worker is forgotten when it is on the index and has no state. Between
+// the read that found no state and the forgetting, the worker can have been
+// put on record again: a machine's worker is, by its pool, when its record
+// has expired. That worker is not lost.
+func TestAWorkerThatIsOnRecordAgainIsNotForgotten(t *testing.T) {
+	f := newClaimedOnWorker(t)
+	ctx := context.TODO()
+	stateKey := common.RedisKeys.SchedulerWorkerState(f.worker.Id)
+
+	f.repo.forgetLostWorker(ctx, stateKey, common.RedisKeys.SchedulerWorkerIndex())
+
+	workers, err := f.repo.GetAllWorkers()
+	require.NoError(t, err)
+	require.Len(t, workers, 1, "the worker is still on the index")
+	require.EqualValues(t, 1, f.rdb.LLen(ctx, common.RedisKeys.SchedulerWorkerRequests(f.worker.Id)).Val(), "with the request that is queued on it")
+	require.Empty(t, backlogContainerIDs(t, f.rdb))
+	status, _, _ := f.state(t, "claimed")
+	require.Equal(t, types.ContainerStatusPending, status)
+}
+
+// Whoever writes a worker's record holds the worker's lock. A read that
+// finds the worker without a state while the lock is held leaves it for the
+// next read to look at.
+func TestAWorkerIsNotForgottenWhileItsRecordIsBeingWritten(t *testing.T) {
+	f := newClaimedOnWorker(t)
+	ctx := context.TODO()
+	require.NoError(t, f.rdb.Del(ctx, common.RedisKeys.SchedulerWorkerState(f.worker.Id)).Err())
+
+	writer := common.NewRedisLock(f.rdb)
+	lockKey := common.RedisKeys.SchedulerWorkerLock(f.worker.Id)
+	require.NoError(t, writer.Acquire(ctx, lockKey, schedulerWorkerLockOptions))
+
+	workers, err := f.repo.GetAllWorkers()
+	require.NoError(t, err)
+	require.Empty(t, workers)
+	require.Empty(t, backlogContainerIDs(t, f.rdb))
+	indexed, err := f.rdb.SMembers(ctx, common.RedisKeys.SchedulerWorkerIndex()).Result()
+	require.NoError(t, err)
+	require.Len(t, indexed, 1)
+
+	// The writer is done and wrote nothing: the worker is lost after all.
+	require.NoError(t, writer.Release(lockKey))
+	_, err = f.repo.GetAllWorkers()
+	require.NoError(t, err)
+	f.requireClaimedContainerEnded(t)
+	indexed, err = f.rdb.SMembers(ctx, common.RedisKeys.SchedulerWorkerIndex()).Result()
+	require.NoError(t, err)
+	require.Empty(t, indexed)
+}
+
+// The backlog has two lanes. Work that only fills spare capacity waits in a
+// lane of its own, which the scheduler takes from after the other, so that it
+// never holds up a request that is waiting for capacity of its own. A request
+// that comes back from a lost worker belongs in the lane it was taken from.
+
+func TestRequestsOfALostWorkerReturnToTheLaneTheyCameFrom(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+
+	requests := []*types.ContainerRequest{
+		{ContainerId: "serverless", WorkspaceId: "workspace", StubId: "stub", Cpu: 100, Memory: 100},
+		{ContainerId: "replica", WorkspaceId: "workspace", StubId: "stub", Cpu: 100, Memory: 100, Evictable: true},
+		{ContainerId: "spare-only", WorkspaceId: "workspace", StubId: "stub", Cpu: 100, Memory: 100, OpportunisticOnly: true},
+		{ContainerId: "spot", WorkspaceId: "workspace", StubId: "stub", Cpu: 100, Memory: 100, Evictable: true, OpportunisticOnly: true},
+	}
+	for _, request := range requests {
+		require.Equal(t, request.ContainerId != "serverless", BacklogLane(request) == common.RedisKeys.SchedulerBackgroundRequests())
+	}
+	worker := workerWithRequests(t, rdb, repo, "lost-worker", requests...)
+	// The worker had taken some of them and started none.
+	taken, err := repo.GetNextContainerRequests(worker.Id, 2)
+	require.NoError(t, err)
+	require.Len(t, taken, 2)
+
+	// Something else waits in each lane already.
+	for _, waiting := range []*types.ContainerRequest{{ContainerId: "waiting"}, {ContainerId: "waiting-replica", Evictable: true}} {
+		member, err := json.Marshal(waiting)
+		require.NoError(t, err)
+		require.NoError(t, rdb.ZAdd(context.TODO(), BacklogLane(waiting), redis.Z{Score: 1, Member: member}).Err())
+	}
+
+	// The worker stops sending keepalives and its state expires.
+	require.NoError(t, rdb.Del(context.TODO(), common.RedisKeys.SchedulerWorkerState(worker.Id)).Err())
+	workers, err := repo.GetAllWorkers()
+	require.NoError(t, err)
+	require.Empty(t, workers)
+
+	require.Equal(t, []string{"waiting", "serverless"}, laneContainerIDs(t, rdb, common.RedisKeys.SchedulerContainerRequests()))
+	require.ElementsMatch(t, []string{"waiting-replica", "replica", "spare-only", "spot"}, laneContainerIDs(t, rdb, common.RedisKeys.SchedulerBackgroundRequests()))
+	require.EqualValues(t, 6, vmetrics.GetDefaultSet().GetOrCreateGauge("scheduler_backlog_depth", nil).Get(),
+		"the backlog's depth is what waits in both lanes")
+}
+
+// A worker's requests are moved all together or not at all, and nothing is
+// moved into a lane that is not a backlog.
+func TestRequestsOfALostWorkerStayOnItWhenALaneCannotTakeThem(t *testing.T) {
+	for _, broken := range []string{common.RedisKeys.SchedulerContainerRequests(), common.RedisKeys.SchedulerBackgroundRequests()} {
+		t.Run(broken, func(t *testing.T) {
+			rdb, err := NewRedisClientForTest()
+			require.NoError(t, err)
+			repo := NewWorkerRedisRepositoryForTest(rdb)
+			worker := workerWithRequests(t, rdb, repo, "lost-worker",
+				&types.ContainerRequest{ContainerId: "serverless", WorkspaceId: "workspace", StubId: "stub", Cpu: 100, Memory: 100},
+				&types.ContainerRequest{ContainerId: "replica", WorkspaceId: "workspace", StubId: "stub", Cpu: 100, Memory: 100, Evictable: true},
+			)
+			require.NoError(t, rdb.Set(context.TODO(), broken, "not a sorted set", 0).Err())
+
+			require.NoError(t, rdb.Del(context.TODO(), common.RedisKeys.SchedulerWorkerState(worker.Id)).Err())
+			_, err = repo.GetAllWorkers()
+			require.NoError(t, err)
+
+			require.EqualValues(t, 2, rdb.LLen(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Val())
+			indexed, err := rdb.SMembers(context.TODO(), common.RedisKeys.SchedulerWorkerIndex()).Result()
+			require.NoError(t, err)
+			require.Len(t, indexed, 1, "the worker stays on the index, so the next read tries again")
+		})
+	}
+}
+
+// A request is stamped with the machine it is placed on. When that machine's
+// worker is lost, the request goes back to the backlog free to run anywhere:
+// only a machine its caller chose still binds it.
+func TestARequeuedRequestIsNotBoundToTheMachineItWasPlacedOn(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+
+	worker := &types.Worker{
+		Id: "worker-1", MachineId: "machine-1", Status: types.WorkerStatusAvailable, PoolName: "spot-l40s",
+		FreeCpu: 10_000, FreeMemory: 10_000, TotalCpu: 10_000, TotalMemory: 10_000,
+	}
+	require.NoError(t, repo.AddWorker(worker))
+	requests := []*types.ContainerRequest{
+		{ContainerId: "taken", WorkspaceId: "workspace", StubId: "stub", Cpu: 100, Memory: 100},
+		{ContainerId: "queued", WorkspaceId: "workspace", StubId: "stub", Cpu: 100, Memory: 100},
+		{ContainerId: "pinned", WorkspaceId: "workspace", StubId: "stub", Cpu: 100, Memory: 100, MachineId: "machine-1"},
+	}
+	setPendingContainerRequests(t, rdb, requests...)
+	require.NoError(t, repo.ScheduleContainerRequests(worker, requests))
+
+	// On the worker, each request names the machine it runs on.
+	taken, err := repo.GetNextContainerRequests(worker.Id, 1)
+	require.NoError(t, err)
+	require.Len(t, taken, 1)
+	require.Equal(t, "taken", taken[0].ContainerId)
+	require.Equal(t, "machine-1", taken[0].MachineId)
+	require.True(t, taken[0].MachineAssigned)
+
+	// The machine is reclaimed.
+	require.NoError(t, repo.RemoveWorker(worker.Id))
+
+	requeued := map[string]types.ContainerRequest{}
+	for _, request := range backlogRequests(t, rdb, common.RedisKeys.SchedulerContainerRequests()) {
+		requeued[request.ContainerId] = request
+	}
+	require.Len(t, requeued, 3)
+	for _, id := range []string{"taken", "queued"} {
+		require.Empty(t, requeued[id].MachineId, "%s is still bound to the machine that is gone", id)
+		require.False(t, requeued[id].MachineAssigned)
+	}
+	require.Equal(t, "machine-1", requeued["pinned"].MachineId, "its caller chose the machine")
+	require.False(t, requeued["pinned"].MachineAssigned)
+}
+
+// A worker's state expires once the worker has sent no keepalive for
+// types.WorkerStateTtlS. That is how a worker that died is noticed, and what
+// returns the requests queued on it to the backlog (see forgetLostWorker). A
+// pool controller saves the state too, each time it reconciles its pool, and
+// that must not keep the state of a worker that died alive.
+
+const workerKeepAliveLifetime = time.Duration(types.WorkerStateTtlS) * time.Second
+
+func TestSavingAWorkerRenewsItsStateOnlyWhileItIsStarting(t *testing.T) {
+	ctx := context.TODO()
+	const left = 30 * time.Second
+
+	// lifetimeAfterSaving returns how long the state of a worker has left
+	// once its controller has saved it again. The worker is added with the
+	// given status; became, if set, is what happens to it before then.
+	lifetimeAfterSaving := func(t *testing.T, status types.WorkerStatus, became func(repo *WorkerRedisRepository, id string) error) (*WorkerRedisRepository, time.Duration) {
+		rdb, err := NewRedisClientForTest()
+		require.NoError(t, err)
+		repo := NewWorkerRedisRepositoryForTest(rdb).(*WorkerRedisRepository)
+		worker := &types.Worker{Id: "worker-1", MachineId: "machine-1", Status: status, PoolName: "joined-a10g"}
+		require.NoError(t, repo.AddWorker(worker))
+		key := common.RedisKeys.SchedulerWorkerState(worker.Id)
+		require.Equal(t, repo.config.CleanupPendingWorkerAgeLimit, rdb.TTL(ctx, key).Val(), "a new worker has the pending lifetime to start in")
+		if became != nil {
+			require.NoError(t, became(repo, worker.Id))
+		}
+
+		// Most of its lifetime has passed when its pool is reconciled.
+		require.NoError(t, rdb.Expire(ctx, key, left).Err())
+		current, err := repo.GetWorkerById(worker.Id)
+		require.NoError(t, err)
+		require.NoError(t, repo.AddWorker(current))
+		return repo, rdb.TTL(ctx, key).Val()
+	}
+
+	t.Run("a worker that is starting gets its full lifetime again", func(t *testing.T) {
+		repo, lifetime := lifetimeAfterSaving(t, types.WorkerStatusPending, nil)
+		require.Equal(t, repo.config.CleanupPendingWorkerAgeLimit, lifetime)
+	})
+
+	t.Run("so does one that is being replaced, which is silent until its replacement starts", func(t *testing.T) {
+		repo, lifetime := lifetimeAfterSaving(t, types.WorkerStatusAvailable, func(repo *WorkerRedisRepository, id string) error {
+			_, err := repo.PrepareWorkerRollout(id, "generation-2")
+			return err
+		})
+		require.Equal(t, repo.config.CleanupPendingWorkerAgeLimit, lifetime)
+	})
+
+	t.Run("a worker that is up lives by its own keepalives", func(t *testing.T) {
+		_, lifetime := lifetimeAfterSaving(t, types.WorkerStatusAvailable, nil)
+		require.Equal(t, left, lifetime)
+	})
+
+	t.Run("and so does one that is cordoned", func(t *testing.T) {
+		_, lifetime := lifetimeAfterSaving(t, types.WorkerStatusAvailable, func(repo *WorkerRedisRepository, id string) error {
+			return repo.SetWorkerCordon(id, true)
+		})
+		require.Equal(t, left, lifetime)
+	})
+}
+
+// expireBeforeSave makes a worker's state expire after it has been read and
+// before the transaction that saves it.
+type expireBeforeSave struct {
+	rdb *common.RedisClient
+	key string
+}
+
+func (h *expireBeforeSave) DialHook(next redis.DialHook) redis.DialHook { return next }
+
+func (h *expireBeforeSave) ProcessHook(next redis.ProcessHook) redis.ProcessHook { return next }
+
+func (h *expireBeforeSave) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		for _, cmd := range cmds {
+			if cmd.Name() == "hset" && len(cmd.Args()) > 1 && cmd.Args()[1] == h.key {
+				if err := h.rdb.Del(ctx, h.key).Err(); err != nil {
+					return err
+				}
+				break
+			}
+		}
+		return next(ctx, cmds)
+	}
+}
+
+// A state that is saved without a lifetime has to have one already. If it
+// expired a moment before, the save would make a state that never expires:
+// a worker that died would stay on record, taking requests, for good.
+func TestSavingAWorkerWhoseStateJustExpiredDoesNotLeaveItOnRecordForGood(t *testing.T) {
+	ctx := context.TODO()
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+
+	worker := &types.Worker{Id: "worker-1", MachineId: "machine-1", Status: types.WorkerStatusAvailable, PoolName: "joined-a10g"}
+	require.NoError(t, repo.AddWorker(worker))
+	current, err := repo.GetWorkerById(worker.Id)
+	require.NoError(t, err)
+
+	key := common.RedisKeys.SchedulerWorkerState(worker.Id)
+	rdb.AddHook(&expireBeforeSave{rdb: rdb, key: key})
+	require.NoError(t, repo.AddWorker(current))
+
+	require.Equal(t, workerKeepAliveLifetime, rdb.TTL(ctx, key).Val(), "it has one keepalive's time to show that it is alive")
+}
+
+// A worker that is starting sends no keepalive yet. The pool that waits for
+// it gives its state its full lifetime again; one that is up lives by its
+// own.
+func TestKeepPendingWorker(t *testing.T) {
+	ctx := context.TODO()
+	newWorker := func(t *testing.T, status types.WorkerStatus) (*WorkerRedisRepository, string) {
+		rdb, err := NewRedisClientForTest()
+		require.NoError(t, err)
+		repo := NewWorkerRedisRepositoryForTest(rdb).(*WorkerRedisRepository)
+		require.NoError(t, repo.AddWorker(&types.Worker{Id: "worker-1", MachineId: "machine-1", Status: status, PoolName: "spot-l40s"}))
+		// Most of its lifetime has passed.
+		key := common.RedisKeys.SchedulerWorkerState("worker-1")
+		require.NoError(t, repo.rdb.Expire(ctx, key, 30*time.Second).Err())
+		return repo, key
+	}
+
+	t.Run("a pending worker gets its full lifetime again", func(t *testing.T) {
+		repo, key := newWorker(t, types.WorkerStatusPending)
+		kept, err := repo.KeepPendingWorker("worker-1")
+		require.NoError(t, err)
+		require.True(t, kept)
+		require.Equal(t, repo.config.CleanupPendingWorkerAgeLimit, repo.rdb.TTL(ctx, key).Val())
+	})
+
+	t.Run("a worker that is up lives by its own heartbeat", func(t *testing.T) {
+		repo, key := newWorker(t, types.WorkerStatusAvailable)
+		kept, err := repo.KeepPendingWorker("worker-1")
+		require.NoError(t, err)
+		require.True(t, kept)
+		require.Equal(t, 30*time.Second, repo.rdb.TTL(ctx, key).Val())
+	})
+
+	t.Run("a worker that is gone is not made again", func(t *testing.T) {
+		repo, _ := newWorker(t, types.WorkerStatusPending)
+		kept, err := repo.KeepPendingWorker("nobody")
+		require.NoError(t, err)
+		require.False(t, kept)
+		_, err = repo.GetWorkerById("nobody")
+		var notFound *types.ErrWorkerNotFound
+		require.ErrorAs(t, err, &notFound)
+	})
+}
+
+// Three kinds of work are done for a pool by one scheduler replica at a
+// time: sizing it, reporting its state and cleaning up after its workers.
+// Each has a lock, held for as long as the work runs.
+
+// poolLocksFixture is a Redis with two scheduler replicas' view of its pool
+// locks, and a count of the round trips made to it while counting is on.
+type poolLocksFixture struct {
+	server        *miniredis.Miniredis
+	first, second *WorkerPoolRedisRepository
+	roundTrips    *redisRoundTrips
+}
+
+func newPoolLocksForTest(t *testing.T) *poolLocksFixture {
+	t.Helper()
+	server := miniredis.RunT(t)
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+	roundTrips := &redisRoundTrips{}
+	rdb.AddHook(roundTrips)
+	replica := func() *WorkerPoolRedisRepository {
+		return NewWorkerPoolRedisRepositoryForTest(rdb).(*WorkerPoolRedisRepository)
+	}
+	return &poolLocksFixture{server: server, first: replica(), second: replica(), roundTrips: roundTrips}
+}
+
+func TestEachKindOfPoolWorkHasItsOwnLock(t *testing.T) {
+	type lock func(*WorkerPoolRedisRepository, string, func()) error
+	sizer := lock((*WorkerPoolRedisRepository).WithWorkerPoolSizerLock)
+	state := lock((*WorkerPoolRedisRepository).WithWorkerPoolStateLock)
+	cleaner := lock((*WorkerPoolRedisRepository).WithWorkerPoolCleanerLock)
+
+	tests := []struct {
+		name string
+		lock lock
+		key  string
+		ttl  time.Duration
+		// attempts is how often a replica asks for a lock that is held
+		// before it leaves the work to the holder.
+		attempts int64
+		others   []lock
+	}{
+		{"sizing", sizer, common.RedisKeys.WorkerPoolSizerLock("gpu"), 30 * time.Second, 1, []lock{state, cleaner}},
+		{"reporting state", state, common.RedisKeys.WorkerPoolStateLock("gpu"), 10 * time.Second, 1, []lock{sizer, cleaner}},
+		{"cleaning", cleaner, common.RedisKeys.WorkerPoolCleanerLock("gpu"), 10 * time.Second, 4, []lock{sizer, state}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			f := newPoolLocksForTest(t)
+			server := f.server
+			ran := func(lock lock, pool string) (bool, error) {
+				ran := false
+				err := lock(f.second, pool, func() { ran = true })
+				return ran, err
+			}
+
+			err := test.lock(f.first, "gpu", func() {
+				require.True(t, server.Exists(test.key))
+				require.Equal(t, test.ttl, server.TTL(test.key))
+
+				// Another replica leaves the work to this one.
+				f.roundTrips.enabled.Store(true)
+				did, err := ran(test.lock, "gpu")
+				f.roundTrips.enabled.Store(false)
+				require.ErrorIs(t, err, redislock.ErrNotObtained)
+				require.False(t, did)
+				require.Equal(t, test.attempts, f.roundTrips.calls.Load())
+
+				// The pool's other work is not held up, nor is another pool.
+				for _, other := range test.others {
+					did, err := ran(other, "gpu")
+					require.NoError(t, err)
+					require.True(t, did)
+				}
+				did, err = ran(test.lock, "cpu")
+				require.NoError(t, err)
+				require.True(t, did)
+			})
+			require.NoError(t, err)
+
+			// The lock is given up when the work is done.
+			require.False(t, server.Exists(test.key))
+			did, err := ran(test.lock, "gpu")
+			require.NoError(t, err)
+			require.True(t, did)
+		})
+	}
+}
+
+// A pass can take longer than its lock's TTL: cleaning lists every Job of
+// the pool and each Job's pods. The lock is renewed while the pass runs, so
+// that a second replica does not start the same work beside it.
+func TestAPoolLockOutlastsItsTTLWhileItsWorkRuns(t *testing.T) {
+	f := newPoolLocksForTest(t)
+	server, first, second := f.server, f.first, f.second
+	const key = "pool-lock"
+	// A short TTL, so that the test need not wait long for a renewal.
+	options := common.RedisLockOptions{TtlS: 1}
+
+	working, finish := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- first.withPoolLock(key, options, func() {
+			close(working)
+			<-finish
+		})
+	}()
+	<-working
+
+	// The work goes on for three times the lock's TTL.
+	for range 3 {
+		server.FastForward(900 * time.Millisecond)
+		require.Eventually(t, func() bool { return server.TTL(key) > 900*time.Millisecond },
+			2*time.Second, 10*time.Millisecond, "the lock was not renewed")
+	}
+	ran := false
+	err := second.withPoolLock(key, options, func() { ran = true })
+	require.ErrorIs(t, err, redislock.ErrNotObtained)
+	require.False(t, ran)
+
+	close(finish)
+	require.NoError(t, <-done)
+	require.NoError(t, second.withPoolLock(key, options, func() { ran = true }))
+	require.True(t, ran)
+}
+
+// The lock that is held is the one the previous release takes and gives up,
+// so that replicas of both releases keep each other out while a release is
+// rolled out.
+func TestAPoolLockKeepsOutAReplicaOfThePreviousRelease(t *testing.T) {
+	f := newPoolLocksForTest(t)
+	server, replica := f.server, f.first
+	previous := common.NewRedisLock(replica.rdb)
+	ctx := context.Background()
+
+	for _, lock := range []struct {
+		key     string
+		options common.RedisLockOptions
+		with    func(string, func()) error
+	}{
+		{common.RedisKeys.WorkerPoolStateLock("gpu"), common.RedisLockOptions{TtlS: 10, Retries: 0}, replica.WithWorkerPoolStateLock},
+		{common.RedisKeys.WorkerPoolCleanerLock("gpu"), common.RedisLockOptions{TtlS: 10, Retries: 3}, replica.WithWorkerPoolCleanerLock},
+	} {
+		// While this release works, the previous one cannot take the lock.
+		require.NoError(t, lock.with("gpu", func() {
+			require.ErrorIs(t, previous.Acquire(ctx, lock.key, lock.options), redislock.ErrNotObtained)
+		}))
+
+		// While the previous one holds it, this release does not work.
+		require.NoError(t, previous.Acquire(ctx, lock.key, lock.options))
+		ran := false
+		require.ErrorIs(t, lock.with("gpu", func() { ran = true }), redislock.ErrNotObtained)
+		require.False(t, ran)
+		require.NoError(t, previous.Release(lock.key))
+		require.False(t, server.Exists(lock.key))
+	}
+}
+
+func TestOnlyOneReplicaSizesAPoolAtATime(t *testing.T) {
+	f := newPoolLocksForTest(t)
+	first, second := f.first, f.second
+
+	// The first replica is in the middle of sizing: buying a machine, say.
+	sizing, finish := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- first.WithWorkerPoolSizerLock("spot-l40s", func() {
+			close(sizing)
+			<-finish
+		})
+	}()
+	<-sizing
+
+	ran := false
+	err := second.WithWorkerPoolSizerLock("spot-l40s", func() { ran = true })
+	require.True(t, errors.Is(err, redislock.ErrNotObtained), "got %v", err)
+	require.False(t, ran)
+
+	// Another pool is not held up.
+	require.NoError(t, second.WithWorkerPoolSizerLock("spot-a10g", func() { ran = true }))
+	require.True(t, ran)
+
+	// Once the first is done, the next tick of either may size the pool.
+	close(finish)
+	require.NoError(t, <-done)
+	ran = false
+	require.NoError(t, second.WithWorkerPoolSizerLock("spot-l40s", func() { ran = true }))
+	require.True(t, ran)
 }

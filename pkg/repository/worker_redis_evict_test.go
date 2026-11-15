@@ -46,7 +46,7 @@ func TestScheduleEvictableRequestTracksEvictableCapacity(t *testing.T) {
 	request := &types.ContainerRequest{ContainerId: "replica-1", Cpu: 1000, Memory: 1000, Gpu: "A10G", GpuCount: 1,
 		Evictable: true, OpportunisticOnly: true, DrainSeconds: 30, EvictOrder: 1}
 	setPendingContainerRequests(t, rdb, request)
-	assert.NoError(t, repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request}))
+	assert.NoError(t, repo.ScheduleContainerRequest(worker, request))
 
 	assert.Equal(t, int64(3000), worker.FreeCpu)
 	assert.Equal(t, uint32(1), worker.FreeGpuCount)
@@ -85,7 +85,7 @@ func TestScheduleEvictsToCoverShortfall(t *testing.T) {
 
 	request := &types.ContainerRequest{ContainerId: "serverless-1", Cpu: 500, Memory: 500, Gpu: "A10G", GpuCount: 1}
 	setPendingContainerRequests(t, rdb, request)
-	assert.NoError(t, repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request}))
+	assert.NoError(t, repo.ScheduleContainerRequest(worker, request))
 
 	// Exactly one victim, the prefill replica, carried on the request.
 	assert.Equal(t, []string{"prefill-new"}, request.EvictContainerIds)
@@ -138,7 +138,7 @@ func TestReservedCPUIsHeldUntilTheContainerLeaves(t *testing.T) {
 	setPendingContainerRequests(t, rdb, request)
 	stateKey := common.RedisKeys.SchedulerContainerState(request.ContainerId)
 	assert.NoError(t, rdb.HSet(context.TODO(), stateKey, "cpu", request.Cpu).Err())
-	assert.NoError(t, repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request}))
+	assert.NoError(t, repo.ScheduleContainerRequest(worker, request))
 	assert.Equal(t, []string{"spot"}, request.EvictContainerIds)
 	assert.Equal(t, int64(5000), queuedRequest(t, rdb, worker.Id).ReservedCpu)
 
@@ -179,7 +179,7 @@ func TestScheduleDoesNotEvictForIdleOnlyRequests(t *testing.T) {
 			Checkpoint: &types.Checkpoint{Status: string(types.CheckpointStatusAvailable), Runtime: "gvisor"}},
 	} {
 		setPendingContainerRequests(t, rdb, request)
-		err := repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request})
+		err := repo.ScheduleContainerRequest(worker, request)
 		assert.Error(t, err, request.ContainerId)
 		assert.Empty(t, request.EvictContainerIds)
 	}
@@ -206,7 +206,7 @@ func TestScheduleEvictionFailsWhenVictimsCannotCover(t *testing.T) {
 
 	request := &types.ContainerRequest{ContainerId: "big", Cpu: 500, Memory: 500, Gpu: "A10G", GpuCount: 2}
 	setPendingContainerRequests(t, rdb, request)
-	err = repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request})
+	err = repo.ScheduleContainerRequest(worker, request)
 	assert.True(t, errors.Is(err, ErrInsufficientEvictableCapacity), err)
 	for _, id := range []string{"replica-a", "protected-a"} {
 		status, err := rdb.HGet(context.TODO(), common.RedisKeys.SchedulerContainerState(id), "status").Result()
@@ -269,7 +269,7 @@ func TestScheduleEvictionExtendsVictimTTLToStoppingWindow(t *testing.T) {
 
 	request := &types.ContainerRequest{ContainerId: "serverless", Cpu: 500, Memory: 500, Gpu: "A10G", GpuCount: 1}
 	setPendingContainerRequests(t, rdb, request)
-	assert.NoError(t, repo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request}))
+	assert.NoError(t, repo.ScheduleContainerRequest(worker, request))
 	assert.Equal(t, []string{"replica-a"}, request.EvictContainerIds)
 
 	ttl, err := rdb.TTL(context.TODO(), victimKey).Result()

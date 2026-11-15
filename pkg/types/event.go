@@ -281,6 +281,10 @@ const (
 	EventComputeAttrWaitMs       = "wait_ms"
 )
 
+// ComputePoolStatusActive is the status of a pool that is in use, in its
+// record and in its events.
+const ComputePoolStatusActive = "active"
+
 type EventComputeSchema struct {
 	Timestamp    time.Time         `json:"timestamp"`
 	WorkspaceID  string            `json:"workspace_id,omitempty"`

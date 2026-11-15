@@ -171,7 +171,7 @@ func scheduleCleanerRequest(t *testing.T, rdb *common.RedisClient, workerRepo re
 		ContainerId: request.ContainerId,
 		Status:      types.ContainerStatusPending,
 	}))
-	assert.NoError(t, workerRepo.ScheduleContainerRequests(worker, []*types.ContainerRequest{request}))
+	assert.NoError(t, workerRepo.ScheduleContainerRequest(worker, request))
 }
 
 func cleanerTestWorkerJob(name, workerId, poolName, machineId string) *batchv1.Job {

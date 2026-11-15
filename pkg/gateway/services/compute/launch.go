@@ -152,7 +152,7 @@ func (s *Service) planLaunch(ctx context.Context, workspaceID string, pool model
 	// tenant's limit less Beam's margin.
 	budget := pool
 	budget.MaxSpendMicros = s.providerBudgetMicros(pool.MaxSpendMicros)
-	plan, err := model.PlanPurchases(budget, offers)
+	plan, err := model.Solve(budget, offers)
 	if err != nil {
 		return plan, launchPoolError(launchErrorNoCompatibleCapacity, err.Error(), billingDecision{})
 	}

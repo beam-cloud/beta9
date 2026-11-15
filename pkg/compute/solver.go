@@ -46,11 +46,11 @@ var (
 	ErrOverBudget = errors.New("max spend would be exceeded")
 )
 
-// PlanPurchases chooses the machines to buy for a pool: the cheapest offers
+// Solve chooses the machines to buy for a pool: the cheapest offers
 // the pool can use, the more reliable first among equals, and no more of an
 // offer than its provider says it has. A machine is paid for by the hour, for
 // the pool's whole lifetime.
-func PlanPurchases(pool Pool, offers []providers.Offer) (Plan, error) {
+func Solve(pool Pool, offers []providers.Offer) (Plan, error) {
 	if err := pool.Validate(); err != nil {
 		return Plan{}, err
 	}

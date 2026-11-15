@@ -89,7 +89,7 @@ func nextPoolState(existing *model.PoolState, config *pb.PoolConfig, actorTokenI
 	}
 	next.Selector = config.Selector
 	next.Config = config
-	next.Status = model.PoolStatusActive
+	next.Status = types.ComputePoolStatusActive
 	next.Mode = config.Mode
 	next.Transport = config.Transport
 	next.Fallback = config.Fallback

@@ -85,7 +85,7 @@ func TestWorkerServesAgainOnItsOpenStreamAfterItsRecordIsEvicted(t *testing.T) {
 	sandbox := &types.ContainerRequest{ContainerId: "sandbox", Cpu: 1000, Memory: 800}
 	require.NoError(t, g.rdb.HSet(g.ctx, common.RedisKeys.SchedulerContainerState(sandbox.ContainerId),
 		"container_id", sandbox.ContainerId, "status", string(types.ContainerStatusPending), "worker_id", "", "machine_id", "").Err())
-	require.NoError(t, g.workers.ScheduleContainerRequests(worker, []*types.ContainerRequest{sandbox}))
+	require.NoError(t, g.workers.ScheduleContainerRequest(worker, sandbox))
 	for {
 		response, err := stream.Recv()
 		require.NoError(t, err)

@@ -24,11 +24,11 @@ type AppGroup struct {
 	config        types.AppConfig
 	backendRepo   repository.BackendRepository
 	containerRepo repository.ContainerRepository
-	scheduler     *scheduler.Scheduler
+	scheduler     scheduler.Scheduler
 	redisClient   *common.RedisClient
 }
 
-func NewAppGroup(g *echo.Group, backendRepo repository.BackendRepository, config types.AppConfig, containerRepo repository.ContainerRepository, scheduler *scheduler.Scheduler, redisClient *common.RedisClient) *AppGroup {
+func NewAppGroup(g *echo.Group, backendRepo repository.BackendRepository, config types.AppConfig, containerRepo repository.ContainerRepository, scheduler scheduler.Scheduler, redisClient *common.RedisClient) *AppGroup {
 	group := &AppGroup{
 		routerGroup:   g,
 		backendRepo:   backendRepo,

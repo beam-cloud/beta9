@@ -231,7 +231,7 @@ func TestReplicaProtectionSerializesWithSchedulerEviction(t *testing.T) {
 			f.rdb.AddHook(barrier)
 			promoted, scheduled := make(chan error, 1), make(chan error, 1)
 			promote := func() { _, err := f.replicas.SetReplicaProtection(ctx, f.replica.ID, true); promoted <- err }
-			schedule := func() { scheduled <- f.workers.ScheduleContainerRequests(f.worker, []*types.ContainerRequest{request}) }
+			schedule := func() { scheduled <- f.workers.ScheduleContainerRequest(f.worker, request) }
 			if first == "promotion" {
 				go promote()
 			} else {

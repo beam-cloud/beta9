@@ -49,16 +49,18 @@ func emptyGPUAvailability() map[string]bool {
 	return availability
 }
 
-// CheckCapacity reports whether the workers that run now have room for
-// replicas containers like the request. The room that the containers of
-// replacedStubID hold counts as free: a rollout stops them. No worker is
-// added and nothing is reserved.
-func (s *Scheduler) CheckCapacity(request *types.ContainerRequest, replicas uint, replacedStubID string, activeContainers []types.ContainerState) bool {
+type CapacityCheckResult struct {
+	CanSchedule bool
+	WorkerId    string
+	Err         error
+}
+
+func (s *Scheduler) CheckCapacity(request *types.ContainerRequest, replicas uint, ignoreStubId string, activeContainers []types.ContainerState) CapacityCheckResult {
 	return (&capacityCheck{
 		scheduler:        s,
 		request:          request,
 		replicas:         replicas,
-		replacedStubID:   replacedStubID,
+		replacedStubID:   ignoreStubId,
 		activeContainers: activeContainers,
 	}).run()
 }
@@ -72,15 +74,15 @@ type capacityCheck struct {
 	workers          []*types.Worker
 }
 
-func (c *capacityCheck) run() bool {
+func (c *capacityCheck) run() CapacityCheckResult {
 	if c.scheduler == nil || c.scheduler.workerRepo == nil {
-		return false
+		return CapacityCheckResult{Err: &types.ErrNoSuitableWorkerFound{}}
 	}
 	if c.replicas == 0 {
 		c.replicas = 1
 	}
 	if err := c.loadWorkers(); err != nil {
-		return false
+		return CapacityCheckResult{Err: err}
 	}
 	c.restoreReplacedCapacity()
 	return c.placeReplicas()
@@ -139,15 +141,20 @@ func containerRequestFromState(container types.ContainerState) *types.ContainerR
 
 // placeReplicas places the replicas one after another, as a scheduling pass
 // would, each on what the ones before it left.
-func (c *capacityCheck) placeReplicas() bool {
+func (c *capacityCheck) placeReplicas() CapacityCheckResult {
+	var selected *types.Worker
 	for i := uint(0); i < c.replicas; i++ {
 		request := c.request.Clone()
 		worker, err := c.scheduler.selectWorkerFromWorkers(c.workers, request)
-		if err != nil || worker == nil || !c.scheduler.reserveWorkerCapacity(worker, request) {
-			return false
+		if err != nil {
+			return CapacityCheckResult{Err: err}
 		}
+		if !c.scheduler.reserveWorkerCapacity(worker, request) {
+			return CapacityCheckResult{Err: &types.ErrNoSuitableWorkerFound{}}
+		}
+		selected = worker
 	}
-	return true
+	return CapacityCheckResult{CanSchedule: true, WorkerId: selected.Id}
 }
 
 func (c *capacityCheck) capFreeCapacity(worker *types.Worker) {

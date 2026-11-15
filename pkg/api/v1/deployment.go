@@ -28,14 +28,14 @@ type DeploymentGroup struct {
 	backendRepo   repository.BackendRepository
 	containerRepo repository.ContainerRepository
 	redisClient   *common.RedisClient
-	scheduler     *scheduler.Scheduler
+	scheduler     scheduler.Scheduler
 }
 
 func NewDeploymentGroup(
 	g *echo.Group,
 	backendRepo repository.BackendRepository,
 	containerRepo repository.ContainerRepository,
-	scheduler *scheduler.Scheduler,
+	scheduler scheduler.Scheduler,
 	redisClient *common.RedisClient,
 	config types.AppConfig,
 ) *DeploymentGroup {

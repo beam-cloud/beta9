@@ -274,7 +274,7 @@ func (w *interruptionWatcher) run(ctx context.Context) {
 // does: the machine is not one that is given notice.
 func (w *interruptionWatcher) find(ctx context.Context) noticeSource {
 	for probe := range w.probes {
-		if probe > 0 && !sleepContext(ctx, w.pollInterval) {
+		if probe > 0 && !waitForRouteRetry(ctx, w.pollInterval) {
 			return nil
 		}
 		for _, source := range w.sources {
@@ -300,7 +300,7 @@ func (w *interruptionWatcher) await(ctx context.Context, source noticeSource) *i
 			fmt.Fprintf(w.stderr, "interruption notice from %s could not be read: %v\n", source.name(), err)
 		}
 		failing = err != nil
-		if !sleepContext(ctx, w.pollInterval) {
+		if !waitForRouteRetry(ctx, w.pollInterval) {
 			return nil
 		}
 	}
@@ -320,7 +320,7 @@ func (w *interruptionWatcher) report(ctx context.Context, source string, notice 
 	}
 
 	for attempt := range w.reportAttempts {
-		if attempt > 0 && !sleepContext(ctx, w.reportInterval) {
+		if attempt > 0 && !waitForRouteRetry(ctx, w.reportInterval) {
 			return
 		}
 		err := w.tell(ctx, request)
@@ -347,17 +347,4 @@ func (w *interruptionWatcher) tell(ctx context.Context, request *pb.ReportAgentI
 		return errors.New(firstNonEmpty(response.GetErrMsg(), "gateway rejected request"))
 	}
 	return nil
-}
-
-// sleepContext waits for d, and reports whether it did: false means ctx
-// ended first.
-func sleepContext(ctx context.Context, d time.Duration) bool {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	}
 }

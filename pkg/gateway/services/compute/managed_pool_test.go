@@ -356,7 +356,7 @@ func TestManagedPoolLifecyclePreservesWorkerConfiguration(t *testing.T) {
 	if err := service.ReconcileManagedPools(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !service.scheduler.HasManagedPoolForGPU("H100", true) {
+	if !service.scheduler.HasManagedPoolForGPU("H100") {
 		t.Fatal("managed pool was not available to serverless scheduling")
 	}
 	createdInstanceID := state.ManagedInstanceID
@@ -1054,13 +1054,9 @@ func TestAMachineThatWasBoughtIsNotRemovedByHand(t *testing.T) {
 	require.NotNil(t, machine)
 
 	// One that was joined by hand is.
-	_, err = service.CreateManagedPool(ctx, clusterAdminAuth(), "l40s", types.WorkerPoolConfig{GPUType: "L40S"})
-	require.NoError(t, err)
-	bootstrap, err := service.CreateManagedMachine(ctx, clusterAdminAuth(), "l40s")
-	require.NoError(t, err)
-	require.True(t, joinAs(t, service, bootstrap.InstallCommand, "by-hand").Ok)
-	require.NoError(t, service.DeleteManagedMachine(ctx, clusterAdminAuth(), "l40s", bootstrap.MachineID))
-	machine, err = repo.GetAgentMachineState(ctx, "admin-workspace", "l40s", bootstrap.MachineID)
+	_, byHand := joinedByHand(t, service)
+	require.NoError(t, service.DeleteManagedMachine(ctx, clusterAdminAuth(), "l40s", byHand.MachineID))
+	machine, err = repo.GetAgentMachineState(ctx, "admin-workspace", "l40s", byHand.MachineID)
 	require.NoError(t, err)
 	require.Nil(t, machine)
 }

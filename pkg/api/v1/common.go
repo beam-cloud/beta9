@@ -14,7 +14,7 @@ import (
 type CommonClients struct {
 	containerRepo repository.ContainerRepository
 	backendRepo   repository.BackendRepository
-	scheduler     *scheduler.Scheduler
+	scheduler     scheduler.Scheduler
 	redisClient   *common.RedisClient
 }
 

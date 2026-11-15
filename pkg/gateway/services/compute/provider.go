@@ -66,7 +66,7 @@ func (s *Service) ensureProviderPoolLocked(ctx context.Context, workspaceID, poo
 		Fallback: types.PrivatePoolFallbackFail, Priority: providerPoolPriority,
 	}
 	state := &model.PoolState{
-		Name: poolName, Selector: poolName, Config: config, Status: model.PoolStatusActive,
+		Name: poolName, Selector: poolName, Config: config, Status: types.ComputePoolStatusActive,
 		Source: model.SourceAttached, Mode: config.Mode, Transport: config.Transport, Fallback: config.Fallback,
 		Priority: config.Priority, CreatedByTokenID: actorTokenID, CreatedAt: now, UpdatedAt: now,
 	}
