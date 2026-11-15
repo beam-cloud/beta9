@@ -262,6 +262,17 @@ def test_vm_new_takes_a_named_mirror_or_none(machine, new_vm):
     assert factory.call_args.kwargs["mirror"] is None
 
 
+def test_vm_new_rejects_the_local_folder_destination(monkeypatch, new_vm):
+    monkeypatch.setattr(mirror, "installed", lambda: "/usr/bin/beam-mirror")
+    monkeypatch.setattr(
+        mirror, "status", lambda: {"mirror": "work", "store": {"kind": "directory"}}
+    )
+    result, factory = new_vm("dev", "--mirror")
+    assert result.exit_code == 1
+    assert "syncs to a local folder" in result.stderr
+    factory.assert_not_called()
+
+
 def test_vm_new_leaves_exit_status_unset_for_the_cli_wrapper(new_vm):
     result = CliRunner().invoke(vm_cli.management, ["new", "dev", "--json"], standalone_mode=False)
     assert result.exit_code == 0, result.output

@@ -197,6 +197,11 @@ def local_name(context: str) -> Optional[str]:
 def local_status(context: str) -> dict:
     """Use the local mirror only for the CLI config and context it syncs to."""
     current = status()
+    store = current.get("store")
+    if isinstance(store, dict) and store.get("kind") == "directory":
+        raise MirrorError(
+            "This mirror syncs to a local folder. Select a Beam workspace to launch a VM."
+        )
     name = current.get("mirror")
     if not isinstance(name, str) or not name:
         return {**current, "mirror": None}
