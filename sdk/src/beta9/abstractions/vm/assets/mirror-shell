@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+if [ -f /run/beam-mirrored-home ]; then
+  cd "$HOME"
+  export BEAM_MIRROR_SHELL_STARTED=1
+  if [ -f "$HOME/.zshrc" ] || [ -f "$HOME/.zprofile" ]; then
+    export SHELL=/usr/bin/zsh
+    exec "$SHELL" -il
+  fi
+  exec /bin/bash -il
+fi
+
+if [ "${1:-}" = --desktop ]; then
+  exec "${SHELL:-/bin/bash}"
+fi
+exec /bin/bash -il

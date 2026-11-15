@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Terminal
-Exec=gnome-terminal
+Exec=gnome-terminal -- /opt/beam-vm/mirror-shell --desktop
 Icon=org.gnome.Terminal
 Path=/workspace
 Terminal=false

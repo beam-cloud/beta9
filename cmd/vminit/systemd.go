@@ -183,6 +183,12 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 	if err := os.MkdirAll(filepath.Dir(processFile), 0700); err != nil {
 		return err
 	}
+	if processEnv(process, "BEAM_VM_MIRRORED_HOME") == "true" {
+		// Login shells use a boot-time flag even if SSH clears the environment.
+		if err := os.WriteFile(filepath.Join(root, "run/beam-mirrored-home"), nil, 0644); err != nil {
+			return err
+		}
+	}
 
 	data, err := json.Marshal(process)
 	if err != nil {

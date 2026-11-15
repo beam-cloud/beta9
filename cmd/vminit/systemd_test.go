@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -378,5 +379,32 @@ func TestSSHPreparationIsOrderedBeforeSSHAndIndependentOfExec(t *testing.T) {
 	}
 	if strings.Contains(guestAgentUnit, "beam-ssh-keys") {
 		t.Fatal("exec agent must not depend on SSH readiness")
+	}
+}
+
+func TestMirroredHomeFlagIsAvailableToInteractiveLogins(t *testing.T) {
+	for _, mirrored := range []bool{false, true} {
+		root := t.TempDir()
+		if err := os.Mkdir(filepath.Join(root, "etc"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		process := &specs.Process{Env: []string{
+			"BEAM_VM_ID=676139cd-f92b-4688-bb36-a0e763ef445c",
+			fmt.Sprintf("BEAM_VM_MIRRORED_HOME=%t", mirrored),
+		}}
+		if err := writeSystemdBootFiles(root, process); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(filepath.Join(root, "run/beam-mirrored-home"))
+		if mirrored {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode().Perm() != 0644 {
+				t.Fatalf("desktop users need read access, got %s", info.Mode())
+			}
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("plain VM should lack a mirrored-home marker, got %v", err)
+		}
 	}
 }

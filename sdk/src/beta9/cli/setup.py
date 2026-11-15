@@ -277,7 +277,7 @@ def setup_mirror(context: Optional[str]):
             connect_workspace(selected)
             with steps.step("Installing the mirror utility", "Mirror utility installed"):
                 path, updated = mirror.install()
-            with steps.step("Starting the mirror utility", "Mirror utility started"):
+            with steps.step("Configuring the mirror utility", "Mirror utility configured"):
                 status = mirror.start(selected)
     except (LoginError, mirror.MirrorError, OSError) as exc:
         raise click.ClickException(str(exc)) from exc
@@ -296,7 +296,14 @@ def setup_mirror(context: Optional[str]):
         },
     )
     terminal.print("")
+    if mirror.platform.system() == "Darwin":
+        terminal.print(
+            f"  {utility} tray    review suggested files in the menu bar",
+            markup=False,
+            soft_wrap=True,
+        )
     for line in (
+        f"{utility} suggest    review shell, Git, editor, and agent settings",
         f"{utility} add PATH    choose a folder or file under your home directory",
         f"{utility} push        upload the chosen files",
         f"{command} vm new --mirror    start a VM with those files",

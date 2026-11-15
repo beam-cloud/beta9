@@ -54,6 +54,7 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 		"BEAM_VM_SYSTEMD=1",
 		"BEAM_VM_ID="+v.ID,
 		"BEAM_VM_DESKTOP="+fmt.Sprint(v.Spec.Desktop),
+		"BEAM_VM_MIRRORED_HOME="+fmt.Sprint(v.Spec.Mirror != nil),
 		"BEAM_VM_SSH="+fmt.Sprint(v.Spec.SSH),
 		"BEAM_VM_SSH_PUBLIC_KEY="+v.Spec.SSHPublicKey,
 	)

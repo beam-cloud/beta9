@@ -1022,8 +1022,7 @@ def metrics_vm(service, name):
     terminal.print_json(_vm(service, name).metrics())
 
 
-def _url(service, name, field, open_url):
-    vm = _vm(service, name)
+def _url(vm, field, open_url):
     url = vm.info.get(field)
     port = 8080 if field in ("desktop_url", "kiosk_url") else 7681
     if not url:
@@ -1038,6 +1037,7 @@ def _url_command(feature):
     @management.command(feature, help=f"Print or open the browser {feature} URL.")
     @click.argument("name")
     @click.option("--open/--no-open", "open_url", default=True)
+    @click.option("--resume", is_flag=True, help="Start this same VM if it is stopped or paused.")
     @click.option(
         "--url",
         "url_only",
@@ -1045,8 +1045,21 @@ def _url_command(feature):
         help="Print the URL without opening a browser.",
     )
     @extraclick.pass_service_client
-    def command(service, name, open_url, url_only):
-        _url(service, name, feature + "_url", open_url and not url_only)
+    def command(service, name, open_url, url_only, resume):
+        if resume and (url_only or not open_url):
+            raise click.UsageError("--resume requires opening the browser")
+        vm = _vm(service, name)
+        if (
+            resume
+            and vm.info.get(feature + "_url")
+            and vm.info.get("status")
+            in (
+                "stopped",
+                "paused",
+            )
+        ):
+            vm.start()
+        _url(vm, feature + "_url", open_url and not url_only)
 
     return command
 
@@ -1054,6 +1067,22 @@ def _url_command(feature):
 desktop_vm = _url_command("desktop")
 kiosk_vm = _url_command("kiosk")
 terminal_vm = _url_command("terminal")
+
+
+@management.command("github")
+@click.argument("name")
+@extraclick.pass_service_client
+def github_vm(service, name):
+    """Open GitHub sign-in and set up HTTPS Git in a private desktop VM."""
+    from ..abstractions.vm.github import connect
+
+    vm = _vm(service, name)
+    connect(vm)
+    _url(vm, "desktop_url", True)
+    terminal.detail(
+        "Enter the code shown in the VM at https://github.com/login/device "
+        "in the browser where you already use GitHub."
+    )
 
 
 @management.command("kiosk-status")
@@ -1213,21 +1242,58 @@ def _ssh_options(vm):
     ]
 
 
+def _ssh_agent_socket(agent_socket):
+    path = os.environ.get("SSH_AUTH_SOCK") if agent_socket is None else agent_socket
+    if not path:
+        raise click.UsageError("Set SSH_AUTH_SOCK or pass --agent-socket for agent forwarding")
+    try:
+        path = Path(path).expanduser().absolute()
+        if path.is_socket():
+            return str(path)
+    except (OSError, RuntimeError, ValueError):
+        pass
+    source = "SSH_AUTH_SOCK" if agent_socket is None else "--agent-socket"
+    raise click.UsageError(f"{source} must point to a local Unix socket")
+
+
 @management.command(
     "ssh",
     context_settings={"ignore_unknown_options": True, "allow_interspersed_args": False},
 )
+@click.option(
+    "--forward-agent",
+    is_flag=True,
+    help="Give root on the VM access to your local SSH agent for this SSH session.",
+)
+@click.option(
+    "--agent-socket",
+    metavar="PATH",
+    help="Use a specific local agent socket with --forward-agent. Defaults to SSH_AUTH_SOCK.",
+)
 @click.argument("name")
 @click.argument("command", nargs=-1, type=click.UNPROCESSED)
 @extraclick.pass_service_client
-def ssh_vm(service, name, command):
+def ssh_vm(service, name, command, forward_agent, agent_socket):
     """Open an SSH shell or run a remote command."""
+    if agent_socket is not None and not forward_agent:
+        raise click.UsageError("--agent-socket requires --forward-agent")
+    socket_path = _ssh_agent_socket(agent_socket) if forward_agent else None
+
     command = _command(command)
     vm = _vm(service, name)
-    argv = ["ssh", *_ssh_options(vm), "-p", "2222", "--", "root@" + vm.name]
+    argv = ["ssh", *_ssh_options(vm)]
+    if socket_path is not None:
+        # Keep this connection in the foreground and out of SSH multiplexing.
+        argv += ["-S", "none", "-o", "ForkAfterAuthentication=no"]
+        argv += ["-o", "ForwardAgent=${BEAM_VM_SSH_AGENT_SOCKET}"]
+    argv += ["-p", "2222", "--", "root@" + vm.name]
     if command:
         argv += [shlex.join(command)]
-    raise click.exceptions.Exit(subprocess.call(argv, **local_process_kwargs(argv[0])))
+    process_kwargs = local_process_kwargs(argv[0])
+    if socket_path is not None:
+        # Pass the forwarding path separately from the agent used for VM authentication.
+        process_kwargs["env"] = {**os.environ, "BEAM_VM_SSH_AGENT_SOCKET": socket_path}
+    raise click.exceptions.Exit(subprocess.call(argv, **process_kwargs))
 
 
 @management.command("scp")

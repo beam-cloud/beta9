@@ -15,6 +15,7 @@ import socket
 import subprocess
 import sys
 import tarfile
+import tempfile
 import textwrap
 import threading
 import time
@@ -1638,10 +1639,14 @@ def test_ssh_preserves_child_flags_that_match_cli_options(cli_service, monkeypat
     call = MagicMock(return_value=0)
     monkeypatch.setattr(vm_cli.subprocess, "call", call)
     result = CliRunner().invoke(
-        vm_cli.management, ["ssh", "dev", "sh", "-c", "echo --context literal"]
+        vm_cli.management,
+        ["ssh", "dev", "tool", "--context", "literal", "--forward-agent", "--agent-socket", "fake"],
     )
     assert result.exit_code == 0, result.output
-    assert call.call_args.args[0][-1] == "sh -c 'echo --context literal'"
+    assert (
+        call.call_args.args[0][-1] == "tool --context literal --forward-agent --agent-socket fake"
+    )
+    assert "env" not in call.call_args.kwargs
 
 
 def test_cli_reports_api_failures_without_tracebacks(cli_service, monkeypatch):
@@ -1686,6 +1691,87 @@ def test_ssh_preserves_remote_arguments_and_exit_status(cli_service, monkeypatch
         "root@dev",
         "echo 'a b;$USER'",
     ]
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+@pytest.mark.skipif(sys.platform not in ("darwin", "linux"), reason="Unix agent socket")
+def test_ssh_forwards_only_the_selected_agent(cli_service, monkeypatch, explicit):
+    vm = SimpleNamespace(name="dev")
+    monkeypatch.setattr(vm_cli, "_vm", lambda *args: vm)
+    monkeypatch.setattr(vm_cli, "_ssh_options", lambda vm: ["-i", "/beam/identity"])
+    call = MagicMock(return_value=7)
+    monkeypatch.setattr(vm_cli.subprocess, "call", call)
+    monkeypatch.delenv("BEAM_VM_SSH_AGENT_SOCKET", raising=False)
+
+    # macOS has a short limit for Unix socket paths, independent of pytest's temp directory.
+    with tempfile.TemporaryDirectory(prefix="beam-ssh-", dir="/tmp") as directory:
+        with socket.socket(socket.AF_UNIX) as agent:
+            path = str(Path(directory) / 'agent %h ${USER} "socket"')
+            agent.bind(path)
+            agent.listen()
+            default = "/unused/default-agent" if explicit else path
+            monkeypatch.setenv("SSH_AUTH_SOCK", default)
+            args = ["ssh", "--forward-agent"]
+            if explicit:
+                args += ["--agent-socket", path]
+            args += ["dev", "--", "echo", "a b;$USER"]
+            result = CliRunner().invoke(vm_cli.management, args)
+
+    assert result.exit_code == 7, result.output
+    assert call.call_args.args[0] == [
+        "ssh",
+        "-i",
+        "/beam/identity",
+        "-S",
+        "none",
+        "-o",
+        "ForkAfterAuthentication=no",
+        "-o",
+        "ForwardAgent=${BEAM_VM_SSH_AGENT_SOCKET}",
+        "-p",
+        "2222",
+        "--",
+        "root@dev",
+        "echo 'a b;$USER'",
+    ]
+    assert call.call_args.kwargs["env"]["BEAM_VM_SSH_AGENT_SOCKET"] == path
+    assert call.call_args.kwargs["env"]["SSH_AUTH_SOCK"] == default
+    assert os.environ["SSH_AUTH_SOCK"] == default
+    assert "BEAM_VM_SSH_AGENT_SOCKET" not in os.environ
+
+
+@pytest.mark.parametrize(
+    "options, configured, message",
+    [
+        (["--forward-agent"], None, "Set SSH_AUTH_SOCK or pass --agent-socket"),
+        (["--forward-agent"], "", "Set SSH_AUTH_SOCK or pass --agent-socket"),
+        (["--forward-agent"], "missing", "SSH_AUTH_SOCK must point to a local Unix socket"),
+        (["--forward-agent"], "regular", "SSH_AUTH_SOCK must point to a local Unix socket"),
+        (
+            ["--forward-agent", "--agent-socket", "regular"],
+            None,
+            "--agent-socket must point to a local Unix socket",
+        ),
+        (["--agent-socket", "regular"], None, "--agent-socket requires --forward-agent"),
+    ],
+)
+def test_ssh_rejects_invalid_agent_options(
+    cli_service, monkeypatch, tmp_path, options, configured, message
+):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "regular").touch()
+    if configured is None:
+        monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    else:
+        monkeypatch.setenv("SSH_AUTH_SOCK", configured)
+    lookup = MagicMock()
+    monkeypatch.setattr(vm_cli, "_vm", lookup)
+
+    result = CliRunner().invoke(vm_cli.management, ["ssh", *options, "dev"])
+
+    assert result.exit_code == 2, result.output
+    assert message in result.output
+    lookup.assert_not_called()
 
 
 @pytest.mark.parametrize("vm_id", ["vm-12ab34cd56ef7890", "12ab34cd56ef7890"])
@@ -2287,6 +2373,29 @@ def test_terminal_and_desktop_open_the_direct_vm_not_a_dashboard(
     assert result.output == "https://vm.example/\n"
     opened.assert_called_once_with("https://vm.example/")
     cli_service.http.json.assert_called_once()
+
+
+def test_desktop_can_reopen_the_same_vm_after_stop(cli_service, monkeypatch):
+    vm = MagicMock()
+    vm.info = {
+        "name": "dev",
+        "status": "stopped",
+        "desktop_url": "https://vm.example/",
+    }
+    monkeypatch.setattr(vm_cli, "_vm", lambda service, name: vm)
+    monkeypatch.setattr(vm_cli, "_port_url", lambda vm, port: "https://vm.example/")
+    opened = MagicMock()
+    monkeypatch.setattr(vm_cli, "_open_browser", opened)
+
+    result = CliRunner().invoke(vm_cli.management, ["desktop", "dev", "--resume"])
+    assert result.exit_code == 0, result.output
+    vm.start.assert_called_once_with()
+    opened.assert_called_once_with(vm, 8080, "https://vm.example/")
+
+    vm.start.reset_mock()
+    result = CliRunner().invoke(vm_cli.management, ["desktop", "dev", "--resume", "--url"])
+    assert result.exit_code == 2
+    vm.start.assert_not_called()
 
 
 @pytest.mark.parametrize(

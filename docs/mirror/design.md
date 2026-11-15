@@ -80,11 +80,9 @@ disagreed, which are corrected.
 - **`run`** pushes when a rescan finds a change, by default at most once a
   minute. It does not watch the file system.
 
-It does not have: a tray application, file watching, a login item,
-self-update, a bandwidth limit, browser or application adapters, a macOS or
-Windows build, or its own sign-in. It trusts the web PKI roots it is built
-with, not the system's, so a gateway behind a private certificate authority
-is refused.
+The utility runs on Linux and macOS and uses the Beam CLI's sign-in. The
+macOS menu bar starts at login through a LaunchAgent. Rescans use a timer
+and the utility uses built-in web PKI roots.
 
 ## What was measured
 
@@ -354,13 +352,36 @@ carry over:
 
 ### The tray application
 
-Launching a VM from the tray is the request `beam vm new --mirror` makes, so
-it needs nothing new from the gateway. Editing sync paths from the tray needs
-the utility's configuration to be the single source of truth, with the tray
-and the command line both writing it. The utility is a core library with a
-command-line front end, and its configuration is one file, so a tray front
-end can use the same library and write the same file. Neither tray feature
-is built.
+Both source platforms can use `beam-mirror suggest` to review shell, Git,
+editor and agent preference files. `beam-mirror suggest --add RELATIVE_PATH`
+opts into a specific file. The macOS tray exposes the same list and shares
+the normal sync-path configuration. Review each file for values you intend
+to send to the workspace. A path added from the suggestions stays file-only
+across pushes.
+
+The tray launches a VM from the synced home and remembers that VM by ID.
+Open Last VM keeps the guest's own changes and signed-in browser profile.
+On either source platform, `beam vm desktop NAME --resume` opens that same
+VM after a stop.
+
+### A familiar login
+
+Interactive logins in current mirrored VM images start in the guest home.
+A mirrored `.zshrc` or `.zprofile` selects Zsh. Bash is the default and reads
+its normal login files. The source home remains the place to maintain the
+settings, while the VM runs Linux programs.
+
+`beam vm github NAME` opens the official GitHub device sign-in in a full
+desktop VM and sets up its Git HTTPS credential helper. The same private
+VM keeps that sign-in and its browser profile when it restarts. Use a
+clean VM when publishing a template.
+
+`beam vm ssh --forward-agent NAME` lets the guest use the local SSH agent
+during the SSH session. `--agent-socket PATH` selects a dedicated agent
+socket, including an agent set up with destination-constrained keys.
+
+Live access to already signed-in source browser tabs and automatic account
+authorization for newly created VMs require their own integrations.
 
 ### Credential scanning
 
@@ -375,8 +396,6 @@ credential the utility recognises is its own sign-in.
   signing in to GitHub, from the releases of `beam-cloud/mirror`, which is
   private. The command fails until a release can be downloaded that way,
   unless `BEAM_MIRROR_RELEASES_URL` names another place.
-- The utility builds for Linux only, and nothing has run on macOS.
-- Nothing has been pushed from a real laptop, over a real network, or to S3.
 - Every generation is a whole manifest, and directory times are part of it:
   a file appearing in the home directory, outside every root, is enough for
   `run` to commit a generation that differs only in the manifest.
