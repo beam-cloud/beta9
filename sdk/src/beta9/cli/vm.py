@@ -395,6 +395,7 @@ def new(
     kiosk_config=None,
     gpu=None,
     mirror=None,
+    open_desktop=False,
 ):
     """Create a VM with a durable root. NAME defaults to a friendly generated name."""
     as_json = as_json or terminal.json_output()
@@ -468,7 +469,8 @@ def new(
             with _progress("Syncing files", "Files synced", as_json):
                 _sync(vm, sync_dir, False)
     _show(vm.info, as_json)
-    return vm
+    if open_desktop and not as_json:
+        _open_browser(vm, 8080, _port_url(vm, 8080))
 
 
 def _local_mirror():

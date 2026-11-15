@@ -91,11 +91,15 @@ def launch(ctx, name, pool, open_desktop, as_json):
         raise click.ClickException(str(exc)) from exc
     if result:
         raise click.ClickException("Mirror upload failed. Resolve the error above and retry.")
-    vm = ctx.invoke(
-        vm_cli.new, name=name, pool=pool, mirror=current["mirror"], desktop=True, as_json=as_json
+    ctx.invoke(
+        vm_cli.new,
+        name=name,
+        pool=pool,
+        mirror=current["mirror"],
+        desktop=True,
+        as_json=as_json,
+        open_desktop=open_desktop,
     )
-    if open_desktop and not as_json:
-        vm_cli._open_browser(vm, 8080, vm_cli._port_url(vm, 8080))
 
 
 @mirror_group.command("open")

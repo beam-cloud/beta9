@@ -261,6 +261,12 @@ def test_vm_new_takes_a_named_mirror_or_none(machine, new_vm):
     assert factory.call_args.kwargs["mirror"] is None
 
 
+def test_vm_new_leaves_exit_status_unset_for_the_cli_wrapper(new_vm):
+    result = CliRunner().invoke(vm_cli.management, ["new", "dev", "--json"], standalone_mode=False)
+    assert result.exit_code == 0, result.output
+    assert result.return_value is None
+
+
 @pytest.mark.parametrize(
     "roots,paused,push_exit",
     [([], False, 0), (["work"], True, 0), (["work"], False, 9), (["work"], False, 0)],
@@ -332,6 +338,21 @@ def test_mirror_launch_uses_the_selected_context_before_upload(machine, monkeypa
     assert result.exit_code == 1
     assert "beta9 --context staging setup mirror" in result.output
     push.assert_not_called()
+
+
+def test_mirror_launch_opens_the_created_desktop(monkeypatch, new_vm):
+    monkeypatch.setattr(mirror_cli, "_selection", lambda: {"mirror": "laptop", "roots": ["work"]})
+    monkeypatch.setattr(mirror, "run", lambda *args, **kwargs: 0)
+    _, factory = new_vm("existing")
+    vm = factory.return_value
+    vm.info["desktop_url"] = "https://dev.example.invalid"
+    opener = MagicMock()
+    monkeypatch.setattr(vm_cli, "_open_browser", opener)
+
+    result = CliRunner().invoke(mirror_cli.mirror_group, ["launch", "dev"], standalone_mode=False)
+    assert result.exit_code == 0, result.output
+    assert result.return_value is None
+    opener.assert_called_once_with(vm, 8080, vm.info["desktop_url"])
 
 
 def test_mirror_add_preserves_arguments_and_utility_exit(monkeypatch):
