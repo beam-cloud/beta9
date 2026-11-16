@@ -48,6 +48,10 @@ type Config struct {
 	// KeepGenerations is how many of the newest generations are kept even
 	// when nothing references them.
 	KeepGenerations int
+	// ExpiredGrace is how long a sweep still counts a generation that stopped
+	// being kept: a VM being created pins the generation it resolved moments
+	// before.
+	ExpiredGrace time.Duration
 	// SweepGrace protects objects that no kept generation references yet:
 	// an upload in progress has objects before it has a manifest.
 	SweepGrace    time.Duration
@@ -58,6 +62,9 @@ type Config struct {
 func (c Config) withDefaults() Config {
 	if c.KeepGenerations <= 0 {
 		c.KeepGenerations = 5
+	}
+	if c.ExpiredGrace <= 0 {
+		c.ExpiredGrace = time.Hour
 	}
 	if c.SweepGrace <= 0 {
 		c.SweepGrace = 48 * time.Hour
@@ -734,8 +741,8 @@ func (s *Service) expireGenerations(ctx context.Context, mirror *types.Mirror) (
 
 // Sweep deletes the objects of a mirror that are older than the grace period
 // and that no generation references, counting generations that expired
-// within the grace period: a VM being created may have pinned one just
-// before it expired. It deletes nothing unless every such manifest could be
+// within ExpiredGrace: a VM being created may have pinned one just before
+// it expired. It deletes nothing unless every such manifest could be
 // read, because an unreadable manifest would make its objects look
 // unreferenced.
 func (s *Service) Sweep(ctx context.Context, bucket ObjectStore, mirror *types.Mirror) (int, error) {
@@ -750,10 +757,11 @@ func (s *Service) Sweep(ctx context.Context, bucket ObjectStore, mirror *types.M
 		return 0, err
 	}
 	cutoff := s.now().Add(-s.config.SweepGrace)
+	expiredBefore := s.now().Add(-s.config.ExpiredGrace)
 	live := map[string]bool{}
 	var dead []int64
 	for _, generation := range generations {
-		if generation.ExpiredAt != nil && generation.ExpiredAt.Before(cutoff) {
+		if generation.ExpiredAt != nil && generation.ExpiredAt.Before(expiredBefore) {
 			dead = append(dead, generation.Number)
 			continue
 		}

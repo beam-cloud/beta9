@@ -466,7 +466,10 @@ commit.
 
 Objects that no kept generation names are deleted after a grace period
 (48 hours by default), so an upload has that long between its first object
-and its commit.
+and its commit. A generation is kept while it is one of the newest five or
+something is pinned to it. Its objects count for an hour after that, since
+a VM being created pins the generation it resolved moments before; then
+the sweep no longer reads its manifest.
 
 ### Writer policy
 

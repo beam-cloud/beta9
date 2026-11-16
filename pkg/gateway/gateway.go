@@ -733,6 +733,7 @@ func (g *Gateway) registerServices() error {
 	mirrors, err := mirror.New(g.ctx, mirror.ServiceOpts{
 		Config: mirror.Config{
 			KeepGenerations: mirrorConfig.KeepGenerations,
+			ExpiredGrace:    mirrorConfig.ExpiredGrace,
 			SweepGrace:      mirrorConfig.SweepGrace,
 			SweepInterval:   mirrorConfig.SweepInterval,
 		},

@@ -1240,6 +1240,9 @@ type MirrorConfig struct {
 	// Generations kept per mirror besides those a VM, snapshot or template
 	// is pinned to. Default 5.
 	KeepGenerations int `key:"keepGenerations" json:"keep_generations"`
+	// How long a sweep still counts a generation that stopped being kept, for
+	// a VM being created that resolved it. Default 1h.
+	ExpiredGrace time.Duration `key:"expiredGrace" json:"expired_grace"`
 	// How long an object no kept generation references survives, which is
 	// also how long an upload may take before its commit. Default 48h.
 	SweepGrace time.Duration `key:"sweepGrace" json:"sweep_grace"`

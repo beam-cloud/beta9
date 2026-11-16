@@ -225,6 +225,7 @@ type memoryBucket struct {
 	modified   map[string]time.Time
 	failDelete bool
 	beforeHead func()
+	downloads  int
 }
 
 func newMemoryBucket() *memoryBucket {
@@ -250,6 +251,7 @@ func (b *memoryBucket) Head(_ context.Context, key string) (int64, bool, error) 
 func (b *memoryBucket) Download(_ context.Context, key string, limit int64) ([]byte, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.downloads++
 	data, ok := b.objects[key]
 	if !ok || int64(len(data)) > limit {
 		return nil, errors.New("not found")
@@ -665,7 +667,7 @@ func TestRetentionAndSweep(t *testing.T) {
 	}
 
 	// Once the VM is gone its generation expires on the next sweep, and its
-	// objects outlive it by the grace period.
+	// objects outlive it by an hour.
 	listed := func() []int64 {
 		var generations []types.MirrorGeneration
 		require.Equal(t, http.StatusOK, h.call(http.MethodGet, "/laptop/generations", nil, &generations))
@@ -700,7 +702,7 @@ func TestRetentionAndSweep(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, deleted)
 
-	// Unpinned for longer than the grace period, it goes for good.
+	// Unpinned for longer than that, it goes for good.
 	h.repo.references = nil
 	_, err = h.service.Sweep(context.Background(), h.bucket, mirror)
 	require.NoError(t, err)
@@ -727,6 +729,41 @@ func TestRetentionAndSweep(t *testing.T) {
 	h.service.SweepAll(context.Background())
 	_, exists, _ := h.bucket.Head(context.Background(), types.MirrorObjectKey(mirror.ID, strings.Repeat("22", 32)))
 	require.False(t, exists)
+}
+
+func TestSweepStopsReadingExpiredGenerations(t *testing.T) {
+	h := newHarness(t, Config{KeepGenerations: 1})
+	require.Equal(t, http.StatusCreated, h.call(http.MethodPost, "", map[string]string{"name": "laptop"}, nil))
+	mirror, _ := h.repo.GetMirror(context.Background(), 7, "laptop")
+	for i := range 3 {
+		status, _, _ := h.push("laptop", int64(i), map[string]string{"file.txt": fmt.Sprintf("version %d", i+1)})
+		require.Equal(t, http.StatusCreated, status)
+	}
+	sweep := func() (int, int) {
+		h.bucket.downloads = 0
+		deleted, err := h.service.Sweep(context.Background(), h.bucket, mirror)
+		require.NoError(t, err)
+		return deleted, h.bucket.downloads
+	}
+
+	// Within the hour, the two generations that expired still count.
+	deleted, read := sweep()
+	require.Zero(t, deleted)
+	require.Equal(t, 3, read)
+
+	// After it, the sweep forgets them and reads only the kept generation's
+	// manifest, while their objects keep the rest of their 48 hours.
+	h.now = h.now.Add(61 * time.Minute)
+	deleted, read = sweep()
+	require.Zero(t, deleted)
+	require.Equal(t, 1, read)
+	_, err := h.repo.GetMirrorGeneration(context.Background(), mirror.ID, 1)
+	require.ErrorIs(t, err, sql.ErrNoRows)
+
+	h.now = h.now.Add(48 * time.Hour)
+	deleted, read = sweep()
+	require.Equal(t, 4, deleted, "the packs and manifests of generations 1 and 2")
+	require.Equal(t, 1, read)
 }
 
 func TestCommitChecksChangedObjectSize(t *testing.T) {
