@@ -782,9 +782,13 @@ func TestReconcileManagedPoolsDoesNotActivateStaleConfigStateWithInventory(t *te
 
 func TestCreateManagedMachineUsesMachineBoundToken(t *testing.T) {
 	repo := &fakeComputeRepo{}
-	service := managedPoolTestService(types.AppConfig{GatewayService: types.GatewayServiceConfig{
-		HTTP: types.HTTPConfig{ExternalHost: "gateway.example.com", ExternalPort: 443, TLS: true},
-	}}, repo)
+	service := managedPoolTestService(types.AppConfig{
+		GatewayService: types.GatewayServiceConfig{HTTP: types.HTTPConfig{ExternalHost: "gateway.example.com", ExternalPort: 443, TLS: true}},
+		Tailscale: types.TailscaleConfig{
+			Enabled: true, AuthKey: "gateway-key", AgentAuthKey: "private-agent-key",
+			ServerlessAgentAuthKey: "serverless-agent-key", AgentSSH: types.TailscaleAgentSSHConfig{Enabled: true},
+		},
+	}, repo)
 	if _, err := service.CreateManagedPool(context.Background(), clusterAdminAuth(), "public-cpu", types.WorkerPoolConfig{Mode: types.PoolModeExternal}); err != nil {
 		t.Fatal(err)
 	}
@@ -813,6 +817,13 @@ func TestCreateManagedMachineUsesMachineBoundToken(t *testing.T) {
 	joined, err := repo.GetAgentMachineState(context.Background(), "admin-workspace", "public-cpu", bootstrap.MachineID)
 	if err != nil || joined == nil || joined.Mode != string(types.PoolModeExternal) {
 		t.Fatalf("joined managed machine = %+v, err = %v", joined, err)
+	}
+	credential, err := service.RequestAgentTransportCredential(context.Background(), &pb.RequestAgentTransportCredentialRequest{
+		AgentToken: joinResponse.AgentToken, Transport: types.BackendRouteTransportTSNet,
+	})
+	if err != nil || credential == nil || !credential.Ok || !credential.TailnetSsh ||
+		credential.AuthKey != "serverless-agent-key" || credential.Hostname != types.AgentTailnetHostnamePrefix+bootstrap.MachineID {
+		t.Fatalf("fresh serverless SSH credential = %+v, err = %v", credential, err)
 	}
 }
 

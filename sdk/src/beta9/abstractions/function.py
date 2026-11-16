@@ -41,7 +41,7 @@ from ..env import called_on_import, is_local
 from ..exceptions import RemoteExecutionError
 from ..schema import Schema
 from ..sync import FileSyncer
-from ..type import DurableDisk, GpuType, GpuTypeAlias, Pool, TaskPolicy
+from ..type import CpuTier, DurableDisk, GpuType, GpuTypeAlias, Pool, TaskPolicy
 from .mixins import DeployableMixin
 
 
@@ -186,9 +186,11 @@ class Function(RunnerAbstraction):
         inputs: Optional[Schema] = None,
         outputs: Optional[Schema] = None,
         pool: Optional[Union[str, Pool]] = None,
+        cpu_tier: Optional[CpuTier] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
+            cpu_tier=cpu_tier,
             memory=memory,
             gpu=gpu,
             gpu_count=gpu_count,
@@ -541,6 +543,7 @@ class Schedule(Function):
         env: Optional[Dict[str, str]] = {},
         name: Optional[str] = None,
         on_deploy: Optional[AbstractCallableWrapper] = None,
+        cpu_tier: Optional[CpuTier] = None,
     ) -> None:
         params = inspect.signature(Function.__init__).parameters
         kwargs = {k: v for k, v in locals().items() if k in params and k != "self"}

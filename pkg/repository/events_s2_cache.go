@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,7 +48,7 @@ func (c *stubCacheContents) get(streamName s2.StreamName) *stubCacheContent {
 
 // ReadStubCacheRequiredContent reads the coalesced required-content set for a
 // stub from the dedicated S2 cache stream. Items are merged by
-// (hash, routing_key) keeping the most recent report for each.
+// immutable content identity or mutable source path, keeping the latest report.
 func (r *S2EventRepository) ReadStubCacheRequiredContent(ctx context.Context, workspaceID, stubID string) ([]types.CacheRequiredContentItem, error) {
 	if workspaceID == "" || stubID == "" {
 		return nil, fmt.Errorf("workspace id and stub id are required to read stub cache required content")
@@ -114,22 +112,53 @@ func mergeStubCacheRequiredContentRecord(merged map[string]types.CacheRequiredCo
 		return
 	}
 	for _, item := range schema.Items {
-		if item.Hash == "" {
-			continue
-		}
 		if item.Kind == "" {
 			item.Kind = schema.Kind
+		}
+		if item.Retired {
+			retireStubCacheRequiredContentItem(merged, item)
+			continue
+		}
+		if item.Hash == "" {
+			continue
 		}
 		mergeStubCacheRequiredContentItem(merged, item)
 	}
 }
 
+// retireStubCacheRequiredContentItem withdraws a stub's checkpoint if it is
+// still the one named. A checkpoint reported since stays: the record of a
+// restore can be published after the next pause's. What was retired is
+// remembered in its place, so that a report of it that is published late is
+// not taken for a new checkpoint.
+func retireStubCacheRequiredContentItem(merged map[string]types.CacheRequiredContentItem, item types.CacheRequiredContentItem) {
+	if item.Kind != types.CacheContentKindCheckpoint || item.CheckpointID == "" {
+		return
+	}
+	key := stubCacheRequiredContentItemKey(item)
+	if current, ok := merged[key]; ok && !current.Retired && current.CheckpointID != item.CheckpointID {
+		return
+	}
+	merged[key] = item
+}
+
 func stubCacheRequiredContentItems(merged map[string]types.CacheRequiredContentItem) []types.CacheRequiredContentItem {
-	return slices.AppendSeq(make([]types.CacheRequiredContentItem, 0, len(merged)), maps.Values(merged))
+	items := make([]types.CacheRequiredContentItem, 0, len(merged))
+	for _, item := range merged {
+		if !item.Retired {
+			items = append(items, item)
+		}
+	}
+	return items
 }
 
 func mergeStubCacheRequiredContentItem(merged map[string]types.CacheRequiredContentItem, item types.CacheRequiredContentItem) {
 	item = normalizeStubCacheRequiredContentItem(item)
+	if item.Kind == types.CacheContentKindCheckpoint {
+		if current, ok := merged[stubCacheRequiredContentItemKey(item)]; ok && current.Retired && current.CheckpointID == item.CheckpointID {
+			return
+		}
+	}
 	if item.Kind == types.CacheContentKindDiskSnapshot && item.DiskName != "" {
 		latest := latestDiskSnapshotContentGeneration(merged, item.DiskName)
 		if item.SnapshotGeneration < latest {
@@ -157,11 +186,6 @@ func normalizeStubCacheRequiredContentItem(item types.CacheRequiredContentItem) 
 }
 
 func stubCacheRequiredContentItemKey(item types.CacheRequiredContentItem) string {
-	// Keep only the checkpoint most recently reported by a stub. Explicit
-	// restores of older checkpoints still fetch their archive from origin.
-	if item.Kind == types.CacheContentKindCheckpoint {
-		return string(types.CacheContentKindCheckpoint)
-	}
 	if item.Kind == types.CacheContentKindDiskSnapshot && item.DiskName != "" {
 		return strings.Join([]string{
 			string(item.Kind),
@@ -171,7 +195,7 @@ func stubCacheRequiredContentItemKey(item types.CacheRequiredContentItem) string
 			item.RoutingKey,
 		}, "\x00")
 	}
-	return item.Hash + "\x00" + item.RoutingKey
+	return item.CoalescingKey()
 }
 
 func latestDiskSnapshotContentGeneration(merged map[string]types.CacheRequiredContentItem, diskName string) int64 {

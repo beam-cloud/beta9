@@ -125,9 +125,9 @@ func ConvertValue(targetType reflect.Type, value interface{}) (reflect.Value, er
 	case reflect.String:
 		switch v := value.(type) {
 		case string:
-			return reflect.ValueOf(v), nil
+			return reflect.ValueOf(v).Convert(targetType), nil
 		case int, int64, uint, uint64, float64, bool:
-			return reflect.ValueOf(fmt.Sprintf("%v", v)), nil
+			return reflect.ValueOf(fmt.Sprintf("%v", v)).Convert(targetType), nil
 		default:
 			return reflect.Value{}, fmt.Errorf("cannot convert %v (%T) to string", value, value)
 		}

@@ -228,6 +228,7 @@ def _show(info, as_json):
     help="RAM in MiB; defaults to 8192.",
 )
 @click.option("--gpu", metavar="TYPE", help="One GPU, for example RTX4090.")
+@extraclick.cpu_tier_option
 @click.option(
     "--disk-size",
     help="Writable disk over the base image; 1–100 GiB, default 50 GiB.",
@@ -342,6 +343,7 @@ def new(
     service,
     name,
     cpu,
+    cpu_tier,
     memory,
     disk_size,
     image_uri,
@@ -404,6 +406,7 @@ def new(
         name,
         image=image,
         cpu=cpu,
+        cpu_tier=cpu_tier,
         memory=memory,
         gpu=gpu,
         disk_size=disk_size,
@@ -470,7 +473,7 @@ def image_group():
 @click.option("--secret", "--build-secret", "build_secret", multiple=True)
 @click.option("--desktop", is_flag=True)
 @click.option(
-    "--kiosk", is_flag=True, help="Install the application streaming backend instead of KasmVNC."
+    "--kiosk", is_flag=True, help="Install an application session instead of the full desktop."
 )
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
@@ -599,6 +602,7 @@ def ip_vm(service, name):
 
 @management.command("update")
 @click.argument("name")
+@extraclick.cpu_tier_option
 @click.option(
     "--ttl",
     type=click.IntRange(0, 31536000),
@@ -615,13 +619,19 @@ def ip_vm(service, name):
 @click.option("--clear-metadata", is_flag=True)
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
-def update_vm(service, name, ttl, auto_resume, metadata, clear_metadata, as_json, idle_action=None):
-    """Update idle sleep, automatic resume and metadata."""
+def update_vm(
+    service, name, cpu_tier, ttl, auto_resume, metadata, clear_metadata, as_json, idle_action=None
+):
+    """Update idle sleep, automatic resume, metadata and the CPU tier of a stopped VM."""
     if metadata and clear_metadata:
         raise click.UsageError("Choose --metadata or --clear-metadata")
     values = _key_values(metadata) if metadata or clear_metadata else None
     vm = _vm(service, name).update(
-        ttl=ttl, idle_action=idle_action, auto_resume=auto_resume, metadata=values
+        ttl=ttl,
+        idle_action=idle_action,
+        auto_resume=auto_resume,
+        metadata=values,
+        cpu_tier=cpu_tier,
     )
     _show(vm.info, as_json)
 
@@ -793,67 +803,82 @@ def share_vm(service, name, port, desktop, port_option, expires_in, ttl, url_onl
 
 
 @management.command("start")
-@click.argument("name")
+@click.argument("names", nargs=-1, required=True)
 @click.option("--cold", is_flag=True, help="Explicitly discard paused RAM and boot from disk.")
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
-def start_vm(service, name, as_json, cold=False):
-    """Start a stopped VM or resume its saved memory."""
-    with _progress("Starting VM", "VM ready", as_json):
-        vm = _vm(service, name).start(cold=cold)
-        _ready(vm)
-    _show(vm.info, as_json)
+def start_vm(service, names, as_json, cold=False):
+    """Start stopped VMs or resume their saved memory."""
+    records = []
+    for name in names:
+        suffix = f" {name}" if len(names) > 1 else ""
+        with _progress("Starting VM" + suffix, "VM ready" + suffix, as_json):
+            vm = _vm(service, name).start(cold=cold)
+            _ready(vm)
+        records.append(vm.info)
+    _show(records[0] if len(records) == 1 else records, as_json)
 
 
 management.add_command(start_vm, "resume")
 
 
 @management.command("pause")
-@click.argument("name")
+@click.argument("names", nargs=-1, required=True)
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
-def pause_vm(service, name, as_json):
-    """Save memory and disk, then release compute."""
-    with _progress("Pausing VM", "VM paused", as_json):
-        vm = _vm(service, name).pause()
-    _show(vm.info, as_json)
+def pause_vm(service, names, as_json):
+    """Save memory and disk for VMs, then release compute."""
+    records = []
+    for name in names:
+        suffix = f" {name}" if len(names) > 1 else ""
+        with _progress("Pausing VM" + suffix, "VM paused" + suffix, as_json):
+            vm = _vm(service, name).pause()
+        records.append(vm.info)
+    _show(records[0] if len(records) == 1 else records, as_json)
 
 
 @management.command("stop")
-@click.argument("name")
+@click.argument("names", nargs=-1, required=True)
 @click.option("--no-snapshot", is_flag=True)
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
-def stop_vm(service, name, no_snapshot, as_json):
-    """Save the root and shut down the VM."""
+def stop_vm(service, names, no_snapshot, as_json):
+    """Save roots and shut down VMs."""
     message = "Stopping VM" if no_snapshot else "Snapshotting and stopping VM"
-    with _progress(message, "VM stopped", as_json):
-        vm = _vm(service, name).stop(no_snapshot)
-    _show(vm.info, as_json)
+    records = []
+    for name in names:
+        suffix = f" {name}" if len(names) > 1 else ""
+        with _progress(message + suffix, "VM stopped" + suffix, as_json):
+            vm = _vm(service, name).stop(no_snapshot)
+        records.append(vm.info)
+    _show(records[0] if len(records) == 1 else records, as_json)
 
 
 @management.command("rm")
-@click.argument("name")
+@click.argument("names", nargs=-1, required=True)
 @extraclick.pass_service_client
-def remove_vm(service, name):
-    """Delete a VM and its root disk."""
-    with _progress("Removing VM", "VM removed"):
-        _vm(service, name).remove()
+def remove_vm(service, names):
+    """Delete VMs and their root disks."""
+    for name in names:
+        suffix = f" {name}" if len(names) > 1 else ""
+        with _progress("Removing VM" + suffix, "VM removed" + suffix):
+            _vm(service, name).remove()
 
 
 @management.command("fork")
 @click.argument("source")
 @click.argument("name", required=False)
+@extraclick.cpu_tier_option
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
-def fork_vm(service, source, name, as_json):
+def fork_vm(service, source, name, as_json, cpu_tier):
     """Create an independent VM from a VM or snapshot."""
     with _progress("Forking VM", "VM ready", as_json):
         snapshots = VM(_service=service)._api("GET", "/artifacts/snapshot")
         if any(item["id"] == source for item in snapshots):
-            vm = VM(name, snapshot=source, _service=service).create()
+            vm = VM(name, snapshot=source, cpu_tier=cpu_tier, _service=service).create()
         else:
-            vm = _vm(service, source).fork(name)
+            vm = _vm(service, source).fork(name, cpu_tier=cpu_tier)
         _ready(vm)
     _show(vm.info, as_json)
 
@@ -1342,22 +1367,25 @@ def screenshot_vm(service, name, path):
 
 @management.group("template")
 def template_group():
-    """Manage reusable private VM roots."""
+    """Manage reusable VM roots."""
 
 
 @template_group.command("create")
 @click.argument("vm_name")
 @click.argument("name", required=False)
 @click.option("-d", "--description", default="")
-@click.option("--public", "public", is_flag=True, help="Reserved; complete VM roots are private.")
+@click.option(
+    "--public",
+    "public",
+    is_flag=True,
+    help="Publish the complete root and snapshot history for other workspaces to fork by ID. Use a fresh VM that has never held personal data or signed-in accounts.",
+)
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def template_create(service, vm_name, name, description, public, as_json):
-    """Save the VM root as a reusable private template."""
-    if public:
-        raise click.UsageError("Public templates are unsupported; complete VM roots remain private")
+    """Save the VM root as an immutable, forkable template."""
     with _progress("Creating template", "Template created", as_json):
-        template = _vm(service, vm_name).create_template(name, description)
+        template = _vm(service, vm_name).create_template(name, description, public=public)
     _show(template, as_json)
 
 
@@ -1365,7 +1393,7 @@ def template_create(service, vm_name, name, description, public, as_json):
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def template_list(service, as_json):
-    """List private VM templates."""
+    """List your VM templates."""
     _show(VM(_service=service)._api("GET", "/artifacts/template"), as_json)
 
 
@@ -1374,12 +1402,8 @@ def template_list(service, as_json):
 @click.option("--json", "as_json", is_flag=True)
 @extraclick.pass_service_client
 def template_show(service, name, as_json):
-    """Show a private VM template."""
-    for item in VM(_service=service)._api("GET", "/artifacts/template"):
-        if item["name"] == name or item["id"] == name:
-            _show(item, as_json)
-            return
-    raise click.ClickException("Template not found")
+    """Show an owned template or a public template by ID."""
+    _show(VM(_service=service)._api("GET", "/artifacts/template/" + quote(name, safe="")), as_json)
 
 
 @template_group.command("rm")

@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -12,7 +11,7 @@ import (
 	"github.com/tj/assert"
 )
 
-func TestRetrySoonIncrementsRetryCount(t *testing.T) {
+func TestRetryIncrementsRetryCount(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 
@@ -21,7 +20,7 @@ func TestRetrySoonIncrementsRetryCount(t *testing.T) {
 		Timestamp:   time.Now(),
 	}
 
-	newSchedulingAttempt(scheduler, request, nil).retrySoon("test")
+	newSchedulingAttempt(scheduler, request, nil).retry("test")
 	assert.Equal(t, 1, request.RetryCount)
 
 	time.Sleep(requestProcessingInterval + 10*time.Millisecond)
@@ -31,464 +30,18 @@ func TestRetrySoonIncrementsRetryCount(t *testing.T) {
 	assert.Equal(t, 1, requeuedRequest.RetryCount)
 }
 
-func TestProvisioningFailureBackoffSkipsImmediateAddWorkerRetry(t *testing.T) {
-	scheduler, err := NewSchedulerForTest()
-	assert.Nil(t, err)
-
-	started := make(chan struct{}, 2)
-	controller := &LocalWorkerPoolControllerForTest{
-		ctx:              context.Background(),
-		name:             "beta9-cpu",
-		config:           scheduler.config,
-		workerRepo:       scheduler.workerRepo,
-		addWorkerStarted: started,
-		addWorkerErr:     errors.New("provisioning failed"),
-	}
-	scheduler.workerPoolManager.SetPool("beta9-cpu", types.WorkerPoolConfig{}, controller)
-
-	firstRequest := &types.ContainerRequest{
-		ContainerId:  uuid.New().String(),
-		Cpu:          100,
-		Memory:       100,
-		PoolSelector: "beta9-cpu",
-		Timestamp:    time.Now(),
-	}
-	newSchedulingAttempt(scheduler, firstRequest, nil).provisionWorker()
-
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("expected first provisioning attempt")
-	}
-
-	deadline := time.After(time.Second)
-	for scheduler.workerProvisioningBackoff.canAttempt("beta9-cpu") {
-		select {
-		case <-deadline:
-			t.Fatal("expected provisioning failure to back off add-worker attempts")
-		case <-time.After(time.Millisecond):
-		}
-	}
-	assert.Equal(t, 1, controller.AddWorkerCallCount())
-
-	secondRequest := &types.ContainerRequest{
-		ContainerId:  uuid.New().String(),
-		Cpu:          100,
-		Memory:       100,
-		PoolSelector: "beta9-cpu",
-		Timestamp:    time.Now(),
-	}
-	newSchedulingAttempt(scheduler, secondRequest, nil).provisionWorker()
-	time.Sleep(2 * requestProcessingInterval)
-
-	assert.Equal(t, 1, controller.AddWorkerCallCount())
-}
-
-func TestProvisionWorkerSkipsExhaustedAgentPool(t *testing.T) {
-	scheduler, err := NewSchedulerForTest()
-	assert.Nil(t, err)
-	scheduler.workerPoolManager = NewWorkerPoolManager()
-
-	agent := &capacityCheckingWorkerPoolControllerForTest{
-		LocalWorkerPoolControllerForTest: &LocalWorkerPoolControllerForTest{
-			ctx:        context.Background(),
-			name:       "agent-cpu",
-			mode:       types.PoolModeExternal,
-			config:     scheduler.config,
-			workerRepo: scheduler.workerRepo,
-		},
-		hasCapacity: false,
-	}
-	dynamicStarted := make(chan struct{}, 1)
-	dynamic := &LocalWorkerPoolControllerForTest{
-		ctx:              context.Background(),
-		name:             "dynamic-cpu",
-		config:           scheduler.config,
-		workerRepo:       scheduler.workerRepo,
-		addWorkerStarted: dynamicStarted,
-	}
-	scheduler.workerPoolManager.SetPool(agent.name, types.WorkerPoolConfig{
-		Mode:     types.PoolModeExternal,
-		Priority: 10,
-	}, agent)
-	scheduler.workerPoolManager.SetPool(dynamic.name, types.WorkerPoolConfig{
-		Mode:     types.PoolModeLocal,
-		Priority: 0,
-	}, dynamic)
-
-	request := &types.ContainerRequest{
-		ContainerId: uuid.NewString(),
-		Cpu:         8000,
-		Memory:      16 * 1024,
-		Timestamp:   time.Now(),
-	}
-	setPendingSchedulerRequests(t, scheduler, request)
-	newSchedulingAttempt(scheduler, request, nil).provisionWorker()
-
-	select {
-	case <-dynamicStarted:
-	case <-time.After(time.Second):
-		t.Fatal("expected the dynamic pool to provision a worker")
-	}
-	assert.Equal(t, 0, agent.AddWorkerCallCount())
-	assert.Equal(t, 1, dynamic.AddWorkerCallCount())
-	assert.Equal(t, 1, request.ProvisioningAttempts)
-}
-
-func TestProvisionWorkerCapacityCheckErrorDoesNotConsumeAttempt(t *testing.T) {
-	scheduler, err := NewSchedulerForTest()
-	assert.Nil(t, err)
-	scheduler.workerPoolManager = NewWorkerPoolManager()
-
-	agent := &capacityCheckingWorkerPoolControllerForTest{
-		LocalWorkerPoolControllerForTest: &LocalWorkerPoolControllerForTest{
-			ctx:        context.Background(),
-			name:       "agent-cpu",
-			mode:       types.PoolModeExternal,
-			config:     scheduler.config,
-			workerRepo: scheduler.workerRepo,
-		},
-		capacityErr: context.DeadlineExceeded,
-	}
-	scheduler.workerPoolManager.SetPool(agent.name, types.WorkerPoolConfig{
-		Mode: types.PoolModeExternal,
-	}, agent)
-
-	request := &types.ContainerRequest{
-		ContainerId: uuid.NewString(),
-		Cpu:         8000,
-		Memory:      16 * 1024,
-		Timestamp:   time.Now(),
-	}
-	setPendingSchedulerRequests(t, scheduler, request)
-	newSchedulingAttempt(scheduler, request, nil).provisionWorker()
-
-	assert.Equal(t, 0, agent.AddWorkerCallCount())
-	assert.Equal(t, 0, request.ProvisioningAttempts)
-	time.Sleep(provisioningWorkerRequeueDelay + 10*time.Millisecond)
-	requeued, err := scheduler.requestBacklog.Pop()
-	assert.Nil(t, err)
-	assert.Equal(t, request.ContainerId, requeued.ContainerId)
-}
-
-func TestIncapablePoolsAreSkippedByEverySchedulerReplica(t *testing.T) {
-	first, err := NewSchedulerForTest()
-	assert.Nil(t, err)
-	first.workerPoolManager = NewWorkerPoolManager()
-	replicas := []*Scheduler{first, schedulerReplicaForTest(first), schedulerReplicaForTest(first)}
-
-	dynamic := &LocalWorkerPoolControllerForTest{
-		ctx:        context.Background(),
-		name:       "dynamic-cpu",
-		config:     first.config,
-		workerRepo: first.workerRepo,
-	}
-	agent := &capacityCheckingWorkerPoolControllerForTest{
-		LocalWorkerPoolControllerForTest: &LocalWorkerPoolControllerForTest{
-			ctx:        context.Background(),
-			name:       "agent-cpu",
-			mode:       types.PoolModeExternal,
-			config:     first.config,
-			workerRepo: first.workerRepo,
-		},
-		hasCapacity: false,
-	}
-	first.workerPoolManager.SetPool(agent.name, types.WorkerPoolConfig{
-		Mode:     types.PoolModeExternal,
-		Priority: 10,
-	}, agent)
-	first.workerPoolManager.SetPool(dynamic.name, types.WorkerPoolConfig{Mode: types.PoolModeLocal}, dynamic)
-
-	request := &types.ContainerRequest{Cpu: 8000, Memory: 16 * 1024}
-	for _, scheduler := range replicas {
-		controllers, err := scheduler.getControllers(request)
-		assert.Nil(t, err)
-		selected, _, err := scheduler.workerProvisioningControllerForRequest(controllers, request)
-		assert.Nil(t, err)
-		assert.NotNil(t, selected)
-		assert.Equal(t, dynamic.name, selected.Name())
-	}
-	assert.Equal(t, 0, agent.AddWorkerCallCount())
-}
-
-func TestProvisioningAttemptDoesNotFailOverWithinReservation(t *testing.T) {
-	scheduler, err := NewSchedulerForTest()
-	assert.Nil(t, err)
-	scheduler.workerPoolManager = NewWorkerPoolManager()
-
-	primaryStarted := make(chan struct{}, 1)
-	secondaryStarted := make(chan struct{}, 1)
-	primary := &LocalWorkerPoolControllerForTest{
-		ctx:              context.Background(),
-		name:             "primary",
-		config:           scheduler.config,
-		workerRepo:       scheduler.workerRepo,
-		addWorkerStarted: primaryStarted,
-		addWorkerErr:     errors.New("provisioning failed"),
-	}
-	secondary := &LocalWorkerPoolControllerForTest{
-		ctx:              context.Background(),
-		name:             "secondary",
-		config:           scheduler.config,
-		workerRepo:       scheduler.workerRepo,
-		addWorkerStarted: secondaryStarted,
-	}
-
-	scheduler.workerPoolManager.SetPool("primary", types.WorkerPoolConfig{Priority: 200}, primary)
-	scheduler.workerPoolManager.SetPool("secondary", types.WorkerPoolConfig{Priority: 100}, secondary)
-
-	request := &types.ContainerRequest{
-		ContainerId: uuid.New().String(),
-		Cpu:         100,
-		Memory:      100,
-		Timestamp:   time.Now(),
-	}
-	newSchedulingAttempt(scheduler, request, nil).provisionWorker()
-
-	select {
-	case <-primaryStarted:
-	case <-time.After(time.Second):
-		t.Fatal("expected primary provisioning attempt")
-	}
-
-	select {
-	case <-secondaryStarted:
-		t.Fatal("did not expect same reservation to provision a second pool")
-	case <-time.After(2 * requestProcessingInterval):
-	}
-
-	assert.Equal(t, 1, primary.AddWorkerCallCount())
-	assert.Equal(t, 0, secondary.AddWorkerCallCount())
-}
-
-func TestProvisionedWorkerRuntimeMismatchDoesNotAmplifyJobs(t *testing.T) {
-	scheduler, err := NewSchedulerForTest()
-	assert.Nil(t, err)
-
-	started := make(chan struct{}, 2)
-	done := make(chan struct{}, 1)
-	controller := &LocalWorkerPoolControllerForTest{
-		ctx:              context.Background(),
-		name:             "gvisor-pool",
-		config:           scheduler.config,
-		workerRepo:       scheduler.workerRepo,
-		containerRuntime: types.ContainerRuntimeGvisor.String(),
-		addWorkerStarted: started,
-		addWorkerDone:    done,
-	}
-	scheduler.workerPoolManager.SetPool("gvisor-pool", types.WorkerPoolConfig{
-		ContainerRuntime: types.ContainerRuntimeGvisor.String(),
-	}, controller)
-
-	request := &types.ContainerRequest{
-		ContainerId:       uuid.NewString(),
-		Cpu:               100,
-		Memory:            100,
-		PoolSelector:      "gvisor-pool",
-		Timestamp:         time.Now(),
-		CheckpointEnabled: true,
-		Checkpoint: &types.Checkpoint{
-			CheckpointId: "checkpoint-1",
-			Status:       string(types.CheckpointStatusAvailable),
-			Runtime:      types.ContainerRuntimeGvisor.String(),
-		},
-	}
-	setPendingSchedulerRequests(t, scheduler, request)
-
-	newSchedulingAttempt(scheduler, request, nil).run()
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("expected the initial worker provisioning attempt")
-	}
-
-	requeued := popBacklogRequest(t, scheduler.requestBacklog)
-	assert.Equal(t, 1, requeued.ProvisioningAttempts)
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("expected the initial worker provisioning attempt to complete")
-	}
-
-	workers, err := scheduler.workerRepo.GetAllWorkers()
-	assert.Nil(t, err)
-	assert.Len(t, workers, 1)
-	workers[0].Runtime = types.ContainerRuntimeRunc.String()
-	assert.Nil(t, scheduler.workerRepo.AddWorker(workers[0]))
-
-	newSchedulingAttempt(scheduler, requeued, workers).run()
-	time.Sleep(2 * requestProcessingInterval)
-	assert.Equal(t, 1, controller.AddWorkerCallCount(), "one request must not create another worker while its first worker is pending")
-}
-
-func TestProvisioningLimitStopsFurtherWorkerCreation(t *testing.T) {
-	scheduler, err := NewSchedulerForTest()
-	assert.Nil(t, err)
-
-	controller := &LocalWorkerPoolControllerForTest{
-		ctx:        context.Background(),
-		name:       "beta9-cpu",
-		config:     scheduler.config,
-		workerRepo: scheduler.workerRepo,
-	}
-	scheduler.workerPoolManager.SetPool("beta9-cpu", types.WorkerPoolConfig{}, controller)
-	request := &types.ContainerRequest{
-		ContainerId:          uuid.NewString(),
-		Cpu:                  100,
-		Memory:               100,
-		PoolSelector:         "beta9-cpu",
-		Timestamp:            time.Now(),
-		ProvisioningAttempts: maxWorkerProvisioningAttempts,
-	}
-	setPendingSchedulerRequests(t, scheduler, request)
-
-	newSchedulingAttempt(scheduler, request, nil).provisionWorker()
-	assert.Equal(t, 0, controller.AddWorkerCallCount())
-	assert.False(t, newSchedulingAttempt(scheduler, request, nil).runnable())
-}
-
-// blockedProvisioning is a pool whose AddWorker parks until unblock closes,
-// reporting each call on started.
-func blockedProvisioning(t *testing.T, scheduler *Scheduler, n int) (*LocalWorkerPoolControllerForTest, chan struct{}) {
-	t.Helper()
-	unblock := make(chan struct{})
-	controller := &LocalWorkerPoolControllerForTest{
-		ctx: context.Background(), name: "beta9-cpu", config: scheduler.config, workerRepo: scheduler.workerRepo,
-		addWorkerStarted: make(chan struct{}, n), addWorkerDone: make(chan struct{}, n), unblockAddWorker: unblock,
-	}
-	scheduler.workerPoolManager.SetPool("beta9-cpu", types.WorkerPoolConfig{}, controller)
-	return controller, unblock
-}
-
-func awaitN(t *testing.T, ch chan struct{}, n int, what string) {
-	t.Helper()
-	for i := range n {
-		select {
-		case <-ch:
-		case <-time.After(2 * time.Second):
-			t.Fatalf("%s: %d/%d", what, i, n)
-		}
-	}
-}
-
-// Replicas share one lock per container: while one provisions, or until its
-// pending worker's reservation expires, the others do not add a second worker.
-// Distinct containers never contend.
-func TestProvisioningLockIsPerContainerAcrossReplicas(t *testing.T) {
-	first, err := NewSchedulerForTest()
-	assert.Nil(t, err)
-	second := schedulerReplicaForTest(first)
-	controller, unblock := blockedProvisioning(t, first, 3)
-	request := func() *types.ContainerRequest {
-		return &types.ContainerRequest{ContainerId: uuid.NewString(), Cpu: 100, Memory: 100, PoolSelector: "beta9-cpu", Timestamp: time.Now()}
-	}
-	same, otherA, otherB := request(), request(), request()
-	setPendingSchedulerRequests(t, first, same, otherA, otherB)
-
-	newSchedulingAttempt(first, same, nil).provisionWorker()
-	newSchedulingAttempt(second, same, nil).provisionWorker()
-	newSchedulingAttempt(second, otherA, nil).provisionWorker()
-	newSchedulingAttempt(first, otherB, nil).provisionWorker()
-	awaitN(t, controller.addWorkerStarted, 3, "distinct containers started provisioning")
-	time.Sleep(2 * requestProcessingInterval)
-	assert.Equal(t, 3, controller.AddWorkerCallCount(), "the duplicate attempt waits")
-
-	close(unblock)
-	awaitN(t, controller.addWorkerDone, 3, "provisioning finished")
-	newSchedulingAttempt(second, same, nil).provisionWorker()
-	time.Sleep(2 * requestProcessingInterval)
-	assert.Equal(t, 3, controller.AddWorkerCallCount(), "the lock outlives a successful attempt")
-	workers, err := first.workerRepo.GetAllWorkers()
-	assert.Nil(t, err)
-	assert.Len(t, workers, 3)
-}
-
-func popBacklogRequest(t *testing.T, backlog *RequestBacklog) *types.ContainerRequest {
-	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		request, err := backlog.Pop()
-		if err == nil {
-			return request
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatal("expected a request in the scheduler backlog")
-	return nil
-}
-
-func TestWorkerProvisioningBackoffDoesNotBlockExistingPoolCapacity(t *testing.T) {
-	scheduler, err := NewSchedulerForTest()
-	assert.Nil(t, err)
-
-	controller := &LocalWorkerPoolControllerForTest{
-		ctx:          context.Background(),
-		name:         "beta9-cpu",
-		config:       scheduler.config,
-		workerRepo:   scheduler.workerRepo,
-		addWorkerErr: errors.New("provisioning failed"),
-	}
-	scheduler.workerPoolManager.SetPool("beta9-cpu", types.WorkerPoolConfig{}, controller)
-
-	provisionRequest := &types.ContainerRequest{
-		ContainerId:  uuid.New().String(),
-		Cpu:          100,
-		Memory:       100,
-		PoolSelector: "beta9-cpu",
-		Timestamp:    time.Now(),
-	}
-	newSchedulingAttempt(scheduler, provisionRequest, nil).provisionWorker()
-
-	deadline := time.After(time.Second)
-	for scheduler.workerProvisioningBackoff.canAttempt("beta9-cpu") {
-		select {
-		case <-deadline:
-			t.Fatal("expected add-worker attempt to be backed off")
-		case <-time.After(time.Millisecond):
-		}
-	}
-
-	worker := &types.Worker{
-		Id:          uuid.New().String(),
-		Status:      types.WorkerStatusAvailable,
-		TotalCpu:    100,
-		FreeCpu:     100,
-		TotalMemory: 125,
-		FreeMemory:  125,
-		PoolName:    "beta9-cpu",
-	}
-	assert.Nil(t, scheduler.workerRepo.AddWorker(worker))
-
-	scheduleRequest := &types.ContainerRequest{
-		ContainerId:  uuid.New().String(),
-		Cpu:          100,
-		Memory:       100,
-		PoolSelector: "beta9-cpu",
-		Timestamp:    time.Now(),
-	}
-	setPendingSchedulerRequests(t, scheduler, scheduleRequest)
-	newSchedulingAttempt(scheduler, scheduleRequest, []*types.Worker{worker}).run()
-
-	queued, err := scheduler.workerRepo.GetNextContainerRequest(worker.Id)
-	assert.Nil(t, err)
-	assert.NotNil(t, queued)
-	assert.Equal(t, scheduleRequest.ContainerId, queued.ContainerId)
-}
-
 func TestPrivatePoolMissFallsBackToRegularAvailableWorker(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 	workspaceID := "workspace-private-fallback"
 
-	privateController := &capacityCheckingWorkerPoolControllerForTest{
-		LocalWorkerPoolControllerForTest: &LocalWorkerPoolControllerForTest{
-			ctx:              context.Background(),
-			name:             "private-cpu",
-			config:           scheduler.config,
-			workerRepo:       scheduler.workerRepo,
-			requiresSelector: true,
-		},
-		hasCapacity: false,
+	privateController := &LocalWorkerPoolControllerForTest{
+		ctx:              context.Background(),
+		name:             "private-cpu",
+		config:           scheduler.config,
+		workerRepo:       scheduler.workerRepo,
+		requiresSelector: true,
+		cannotAddWorker:  true,
 	}
 	state := &compute.PoolState{Selector: "private-cpu", Mode: string(types.PoolModePrivate)}
 	scheduler.workerPoolManager.SetPoolAt(agentPoolControllerKey(workspaceID, state), "private-cpu", types.WorkerPoolConfig{
@@ -527,19 +80,22 @@ func TestPrivatePoolMissFallsBackToRegularAvailableWorker(t *testing.T) {
 	withoutStorage.Workspace = types.Workspace{}
 	withoutStorage.Env = []string{"BETA9_TOKEN=user-token"}
 	withoutStorage = withoutStorage.PrivateWorkerRequest()
-	privateController.hasCapacity = true
+	privateController.cannotAddWorker = false
 	fallback, poolName, ok := newSchedulingAttempt(scheduler, withoutStorage, nil).privatePoolFallbackRequest()
 	assert.True(t, ok)
 	assert.Equal(t, "private-cpu", poolName)
 	assert.Empty(t, fallback.PoolSelector)
 	assert.True(t, fallback.RuntimeTokenRequired)
 	assert.Empty(t, fallback.Env)
-	privateController.hasCapacity = false
+	privateController.cannotAddWorker = true
 
 	setPendingSchedulerRequests(t, scheduler, request)
-	newSchedulingAttempt(scheduler, request, []*types.Worker{privateWorker, regularWorker}).run()
+	scheduler.processRequestBatch([]*types.ContainerRequest{request}, []*types.Worker{privateWorker, regularWorker})
+	// The request went back to the backlog without its pool. The next pass
+	// places it.
+	assert.Equal(t, 1, scheduler.ProcessBacklog())
 
-	queued, err := scheduler.workerRepo.GetNextContainerRequest(regularWorker.Id)
+	queued, err := nextContainerRequest(scheduler.workerRepo, regularWorker.Id)
 	assert.Nil(t, err)
 	assert.NotNil(t, queued)
 	assert.Equal(t, request.ContainerId, queued.ContainerId)
@@ -555,15 +111,13 @@ func TestPrivatePoolMissWithDurableDiskDoesNotFallback(t *testing.T) {
 	assert.Nil(t, err)
 	workspaceID := "workspace-private-durable"
 
-	privateController := &capacityCheckingWorkerPoolControllerForTest{
-		LocalWorkerPoolControllerForTest: &LocalWorkerPoolControllerForTest{
-			ctx:              context.Background(),
-			name:             "private-cpu",
-			config:           scheduler.config,
-			workerRepo:       scheduler.workerRepo,
-			requiresSelector: true,
-		},
-		hasCapacity: false,
+	privateController := &LocalWorkerPoolControllerForTest{
+		ctx:              context.Background(),
+		name:             "private-cpu",
+		config:           scheduler.config,
+		workerRepo:       scheduler.workerRepo,
+		requiresSelector: true,
+		cannotAddWorker:  true,
 	}
 	state := &compute.PoolState{Selector: "private-cpu", Mode: string(types.PoolModePrivate)}
 	scheduler.workerPoolManager.SetPoolAt(agentPoolControllerKey(workspaceID, state), "private-cpu", types.WorkerPoolConfig{
@@ -598,15 +152,13 @@ func TestPrivatePoolMissWithoutRegularCapacityKeepsPrivateSelector(t *testing.T)
 	scheduler.workerPoolManager = NewWorkerPoolManager()
 	workspaceID := "workspace-private-no-capacity"
 
-	privateController := &capacityCheckingWorkerPoolControllerForTest{
-		LocalWorkerPoolControllerForTest: &LocalWorkerPoolControllerForTest{
-			ctx:              context.Background(),
-			name:             "private-cpu",
-			config:           scheduler.config,
-			workerRepo:       scheduler.workerRepo,
-			requiresSelector: true,
-		},
-		hasCapacity: false,
+	privateController := &LocalWorkerPoolControllerForTest{
+		ctx:              context.Background(),
+		name:             "private-cpu",
+		config:           scheduler.config,
+		workerRepo:       scheduler.workerRepo,
+		requiresSelector: true,
+		cannotAddWorker:  true,
 	}
 	state := &compute.PoolState{Selector: "private-cpu", Mode: string(types.PoolModePrivate)}
 	scheduler.workerPoolManager.SetPoolAt(agentPoolControllerKey(workspaceID, state), "private-cpu", types.WorkerPoolConfig{
@@ -624,7 +176,7 @@ func TestPrivatePoolMissWithoutRegularCapacityKeepsPrivateSelector(t *testing.T)
 		Workspace:    testWorkspaceWithStorage(),
 	}
 	setPendingSchedulerRequests(t, scheduler, request)
-	newSchedulingAttempt(scheduler, request, nil).run()
+	scheduler.processRequestBatch([]*types.ContainerRequest{request}, nil)
 
 	time.Sleep(provisioningWorkerRequeueDelay + requestProcessingInterval)
 	requeued, err := scheduler.requestBacklog.Pop()
@@ -632,7 +184,7 @@ func TestPrivatePoolMissWithoutRegularCapacityKeepsPrivateSelector(t *testing.T)
 	assert.Equal(t, request.ContainerId, requeued.ContainerId)
 	assert.Equal(t, "private-cpu", requeued.PoolSelector)
 	assert.Equal(t, 0, privateController.AddWorkerCallCount())
-	assert.Equal(t, 0, request.ProvisioningAttempts)
+	assert.Empty(t, request.GrowAttempts)
 }
 
 func TestPrivatePoolMissWithExhaustedRegularAgentKeepsPrivateSelector(t *testing.T) {
@@ -641,16 +193,13 @@ func TestPrivatePoolMissWithExhaustedRegularAgentKeepsPrivateSelector(t *testing
 	scheduler.workerPoolManager = NewWorkerPoolManager()
 	workspaceID := "workspace-private-exhausted-regular-agent"
 
-	privateController := &capacityCheckingWorkerPoolControllerForTest{
-		LocalWorkerPoolControllerForTest: &LocalWorkerPoolControllerForTest{
-			ctx:              context.Background(),
-			name:             "private-cpu",
-			mode:             types.PoolModePrivate,
-			config:           scheduler.config,
-			workerRepo:       scheduler.workerRepo,
-			requiresSelector: true,
-		},
-		hasCapacity: false,
+	privateController := &LocalWorkerPoolControllerForTest{
+		ctx:              context.Background(),
+		name:             "private-cpu",
+		config:           scheduler.config,
+		workerRepo:       scheduler.workerRepo,
+		requiresSelector: true,
+		cannotAddWorker:  true,
 	}
 	privateState := &compute.PoolState{Selector: "private-cpu", Mode: string(types.PoolModePrivate)}
 	scheduler.workerPoolManager.SetPoolAt(agentPoolControllerKey(workspaceID, privateState), "private-cpu", types.WorkerPoolConfig{
@@ -658,15 +207,12 @@ func TestPrivatePoolMissWithExhaustedRegularAgentKeepsPrivateSelector(t *testing
 		RequiresPoolSelector: true,
 	}, privateController)
 
-	regularController := &capacityCheckingWorkerPoolControllerForTest{
-		LocalWorkerPoolControllerForTest: &LocalWorkerPoolControllerForTest{
-			ctx:        context.Background(),
-			name:       "regular-agent-cpu",
-			mode:       types.PoolModeExternal,
-			config:     scheduler.config,
-			workerRepo: scheduler.workerRepo,
-		},
-		hasCapacity: false,
+	regularController := &LocalWorkerPoolControllerForTest{
+		ctx:             context.Background(),
+		name:            "regular-agent-cpu",
+		config:          scheduler.config,
+		workerRepo:      scheduler.workerRepo,
+		cannotAddWorker: true,
 	}
 	scheduler.workerPoolManager.SetPool(regularController.name, types.WorkerPoolConfig{
 		Mode: types.PoolModeExternal,
@@ -682,7 +228,7 @@ func TestPrivatePoolMissWithExhaustedRegularAgentKeepsPrivateSelector(t *testing
 		Workspace:    testWorkspaceWithStorage(),
 	}
 	setPendingSchedulerRequests(t, scheduler, request)
-	newSchedulingAttempt(scheduler, request, nil).run()
+	scheduler.processRequestBatch([]*types.ContainerRequest{request}, nil)
 
 	time.Sleep(provisioningWorkerRequeueDelay + requestProcessingInterval)
 	requeued, err := scheduler.requestBacklog.Pop()
@@ -691,15 +237,5 @@ func TestPrivatePoolMissWithExhaustedRegularAgentKeepsPrivateSelector(t *testing
 	assert.Equal(t, "private-cpu", requeued.PoolSelector)
 	assert.Equal(t, 0, privateController.AddWorkerCallCount())
 	assert.Equal(t, 0, regularController.AddWorkerCallCount())
-	assert.Equal(t, 0, request.ProvisioningAttempts)
-}
-
-type capacityCheckingWorkerPoolControllerForTest struct {
-	*LocalWorkerPoolControllerForTest
-	hasCapacity bool
-	capacityErr error
-}
-
-func (wpc *capacityCheckingWorkerPoolControllerForTest) HasWorkerCapacity(cpu int64, memory int64, gpuCount uint32) (bool, error) {
-	return wpc.hasCapacity, wpc.capacityErr
+	assert.Empty(t, request.GrowAttempts)
 }

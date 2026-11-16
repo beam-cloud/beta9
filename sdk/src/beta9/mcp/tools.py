@@ -33,6 +33,7 @@ from ..config import (
     get_settings,
     set_settings,
 )
+from ..type import CPU_TIERS
 
 if TYPE_CHECKING:
     from ..deployment.images import Registry
@@ -226,6 +227,14 @@ def deploy_definition(cli: str, cwd: str) -> Dict[str, Any]:
                     "description": "CPU cores, e.g. 0.5 or 2; must be positive.",
                 },
                 "memory": {**STRING, "description": "e.g. 2Gi"},
+                "cpu_tier": {
+                    "type": "string",
+                    "enum": list(CPU_TIERS),
+                    "description": "CPU capacity tier for CPU workloads: spot uses spare "
+                    "capacity and may be interrupted; shared has shared vCPUs (up to 8 vCPU "
+                    "and 16 GiB); performance has no CPU overbooking. Omit for the account "
+                    "default; a named pool must run the tier.",
+                },
                 "gpu": {
                     **STRING,
                     "description": "Discover current choices with capabilities; omit for CPU.",
@@ -351,6 +360,7 @@ DEPLOY_FLAGS = {
     "target": "--target",
     "image": "--image",
     "cpu": "--cpu",
+    "cpu_tier": "--cpu-tier",
     "memory": "--memory",
     "gpu": "--gpu",
     "gpu_count": "--gpu-count",

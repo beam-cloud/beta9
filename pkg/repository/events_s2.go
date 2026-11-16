@@ -95,6 +95,8 @@ func (r *S2EventRepository) PushEventSync(event cloudevents.Event) error {
 	return r.writer.write(event)
 }
 
+func (r *S2EventRepository) dropWhenFull() { r.writer.enqueueWait = 0 }
+
 func NewScopedS2EventRepository(config types.S2Config) (*ScopedS2EventRepository, error) {
 	if config.LogApiKey == "" && config.EventApiKey == "" {
 		return nil, nil
@@ -134,6 +136,8 @@ func (r *ScopedS2EventRepository) PushEventSync(event cloudevents.Event) error {
 	return r.writer.write(event)
 }
 
+func (r *ScopedS2EventRepository) dropWhenFull() { r.writer.enqueueWait = 0 }
+
 func (r *ScopedS2EventRepository) basinForStream(streamName s2.StreamName) *s2.BasinClient {
 	if target := r.targetForStream(streamName); target != nil {
 		return target.basin
@@ -159,30 +163,36 @@ type s2EventWriter struct {
 	layout      s2StreamLayout
 	basinFor    func(s2.StreamName) *s2.BasinClient
 	queue       chan cloudevents.Event
+	enqueueWait time.Duration // how long push holds its caller for room in a full queue
 	lastWarning atomic.Int64
 }
 
 // newS2EventWriter starts a writer draining its queue in the background.
 func newS2EventWriter(name string, layout s2StreamLayout, basinFor func(s2.StreamName) *s2.BasinClient) *s2EventWriter {
 	w := &s2EventWriter{
-		name:     name,
-		layout:   layout,
-		basinFor: basinFor,
-		queue:    make(chan cloudevents.Event, s2EventQueueSize),
+		name:        name,
+		layout:      layout,
+		basinFor:    basinFor,
+		queue:       make(chan cloudevents.Event, s2EventQueueSize),
+		enqueueWait: s2EventEnqueueTimeout,
 	}
 	go writeS2Events(w.queue, w.recordForEvent, w.append, w.warn)
 	return w
 }
 
-// push queues an event, waiting briefly for room.
+// push queues an event, waiting briefly for room unless the writer's events
+// are dropped when its queue is full.
 func (w *s2EventWriter) push(event cloudevents.Event) error {
 	select {
 	case w.queue <- event:
 		return nil
 	default:
 	}
+	if w.enqueueWait <= 0 {
+		return fmt.Errorf("%s event queue is full", w.name)
+	}
 
-	timer := time.NewTimer(s2EventEnqueueTimeout)
+	timer := time.NewTimer(w.enqueueWait)
 	defer timer.Stop()
 
 	select {

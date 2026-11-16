@@ -4,7 +4,7 @@ ARG GO_BUILD_IMAGE=docker.io/library/golang:1.25-bookworm@sha256:6359592445455f2
 ARG WORKER_RUNTIME_IMAGE=public.ecr.aws/n4e0e1y0/beta9-worker@sha256:5792f3b5c2ce00e37165db3ed1f1d39b245da6ec922a3cf688f437280cae0308
 
 # Built from docker/Dockerfile.microvm; CI checks this matches hack/microvm-image-tag.sh.
-ARG MICROVM_IMAGE=public.ecr.aws/n4e0e1y0/beta9-microvm:d05046b2646a
+ARG MICROVM_IMAGE=public.ecr.aws/n4e0e1y0/beta9-microvm:d22ea0c29c1c
 
 # MICROVM_DEV=1 also compiles the microvm integration test binary into the
 # image so hack/microvm-smoke.sh can run it in place with the worker's PATH.
@@ -47,14 +47,18 @@ FROM ${MICROVM_IMAGE} AS microvm
 FROM --platform=$TARGETPLATFORM ${WORKER_RUNTIME_IMAGE}
 
 ARG TARGETARCH
-ARG GOPROC_VERSION=0.1.17
+ARG GOPROC_VERSION=0.1.18
 ARG SOURCE_REVISION
 ARG SOURCE_HASH
 LABEL org.opencontainers.image.revision="$SOURCE_REVISION" \
       dev.beam.source-hash="$SOURCE_HASH"
 
-RUN wget "https://github.com/beam-cloud/goproc/releases/download/v${GOPROC_VERSION}/goproc-${GOPROC_VERSION}-linux-${TARGETARCH}" \
-      -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc
+COPY docker/goproc.sha256 /tmp/goproc.sha256
+RUN cd /tmp && \
+    wget "https://github.com/beam-cloud/goproc/releases/download/v${GOPROC_VERSION}/goproc-${GOPROC_VERSION}-linux-${TARGETARCH}" && \
+    sha256sum --check --ignore-missing goproc.sha256 && \
+    install -m 0755 "goproc-${GOPROC_VERSION}-linux-${TARGETARCH}" /usr/local/bin/goproc && \
+    rm goproc.sha256 "goproc-${GOPROC_VERSION}-linux-${TARGETARCH}"
 
 COPY --link --from=binaries /out/ /usr/local/bin/
 COPY --link --from=microvm /microvm/bin/ /usr/local/bin/

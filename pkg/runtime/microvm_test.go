@@ -134,7 +134,7 @@ func TestMicroVMCgroupPath(t *testing.T) {
 func TestMicroVMHypervisorArgs(t *testing.T) {
 	root := microVMDisk{arg: "path=/tmp/scratch.ext4", device: "/dev/vda"}
 	extra := []microVMDisk{{arg: "vhost_user=on,socket=/s,num_queues=1,queue_size=128", device: "/dev/vdb"}}
-	args := microVMHypervisorArgs("/run/beam/microvm/c1", "/vmlinux", "console=ttyS0", 2, 1<<30, "02:00:00:00:00:01", root, extra, nil)
+	args := microVMHypervisorArgs("/run/beam/microvm/c1", "/vmlinux", "console=ttyS0", 2, 1<<30, "", "02:00:00:00:00:01", root, extra, nil, false)
 	joined := strings.Join(args, " ")
 
 	assert.Contains(t, joined, "--kernel /vmlinux")
@@ -169,11 +169,10 @@ func TestMicroVMGPUPlacementArgs(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			memory := microVMMemoryBytes(&specs.Spec{Annotations: map[string]string{MicroVMMemoryMiBAnnotation: "16384"}})
-			args := microVMHypervisorArgs("/state", "/kernel", "", test.vcpus, memory, "mac", microVMDisk{}, nil,
-				test.placement, "/sys/bus/pci/devices/0000:c1:00.0", "/sys/bus/pci/devices/0000:c1:00.1")
+			args := microVMHypervisorArgs("/state", "/kernel", "", test.vcpus, memory, "", "mac", microVMDisk{}, nil, test.placement, true)
 			joined := strings.Join(args, " ")
 			assert.Contains(t, args, test.cpuArg)
-			assert.Contains(t, joined, "--device path=/sys/bus/pci/devices/0000:c1:00.0 path=/sys/bus/pci/devices/0000:c1:00.1")
+			assert.NotContains(t, args, "--device", "VFIO devices are attached while the guest boots")
 			assert.NotContains(t, args, "--balloon")
 			assert.NotContains(t, args, "--numa", "host locality must not change guest NUMA topology")
 			if test.placement == nil {
@@ -182,6 +181,9 @@ func TestMicroVMGPUPlacementArgs(t *testing.T) {
 			} else {
 				assert.Contains(t, joined, "--memory size=0 --memory-zone id=ram,size=17716740096,shared=on,host_numa_node="+strconv.Itoa(test.placement.node))
 			}
+			prepared := strings.Join(microVMHypervisorArgs("/state", "/kernel", "", test.vcpus, memory, "/proc/self/fd/4", "mac", microVMDisk{}, nil, test.placement, true), " ")
+			assert.Contains(t, prepared, "--memory size=0 --memory-zone id=ram,size=17716740096,shared=on,file=/proc/self/fd/4 ")
+			assert.NotContains(t, prepared, "host_numa_node", "prepared RAM is already on the GPU's node")
 		})
 	}
 }
@@ -260,7 +262,7 @@ func TestRewriteSnapshotConfigRetargetsDevices(t *testing.T) {
 	root := microVMDisk{path: "/new/scratch.ext4"}
 	extra := []microVMDisk{{socket: "/new/run/bbb/vhost-user-blk.sock"}}
 	network := microvm.Network{MAC: "02:00:00:00:00:02"}
-	out, err := rewriteSnapshotConfig(snapshot, "/new/state", network, root, extra)
+	out, err := rewriteSnapshotConfig(snapshot, "/new/state", network, root, extra, snapshotHost{})
 	require.NoError(t, err)
 
 	var cfg map[string]any
@@ -275,8 +277,82 @@ func TestRewriteSnapshotConfigRetargetsDevices(t *testing.T) {
 	assert.Equal(t, "/new/state/vsock.sock", cfg["vsock"].(map[string]any)["socket"])
 	assert.Equal(t, "02:00:00:00:00:02", cfg["net"].([]any)[0].(map[string]any)["mac"], "the guest takes the new slot's MAC")
 
-	_, err = rewriteSnapshotConfig(snapshot, "/new/state", network, root, nil)
+	_, err = rewriteSnapshotConfig(snapshot, "/new/state", network, root, nil, snapshotHost{})
 	assert.ErrorContains(t, err, "snapshot has 2 disks, this VM has 1")
-	_, err = rewriteSnapshotConfig(snapshot, "/new/state", network, microVMDisk{socket: "/x"}, extra)
+	_, err = rewriteSnapshotConfig(snapshot, "/new/state", network, microVMDisk{socket: "/x"}, extra, snapshotHost{})
 	assert.ErrorContains(t, err, "not a vhost-user export", "a scratch-root snapshot cannot be restored onto a durable root")
+}
+
+// A GPU guest's snapshot names what it had on the host it was taken on: the
+// descriptors its hypervisor inherited and the CPUs and NUMA node next to
+// its GPU. It is restored next to whichever GPU is free.
+func TestRewriteSnapshotConfigMovesGuestToAnotherGPU(t *testing.T) {
+	snapshot := []byte(`{
+	  "cpus": {"boot_vcpus": 2, "affinity": [{"vcpu": 0, "host_cpus": [1, 2]}, {"vcpu": 1, "host_cpus": [1, 2]}]},
+	  "memory": {"size": 0, "thp": true, "zones": [
+	    {"id": "ram", "size": 2147483648, "file": "/proc/self/fd/4", "shared": true, "host_numa_node": null}
+	  ]},
+	  "payload": {"kernel": "/proc/self/fd/5", "cmdline": "console=ttyS0"},
+	  "disks": [{"path": "/old/scratch.ext4"}],
+	  "devices": []
+	}`)
+	rewrite := func(t *testing.T, config []byte, host snapshotHost) (cpus, zone, payload map[string]any) {
+		t.Helper()
+		out, err := rewriteSnapshotConfig(config, "/state", microvm.Network{}, microVMDisk{path: "/new/scratch.ext4"}, nil, host)
+		require.NoError(t, err)
+		var cfg map[string]any
+		require.NoError(t, json.Unmarshal(out, &cfg))
+		if zones, _ := cfg["memory"].(map[string]any)["zones"].([]any); len(zones) == 1 {
+			zone = zones[0].(map[string]any)
+		}
+		payload, _ = cfg["payload"].(map[string]any)
+		return cfg["cpus"].(map[string]any), zone, payload
+	}
+	there := &microVMPlacement{node: 1, cpus: []int{64, 65, 66}}
+	near := []any{float64(64), float64(65), float64(66)}
+
+	cpus, zone, payload := rewrite(t, snapshot, snapshotHost{kernel: "/proc/self/fd/7", ram: "/proc/self/fd/6", ramBytes: 2 << 30, placement: there})
+	assert.Equal(t, []any{
+		map[string]any{"vcpu": float64(0), "host_cpus": near},
+		map[string]any{"vcpu": float64(1), "host_cpus": near},
+	}, cpus["affinity"])
+	assert.Equal(t, "/proc/self/fd/6", zone["file"], "the snapshot's descriptor numbers mean nothing to another hypervisor")
+	assert.Equal(t, true, zone["shared"])
+	assert.Nil(t, zone["host_numa_node"], "prepared huge pages are already on the GPU's node")
+	assert.Equal(t, "/proc/self/fd/7", payload["kernel"])
+	assert.Equal(t, "console=ttyS0", payload["cmdline"])
+
+	// Without free huge pages the guest's RAM is ordinary memory near the GPU.
+	cpus, zone, _ = rewrite(t, snapshot, snapshotHost{kernel: "/kernel", placement: there})
+	assert.Len(t, cpus["affinity"], 2)
+	assert.Nil(t, zone["file"])
+	assert.Equal(t, float64(1), zone["host_numa_node"])
+
+	// A host that does not know where its GPUs are pins nothing.
+	cpus, zone, payload = rewrite(t, snapshot, snapshotHost{kernel: "/kernel"})
+	assert.Nil(t, cpus["affinity"], "the CPUs next to the other host's GPU are not this guest's")
+	assert.Nil(t, zone["file"])
+	assert.Nil(t, zone["host_numa_node"])
+	assert.Equal(t, "/kernel", payload["kernel"])
+
+	_, err := rewriteSnapshotConfig(snapshot, "/state", microvm.Network{}, microVMDisk{path: "/new/scratch.ext4"}, nil,
+		snapshotHost{ram: "/proc/self/fd/6", ramBytes: 4 << 30})
+	assert.ErrorContains(t, err, "snapshot has 2147483648 bytes of RAM, this VM has 4294967296")
+
+	assert.True(t, snapshotRAMInFile(snapshot))
+	for _, config := range []string{
+		`{"memory": {"size": 1073741824, "shared": true, "zones": null}}`,
+		`{"memory": {"size": 0, "zones": [{"id": "ram", "size": 1073741824, "file": null, "host_numa_node": 0}]}}`,
+		`not a snapshot`,
+	} {
+		assert.False(t, snapshotRAMInFile([]byte(config)), config)
+	}
+
+	// A CPU guest's snapshot has no zones and keeps the kernel it names
+	// only when this host has none to give.
+	cpuGuest := []byte(`{"cpus": {"boot_vcpus": 1, "affinity": null}, "memory": {"size": 1073741824}, "payload": {"kernel": "/old/vmlinux"}, "disks": [{"path": "/old"}]}`)
+	cpus, zone, payload = rewrite(t, cpuGuest, snapshotHost{})
+	assert.Nil(t, cpus["affinity"])
+	assert.Nil(t, zone)
+	assert.Equal(t, "/old/vmlinux", payload["kernel"])
 }

@@ -49,41 +49,16 @@ func (g *diskGroup) PublishSnapshot(ctx echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid snapshot ID")
 	}
 
-	// Publishing requires ownership even when the snapshot is public.
-	snapshot, err := g.gds.backendRepo.GetDiskSnapshot(ctx.Request().Context(), workspace.Id, snapshotID)
-	if err != nil {
+	if err := g.gds.backendRepo.PublishDiskSnapshot(ctx.Request().Context(), workspace.Id, snapshotID); err != nil {
 		var notFound *types.ErrDiskSnapshotNotFound
 		if errors.As(err, &notFound) {
 			return echo.NewHTTPError(http.StatusNotFound, "Disk snapshot not found")
 		}
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to find disk snapshot")
-	}
-	if snapshot.WorkspaceId != workspace.Id {
-		return echo.NewHTTPError(http.StatusNotFound, "Disk snapshot not found")
-	}
-	if snapshot.Status != types.DiskSnapshotStatusAvailable {
-		return echo.NewHTTPError(http.StatusConflict, "Disk snapshot is not available")
-	}
-
-	// A restore walks ParentSnapshotId back to a parentless base, so a public
-	// snapshot is only usable from another workspace if its whole ancestry is
-	// public too. Publish the chain, newest first.
-	const maxChainDepth = 128
-	for depth := 0; snapshot != nil; depth++ {
-		if depth >= maxChainDepth {
-			return echo.NewHTTPError(http.StatusInternalServerError, "Disk snapshot chain is too deep to publish")
+		var unavailable *types.ErrDiskSnapshotNotAvailable
+		if errors.As(err, &unavailable) {
+			return echo.NewHTTPError(http.StatusConflict, "Disk snapshot is not available")
 		}
-		snapshot.Public = true
-		if _, err := g.gds.backendRepo.UpdateDiskSnapshot(ctx.Request().Context(), snapshot); err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to publish disk snapshot")
-		}
-		if snapshot.ParentSnapshotId == "" {
-			break
-		}
-		snapshot, err = g.gds.backendRepo.GetDiskSnapshot(ctx.Request().Context(), workspace.Id, snapshot.ParentSnapshotId)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to resolve disk snapshot parent")
-		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to publish disk snapshot")
 	}
 	return ctx.JSON(http.StatusOK, map[string]any{"ok": true, "err_msg": ""})
 }

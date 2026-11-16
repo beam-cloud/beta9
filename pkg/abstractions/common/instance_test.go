@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -754,4 +755,126 @@ func (i *testAutoscaledInstance) HandleScalingEvent(desiredContainers int) error
 func (i *testAutoscaledInstance) Sync() error {
 	i.syncs++
 	return nil
+}
+
+func TestScaleLogReadsTheInstanceStateOncePerBurst(t *testing.T) {
+	instance, repo, server := newTestAutoscaledInstance(t, true, nil)
+	seedTestContainer(t, repo, types.ContainerStatusRunning)
+
+	before := server.CommandCount()
+	_, err := instance.State()
+	require.NoError(t, err)
+	oneRead := server.CommandCount() - before
+	require.Positive(t, oneRead)
+
+	// A stub that gains fifty containers together logs fifty lines.
+	before = server.CommandCount()
+	for tracked := range 50 {
+		instance.logScaleEvent(tracked, tracked+1)
+	}
+	require.Equal(t, oneRead, server.CommandCount()-before, "commands for fifty scale log lines")
+
+	// A change after the burst reads the state again.
+	instance.scaleStateLoggedAt = time.Now().Add(-sampleRate)
+	instance.logScaleEvent(50, 51)
+	require.Equal(t, 2*oneRead, server.CommandCount()-before)
+
+	// A stub of 20,000 containers is read for its log line as seldom as its
+	// autoscaler samples it, not once a second.
+	instance.scaleStateLoggedAt = time.Now().Add(-9 * sampleRate)
+	instance.logScaleEvent(19_999, 20_000)
+	require.Equal(t, 2*oneRead, server.CommandCount()-before)
+	instance.scaleStateLoggedAt = time.Now().Add(-10 * sampleRate)
+	instance.logScaleEvent(19_999, 20_000)
+	require.Equal(t, 3*oneRead, server.CommandCount()-before)
+}
+
+func TestALargeStubIsSampledLessOften(t *testing.T) {
+	require.Equal(t, sampleRate, autoscalerInterval(0))
+	require.Equal(t, sampleRate, autoscalerInterval(autoscalerContainersPerSecond))
+	require.Equal(t, 5*sampleRate, autoscalerInterval(5*autoscalerContainersPerSecond))
+	require.Equal(t, maxAutoscalerInterval, autoscalerInterval(1_000_000))
+
+	// A stub of ordinary size is sampled on every tick.
+	small, repo, _ := newTestAutoscaledInstance(t, true, nil)
+	seedTestContainer(t, repo, types.ContainerStatusRunning)
+	_, err := small.State()
+	require.NoError(t, err)
+	for range 3 {
+		require.True(t, small.AutoscalerTickDue())
+	}
+
+	// One with 10,000 containers is sampled every fifth tick: each sample
+	// reads all of them.
+	large, _, _ := newTestAutoscaledInstance(t, true, nil)
+	large.containers = stubContainers{active: make([]types.ContainerState, 5*autoscalerContainersPerSecond), readAt: time.Now()}
+	require.True(t, large.AutoscalerTickDue(), "the first tick")
+	require.False(t, large.AutoscalerTickDue(), "the tick after a sample")
+	large.autoscalerTickedAt = time.Now().Add(-3 * sampleRate)
+	require.False(t, large.AutoscalerTickDue(), "three ticks after a sample")
+	large.autoscalerTickedAt = time.Now().Add(-5 * sampleRate)
+	require.True(t, large.AutoscalerTickDue(), "five ticks after a sample")
+	require.False(t, large.AutoscalerTickDue(), "the tick after that sample")
+
+	// Once it is small again, so is its interval.
+	large.containers = stubContainers{active: make([]types.ContainerState, 10), readAt: time.Now()}
+	require.True(t, large.AutoscalerTickDue())
+}
+
+// pacedInstance is an instance whose autoscaler ticks are not due.
+type pacedInstance struct {
+	IAutoscaledInstance
+	asked atomic.Int64
+}
+
+func (i *pacedInstance) AutoscalerTickDue() bool {
+	i.asked.Add(1)
+	return false
+}
+
+func TestAutoscalerSkipsATickThatIsNotDueButNeverATrigger(t *testing.T) {
+	instance := &pacedInstance{}
+	samples := make(chan struct{}, 8)
+	autoscaler := NewAutoscaler(instance, func(*pacedInstance) (int, error) {
+		samples <- struct{}{}
+		return 0, nil
+	}, func(*pacedInstance, int) *AutoscalerResult { return nil })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go autoscaler.Start(ctx)
+
+	// A request's trigger is sampled at once, whatever the ticks do.
+	autoscaler.Trigger()
+	select {
+	case <-samples:
+	case <-time.After(sampleRate / 2):
+		t.Fatal("a trigger was not sampled")
+	}
+
+	// The ticks ask, are told no, and sample nothing.
+	require.Eventually(t, func() bool { return instance.asked.Load() >= 2 }, 4*sampleRate, 10*time.Millisecond)
+	require.Empty(t, samples)
+}
+
+func TestContainersJustReadServeTheStepAfterTheRead(t *testing.T) {
+	instance, repo, _ := newTestAutoscaledInstance(t, true, nil)
+	_, _, justRead := instance.ContainersJustRead()
+	require.False(t, justRead, "before any read")
+
+	containerID := seedTestContainer(t, repo, types.ContainerStatusRunning)
+	seedFailedContainers(t, repo, 2)
+	_, err := instance.State()
+	require.NoError(t, err)
+
+	containers, failed, justRead := instance.ContainersJustRead()
+	require.True(t, justRead)
+	require.Len(t, containers, 1)
+	require.Equal(t, containerID, containers[0].ContainerId)
+	require.Len(t, failed, 2)
+
+	// A read from longer ago is no longer one to act on.
+	instance.containers.readAt = time.Now().Add(-2 * containersJustReadFor)
+	_, _, justRead = instance.ContainersJustRead()
+	require.False(t, justRead)
 }

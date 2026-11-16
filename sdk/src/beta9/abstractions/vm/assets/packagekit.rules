@@ -1,0 +1,12 @@
+polkit.addRule(function(action, subject) {
+    if (subject.user === "@DESKTOP_USER@" && [
+        "org.freedesktop.packagekit.package-install",
+        "org.freedesktop.packagekit.package-install-untrusted",
+        "org.freedesktop.packagekit.package-reinstall",
+        "org.freedesktop.packagekit.package-downgrade",
+        "org.freedesktop.packagekit.package-remove",
+        "org.freedesktop.packagekit.package-eula-accept"
+    ].indexOf(action.id) !== -1) {
+        return polkit.Result.YES;
+    }
+});

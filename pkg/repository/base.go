@@ -14,13 +14,14 @@ import (
 type SchedulerRepository interface{}
 
 type WorkerRepository interface {
-	GetId() string
 	GetWorkerById(workerId string) (*types.Worker, error)
 	GetAllWorkers() ([]*types.Worker, error)
 	GetAllWorkersInPool(poolName string) ([]*types.Worker, error)
 	AddWorker(w *types.Worker) error
 	ToggleWorkerAvailable(workerId, generation string) error
 	SetWorkerCordon(workerId string, cordoned bool) error
+	CordonWorkerIfIdle(workerId string) (bool, error)
+	KeepPendingWorker(workerId string) (bool, error)
 	PrepareWorkerRollout(workerId, generation string) (bool, error)
 	CancelWorkerRollout(workerId, generation string) error
 	UpdateWorkerStatus(workerId string, status types.WorkerStatus) error
@@ -29,7 +30,6 @@ type WorkerRepository interface {
 	UpdateWorkerCapacity(w *types.Worker, cr *types.ContainerRequest, ut types.CapacityUpdateType) error
 	ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error
 	ScheduleContainerRequests(worker *types.Worker, requests []*types.ContainerRequest) error
-	GetNextContainerRequest(workerId string) (*types.ContainerRequest, error)
 	GetNextContainerRequests(workerId string, limit int) ([]*types.ContainerRequest, error)
 	RecoverPendingContainerRequests(workerId string) error
 	RequeueContainerRequests(workerId string, requests []*types.ContainerRequest) error
@@ -70,6 +70,7 @@ type ContainerRepository interface {
 	DeleteBackendRoutesByContainerID(ctx context.Context, containerID string) error
 	DeleteBackendRoutesByMachine(ctx context.Context, workspaceID, poolName, machineID string) error
 	UpdateContainerStatus(string, types.ContainerStatus, int64) error
+	RenewContainerLeases(ctx context.Context, workerId, workspaceId string, renewals []types.ContainerLeaseRenewal) []types.ContainerLease
 	MarkPendingContainerStoppingIfUnassigned(containerId string, expirySeconds int64, exitCode int) (bool, error)
 	DeleteContainerState(containerId string) error
 	SetContainerRequestStatus(containerId string, status types.ContainerRequestStatus) error
@@ -78,6 +79,7 @@ type ContainerRepository interface {
 	GetWorkerAddress(ctx context.Context, containerId string) (string, error)
 	SetContainerAddressMap(containerId string, addressMap map[int32]string) error
 	GetContainerAddressMap(containerId string) (map[int32]string, error)
+	GetContainerAddressMaps(containerIds []string) (map[string]map[int32]string, error)
 	CheckContainerConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
 	CreateContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
 	ReserveContainerConcurrencyForPending(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
@@ -87,6 +89,7 @@ type ContainerRepository interface {
 	GetSandboxActivity(workspaceId string, appIds []string, since time.Time) (map[string][]types.AppActivityBucket, error)
 	GetActiveContainersByWorkerId(workerId string) ([]types.ContainerState, error)
 	GetFailedContainersByStubId(stubId string) ([]string, error)
+	GetContainersByStubId(stubId string) (active []types.ContainerState, failed []string, err error)
 	GetStubState(stubId string) (string, error)
 	SetStubState(stubId, state string) error
 	DeleteStubState(stubId string) error
@@ -100,18 +103,16 @@ type ContainerRepository interface {
 	EndpointRequestHeartbeatExists(ctx context.Context, workspaceName, stubId, taskId, containerId string) (bool, error)
 	SetPodKeepWarmLock(ctx context.Context, workspaceName, stubId, containerId string, keepWarmSeconds int) error
 	PodKeepWarmLockExists(ctx context.Context, workspaceName, stubId, containerId string) (bool, error)
+	PodKeepWarmLocksExist(ctx context.Context, workspaceName, stubId string, containerIds []string) (map[string]bool, error)
 }
 
 type WorkerPoolRepository interface {
 	SetWorkerPoolState(ctx context.Context, poolName string, state *types.WorkerPoolState) error
 	GetWorkerPoolState(ctx context.Context, poolName string) (*types.WorkerPoolState, error)
 	DeleteWorkerPoolState(ctx context.Context, poolName string) error
-	SetWorkerPoolStateLock(poolName string) error
-	RemoveWorkerPoolStateLock(poolName string) error
-	SetWorkerPoolSizerLock(poolName string) error
-	RemoveWorkerPoolSizerLock(poolName string) error
-	SetWorkerCleanerLock(poolName string) error
-	RemoveWorkerCleanerLock(poolName string) error
+	WithWorkerPoolSizerLock(poolName string, size func()) error
+	WithWorkerPoolStateLock(poolName string, report func()) error
+	WithWorkerPoolCleanerLock(poolName string, clean func()) error
 }
 
 type ComputeRepository interface {
@@ -137,11 +138,7 @@ type ComputeRepository interface {
 	SaveAgentWorkerSlotState(ctx context.Context, state *compute.AgentWorkerSlotState) error
 	ListAgentWorkerSlotStates(ctx context.Context, workspaceID, poolName, machineID string) ([]*compute.AgentWorkerSlotState, error)
 	DeleteAgentWorkerSlotState(ctx context.Context, workspaceID, poolName, machineID, workerID string) error
-	PushFailoverDemand(ctx context.Context, demand *compute.FailoverDemand, ttl time.Duration) error
-	ListFailoverDemand(ctx context.Context) ([]*compute.FailoverDemand, error)
-	DeleteFailoverDemand(ctx context.Context, gpu string) error
-	RecordOnDemandSpend(ctx context.Context, at time.Time, cents float64) error
-	OnDemandSpendCents(ctx context.Context, window time.Duration) (float64, error)
+	ProviderOwner(ctx context.Context) (string, error)
 }
 
 // ManagedPoolRepository keeps managed pool definitions separate from
@@ -232,7 +229,7 @@ type BackendRepository interface {
 	CreateWorkerToken(ctx context.Context, workspaceId uint, tokenType string, workerId string) (types.Token, error)
 	BindWorkerToken(ctx context.Context, tokenKey, workerId string) (bool, error)
 	AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error)
-	RetrieveActiveToken(ctx context.Context, workspaceId uint) (*types.Token, error)
+	RetrieveActiveToken(ctx context.Context, workspaceId uint, tokenType string) (*types.Token, error)
 	GetTokenByExternalId(ctx context.Context, workspaceId uint, extTokenId string) (*types.Token, error)
 	ListTokens(ctx context.Context, workspaceId uint) ([]types.Token, error)
 	SetWorkspaceTokensDisabled(ctx context.Context, workspaceId uint, disabled bool) ([]string, error)
@@ -326,6 +323,7 @@ type BackendRepository interface {
 	CreateDiskSnapshot(ctx context.Context, snapshot *types.DiskSnapshot) (*types.DiskSnapshot, error)
 	UpdateDiskSnapshot(ctx context.Context, snapshot *types.DiskSnapshot) (*types.DiskSnapshot, error)
 	GetDiskSnapshot(ctx context.Context, workspaceId uint, snapshotId string) (*types.DiskSnapshot, error)
+	PublishDiskSnapshot(ctx context.Context, workspaceId uint, snapshotId string) error
 	GetLatestDiskSnapshot(ctx context.Context, workspaceId uint, diskName string) (*types.DiskSnapshot, error)
 	ListDiskSnapshots(ctx context.Context, filter types.DiskSnapshotFilter) ([]types.DiskSnapshot, error)
 	GetDisk(ctx context.Context, workspaceId uint, name string) (*types.Disk, error)

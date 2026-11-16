@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -25,6 +26,57 @@ const (
 )
 
 var errManagedBillingUnavailable = errors.New("managed compute billing is not configured")
+
+// billingHTTPError is a non-2xx billing response. Body is internal diagnostic
+// text (up to 1 MiB) and must never reach customer-visible events.
+type billingHTTPError struct {
+	Path       string
+	StatusCode int
+	Body       string
+}
+
+func (e *billingHTTPError) Error() string {
+	return fmt.Sprintf("managed compute billing %s failed with status %d: %s", e.Path, e.StatusCode, e.Body)
+}
+
+// Billing error classes safe to show customers.
+const (
+	billingErrorClassTimeout       = "timeout"
+	billingErrorClassCanceled      = "canceled"
+	billingErrorClassHTTP          = "http_error"
+	billingErrorClassUnreachable   = "unreachable"
+	billingErrorClassNotConfigured = "not_configured"
+	billingErrorClassDecode        = "invalid_response"
+	billingErrorClassUnknown       = "unknown"
+)
+
+// classifyBillingError reduces a billing client error to a fixed class and,
+// for HTTP failures, the status code. Nothing from the error text or the
+// response body is returned.
+func classifyBillingError(err error) (class string, httpStatus int) {
+	var httpErr *billingHTTPError
+	var netErr net.Error
+	var syntaxErr *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+	switch {
+	case err == nil:
+		return "", 0
+	case errors.As(err, &httpErr):
+		return billingErrorClassHTTP, httpErr.StatusCode
+	case errors.Is(err, errManagedBillingUnavailable):
+		return billingErrorClassNotConfigured, 0
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
+		return billingErrorClassTimeout, 0
+	case errors.Is(err, context.Canceled):
+		return billingErrorClassCanceled, 0
+	case errors.As(err, &syntaxErr), errors.As(err, &typeErr):
+		return billingErrorClassDecode, 0
+	case errors.As(err, &netErr):
+		return billingErrorClassUnreachable, 0
+	default:
+		return billingErrorClassUnknown, 0
+	}
+}
 
 type managedComputeBillingClient interface {
 	CheckLaunchCredit(context.Context, billingCreditRequest) (billingDecision, error)
@@ -272,7 +324,7 @@ func (h *httpManagedBilling) post(ctx context.Context, path string, in, out any)
 		return err
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
-		return fmt.Errorf("managed compute billing %s failed with status %d: %s", path, resp.StatusCode, strings.TrimSpace(string(data)))
+		return &billingHTTPError{Path: path, StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(data))}
 	}
 	if len(bytes.TrimSpace(data)) == 0 {
 		return nil

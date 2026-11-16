@@ -5,7 +5,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from .kiosk_config import KioskRuntime
+from .kiosk_config import DesktopRuntime
 
 
 class VMDesktop:
@@ -50,10 +50,10 @@ class VMDesktop:
         return tuple(map(int, geometry.groups()))
 
     def resize(self, width: int, height: int):
-        if self.vm.info["spec"].get("kiosk") is not None:
-            if not KioskRuntime().valid_size((width, height)):
-                raise ValueError("Invalid kiosk resolution")
-            self._run("/opt/beam-vm/kiosk", "--resize", str(width), str(height))
+        if self.vm._streaming_desktop:
+            if not DesktopRuntime().valid_size((width, height)):
+                raise ValueError("Invalid desktop resolution")
+            self._run(DesktopRuntime().session_path, "--resize", str(width), str(height))
             return
         if (
             not isinstance(width, int)
@@ -144,7 +144,10 @@ class VMDesktop:
         """Launch a GUI program and return its reattachable process handle."""
         if not command:
             raise ValueError("Provide a program to launch")
-        return self._sandbox().process.exec(*command)
+        sandbox = self._sandbox()
+        if self.vm.info["spec"].get("desktop_transport"):
+            command = (DesktopRuntime().desktop_launcher, "--launch", *command)
+        return sandbox.process.exec(*command)
 
     def record(self, path: str, *, fps=30):
         """Record the guest screen to an MP4 until the returned handle stops.

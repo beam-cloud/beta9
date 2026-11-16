@@ -26,6 +26,7 @@ import (
 type BackendRepositoryService struct {
 	ctx                     context.Context
 	backendRepo             repository.BackendRepository
+	containerRepo           repository.ContainerRepository
 	diskSnapshotObjectMu    sync.Mutex
 	diskSnapshotObjectCache map[string]diskSnapshotObjectCacheEntry
 	diskSnapshotObjectGroup singleflight.Group
@@ -40,10 +41,11 @@ type diskSnapshotObjectCacheEntry struct {
 	keys      map[string]struct{}
 }
 
-func NewBackendRepositoryService(ctx context.Context, backendRepo repository.BackendRepository) *BackendRepositoryService {
+func NewBackendRepositoryService(ctx context.Context, backendRepo repository.BackendRepository, containerRepo repository.ContainerRepository) *BackendRepositoryService {
 	return &BackendRepositoryService{
 		ctx:                     ctx,
 		backendRepo:             backendRepo,
+		containerRepo:           containerRepo,
 		diskSnapshotObjectCache: make(map[string]diskSnapshotObjectCacheEntry),
 	}
 }
@@ -62,6 +64,9 @@ func (s *BackendRepositoryService) AuthorizeRequest(ctx context.Context, req int
 		return err
 	}
 	switch req := req.(type) {
+	case *pb.PreemptVMRequest:
+		_, err := worker.Container(s.containerRepo, req.ContainerId)
+		return err
 	case *pb.GetCheckpointByIdRequest, *pb.ListCheckpointsRequest:
 		return errCheckpointNotPermitted
 	case *pb.CreateCheckpointRequest:
@@ -522,4 +527,35 @@ func diskSnapshotFromProto(in *pb.DiskSnapshot) *types.DiskSnapshot {
 		SourceStorageNodeId: in.SourceStorageNodeId,
 		Public:              in.Public,
 	}
+}
+
+// PreemptVM records, under the VM's lifecycle lock, that a worker is reclaiming
+// a Spot VM, so the reconciler records the stop instead of restarting the VM.
+// The worker then stops it, and its final disk sync commits the root.
+func (s *BackendRepositoryService) PreemptVM(ctx context.Context, req *pb.PreemptVMRequest) (*pb.PreemptVMResponse, error) {
+	repo, ok := s.backendRepo.(repository.VMRepository)
+	if !ok {
+		return nil, status.Error(codes.Unavailable, "VM repository is unavailable")
+	}
+	ws, err := s.backendRepo.GetWorkspaceByExternalId(ctx, req.WorkspaceId)
+	if err != nil {
+		return nil, err
+	}
+	unlock, err := repo.LockVM(ctx, req.VmId)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	v, err := repo.GetVM(ctx, ws.Id, req.VmId)
+	if err != nil {
+		return nil, err
+	}
+	if v.ContainerID != req.ContainerId || !v.Spec.CPUTier.Borrows() || v.DesiredState == types.VMStateDeleted {
+		return nil, status.Error(codes.FailedPrecondition, "runtime is not a reclaimable Spot VM")
+	}
+	v.Status, v.StopReason, v.DesiredState = types.VMStateStopping, types.VMStopReasonPreempted, types.VMStateStopped
+	if err := repo.SaveVM(ctx, v); err != nil {
+		return nil, err
+	}
+	return &pb.PreemptVMResponse{}, nil
 }

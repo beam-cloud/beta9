@@ -23,6 +23,7 @@ import (
 
 var validName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,23}$`)
 var validEnvKey = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+var errVMPreempted = echo.NewHTTPError(http.StatusConflict, "Spot VM was preempted; call start() to restart")
 
 func normalizeDiskSize(size string) (string, error) {
 	if size == "" {
@@ -54,9 +55,6 @@ func validate(spec *types.VMSpec) error {
 		return fmt.Errorf("unknown GPU type %q", spec.GPU)
 	}
 	spec.GPU = string(gpu)
-	if spec.GPU != "" && spec.IdleAction == "pause" {
-		return fmt.Errorf("GPU VMs cannot pause memory; use idle_action=stop to preserve saved files")
-	}
 	if spec.CPU == 0 {
 		spec.CPU = 4000
 	}
@@ -135,6 +133,22 @@ func validate(spec *types.VMSpec) error {
 	}
 	if err := validateKiosk(spec); err != nil {
 		return err
+	}
+	if spec.DesktopTransport != "" && (!spec.Desktop || spec.Kiosk != nil) {
+		return fmt.Errorf("desktop_transport requires a full desktop")
+	}
+	if !spec.DisplayTransport().Valid() {
+		return fmt.Errorf("desktop transport must be webrtc or websockets")
+	}
+	for _, port := range slices.Concat(spec.Ports, spec.PublicPorts) {
+		if err := validateDesktopPort(*spec, port, slices.Contains(spec.PublicPorts, port)); err != nil {
+			return err
+		}
+	}
+	for _, port := range spec.DesktopPrivatePorts() {
+		if !slices.Contains(spec.PrivatePorts, port) {
+			spec.PrivatePorts = append(spec.PrivatePorts, port)
+		}
 	}
 
 	if spec.Desktop && spec.Memory < 1024 {
@@ -258,6 +272,7 @@ type updateRequest struct {
 	Metadata     *map[string]string `json:"metadata,omitempty"`
 	BlockNetwork *bool              `json:"block_network,omitempty"`
 	AllowList    *[]string          `json:"allow_list,omitempty"`
+	CPUTier      *types.CPUTier     `json:"cpu_tier,omitempty"`
 }
 
 func (s *Service) update(c echo.Context) error {
@@ -283,6 +298,20 @@ func (s *Service) update(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "VM removed")
 	}
 
+	if req.CPUTier != nil && *req.CPUTier != v.Spec.CPUTier {
+		spec := v.Spec
+		spec.CPUTier = *req.CPUTier
+		if err := s.resolveCPUTier(ctx, info.Workspace, &spec); err != nil {
+			return apiError(err)
+		}
+		if spec.CPUTier != v.Spec.CPUTier {
+			if v.Status != types.VMStateStopped || v.DesiredState != types.VMStateStopped {
+				return echo.NewHTTPError(http.StatusConflict, "stop the VM before changing CPU tier")
+			}
+			// The next start creates a stub for the new tier.
+			v.Spec, v.StubID = spec, ""
+		}
+	}
 	oldSpec := v.Spec
 	if req.IdleTimeout != nil {
 		v.Spec.IdleTimeout = *req.IdleTimeout
@@ -431,6 +460,9 @@ func (s *Service) resumeAccessAttempt(ctx context.Context, record *types.VM, por
 	}
 
 	defer unlock()
+	if v.StopReason == types.VMStopReasonPreempted {
+		return nil, false, errVMPreempted
+	}
 	if v.DesiredState == types.VMStateDeleted || !v.Spec.AutoResume || !slices.Contains(v.Spec.Ports, port) {
 		return nil, false, echo.NewHTTPError(http.StatusConflict, "VM access changed while resuming")
 	}
@@ -491,7 +523,7 @@ func (s *Service) wakeForAccess(parent context.Context, record *types.VM, port u
 
 func (s *Service) configurePort(ctx context.Context, v *types.VM, action string, port uint32, protected *bool) error {
 	public := action == "expose" && (protected == nil || !*protected)
-	if err := validateKioskPort(v.Spec.Kiosk, port, public); err != nil {
+	if err := validateDesktopPort(v.Spec, port, public); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	systemPort := port == types.VMTerminalPort || (port == types.VMDesktopPort && v.Spec.Desktop)
@@ -537,4 +569,27 @@ func (s *Service) configurePort(ctx context.Context, v *types.VM, action string,
 	}
 
 	return s.repo.SaveVM(ctx, v)
+}
+
+// cpuTierEligible reports whether a VM may use a CPU tier: a CPU VM with no pool
+// or a hosted one, which the tier replaces. Private and BYOC pools are kept.
+func (s *Service) cpuTierEligible(spec types.VMSpec) bool {
+	return spec.GPU == "" && (spec.Pool == "" || s.gateway.IsHostedCPUPool(spec.Pool))
+}
+
+// resolveCPUTier sets a VM's CPU tier and pool: a tier replaces a hosted pool,
+// and untiered CPU VMs without a pool use the default pool.
+func (s *Service) resolveCPUTier(ctx context.Context, workspace *types.Workspace, spec *types.VMSpec) error {
+	tier, err := s.gateway.ResolveCPUTier(ctx, workspace, spec.CPUTier, spec.Pool, s.cpuTierEligible(*spec))
+	if err != nil {
+		return err
+	}
+	spec.CPUTier = tier
+	switch {
+	case tier != "":
+		spec.Pool = ""
+	case spec.Pool == "" && spec.GPU == "":
+		spec.Pool = s.config.DefaultPool
+	}
+	return tier.Validate(spec.CPU, spec.Memory, true, spec.GPU != "")
 }

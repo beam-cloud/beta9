@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -28,6 +29,8 @@ type Runtime interface {
 type Gateway interface {
 	GetOrCreateStub(context.Context, *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error)
 	StopContainer(context.Context, *pb.StopContainerRequest) (*pb.StopContainerResponse, error)
+	ResolveCPUTier(ctx context.Context, workspace *types.Workspace, requested types.CPUTier, pool string, eligible bool) (types.CPUTier, error)
+	IsHostedCPUPool(string) bool
 }
 
 type ImageVerifier interface {
@@ -47,6 +50,9 @@ type Service struct {
 	publicNetwork *publicVMNetwork
 	webrtc        *vmWebRTC
 	runners       *githubRunners
+
+	runningLock sync.Mutex
+	running     map[string]*types.VM // by container, as of the last reconciliation pass
 }
 
 type ServiceOpts struct {
@@ -100,6 +106,9 @@ func New(ctx context.Context, opts ServiceOpts) error {
 	}
 
 	go s.reconcile(ctx)
+	if s.stateRepo != nil {
+		go s.relaunchExited(ctx, s.stateRepo.ContainerExits(ctx))
+	}
 	return nil
 }
 
@@ -128,6 +137,7 @@ func registerVMRoutes(api *echo.Group, s *Service) {
 	api.POST("/:workspaceId", auth.WithStrictWorkspaceAuth(s.create))
 	api.GET("/:workspaceId/artifacts/:kind", auth.WithStrictWorkspaceAuth(s.artifacts))
 	api.DELETE("/:workspaceId/artifacts/:kind/:artifact", auth.WithStrictWorkspaceAuth(s.removeArtifact))
+	api.GET("/:workspaceId/artifacts/:kind/:artifact", auth.WithStrictWorkspaceAuth(s.showArtifact))
 	api.GET("/:workspaceId/:name", auth.WithStrictWorkspaceAuth(s.get))
 	api.PATCH("/:workspaceId/:name", auth.WithStrictWorkspaceAuth(s.update))
 	api.GET("/:workspaceId/:name/tunnel/:port", auth.WithStrictWorkspaceAuth(s.tunnel))

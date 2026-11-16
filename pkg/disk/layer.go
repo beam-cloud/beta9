@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strconv"
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
@@ -47,8 +48,18 @@ const (
 // should not retain a full 8 MiB chunk buffer.
 var layerBuffers = mem.NewTieredBufferPool(64<<10, 256<<10, 1<<20, LayerChunkSize, chunkMaxSize)
 
-var chunkUploads = newChunkGate(chunkUploadConcurrency)
+var chunkUploads = newChunkGate(configuredChunkUploadConcurrency(os.Getenv))
 var chunkFetches = newChunkGate(chunkFetchConcurrency)
+
+// A worker-wide limit bounds both buffers and competing origin requests during
+// a pause burst. Keep the existing budget unless explicitly tuned for a node.
+func configuredChunkUploadConcurrency(getenv func(string) string) int {
+	limit, err := strconv.Atoi(getenv(types.DiskChunkUploadConcurrencyEnv))
+	if err != nil || limit < 1 || limit > chunkUploadConcurrency {
+		return chunkUploadConcurrency
+	}
+	return limit
+}
 
 // gearTable drives the boundary rolling hash. Changing it (or the size
 // constants) re-cuts every future publish, costing each disk one full
@@ -150,38 +161,65 @@ type chunkSpan struct{ offset, size int64 }
 
 // chunkSpans enumerates the file's data extents (SEEK_DATA/SEEK_HOLE; the
 // whole file on filesystems without support) and splits each at content
-// defined boundaries. Extents reset the boundary state, so sparse layouts
-// chunk identically regardless of surrounding holes.
+// defined boundaries. Nearby extents share a range when the added zeros cost
+// at most 25% of its allocated data. Small qcow metadata writes otherwise each
+// require an object-store round trip, even when their whole file is only 2 MiB.
+// Large holes remain sparse and dense files retain their existing boundaries.
 func chunkSpans(ctx context.Context, file *os.File, fileSize int64) ([]chunkSpan, error) {
-	var spans []chunkSpan
-	scratch := layerBuffers.Get(LayerChunkSize)
-	defer layerBuffers.Put(scratch)
-	buffer := *scratch
+	var extents []chunkSpan
 	for offset := int64(0); offset < fileSize; {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		dataStart, err := unix.Seek(int(file.Fd()), offset, unix.SEEK_DATA)
 		if err != nil {
 			if err == unix.ENXIO {
-				break // Nothing but holes remain.
+				break
 			}
-			// No SEEK_DATA support: treat the rest of the file as one extent.
-			extent, err := splitExtent(ctx, file, buffer, offset, fileSize)
-			if err != nil {
-				return nil, err
-			}
-			return append(spans, extent...), nil
+			// No SEEK_DATA support: treat the rest as allocated.
+			extents = append(extents, chunkSpan{offset: offset, size: fileSize - offset})
+			break
 		}
 		dataEnd, err := unix.Seek(int(file.Fd()), dataStart, unix.SEEK_HOLE)
 		if err != nil {
 			dataEnd = fileSize
 		}
-		extent, err := splitExtent(ctx, file, buffer, dataStart, min(dataEnd, fileSize))
+		dataEnd = min(dataEnd, fileSize)
+		extents = append(extents, chunkSpan{offset: dataStart, size: dataEnd - dataStart})
+		offset = dataEnd
+	}
+	var spans []chunkSpan
+	scratch := layerBuffers.Get(LayerChunkSize)
+	defer layerBuffers.Put(scratch)
+	buffer := *scratch
+	for _, region := range coalesceSparseExtents(extents) {
+		extent, err := splitExtent(ctx, file, buffer, region.offset, region.offset+region.size)
 		if err != nil {
 			return nil, err
 		}
 		spans = append(spans, extent...)
-		offset = dataEnd
 	}
 	return spans, nil
+}
+
+func coalesceSparseExtents(extents []chunkSpan) []chunkSpan {
+	var regions []chunkSpan
+	var padding int64
+	for _, next := range extents {
+		if len(regions) > 0 {
+			current := &regions[len(regions)-1]
+			gap := next.offset - (current.offset + current.size)
+			allocated := current.size - padding + next.size
+			if gap >= 0 && gap <= 64<<10 && current.size+gap+next.size <= chunkMaxSize && (padding+gap)*4 <= allocated {
+				current.size += gap + next.size
+				padding += gap
+				continue
+			}
+		}
+		regions = append(regions, next)
+		padding = 0
+	}
+	return regions
 }
 
 // splitExtent cuts one data extent at gear-hash boundaries: the hash rolls

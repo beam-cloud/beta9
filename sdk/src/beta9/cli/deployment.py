@@ -345,7 +345,7 @@ def _generate_service_module(name: Optional[str], kwargs: Dict) -> Service:
     }
     service_kwargs.update(_service_checkpoint_options(kwargs))
 
-    for key in ("cpu", "memory", "gpu", "gpu_count", "secrets", "disks"):
+    for key in ("cpu", "memory", "cpu_tier", "gpu", "gpu_count", "secrets", "disks"):
         value = kwargs.get(key)
         if value is not None and value != ():
             service_kwargs[key] = list(value) if key == "disks" else value

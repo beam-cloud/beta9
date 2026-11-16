@@ -7,11 +7,14 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,6 +29,16 @@ type restoredSocketNetwork struct {
 	current   map[iptables.Protocol]net.IP
 	nic       string
 	signature string
+}
+
+// tcpConnection is an established connection: its address here, and the
+// other end's.
+type tcpConnection struct {
+	local, remote netip.AddrPort
+}
+
+func (conn tcpConnection) String() string {
+	return conn.local.String() + "<-" + conn.remote.String()
 }
 
 // A restored process can still listen on its old interface address. Preserve
@@ -109,6 +122,8 @@ func (c *control) restoreNetworkLink(cfg microvm.Network, link netlink.Link) err
 		}
 	}
 
+	// What the host had connected went with the network it had for the VM.
+	c.staleConnections, c.hostConnections = c.hostConnections, nil
 	c.restoredNetwork = &restoredSocketNetwork{current: current, nic: link.Attrs().Name}
 	return c.refreshSocketRulesLocked()
 }
@@ -122,27 +137,20 @@ func (c *control) refreshRestoredSockets() error {
 }
 
 func (c *control) refreshSocketRulesLocked() error {
-	if c.restoredNetwork == nil || len(c.networkAliases) == 0 {
+	if c.restoredNetwork == nil {
+		return nil
+	}
+	if len(c.networkAliases) == 0 && len(c.staleConnections) == 0 && c.restoredNetwork.signature != "" {
 		return nil
 	}
 
-	listeners := map[string][]int{}
-	for _, file := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
-		f, err := os.Open(file)
-		if os.IsNotExist(err) {
-			continue
-		}
-
-		if err != nil {
-			return err
-		}
-
-		err = readTCPListeners(f, listeners)
-		_ = f.Close()
-		if err != nil {
-			return err
-		}
+	listeners, established, err := tcpSockets()
+	if err != nil {
+		return err
 	}
+
+	// A connection that has been reset is no longer there to be.
+	c.staleConnections = slices.DeleteFunc(c.staleConnections, func(conn tcpConnection) bool { return !established[conn] })
 
 	// Only relevant listener changes require a firewall transaction.
 	tracked := map[string][]int{}
@@ -158,7 +166,12 @@ func (c *control) refreshSocketRulesLocked() error {
 		sort.Ints(ports)
 	}
 
-	signature, err := json.Marshal(tracked)
+	stale := make([]string, 0, len(c.staleConnections))
+	for _, conn := range c.staleConnections {
+		stale = append(stale, conn.String())
+	}
+
+	signature, err := json.Marshal([]any{tracked, stale})
 	if err != nil {
 		return err
 	}
@@ -173,42 +186,98 @@ func (c *control) refreshSocketRulesLocked() error {
 		}
 	}
 
+	// The guest runs as well without: a connection that is not reset is one
+	// that its owner waits for, as it did before there was this.
+	if err := c.resetStaleConnections(); err != nil {
+		logf("connections from before the restore are not reset: %v", err)
+	}
+
 	c.restoredNetwork.signature = string(signature)
 	return nil
 }
 
-func readTCPListeners(r io.Reader, listeners map[string][]int) error {
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
-		if len(fields) < 4 || fields[3] != "0A" {
+// tcpSockets reads the ports that are listened on, by address, and the
+// connections that are established.
+func tcpSockets() (map[string][]int, map[tcpConnection]bool, error) {
+	listeners, established := map[string][]int{}, map[tcpConnection]bool{}
+	for _, file := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
+		f, err := os.Open(file)
+		if os.IsNotExist(err) {
 			continue
 		}
 
-		address, port, ok := strings.Cut(fields[1], ":")
-		if !ok {
-			return fmt.Errorf("invalid TCP listener address")
+		if err != nil {
+			return nil, nil, err
 		}
 
-		bytes, err := hex.DecodeString(address)
-		if err != nil || (len(bytes) != 4 && len(bytes) != 16) {
-			return fmt.Errorf("invalid TCP listener IP %q", address)
+		err = readTCPSockets(f, listeners, established)
+		_ = f.Close()
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	return listeners, established, nil
+}
+
+func readTCPSockets(r io.Reader, listeners map[string][]int, established map[tcpConnection]bool) error {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 4 || (fields[3] != "0A" && fields[3] != "01") {
+			continue
 		}
 
-		for i := 0; i < len(bytes); i += 4 {
-			binary.BigEndian.PutUint32(bytes[i:i+4], binary.NativeEndian.Uint32(bytes[i:i+4]))
-		}
-
-		n, err := strconv.ParseUint(port, 16, 16)
+		local, err := procTCPAddress(fields[1])
 		if err != nil {
 			return err
 		}
 
-		ip := net.IP(bytes).String()
-		listeners[ip] = append(listeners[ip], int(n))
+		if fields[3] == "0A" {
+			ip := net.IP(local.Addr().AsSlice()).String()
+			listeners[ip] = append(listeners[ip], int(local.Port()))
+			continue
+		}
+
+		remote, err := procTCPAddress(fields[2])
+		if err != nil {
+			return err
+		}
+
+		// A socket of either family carries IPv4, which is how it is filtered.
+		established[tcpConnection{
+			local:  netip.AddrPortFrom(local.Addr().Unmap(), local.Port()),
+			remote: netip.AddrPortFrom(remote.Addr().Unmap(), remote.Port()),
+		}] = true
 	}
 
 	return scanner.Err()
+}
+
+// procTCPAddress reads an address as /proc/net/tcp writes it: each 32 bits of
+// it in the byte order of the machine, then the port.
+func procTCPAddress(field string) (netip.AddrPort, error) {
+	address, port, ok := strings.Cut(field, ":")
+	if !ok {
+		return netip.AddrPort{}, fmt.Errorf("invalid TCP address %q", field)
+	}
+
+	bytes, err := hex.DecodeString(address)
+	if err != nil || (len(bytes) != 4 && len(bytes) != 16) {
+		return netip.AddrPort{}, fmt.Errorf("invalid TCP IP %q", address)
+	}
+
+	for i := 0; i < len(bytes); i += 4 {
+		binary.BigEndian.PutUint32(bytes[i:i+4], binary.NativeEndian.Uint32(bytes[i:i+4]))
+	}
+
+	n, err := strconv.ParseUint(port, 16, 16)
+	if err != nil {
+		return netip.AddrPort{}, err
+	}
+
+	ip, _ := netip.AddrFromSlice(bytes)
+	return netip.AddrPortFrom(ip, uint16(n)), nil
 }
 
 func (c *control) restoreSocketRules(family iptables.Protocol, current net.IP, nic string, listeners map[string][]int) error {
@@ -241,7 +310,7 @@ func (c *control) restoreSocketRules(family iptables.Protocol, current net.IP, n
 	if family == iptables.ProtocolIPv6 {
 		binary = "ip6tables"
 	}
-	existing, err := exec.Command(binary+"-save", "-t", "nat").CombinedOutput()
+	existing, err := helperOutput(exec.Command(binary+"-save", "-t", "nat"))
 	if err != nil {
 		return fmt.Errorf("read restore rules: %w: %s", err, existing)
 	}
@@ -271,8 +340,141 @@ func (c *control) restoreSocketRules(family iptables.Protocol, current net.IP, n
 	rules.WriteString("COMMIT\n")
 	command := exec.Command(binary+"-restore", "--noflush", "--wait", "5")
 	command.Stdin = strings.NewReader(rules.String())
-	if output, err := command.CombinedOutput(); err != nil {
+	if output, err := helperOutput(command); err != nil {
 		return fmt.Errorf("apply restore rules: %w: %s", err, output)
 	}
 	return nil
+}
+
+// The host reaches the guest from the gateway's address, and what it has
+// connected when the guest is saved does not outlive the network it had for
+// the VM: a restored guest holds its end of a connection that nothing will
+// answer, not even to refuse it. The process manager holds one from the
+// worker, and would wait for it when asked to stop.
+//
+// noteHostConnections records those connections as the host freezes the guest
+// to save it. A guest restored from what was saved refuses what they send,
+// which resets each: at its next keepalive, or when it is next written to.
+func (c *control) noteHostConnections() {
+	if !c.systemd {
+		return
+	}
+
+	var gateways []netip.Addr
+	listeners, established, err := tcpSockets()
+	if err == nil {
+		gateways, err = defaultGateways()
+	}
+
+	if err != nil {
+		logf("connections from the host are not recorded: %v", err)
+	}
+
+	c.networkMu.Lock()
+	defer c.networkMu.Unlock()
+	c.hostConnections = hostConnections(listeners, established, gateways)
+}
+
+// hostConnections picks out the connections that the host made: those from a
+// gateway to a port that is listened on here. One that the guest made to its
+// gateway may still be answered.
+func hostConnections(listeners map[string][]int, established map[tcpConnection]bool, gateways []netip.Addr) []tcpConnection {
+	listening := map[uint16]bool{}
+	for _, ports := range listeners {
+		for _, port := range ports {
+			listening[uint16(port)] = true
+		}
+	}
+
+	var found []tcpConnection
+	for conn := range established {
+		if listening[conn.local.Port()] && slices.Contains(gateways, conn.remote.Addr()) {
+			found = append(found, conn)
+		}
+	}
+
+	slices.SortFunc(found, func(a, b tcpConnection) int { return strings.Compare(a.String(), b.String()) })
+	return found
+}
+
+func defaultGateways() ([]netip.Addr, error) {
+	routes, err := netlink.RouteList(nil, netlink.FAMILY_ALL)
+	if err != nil {
+		return nil, err
+	}
+
+	var gateways []netip.Addr
+	for _, route := range routes {
+		if route.Dst != nil {
+			if ones, _ := route.Dst.Mask.Size(); ones != 0 {
+				continue
+			}
+		}
+
+		if gateway, ok := netip.AddrFromSlice(route.Gw); ok {
+			gateways = append(gateways, gateway.Unmap())
+		}
+	}
+
+	return gateways, nil
+}
+
+const resetChain = "BEAM_VM_RESTORE_RESET"
+
+func (c *control) resetStaleConnections() error {
+	if c.resetting == nil {
+		c.resetting = map[string]bool{}
+	}
+
+	var errs []error
+	for _, binary := range []string{"iptables", "ip6tables"} {
+		var stale []tcpConnection
+		for _, conn := range c.staleConnections {
+			if conn.local.Addr().Is4() == (binary == "iptables") {
+				stale = append(stale, conn)
+			}
+		}
+
+		// Nothing of this family to reset, and nothing left that resets.
+		if len(stale) == 0 && !c.resetting[binary] {
+			continue
+		}
+
+		existing, err := helperOutput(exec.Command(binary+"-save", "-t", "filter"))
+		if err != nil {
+			errs = append(errs, fmt.Errorf("read filter rules: %w: %s", err, existing))
+			continue
+		}
+
+		command := exec.Command(binary+"-restore", "--noflush", "--wait", "5")
+		command.Stdin = strings.NewReader(resetRules("\n"+string(existing), stale))
+		if output, err := helperOutput(command); err != nil {
+			errs = append(errs, fmt.Errorf("apply filter rules: %w: %s", err, output))
+			continue
+		}
+
+		c.resetting[binary] = len(stale) > 0
+	}
+
+	return errors.Join(errs...)
+}
+
+// resetRules refuses, with a reset, what each connection sends. They replace
+// those of the chain, which the guest's own rules and Docker's do not see. A
+// rule goes once its connection has: the host may connect again from the same
+// port, and that connection is not the one that was refused.
+func resetRules(installed string, connections []tcpConnection) string {
+	var rules strings.Builder
+	fmt.Fprintf(&rules, "*filter\n:%s - [0:0]\n-F %s\n", resetChain, resetChain)
+	if !strings.Contains(installed, "\n-A OUTPUT -j "+resetChain+"\n") {
+		fmt.Fprintf(&rules, "-I OUTPUT 1 -j %s\n", resetChain)
+	}
+
+	for _, conn := range connections {
+		fmt.Fprintf(&rules, "-A %s -s %s -d %s -p tcp --sport %d --dport %d -j REJECT --reject-with tcp-reset\n",
+			resetChain, conn.local.Addr(), conn.remote.Addr(), conn.local.Port(), conn.remote.Port())
+	}
+
+	rules.WriteString("COMMIT\n")
+	return rules.String()
 }

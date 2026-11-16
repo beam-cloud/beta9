@@ -31,7 +31,7 @@ func (s *Scheduler) serverlessGPUAvailability(workers []*types.Worker) map[strin
 		if pool.Config.Mode == types.PoolModeProvider || pool.Config.Mode == types.PoolModePrivate {
 			continue
 		}
-		if worker.WorkspaceId != "" && !worker.ControlPlaneManaged {
+		if workspaceOwned(worker) {
 			continue
 		}
 		availability[worker.Gpu] = true
@@ -47,28 +47,6 @@ func emptyGPUAvailability() map[string]bool {
 		}
 	}
 	return availability
-}
-
-// HasManagedPoolForGPU reports whether any registered pool that is usable
-// without a pool selector could serve the given GPU type. The check is
-// pool-config-based rather than live-worker-based, so scale-to-zero pools
-// still count as supported. gpuType may be types.GPU_ANY. Provider pools never
-// count: they only host managed endpoint replicas.
-func (s *Scheduler) HasManagedPoolForGPU(gpuType string) bool {
-	if s == nil || s.workerPoolManager == nil {
-		return false
-	}
-	pools := s.workerPoolManager.GetPoolByFilters(poolFilters{GPUType: gpuType})
-	for _, pool := range pools {
-		if pool.Controller == nil || pool.Controller.RequiresPoolSelector() {
-			continue
-		}
-		if pool.Controller.Mode() == types.PoolModeProvider {
-			continue
-		}
-		return true
-	}
-	return false
 }
 
 type CapacityCheckResult struct {
@@ -144,7 +122,7 @@ func (c *capacityCheck) restoreReplacedCapacity() {
 			continue
 		}
 		replacedRequest := containerRequestFromState(container)
-		worker.FreeCpu += container.Cpu
+		worker.FreeCpu += container.CapacityCpu()
 		worker.FreeMemory += capacityMemoryForScheduling(replacedRequest)
 		worker.FreeGpuCount += gpuCountForScheduling(replacedRequest)
 		c.capFreeCapacity(worker)
@@ -161,25 +139,22 @@ func containerRequestFromState(container types.ContainerState) *types.ContainerR
 	}
 }
 
+// placeReplicas places the replicas one after another, as a scheduling pass
+// would, each on what the ones before it left.
 func (c *capacityCheck) placeReplicas() CapacityCheckResult {
 	var selected *types.Worker
 	for i := uint(0); i < c.replicas; i++ {
-		worker, err := c.scheduler.selectWorkerFromWorkers(c.workers, c.request.Clone())
+		request := c.request.Clone()
+		worker, err := c.scheduler.selectWorkerFromWorkers(c.workers, request)
 		if err != nil {
 			return CapacityCheckResult{Err: err}
 		}
-		c.reserve(worker)
+		if !c.scheduler.reserveWorkerCapacity(worker, request) {
+			return CapacityCheckResult{Err: &types.ErrNoSuitableWorkerFound{}}
+		}
 		selected = worker
 	}
 	return CapacityCheckResult{CanSchedule: true, WorkerId: selected.Id}
-}
-
-func (c *capacityCheck) reserve(worker *types.Worker) {
-	worker.FreeCpu -= c.request.Cpu
-	worker.FreeMemory -= capacityMemoryForScheduling(c.request)
-	if c.request.RequiresGPU() {
-		worker.FreeGpuCount -= gpuCountForScheduling(c.request)
-	}
 }
 
 func (c *capacityCheck) capFreeCapacity(worker *types.Worker) {

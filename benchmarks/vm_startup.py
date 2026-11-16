@@ -41,6 +41,10 @@ def arguments():
     p.add_argument("--count", type=int, default=10)
     p.add_argument("--cpu", type=float, default=1)
     p.add_argument("--memory", type=int, default=1024)
+    p.add_argument(
+        "--gpu",
+        help="A single GPU type for --mode vm; the default image becomes the NVIDIA guest",
+    )
     p.add_argument("--disk-size", default="50GiB")
     p.add_argument(
         "--image-id", help="An already prepared VM image, or ordinary sandbox image"
@@ -80,6 +84,8 @@ def arguments():
         p.error("--include-preparation requires --mode vm")
     if a.budget_phase == "exec-ready" and a.mode != "vm":
         p.error("--budget-phase exec-ready requires --mode vm")
+    if a.gpu and a.mode != "vm":
+        p.error("--gpu requires --mode vm")
     return a
 
 
@@ -122,6 +128,7 @@ def main():
         "pool": args.pool,
         "cpu": args.cpu,
         "memory": args.memory,
+        "gpu": args.gpu,
         "disk_size": args.disk_size if args.mode == "vm" else None,
         "budget_ms": args.budget_ms,
         "budget_phase": args.budget_phase,
@@ -222,6 +229,7 @@ def main():
                             image=image,
                             cpu=args.cpu,
                             memory=args.memory,
+                            gpu=args.gpu,
                             pool=args.pool,
                             disk_size=args.disk_size,
                             ssh=not args.no_ssh,
@@ -259,6 +267,20 @@ def main():
                     output = process.stdout.read().strip()
                     row["verified_output_ms"] = (time.perf_counter() - begin) * 1000
                     assert output == nonce, f"First command output mismatch: {output!r}"
+                    if args.gpu:
+                        # Exec readiness does not wait for the guest driver.
+                        # Report when the device answers its first query.
+                        query = runtime.process.exec(
+                            "sh",
+                            "-c",
+                            "until nvidia-smi --query-gpu=name,memory.total "
+                            "--format=csv,noheader 2>/dev/null; do sleep 0.05; done",
+                            cwd="/",
+                        )
+                        assert query.wait(180) == 0, "GPU never answered nvidia-smi"
+                        row["gpu_ready_ms"] = (time.perf_counter() - begin) * 1000
+                        row["gpu_device"] = query.stdout.read().strip()
+                        assert row["gpu_device"], "nvidia-smi reported no GPU"
                     metric = (
                         "exec_ready_ms"
                         if args.budget_phase == "exec-ready"

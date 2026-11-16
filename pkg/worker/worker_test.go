@@ -1027,33 +1027,52 @@ func TestRuntimeStartStateIsPublishedAtomically(t *testing.T) {
 }
 
 func TestUpdateContainerStatusStopsWhenRequestEnds(t *testing.T) {
-	repoClient := &fakeContainerRepoClient{
-		state: &pb.ContainerState{
-			ContainerId: "container-cancelled-heartbeat",
-			Status:      string(types.ContainerStatusRunning),
-		},
-	}
+	repoClient := &fakeContainerRepoClient{}
+	ctx, cancel := context.WithCancel(context.Background())
 	worker := &Worker{
+		ctx:                 ctx,
 		containerInstances:  common.NewSafeMap[*ContainerInstance](),
 		containerRepoClient: repoClient,
 		stopContainerChan:   make(chan stopContainerEvent, 1),
 	}
 	request := &types.ContainerRequest{ContainerId: "container-cancelled-heartbeat"}
 	worker.containerInstances.Set(request.ContainerId, &ContainerInstance{ExitCode: -1})
+	// The test runs the loop itself, at a short interval.
+	worker.statusHeartbeats.running = true
+	worker.startContainerStatusHeartbeat(request)
 
-	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		worker.updateContainerStatusLoop(ctx, request)
+		worker.runContainerStatusHeartbeats(time.Millisecond)
 	}()
-	cancel()
+	require.Eventually(t, func() bool { return len(repoClient.containerLeaseRenewals()) > 0 }, time.Second, time.Millisecond)
 
+	// A request whose startup failed ends its heartbeat; the loop has no
+	// container left and returns.
+	worker.stopContainerStatusHeartbeat(request)
 	select {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("heartbeat outlived its container request")
 	}
+	renewals := len(repoClient.containerLeaseRenewals())
+
+	// So does the worker shutting down, whatever is still running.
+	worker.statusHeartbeats.running = true
+	worker.startContainerStatusHeartbeat(request)
+	done = make(chan struct{})
+	go func() {
+		defer close(done)
+		worker.runContainerStatusHeartbeats(time.Hour)
+	}()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat outlived its worker")
+	}
+	require.Len(t, repoClient.containerLeaseRenewals(), renewals)
 }
 
 func TestMissingStateHeartbeatCancelsStartupWhenStopQueueUnavailable(t *testing.T) {
@@ -1242,6 +1261,50 @@ func TestStopEventKillFailureHandsOffToLifecycleReconciliation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("stop event processor did not finish")
 	}
+}
+
+func TestObservedStopSignalsRuntimeStartedDuringGrace(t *testing.T) {
+	const containerID = "container-stop-during-startup"
+	workerCtx, cancelWorker := context.WithCancel(context.Background())
+	defer cancelWorker()
+	worker := &Worker{
+		ctx:                workerCtx,
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		config: types.AppConfig{Worker: types.WorkerConfig{
+			TerminationGracePeriod: 30,
+		}},
+	}
+	var runtimeExists atomic.Bool
+	rt := &retryStoppingRuntime{
+		worker:      worker,
+		containerID: containerID,
+		killError: func(syscall.Signal) error {
+			if !runtimeExists.Load() {
+				return runtime.ErrContainerNotFound{ContainerID: containerID}
+			}
+			return nil
+		},
+	}
+	instance := &ContainerInstance{
+		Id:       containerID,
+		ExitCode: -1,
+		Request:  &types.ContainerRequest{ContainerId: containerID},
+		Runtime:  rt,
+	}
+	worker.containerInstances.Set(containerID, instance)
+
+	worker.handleObservedStoppingContainer(containerID, types.EventSourceWorkerEventBus)
+	require.Eventually(t, func() bool {
+		return len(rt.observedSignals()) == 1
+	}, time.Second, time.Millisecond)
+
+	runtimeExists.Store(true)
+	instance.markRuntimeStarted(1234)
+
+	require.Eventually(t, func() bool {
+		return len(rt.observedSignals()) == 2
+	}, 2*time.Second, 5*time.Millisecond, "a runtime that starts after the stop must be signalled within the grace period")
+	require.Equal(t, []syscall.Signal{syscall.SIGTERM, syscall.SIGTERM}, rt.observedSignals())
 }
 
 func TestStatusHeartbeatRetriesStopObservedBeforeRuntimeExists(t *testing.T) {
@@ -1582,6 +1645,11 @@ type fakeContainerRepoClient struct {
 	deleteStateCalls           int
 	deleteStateErrors          []error
 	deleteStateDone            chan struct{}
+	renewLeases                []*pb.RenewContainerLeasesRequest
+	renewLeasesError           error
+	renewLeasesStarted         chan struct{}
+	renewLeasesRelease         <-chan struct{}
+	leases                     map[string]*pb.ContainerLease // what the gateway finds for a container, when it is not simply running
 }
 
 type missingContainerRepoClient struct {
@@ -1737,6 +1805,35 @@ func (f *fakeContainerRepoClient) GetContainerAddressMap(ctx context.Context, in
 
 func (f *fakeContainerRepoClient) SetWorkerAddress(ctx context.Context, in *pb.SetWorkerAddressRequest, opts ...grpc.CallOption) (*pb.SetWorkerAddressResponse, error) {
 	return &pb.SetWorkerAddressResponse{Ok: true}, nil
+}
+
+func (f *fakeContainerRepoClient) RenewContainerLeases(ctx context.Context, in *pb.RenewContainerLeasesRequest, opts ...grpc.CallOption) (*pb.RenewContainerLeasesResponse, error) {
+	f.mu.Lock()
+	f.renewLeases = append(f.renewLeases, in)
+	err := f.renewLeasesError
+	leases := make([]*pb.ContainerLease, len(in.Containers))
+	for i, container := range in.Containers {
+		leases[i] = f.leases[container.ContainerId]
+		if leases[i] == nil {
+			// Mirror the gateway: a running container is renewed.
+			leases[i] = &pb.ContainerLease{ContainerId: container.ContainerId, Ok: true, Status: string(types.ContainerStatusRunning)}
+		}
+	}
+	started, release := f.renewLeasesStarted, f.renewLeasesRelease
+	f.mu.Unlock()
+	if err := gateFakeCall(ctx, started, release); err != nil {
+		return nil, err
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &pb.RenewContainerLeasesResponse{Ok: true, Leases: leases}, nil
+}
+
+func (f *fakeContainerRepoClient) containerLeaseRenewals() []*pb.RenewContainerLeasesRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*pb.RenewContainerLeasesRequest(nil), f.renewLeases...)
 }
 
 func TestStatusHeartbeatRepositoryDeadline(t *testing.T) {

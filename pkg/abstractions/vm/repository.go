@@ -18,6 +18,9 @@ type VMRepository interface {
 	AcquireICELease(ctx context.Context, fragment, lease string, ttl time.Duration) (int, error)
 	RenewICELease(ctx context.Context, fragment, lease string, ttl time.Duration) error
 	ReleaseICELease(ctx context.Context, fragment, lease string) error
+	// ContainerExits delivers the ID of each VM container whose state is
+	// removed from now on. An exit can be missed.
+	ContainerExits(ctx context.Context) <-chan string
 }
 
 type ICESession struct {

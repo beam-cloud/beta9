@@ -363,6 +363,87 @@ func TestMergeStubCacheRequiredContentRecordKeepsMostRecentlyReportedCheckpoint(
 	}
 }
 
+func TestMergeStubCacheRequiredContentRecordRetiresRestoredCheckpoint(t *testing.T) {
+	merged := map[string]types.CacheRequiredContentItem{}
+	writeRecord := func(kind types.CacheContentKind, item types.CacheRequiredContentItem) {
+		body, err := json.Marshal(struct {
+			Type string                                    `json:"type"`
+			Data types.EventStubCacheRequiredContentSchema `json:"data"`
+		}{
+			Type: types.EventStubCacheRequiredContent,
+			Data: types.EventStubCacheRequiredContentSchema{Kind: kind, Items: []types.CacheRequiredContentItem{item}},
+		})
+		require.NoError(t, err)
+		mergeStubCacheRequiredContentRecord(merged, body)
+	}
+	checkpoints := func() []string {
+		var ids []string
+		for _, item := range stubCacheRequiredContentItems(merged) {
+			if item.Kind == types.CacheContentKindCheckpoint {
+				ids = append(ids, item.CheckpointID)
+			}
+		}
+		return ids
+	}
+	paused := func(id string) {
+		writeRecord(types.CacheContentKindCheckpoint, types.CacheRequiredContentItem{Hash: id + "-hash", RoutingKey: id + "-hash", CheckpointID: id})
+	}
+	restored := func(id string) {
+		writeRecord(types.CacheContentKindCheckpoint, types.CacheRequiredContentItem{CheckpointID: id, Retired: true})
+	}
+	writeRecord(types.CacheContentKindClipV2, types.CacheRequiredContentItem{Hash: "layer-hash", RoutingKey: "layer"})
+
+	paused("first")
+	restored("first")
+	require.Empty(t, checkpoints())
+
+	// A report of a checkpoint can be published after the record of its
+	// restore. It is not a new checkpoint.
+	paused("first")
+	require.Empty(t, checkpoints())
+
+	// The record of a restore can follow the record of the pause after it.
+	paused("second")
+	restored("first")
+	require.Equal(t, []string{"second"}, checkpoints())
+
+	// Only a checkpoint is retired, and only one that is named.
+	writeRecord(types.CacheContentKindClipV2, types.CacheRequiredContentItem{Hash: "layer-hash", RoutingKey: "layer", Retired: true})
+	restored("")
+	require.Equal(t, []string{"second"}, checkpoints())
+	require.Len(t, stubCacheRequiredContentItems(merged), 2)
+
+	restored("second")
+	require.Empty(t, checkpoints())
+	require.Len(t, stubCacheRequiredContentItems(merged), 1)
+
+	// A restore whose pause was never reported here is remembered too.
+	restored("third")
+	paused("third")
+	require.Empty(t, checkpoints())
+	paused("fourth")
+	require.Equal(t, []string{"fourth"}, checkpoints())
+}
+
+func TestMutableVolumeRequirementsReplaceObsoleteHashes(t *testing.T) {
+	merged := map[string]types.CacheRequiredContentItem{}
+	for _, item := range []types.CacheRequiredContentItem{
+		{Kind: types.CacheContentKindVolume, Hash: "old", Source: "volumes/model", SourceBucket: "a"},
+		{Kind: types.CacheContentKindVolume, Hash: "other-path", Source: "volumes/other", SourceBucket: "a"},
+		{Kind: types.CacheContentKindVolume, Hash: "other-bucket", Source: "volumes/model", SourceBucket: "b"},
+		{Kind: types.CacheContentKindVolume, Hash: "new", Source: "volumes/model", SourceBucket: "a"},
+		{Kind: types.CacheContentKindVolume, Hash: "unknown-path-1"},
+		{Kind: types.CacheContentKindVolume, Hash: "unknown-path-2"},
+	} {
+		mergeStubCacheRequiredContentItem(merged, item)
+	}
+	var hashes []string
+	for _, item := range stubCacheRequiredContentItems(merged) {
+		hashes = append(hashes, item.Hash)
+	}
+	require.ElementsMatch(t, []string{"new", "other-path", "other-bucket", "unknown-path-1", "unknown-path-2"}, hashes)
+}
+
 func TestMergeStubCacheRequiredContentRecordKeepsLatestDiskSnapshotGeneration(t *testing.T) {
 	merged := map[string]types.CacheRequiredContentItem{}
 	writeRecord := func(items ...types.CacheRequiredContentItem) {
@@ -2403,6 +2484,47 @@ func TestS2WriterSlowStreamDoesNotBlockUnrelatedMetrics(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("closed writer did not drain")
+	}
+}
+
+func TestEventRepoWithoutQueueWaitDoesNotHoldItsCaller(t *testing.T) {
+	// An event store that has fallen behind: the queue is full and not draining.
+	fullWriter := func() *s2EventWriter {
+		writer := &s2EventWriter{name: "s2", queue: make(chan cloudevents.Event, 1), enqueueWait: s2EventEnqueueTimeout}
+		writer.queue <- writerTestEvent("stream", 0)
+		return writer
+	}
+	sinks := func() []eventSink {
+		return []eventSink{&S2EventRepository{writer: fullWriter()}, &ScopedS2EventRepository{writer: fullWriter()}}
+	}
+	push := func(events *EventClientRepo) time.Duration {
+		start := time.Now()
+		events.PushContainerLifecycleEvent(types.EventContainerLifecycleSchema{
+			ID:          types.ContainerLifecycleSchedulerBatchPlan,
+			ContainerID: "sandbox-1",
+			StartTime:   start,
+		})
+		return time.Since(start)
+	}
+
+	// By default each sink holds its caller for room.
+	waits := &EventClientRepo{storageSinks: sinks()}
+	if took := push(waits); took < 2*s2EventEnqueueTimeout {
+		t.Fatalf("push returned after %s, want it to wait %s for room in each of two sinks", took, s2EventEnqueueTimeout)
+	}
+
+	drops := &EventClientRepo{storageSinks: sinks()}
+	WithoutQueueWait()(drops)
+	if took := push(drops); took > s2EventEnqueueTimeout/5 {
+		t.Fatalf("push held its caller for %s with the queue full", took)
+	}
+
+	// Events are still stored whenever there is room.
+	writer := drops.storageSinks[0].(*S2EventRepository).writer
+	<-writer.queue
+	push(drops)
+	if len(writer.queue) != 1 {
+		t.Fatal("an event was dropped though the queue had room")
 	}
 }
 

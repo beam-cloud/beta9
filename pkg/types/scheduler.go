@@ -3,6 +3,7 @@ package types
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"strings"
 	"time"
@@ -53,10 +54,11 @@ const (
 	ContainerSchedulingFailureProvisioningLimit               ContainerSchedulingFailureReason = "worker_provisioning_limit"
 	ContainerSchedulingFailureRetryLimit                      ContainerSchedulingFailureReason = "retry_limit"
 	ContainerSchedulingFailureManagedFallbackConcurrencyLimit ContainerSchedulingFailureReason = "managed_fallback_concurrency_limit"
+	ContainerSchedulingFailureManagedFallbackNoCredit         ContainerSchedulingFailureReason = "managed_fallback_no_credit"
 	ContainerSchedulingFailureManagedFallbackNoCapacity       ContainerSchedulingFailureReason = "managed_fallback_no_capacity"
 	// ContainerSchedulingFailureNoOpportunisticCapacity is reported when an
-	// OpportunisticOnly request finds no idle worker; it never waits or
-	// provisions.
+	// OpportunisticOnly request finds no idle worker: at once for managed
+	// endpoint replicas, and once the scheduling window ends for Spot.
 	ContainerSchedulingFailureNoOpportunisticCapacity ContainerSchedulingFailureReason = "no_opportunistic_capacity"
 )
 
@@ -99,11 +101,21 @@ type Worker struct {
 	// Keep internal fields after wire fields: go2proto numbers by struct position.
 	RolloutPreviousStatus      WorkerStatus `json:"-" redis:"rollout_previous_status" go2proto:"ignore"`
 	CheckpointCompatibilityKey string       `json:"-" redis:"checkpoint_compatibility_key" go2proto:"ignore"`
+	CPUTierProtocol            uint32       `json:"-" redis:"cpu_tier_protocol" go2proto:"ignore"`
+	// CreatedAt is when the worker's state was first written, in Unix
+	// seconds. The worker repository sets it. Zero means unknown: the state
+	// was written by a release that did not record it.
+	CreatedAt int64 `json:"-" redis:"created_at" go2proto:"ignore"`
 }
 
 type WorkerKeepAlive struct {
 	MachineId                  string `json:"machine_id"`
 	CheckpointCompatibilityKey string `json:"checkpoint_compatibility_key"`
+	CPUTierProtocol            uint32 `json:"cpu_tier_protocol"`
+	// RequestStreamOpen is set by the gateway that received the keepalive when
+	// it also holds this worker's container request stream. A worker opens
+	// that stream only after it has started.
+	RequestStreamOpen bool `json:"request_stream_open"`
 }
 
 func StableStorageNodeID(machineID, workerID string) string {
@@ -187,10 +199,9 @@ func NewWorkerFromProto(in *pb.Worker) *Worker {
 
 type CapacityUpdateType int
 
-const (
-	AddCapacity CapacityUpdateType = iota
-	RemoveCapacity
-)
+// AddCapacity is the one capacity update: a worker gives back what a
+// container held.
+const AddCapacity CapacityUpdateType = 0
 
 const maxCPUShareMultiplier CPUShareMultiplier = 16
 
@@ -208,6 +219,13 @@ func (m CPUShareMultiplier) Validate() error {
 // Schedulable converts physical CPU millicores into schedulable millicores.
 func (m CPUShareMultiplier) Schedulable(physical int64) int64 {
 	return physical * m.hundredths() / 100
+}
+
+// Physical converts schedulable CPU millicores into the physical millicores
+// that hold them, rounding up. It is the inverse of Schedulable.
+func (m CPUShareMultiplier) Physical(schedulable int64) int64 {
+	hundredths := m.hundredths()
+	return (schedulable*100 + hundredths - 1) / hundredths
 }
 
 func (m CPUShareMultiplier) hundredths() int64 {
@@ -255,6 +273,36 @@ type ContainerState struct {
 	Evicting     bool   `redis:"evicting" json:"evicting,omitempty"`
 	DrainSeconds uint32 `redis:"drain_seconds" json:"drain_seconds,omitempty"`
 	EvictOrder   int32  `redis:"evict_order" json:"evict_order,omitempty"`
+	// ReservedCpu mirrors ContainerRequest.ReservedCpu for the scheduled request.
+	ReservedCpu int64 `redis:"reserved_cpu" json:"reserved_cpu,omitempty" go2proto:"ignore"`
+}
+
+// CapacityCpu is the CPU the container takes from its worker's capacity.
+func (s *ContainerState) CapacityCpu() int64 {
+	return max(s.ReservedCpu, s.Cpu)
+}
+
+// ContainerLeaseRenewal is one container in a worker's routine status
+// heartbeat. RuntimeStarted says the worker has seen the container's process
+// start, so a state that is still PENDING becomes RUNNING.
+type ContainerLeaseRenewal struct {
+	ContainerId    string
+	RuntimeStarted bool
+}
+
+// ContainerLease is what the routine status heartbeat found for a container.
+// Err is set when nothing could be renewed: ErrContainerStateNotFound when
+// the container has no state, ErrContainerNotAssigned when its state is not
+// the calling worker's. Otherwise Status is the persisted status after the
+// call: a PENDING or RUNNING container was renewed, a STOPPING one was left
+// as it is. Started is set when the call moved it from PENDING to RUNNING.
+type ContainerLease struct {
+	ContainerId  string
+	Err          error
+	Status       ContainerStatus
+	Started      bool
+	Evicting     bool
+	DrainSeconds uint32
 }
 
 // @go2proto
@@ -406,14 +454,17 @@ type ContainerRequest struct {
 	// position, so this blank keeps the wire numbering of everything below it.
 	_ struct{}
 	// MachineId pins scheduling to a single agent machine; empty means any
-	// machine. The scheduler fills it in after placement on agent pools.
+	// machine. The scheduler fills it in after placement on agent pools, and
+	// then sets MachineAssigned to tell its choice from a caller's pin.
 	MachineId         string             `json:"machine_id,omitempty"`
 	CheckpointTrigger *CheckpointTrigger `json:"checkpoint_trigger,omitempty"`
 	TaskId            string             `json:"task_id,omitempty"`
 	DeliveryToken     string             `json:"-" go2proto:"ignore"`
 	// Hostname preserved across checkpoint and restore.
-	Hostname             string `json:"hostname,omitempty"`
-	ProvisioningAttempts int    `json:"provisioning_attempts,omitempty" go2proto:"ignore"`
+	Hostname string `json:"hostname,omitempty"`
+	// GrowAttempts counts, per pool, the workers the scheduler has asked for
+	// on behalf of this request. Set by the scheduler, never by callers.
+	GrowAttempts map[string]int `json:"grow_attempts,omitempty" go2proto:"ignore"`
 	// Evictable marks a container that the scheduler may stop to make room for
 	// a non-evictable request (managed endpoint replicas).
 	Evictable bool `json:"evictable,omitempty"`
@@ -438,6 +489,22 @@ type ContainerRequest struct {
 	// they never fall back to a container runtime.
 	UseVM          bool            `json:"use_vm,omitempty"`
 	SecretBindings []SecretBinding `json:"secret_bindings,omitempty"`
+	// ReservedCpu is the CPU the request takes from its worker's capacity (see
+	// CPUTier.CPUReservation). The scheduler sets it when it places the request
+	// and the worker when it accepts it; zero means Cpu.
+	ReservedCpu int64 `json:"reserved_cpu,omitempty" go2proto:"ignore"`
+	// MachineAssigned marks a MachineId that the scheduler filled in when it
+	// placed the request, rather than one the caller pinned the request to.
+	// Set by AssignMachine, never by callers.
+	//
+	// New fields go here, at the end: a field added higher up renumbers the
+	// wire fields below it, ignored by go2proto or not.
+	MachineAssigned bool `json:"machine_assigned,omitempty" go2proto:"ignore"`
+}
+
+// CapacityCpu is the CPU the request takes from its worker's capacity.
+func (c *ContainerRequest) CapacityCpu() int64 {
+	return max(c.ReservedCpu, c.Cpu)
 }
 
 // @go2proto
@@ -492,10 +559,17 @@ func (c *ContainerRequest) RequiresGPU() bool {
 	return c.Gpu != "" && c.Gpu != string(NO_GPU)
 }
 
+// Background reports whether the request only fills spare capacity. Such a
+// request is placed after the others, waits in a backlog lane of its own and
+// evicts nothing.
+func (c *ContainerRequest) Background() bool {
+	return c != nil && (c.Evictable || c.OpportunisticOnly)
+}
+
 // Keyless GPU restores can use idle capacity, but cannot evict workloads
 // before the runtime has validated their compatibility.
 func (c *ContainerRequest) MayEvict() bool {
-	if c == nil || c.Evictable || c.OpportunisticOnly {
+	if c == nil || c.Background() {
 		return false
 	}
 	if c.Stub.Type.IsDeployment() || !c.RequiresGPU() {
@@ -620,6 +694,23 @@ func (c *ContainerRequest) HasDurableDiskMount() bool {
 	return false
 }
 
+// AssignMachine records the machine the scheduler placed the request on. A
+// request that its caller pinned to a machine stays pinned.
+func (c *ContainerRequest) AssignMachine(machineID string) {
+	pinned := c.MachineId != "" && !c.MachineAssigned
+	c.MachineId = machineID
+	c.MachineAssigned = !pinned && machineID != ""
+}
+
+// ReleaseMachine undoes AssignMachine: the request may be placed again
+// wherever its caller allows. A pin the caller set is kept.
+func (c *ContainerRequest) ReleaseMachine() {
+	if c.MachineAssigned {
+		c.MachineId = ""
+		c.MachineAssigned = false
+	}
+}
+
 func (c *ContainerRequest) Clone() *ContainerRequest {
 	if c == nil {
 		return nil
@@ -639,6 +730,7 @@ func (c *ContainerRequest) Clone() *ContainerRequest {
 	}
 	cloned.SecretBindings = CloneSecretBindings(c.SecretBindings)
 	cloned.RuntimeSecretNames = append([]string(nil), c.RuntimeSecretNames...)
+	cloned.GrowAttempts = maps.Clone(c.GrowAttempts)
 	return &cloned
 }
 
@@ -988,6 +1080,15 @@ func (e *ErrContainerStateNotFound) From(err error) bool {
 	}
 
 	return false
+}
+
+// ErrContainerNotAssigned reports a container whose state is assigned to
+// another worker, or to no worker yet.
+type ErrContainerNotAssigned struct {
+}
+
+func (e *ErrContainerNotAssigned) Error() string {
+	return "container is not assigned to this worker"
 }
 
 type ErrInvalidWorkerStatus struct {

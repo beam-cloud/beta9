@@ -289,6 +289,56 @@ func sharedPodContainerConnections(ctx context.Context, rdb *common.RedisClient,
 	return total, err
 }
 
+// sharedPodContainersConnections is sharedPodContainerConnections for many
+// containers of a stub: its proxies are listed once and every count is read
+// in one round trip. Containers without connections are absent from the result.
+func sharedPodContainersConnections(ctx context.Context, rdb *common.RedisClient, workspaceName, stubId string, containerIds []string) (map[string]int64, error) {
+	totals := make(map[string]int64)
+	if rdb == nil || workspaceName == "" || stubId == "" || len(containerIds) == 0 {
+		return totals, nil
+	}
+
+	proxyIds, err := rdb.SMembers(ctx, Keys.podProxyConnectionIndex(workspaceName, stubId)).Result()
+	if err != nil {
+		return nil, err
+	}
+	if len(proxyIds) == 0 {
+		return totals, nil
+	}
+
+	type read struct {
+		containerId string
+		count       *redis.StringCmd
+	}
+	pipe := rdb.Pipeline()
+	reads := make([]read, 0, len(containerIds)*len(proxyIds))
+	for _, containerId := range containerIds {
+		if containerId == "" {
+			continue
+		}
+		for _, proxyId := range proxyIds {
+			reads = append(reads, read{containerId, pipe.Get(ctx, Keys.podProxyConnections(workspaceName, stubId, proxyId, containerId))})
+		}
+	}
+	// Exec reports the first command that failed, and a proxy without a count
+	// for a container is one of those, so each result is checked on its own.
+	_, _ = pipe.Exec(ctx)
+
+	for _, read := range reads {
+		value, err := read.count.Int64()
+		if err == redis.Nil {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if value > 0 {
+			totals[read.containerId] += value
+		}
+	}
+	return totals, nil
+}
+
 func sumRedisIntKeys(ctx context.Context, rdb *common.RedisClient, indexKey string, keyForProxy func(string) string, pruneMissing bool) (int64, bool, error) {
 	var total int64
 

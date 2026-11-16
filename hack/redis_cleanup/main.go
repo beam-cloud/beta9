@@ -1,5 +1,6 @@
 // redis_cleanup removes expired task state and old CacheFS leaves through
 // explicit indexes. It is a dry run unless --apply is supplied.
+// TODO: replace this with automated cleanup in Makefile
 package main
 
 import (

@@ -24,7 +24,6 @@ import (
 )
 
 const (
-	durableDiskDriverEnv  = "BETA9_DURABLE_DISK_DRIVER"
 	durableDiskMarkerFile = ".beta9-durable-disk"
 	durableDiskLockDir    = ".beta9-durable-disk-locks"
 	durableDiskLockWait   = 10 * time.Minute
@@ -44,6 +43,10 @@ func (s *Worker) initializeDurableDisks(ctx context.Context) {
 		// Empty roots consume no guest CPU or RAM. Cover the start gate even
 		// when guests are smaller than the default VM resource allocation.
 		diskConfig.SpareCount = max(2, s.containerStartLimit)
+		if quiet, err := time.ParseDuration(os.Getenv(types.DiskSpareRefillQuietEnv)); err == nil && quiet > 0 && quiet <= 5*time.Second {
+			diskConfig.SpareRefillQuietPeriod = quiet
+		}
+		diskConfig.DetachedStateMarker = true
 	}
 
 	if s.agentWorker() {
@@ -64,6 +67,40 @@ func (s *Worker) initializeDurableDisks(ctx context.Context) {
 		// work back onto the first burst's critical path.
 		if err := s.diskManager.WarmSpares(ctx, types.DefaultVMRootSizeBytes); err != nil {
 			log.Warn().Err(err).Msg("failed to warm fresh VM root disks")
+		}
+	}
+	go s.pruneDetachedQcowVolumes(ctx)
+}
+
+// Detached qcow layers are another local cache, outside the CAS and image
+// directories maintained by the cache-server owner. Each worker owns its slot's
+// directory and must age it out even while other containers keep running.
+func (s *Worker) pruneDetachedQcowVolumes(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	seconds := s.config.Cache.Reconciliation.RecentStubTTLSeconds
+	if seconds <= 0 {
+		seconds = cache.DefaultReconcileRecentStubTTLS
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		pruneCtx, cancel := context.WithTimeout(ctx, time.Minute)
+		var bytesToFree int64
+		if usage, err := fastDiskUsage(s.diskManager.Root()); err == nil {
+			watermark := cache.NormalizeEvictWatermarkPct(s.config.Cache.Server.DiskCacheEvictWatermarkPct)
+			bytesToFree = reconcilePressureBytesToFree(usage, watermark, s.config.Cache.Disk.MinFreeBytes)
+		}
+		pruned, freed, err := s.diskManager.PruneDetachedWithBudget(pruneCtx, time.Now().Add(-time.Duration(seconds)*time.Second), bytesToFree)
+		cancel()
+		if pruned > 0 {
+			log.Info().Int("pruned", pruned).Int64("freed_bytes", freed).Int64("target_free_bytes", bytesToFree).Msg("pruned detached qcow volume copies")
+		}
+		if err != nil && ctx.Err() == nil && !errors.Is(err, context.DeadlineExceeded) {
+			log.Warn().Err(err).Msg("detached qcow volume cache cleanup incomplete")
 		}
 	}
 }
@@ -238,7 +275,7 @@ func durableDiskDriver(configured string) string {
 	if driver := types.NormalizeDurableDiskDriver(configured); driver != "" {
 		return driver
 	}
-	if driver := types.NormalizeDurableDiskDriver(os.Getenv(durableDiskDriverEnv)); driver != "" {
+	if driver := types.NormalizeDurableDiskDriver(os.Getenv(types.DurableDiskDriverEnv)); driver != "" {
 		return driver
 	}
 	return types.DurableDiskDriverSnapshot
@@ -263,6 +300,12 @@ func prepareSnapshotDurableDiskMount(mount *types.Mount) error {
 // syncDurableDiskMounts snapshots all durable mounts according to the caller's
 // persistence boundary.
 func (s *Worker) syncDurableDiskMounts(ctx context.Context, request *types.ContainerRequest, mode durableDiskSyncMode) ([]*types.DiskSnapshot, error) {
+	return s.syncDurableDiskMountsWithSeal(ctx, request, mode, nil)
+}
+
+// sealed is used only by the single writable qcow disk terminal-checkpoint
+// pipeline. The disk lock remains held through publication, as on the serial path.
+func (s *Worker) syncDurableDiskMountsWithSeal(ctx context.Context, request *types.ContainerRequest, mode durableDiskSyncMode, sealed func()) ([]*types.DiskSnapshot, error) {
 	if request == nil {
 		return nil, nil
 	}
@@ -305,7 +348,7 @@ func (s *Worker) syncDurableDiskMounts(ctx context.Context, request *types.Conta
 				defer s.stopQcowMerge(s.qcowVolumeKey(request, mount))()
 			}
 			err := withDurableDiskLock(ctx, mount, func() error {
-				snapshot, snapErr := s.snapshotQcowDurableDiskMount(ctx, request, mount, mode)
+				snapshot, snapErr := s.snapshotQcowDurableDiskMountWithSeal(ctx, request, mount, mode, sealed)
 				if snapshot != nil {
 					snapshots = append(snapshots, snapshot)
 				}

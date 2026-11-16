@@ -244,6 +244,17 @@ func IsWorkerTokenType(tokenType string) bool {
 	return tokenType == TokenTypeWorker || tokenType == TokenTypeWorkerPrivate
 }
 
+// IsTokenType reports whether the gateway issues tokens of this type. Tokens
+// of retired types stay in the database but don't authenticate.
+func IsTokenType(tokenType string) bool {
+	switch tokenType {
+	case TokenTypeClusterAdmin, TokenTypeWorkspacePrimary, TokenTypeWorkspace, TokenTypePlatformDeployer,
+		TokenTypeWorker, TokenTypeWorkerPrivate, TokenTypeWorkspaceRestricted:
+		return true
+	}
+	return false
+}
+
 type Token struct {
 	Id                     uint       `db:"id" json:"id" serializer:"id,source:external_id"`
 	ExternalId             string     `db:"external_id" json:"external_id" serializer:"external_id"`
@@ -554,6 +565,7 @@ func NewCheckpointFromProto(in *pb.Checkpoint) *Checkpoint {
 
 type StubConfigV1 struct {
 	Runtime            Runtime            `json:"runtime"`
+	CPUTier            CPUTier            `json:"cpu_tier,omitempty"`
 	Handler            string             `json:"handler"`
 	OnStart            string             `json:"on_start"`
 	OnDeploy           string             `json:"on_deploy"`
@@ -995,6 +1007,16 @@ func (t StubType) RouteKind() string {
 // StubScopedContainerPrefixes identifies container IDs carrying a stub UUID.
 func StubScopedContainerPrefixes() []string {
 	return []string{StubTypeSandbox, StubTypeVM, StubTypePod, StubTypeEndpoint, StubTypeTaskQueue, "managed"}
+}
+
+// StubUpsertInput is the shared input for single and batched stub creation.
+type StubUpsertInput struct {
+	Name        string          `json:"name"`
+	Type        string          `json:"type"`
+	Config      json.RawMessage `json:"config"`
+	ObjectID    uint            `json:"object_id"`
+	WorkspaceID uint            `json:"workspace_id"`
+	AppID       uint            `json:"app_id"`
 }
 
 // @go2proto

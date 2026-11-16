@@ -76,7 +76,7 @@ func TestCreatePodRunOptionsPreserveResourceOverrideForColdAndCheckpointLaunches
 	require.False(t, createPodRunOptions(context.Background(), request, nil).forceResourceLimits)
 }
 
-func TestRunVMValidatesGPUColdBootBeforeLaunch(t *testing.T) {
+func TestRunVMValidatesGPUBeforeLaunch(t *testing.T) {
 	launchError := errors.New("secret resolution failed")
 	for _, test := range []struct {
 		name, gpu, checkpoint, want string
@@ -86,7 +86,7 @@ func TestRunVMValidatesGPUColdBootBeforeLaunch(t *testing.T) {
 		{name: "GPU cold boot", gpu: "RTX4090", count: 1},
 		{name: "GPU without count", gpu: "RTX4090", want: "exactly one GPU"},
 		{name: "multiple GPUs", gpu: "RTX4090", count: 2, want: "exactly one GPU"},
-		{name: "GPU memory restore", gpu: "RTX4090", count: 1, checkpoint: "memory", want: "cold boot"},
+		{name: "GPU memory restore", gpu: "RTX4090", count: 1, checkpoint: "memory"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			config, err := json.Marshal(types.StubConfigV1{
@@ -97,8 +97,9 @@ func TestRunVMValidatesGPUColdBootBeforeLaunch(t *testing.T) {
 			})
 			require.NoError(t, err)
 			service := &GenericPodService{backendRepo: &sandboxBackendRepository{
-				stub:      &types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeVM), Config: string(config)}},
-				secretErr: launchError,
+				stub:       &types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeVM), Config: string(config)}},
+				secretErr:  launchError,
+				checkpoint: &types.Checkpoint{Runtime: types.ContainerRuntimeMicroVM.String(), Status: string(types.CheckpointStatusAvailable)},
 			}}
 			info := &auth.AuthInfo{Workspace: &types.Workspace{ExternalId: "workspace"}}
 			err = service.RunVM(context.Background(), info, "stub", "container", types.VMSpec{}, test.checkpoint, nil)

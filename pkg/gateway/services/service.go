@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/common"
 	computesvc "github.com/beam-cloud/beta9/pkg/gateway/services/compute"
 	thundersvc "github.com/beam-cloud/beta9/pkg/gateway/services/thunder"
@@ -35,6 +36,7 @@ type GatewayService struct {
 	keyEventManager  *common.KeyEventManager
 	endpointRepo     repository.ManagedEndpointRepository // nil when managed endpoints are disabled
 	imageService     pb.ImageServiceServer                // optional; needed to create database services
+	billing          *clients.ContainerCostClient         // nil when the billing hook is not configured
 	pb.UnimplementedGatewayServiceServer
 }
 
@@ -119,5 +121,6 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		keyEventManager:  keyEventManager,
 		endpointRepo:     endpointRepo,
 		imageService:     opts.ImageService,
+		billing:          clients.NewContainerCostClient(opts.Config.Monitoring.ContainerCostHookConfig),
 	}, nil
 }

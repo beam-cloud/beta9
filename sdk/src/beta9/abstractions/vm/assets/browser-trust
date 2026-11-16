@@ -8,20 +8,20 @@ certificate=/usr/local/share/ca-certificates/beam-egress.crt
 
 # Chrome 146+ prefers the XDG path unless the legacy database already exists.
 # Creating the legacy path also supports older Chromium versions.
-database=/root/.pki/nssdb
-if [ ! -d "$database" ] && [ -d /root/.local/share/pki/nssdb ]; then
-  database=/root/.local/share/pki/nssdb
+trust_home=${HOME:-$(getent passwd "$(id -u)" | cut -d: -f6)}
+database="$trust_home/.pki/nssdb"
+if [ ! -d "$database" ] && [ -d "$trust_home/.local/share/pki/nssdb" ]; then
+  database="$trust_home/.local/share/pki/nssdb"
 fi
 
 # Desktop startup, headless launches and CA hooks can arrive together.
-mkdir -p /run/beam-vm
-exec 9>/run/beam-vm/browser-trust.lock
+mkdir -p "$database"
+exec 9>"$database/.beam-trust.lock"
 flock 9
 if [ "${1:-}" != --initialize ] && cmp -s "$certificate" "$database/.beam-egress.crt"; then
   exit 0
 fi
 
-mkdir -p "$database"
 if [ ! -f "$database/cert9.db" ]; then
   certutil -N --empty-password -d "sql:$database"
   touch "$database/.beam-empty"

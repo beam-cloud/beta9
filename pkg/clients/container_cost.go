@@ -21,6 +21,7 @@ const (
 	containerCostRequestTimeout = 5 * time.Second
 	containerCostQuoteRefresh   = 5 * time.Minute
 	containerCostRetryDelay     = 5 * time.Second
+	containerCostIdleTimeout    = time.Hour
 	containerCostResponseLimit  = 1 << 20
 	containerCostErrorLimit     = 4 << 10
 )
@@ -30,6 +31,8 @@ type ContainerCostResponse struct {
 	PricingVersion string `json:"pricing_version,omitempty"`
 	EffectiveAt    string `json:"effective_at,omitempty"`
 	ValidUntil     string `json:"valid_until,omitempty"`
+
+	CPUTierPolicy types.CPUTierPolicy `json:"cpu_tier_policy"`
 }
 
 // ContainerCostQuote is a validated quote returned by the billing service.
@@ -40,6 +43,8 @@ type ContainerCostQuote struct {
 	EffectiveAt    time.Time
 	ValidUntil     time.Time
 	Valid          bool
+
+	CPUTierPolicy types.CPUTierPolicy
 }
 
 type ContainerCostRequest struct {
@@ -50,6 +55,10 @@ type ContainerCostRequest struct {
 	GpuCount    uint32 `json:"gpu_count"`
 	Sandbox     bool   `json:"sandbox"`
 	VM          bool   `json:"vm,omitempty"`
+
+	CPUTier    types.CPUTier `json:"cpu_tier,omitempty"`
+	StubId     string        `json:"stub_id,omitempty"`
+	PolicyOnly bool          `json:"policy_only,omitempty"`
 }
 
 type containerCostCacheEntry struct {
@@ -68,10 +77,11 @@ type ContainerCostClient struct {
 	endpoint string
 	token    string
 
-	mu      sync.RWMutex
-	quotes  map[ContainerCostRequest]containerCostCacheEntry
-	refresh singleflight.Group
-	now     func() time.Time
+	mu       sync.RWMutex
+	quotes   map[ContainerCostRequest]containerCostCacheEntry
+	prunedAt time.Time
+	refresh  singleflight.Group
+	now      func() time.Time
 }
 
 func NewContainerCostClient(config types.ContainerCostHookConfig) *ContainerCostClient {
@@ -96,9 +106,6 @@ func (c *ContainerCostClient) GetContainerCostQuote(ctx context.Context, request
 	if request == nil {
 		return ContainerCostQuote{}, fmt.Errorf("container cost request is nil")
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
 
 	key := ContainerCostRequest{
 		WorkspaceId: request.WorkspaceId,
@@ -106,6 +113,34 @@ func (c *ContainerCostClient) GetContainerCostQuote(ctx context.Context, request
 		Gpu: strings.TrimSpace(request.Gpu), GpuCount: request.GpuCount,
 		Sandbox: request.Stub.Type.Kind() == types.StubTypeSandbox,
 		VM:      request.Stub.Type.Kind() == types.StubTypeVM,
+		CPUTier: request.CPUTier(),
+	}
+	if key.CPUTier != "" {
+		// Billing keeps the price each tiered stub was first quoted at.
+		key.StubId = request.StubId
+	}
+	return c.lookup(ctx, key)
+}
+
+// CPUTierPolicy returns a workspace's CPU tier policy, cached like a quote.
+// Without a billing service no workspace may use CPU tiers.
+func (c *ContainerCostClient) CPUTierPolicy(ctx context.Context, workspaceID string) (types.CPUTierPolicy, error) {
+	if c == nil {
+		return types.CPUTierPolicy{}, nil
+	}
+	quote, err := c.lookup(ctx, ContainerCostRequest{WorkspaceId: workspaceID, PolicyOnly: true})
+	if !quote.Valid {
+		if err == nil {
+			err = fmt.Errorf("CPU tier policy is unavailable")
+		}
+		return types.CPUTierPolicy{}, err
+	}
+	return quote.CPUTierPolicy, nil
+}
+
+func (c *ContainerCostClient) lookup(ctx context.Context, key ContainerCostRequest) (ContainerCostQuote, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	if quote, ok := c.cached(key); ok {
 		return quote, nil
@@ -132,6 +167,7 @@ func (c *ContainerCostClient) GetContainerCostQuote(ctx context.Context, request
 
 		c.mu.Lock()
 		c.quotes[key] = containerCostCacheEntry{quote: quote, refreshAt: refreshAt}
+		c.prune()
 		c.mu.Unlock()
 		return containerCostResult{quote: quote}, nil
 	})
@@ -231,6 +267,7 @@ func (c *ContainerCostClient) fetch(ctx context.Context, request ContainerCostRe
 	return ContainerCostQuote{
 		CostPerMs: cost, PricingVersion: response.PricingVersion,
 		EffectiveAt: effectiveAt, ValidUntil: validUntil, Valid: true,
+		CPUTierPolicy: response.CPUTierPolicy,
 	}, refreshAt, nil
 }
 
@@ -254,7 +291,25 @@ func (c *ContainerCostClient) rememberFailure(key ContainerCostRequest) Containe
 	entry := c.quotes[key]
 	entry.retryAt = c.now().Add(containerCostRetryDelay)
 	c.quotes[key] = entry
+	c.prune()
 	return entry.quote
+}
+
+// prune drops the quotes of tiered stubs that no lookup has refreshed or
+// retried for an hour, which would otherwise accumulate as stubs come and go.
+// Policies and untiered quotes are bounded by workspaces and resources, so
+// they keep their last good value for billing outages. Callers hold c.mu.
+func (c *ContainerCostClient) prune() {
+	now := c.now()
+	if now.Sub(c.prunedAt) < containerCostIdleTimeout {
+		return
+	}
+	c.prunedAt = now
+	for key, entry := range c.quotes {
+		if key.StubId != "" && now.Sub(entry.refreshAt) > containerCostIdleTimeout && now.Sub(entry.retryAt) > containerCostIdleTimeout {
+			delete(c.quotes, key)
+		}
+	}
 }
 
 func (c *ContainerCostClient) lastGood(key ContainerCostRequest) ContainerCostQuote {
@@ -268,9 +323,8 @@ func (c *ContainerCostClient) lastGood(key ContainerCostRequest) ContainerCostQu
 // can be quoted differently. A narrower key hands one workspace's quote to
 // another workspace's concurrent lookup.
 func (r ContainerCostRequest) cacheKey() string {
-	return r.WorkspaceId + "\x00" + strconv.FormatInt(r.Cpu, 10) + "\x00" + strconv.FormatInt(r.Memory, 10) +
-		"\x00" + r.Gpu + "\x00" + strconv.FormatUint(uint64(r.GpuCount), 10) +
-		"\x00" + strconv.FormatBool(r.Sandbox) + "\x00" + strconv.FormatBool(r.VM)
+	data, _ := json.Marshal(r)
+	return string(data)
 }
 
 func optionalTime(value, name string) (time.Time, error) {

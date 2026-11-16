@@ -3,6 +3,7 @@ package repository_services
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path"
 	"time"
@@ -321,21 +322,19 @@ func uniqueRuntimeSecretNames(names []string) []string {
 }
 
 func (s *WorkerRepositoryService) workspaceRuntimeToken(ctx context.Context, workspaceID uint) (string, error) {
-	tokens, err := s.backendRepo.ListTokens(ctx, workspaceID)
-	if err != nil && err != sql.ErrNoRows {
+	token, err := s.backendRepo.RetrieveActiveToken(ctx, workspaceID, types.TokenTypeWorkspaceRestricted)
+	if err == nil {
+		return token.Key, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
 		return "", err
 	}
-	for _, token := range tokens {
-		if token.Active && !token.DisabledByClusterAdmin && token.TokenType == types.TokenTypeWorkspaceRestricted {
-			return token.Key, nil
-		}
-	}
 
-	token, err := s.backendRepo.CreateToken(ctx, workspaceID, types.TokenTypeWorkspaceRestricted, true)
+	created, err := s.backendRepo.CreateToken(ctx, workspaceID, types.TokenTypeWorkspaceRestricted, true)
 	if err != nil {
 		return "", err
 	}
-	return token.Key, nil
+	return created.Key, nil
 }
 
 func (s *WorkerRepositoryService) workerRuntimeMountCredentials(ctx context.Context, workspace *types.Workspace, req *pb.GetContainerRuntimeCredentialsRequest) ([]*pb.RuntimeMountCredentials, error) {

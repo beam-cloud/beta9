@@ -9,6 +9,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -17,6 +18,7 @@ const (
 	iceRegistrationPrefix  = "vm:ice-rate:"
 	iceSessionPrefix       = "vm:ice:"
 	iceLeasePrefix         = "vm:ice-open:"
+	containerExitBacklog   = 256
 )
 
 type VMRedisRepository struct {
@@ -113,4 +115,30 @@ func (r *VMRedisRepository) RenewICELease(ctx context.Context, fragment, lease s
 
 func (r *VMRedisRepository) ReleaseICELease(ctx context.Context, fragment, lease string) error {
 	return r.rdb.ZRem(ctx, iceLeasePrefix+fragment, lease).Err()
+}
+
+func (r *VMRedisRepository) ContainerExits(ctx context.Context) <-chan string {
+	events := make(chan common.KeyEvent, containerExitBacklog)
+	exits := make(chan string, containerExitBacklog)
+	if err := common.NewKeyEventManager(r.rdb).ListenForPatternEvents(ctx, common.RedisKeys.SchedulerContainerState(vmIDPrefix), events); err != nil {
+		log.Warn().Err(err).Msg("watch VM container exits")
+	}
+
+	go func() {
+		for {
+			select {
+			case event := <-events:
+				if event.Operation != common.KeyOperationDel && event.Operation != common.KeyOperationExpired {
+					continue
+				}
+				select {
+				case exits <- vmIDPrefix + event.Key:
+				default:
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return exits
 }

@@ -23,6 +23,7 @@ service BackendRepositoryService {
   rpc GetDiskSnapshot(GetDiskSnapshotRequest) returns (GetDiskSnapshotResponse);
   rpc GetDiskSnapshotDownloadURL(GetDiskSnapshotDownloadURLRequest)
       returns (GetDiskSnapshotDownloadURLResponse);
+  rpc PreemptVM(PreemptVMRequest) returns (PreemptVMResponse);
 }
 
 message GetCheckpointByIdRequest { string checkpoint_id = 1; }
@@ -173,3 +174,6 @@ message GetDiskSnapshotDownloadURLResponse {
   string url = 2;
   string error_msg = 3;
 }
+
+message PreemptVMRequest { string workspace_id = 1; string vm_id = 2; string container_id = 3; }
+message PreemptVMResponse {}

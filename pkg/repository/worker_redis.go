@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,6 +24,24 @@ type WorkerRedisRepository struct {
 	rdb    *common.RedisClient
 	lock   *common.RedisLock
 	config types.WorkerConfig
+	// clock stamps requests the repository requeues. Nil means the wall clock.
+	clock func() time.Time
+}
+
+// WorkerRepositoryOption configures a WorkerRedisRepository.
+type WorkerRepositoryOption func(*WorkerRedisRepository)
+
+// WithWorkerClock sets the clock the repository stamps requeued and scheduled
+// requests with, so it agrees with the scheduler's.
+func WithWorkerClock(now func() time.Time) WorkerRepositoryOption {
+	return func(r *WorkerRedisRepository) { r.clock = now }
+}
+
+func (r *WorkerRedisRepository) now() time.Time {
+	if r.clock == nil {
+		return time.Now()
+	}
+	return r.clock()
 }
 
 const (
@@ -33,6 +52,8 @@ const (
 	schedulerDeliveryTokenField   = "schedule_delivery_token"
 	schedulerDeliveryAttemptField = "schedule_delivery_attempt"
 	schedulerLastBatchIDField     = "last_schedule_batch_id"
+	workerRolloutRequestBatchSize = 128
+	workerRolloutPendingCursor    = "rollout_pending_cursor"
 	// containerEvictedForField records, on an evicting victim's state, the
 	// container ids whose placement consumed its capacity (comma separated).
 	containerEvictedForField = "evicted_for"
@@ -167,15 +188,20 @@ redis.call("DEL", index_key, ref_counts_key)
 return #ips
 `)
 
+// requeueWorkerRequestsScript returns a worker's undelivered requests to the
+// backlog. KEYS[4] and KEYS[5] are the backlog's two lanes, and each request
+// comes with the one it goes back to.
 var requeueWorkerRequestsScript = redis.NewScript(`
 local queue_type = redis.call("TYPE", KEYS[1]).ok
 local pending_type = redis.call("TYPE", KEYS[2]).ok
 local index_type = redis.call("TYPE", KEYS[3]).ok
 local backlog_type = redis.call("TYPE", KEYS[4]).ok
+local background_type = redis.call("TYPE", KEYS[5]).ok
 if (queue_type ~= "none" and queue_type ~= "list")
 	or (pending_type ~= "none" and pending_type ~= "hash")
 	or (index_type ~= "none" and index_type ~= "set")
-	or (backlog_type ~= "none" and backlog_type ~= "zset") then
+	or (backlog_type ~= "none" and backlog_type ~= "zset")
+	or (background_type ~= "none" and background_type ~= "zset") then
 	return redis.error_reply("invalid worker request state type")
 end
 
@@ -190,8 +216,10 @@ for i = 1, #pending, 2 do
 end
 
 local updated = {}
-for i = 7, #ARGV, 2 do
+local lanes = {}
+for i = 7, #ARGV, 3 do
 	updated[ARGV[i]] = ARGV[i + 1]
+	lanes[ARGV[i]] = ARGV[i + 2]
 end
 local valid = {}
 for _, item in ipairs(requests) do
@@ -218,9 +246,29 @@ redis.call("DEL", KEYS[1], KEYS[2])
 for _, item in ipairs(valid) do
 	redis.call("HDEL", item.state, "worker_id", "machine_id", "gpu", ARGV[3], ARGV[4], ARGV[5])
 	redis.call("SREM", KEYS[3], item.state)
-	redis.call("ZADD", KEYS[4], ARGV[6], updated[item.container_id])
+	redis.call("ZADD", lanes[item.container_id], ARGV[6], updated[item.container_id])
 end
 return #valid
+`)
+
+// endClaimedContainersScript ends the containers a worker claimed and has not
+// started: the PENDING states on the worker's container index (KEYS[1]) that
+// are the worker's. Each is left as a stop request leaves a container:
+// STOPPING, with a stopping container's lease, under which the index of
+// container states (KEYS[2]) lists it. It returns the states it ended.
+var endClaimedContainersScript = redis.NewScript(`
+local ended = {}
+for _, state in ipairs(redis.call("SMEMBERS", KEYS[1])) do
+	if redis.call("TYPE", state).ok == "hash"
+		and redis.call("HGET", state, "worker_id") == ARGV[1]
+		and redis.call("HGET", state, "status") == ARGV[2] then
+		redis.call("HSET", state, "status", ARGV[3])
+		redis.call("EXPIRE", state, ARGV[4])
+		redis.call("ZADD", KEYS[2], ARGV[5], state)
+		table.insert(ended, state)
+	end
+end
+return ended
 `)
 
 var reserveWorkerRequestsScript = redis.NewScript(`
@@ -228,20 +276,31 @@ local requests = redis.call("LRANGE", KEYS[1], 0, tonumber(ARGV[1]) - 1)
 local pending = {}
 local deliveries = {}
 for i, raw in ipairs(requests) do
-	local request = cjson.decode(raw)
-	local container_id = request.container_id
+	-- A request is encoded with its container id first. Reading it from there
+	-- spares parsing the whole request, which is several kilobytes, only to
+	-- find where its state is kept.
+	local container_id = string.match(raw, '^{"container_id":"([^"\\]*)"')
+	if not container_id then
+		container_id = cjson.decode(raw).container_id
+	end
 	if not container_id or container_id == "" then
 		return redis.error_reply("container request is missing container_id")
 	end
-	local assignment = redis.call("HGET", ARGV[2] .. container_id, ARGV[3])
-	if not assignment or assignment == "" then
-		return redis.error_reply("container request is missing schedule assignment")
+	local state = ARGV[2] .. container_id
+	-- The queue can outlive its container state during a worker outage. An
+	-- expired request must not block every live request behind it or recreate
+	-- state for a container that the scheduler no longer owns.
+	if redis.call("EXISTS", state) ~= 0 then
+		local assignment = redis.call("HGET", state, ARGV[3])
+		if not assignment or assignment == "" then
+			return redis.error_reply("container request is missing schedule assignment")
+		end
+		local attempt = redis.call("HINCRBY", state, ARGV[4], 1)
+		local token = assignment .. ":" .. attempt
+		table.insert(pending, {assignment, cjson.encode({delivery_token = token, request = raw})})
+		table.insert(deliveries, raw)
+		table.insert(deliveries, token)
 	end
-	local attempt = redis.call("HINCRBY", ARGV[2] .. container_id, ARGV[4], 1)
-	local token = assignment .. ":" .. attempt
-	pending[i] = {assignment, cjson.encode({delivery_token = token, request = raw})}
-	table.insert(deliveries, raw)
-	table.insert(deliveries, token)
 end
 
 if #requests > 0 then
@@ -305,12 +364,14 @@ if not assignment then
 	end
 	return -2
 end
-local encoded = redis.call("HGET", KEYS[3], assignment)
-if not encoded then
+if redis.call("HEXISTS", KEYS[3], assignment) == 0 then
 	return -2
 end
-local pending = cjson.decode(encoded)
-if pending.delivery_token ~= ARGV[4] then
+-- A delivery's token is its assignment and the attempt the state counts,
+-- which changes only when the delivery is written. Comparing with those
+-- spares reading and parsing the pending request to find the token in it.
+local attempt = redis.call("HGET", KEYS[1], ARGV[6])
+if not attempt or assignment .. ":" .. attempt ~= ARGV[4] then
 	return -2
 end
 local status = redis.call("HGET", KEYS[1], "status")
@@ -398,7 +459,7 @@ if (queue_type ~= "none" and queue_type ~= "list") or (index_type ~= "none" and 
 	return {-5}
 
 end
-for i = first_request, #ARGV, 4 do
+for i = first_request, #ARGV, 5 do
 	local state_type = redis.call("TYPE", ARGV[i]).ok
 	if state_type ~= "hash" then
 		return {-4}
@@ -490,13 +551,14 @@ for i = first_victim, first_request - 1, 4 do
 	end
 end
 local machine_id = redis.call("HGET", KEYS[1], "machine_id") or ""
-for i = first_request, #ARGV, 4 do
+for i = first_request, #ARGV, 5 do
 	local state = ARGV[i]
 	redis.call("RPUSH", KEYS[2], ARGV[i + 1])
 	redis.call("HSET", state,
 		"worker_id", ARGV[5],
 		"machine_id", machine_id,
 		"gpu", ARGV[i + 2],
+		"reserved_cpu", ARGV[i + 4],
 		ARGV[6], ARGV[i + 3])
 	redis.call("HDEL", state, ARGV[7], ARGV[8])
 	redis.call("SADD", KEYS[3], state)
@@ -504,37 +566,13 @@ end
 return {1, machine_id, free_cpu, free_memory, free_gpu, version}
 `)
 
-var adjustWorkerCapacityScript = redis.NewScript(`
-local status = redis.call("HGET", KEYS[1], "status")
-if not status then
-    return {-1}
-end
-
-local free_cpu = tonumber(redis.call("HGET", KEYS[1], "free_cpu") or "0") + tonumber(ARGV[1])
-local free_memory = tonumber(redis.call("HGET", KEYS[1], "free_memory") or "0") + tonumber(ARGV[2])
-local free_gpu = tonumber(redis.call("HGET", KEYS[1], "gpu_count") or "0") + tonumber(ARGV[3])
-if free_cpu < 0 or free_memory < 0 or free_gpu < 0 then
-    return {-3}
-end
-
-local total_cpu = tonumber(redis.call("HGET", KEYS[1], "total_cpu") or "0")
-local total_memory = tonumber(redis.call("HGET", KEYS[1], "total_memory") or "0")
-local total_gpu = tonumber(redis.call("HGET", KEYS[1], "total_gpu_count") or "0")
-if total_cpu > 0 and free_cpu > total_cpu then free_cpu = total_cpu end
-if total_memory > 0 and free_memory > total_memory then free_memory = total_memory end
-if total_gpu > 0 and free_gpu > total_gpu then free_gpu = total_gpu end
-
-redis.call("HSET", KEYS[1],
-    "free_cpu", free_cpu,
-    "free_memory", free_memory,
-    "gpu_count", free_gpu)
-local version = redis.call("HINCRBY", KEYS[1], "resource_version", ARGV[4])
-return {1, redis.call("HGET", KEYS[1], "machine_id") or "", free_cpu, free_memory, free_gpu, version}
-`)
-
-func NewWorkerRedisRepository(r *common.RedisClient, config types.WorkerConfig) WorkerRepository {
+func NewWorkerRedisRepository(r *common.RedisClient, config types.WorkerConfig, opts ...WorkerRepositoryOption) WorkerRepository {
 	lock := common.NewRedisLock(r)
-	return &WorkerRedisRepository{rdb: r, lock: lock, config: config}
+	repo := &WorkerRedisRepository{rdb: r, lock: lock, config: config}
+	for _, opt := range opts {
+		opt(repo)
+	}
+	return repo
 }
 
 // AddWorker adds or updates a worker
@@ -578,6 +616,13 @@ func (r *WorkerRedisRepository) addWorker(ctx context.Context, worker *types.Wor
 		}
 	}
 
+	// The first write decides how old the worker is, whoever writes it later.
+	if oldWorker != nil {
+		worker.CreatedAt = oldWorker.CreatedAt
+	} else if worker.CreatedAt == 0 {
+		worker.CreatedAt = r.now().Unix()
+	}
+
 	if err := r.reconcileWorkerCapacity(ctx, worker); err != nil {
 		return err
 	}
@@ -589,9 +634,19 @@ func (r *WorkerRedisRepository) addWorker(ctx context.Context, worker *types.Wor
 		}
 	}
 
+	// A worker that has started keeps its state alive with its keepalives,
+	// and a state that nothing keeps alive has to expire: that is how a
+	// worker that died is noticed (see forgetLostWorker). So this write gives
+	// time only to a worker that is expected to be silent: one that is
+	// starting, or one that is being replaced and whose replacement is.
+	starting := oldWorker == nil || worker.Status == types.WorkerStatusPending || worker.RolloutGeneration != ""
+
 	pipe := r.rdb.TxPipeline()
 	pipe.HSet(ctx, stateKey, common.ToSlice(worker))
-	pipe.Expire(ctx, stateKey, r.config.CleanupPendingWorkerAgeLimit)
+	if starting {
+		pipe.Expire(ctx, stateKey, r.config.CleanupPendingWorkerAgeLimit)
+	}
+	lifetime := pipe.TTL(ctx, stateKey)
 	for _, indexKey := range r.workerIndexKeys(worker) {
 		pipe.SAdd(ctx, indexKey, stateKey)
 	}
@@ -602,6 +657,14 @@ func (r *WorkerRedisRepository) addWorker(ctx context.Context, worker *types.Wor
 	}
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("failed to add worker state and indexes <%s>: %w", stateKey, err)
+	}
+
+	// The state can expire after it was read above. The write then made a
+	// new state with no lifetime, which would stay on record for good.
+	if lifetime.Val() < 0 {
+		if err := r.rdb.Expire(ctx, stateKey, time.Duration(types.WorkerStateTtlS)*time.Second).Err(); err != nil {
+			return fmt.Errorf("failed to give worker state a lifetime <%s>: %w", stateKey, err)
+		}
 	}
 
 	return nil
@@ -627,38 +690,36 @@ func (r *WorkerRedisRepository) RemoveWorker(workerId string) error {
 	return err
 }
 
+// removeWorker returns the worker's undelivered requests to the backlog and
+// ends the containers it had claimed and not started, then deletes its
+// state. The requests come first because the state of a worker that died has
+// usually expired by the time anyone removes it, and its requests are still
+// waiting on it.
 func (r *WorkerRedisRepository) removeWorker(ctx context.Context, workerId string) error {
-	stateKey := common.RedisKeys.SchedulerWorkerState(workerId)
-	res, err := r.rdb.Exists(ctx, stateKey).Result()
+	requeued, err := r.requeueWorkerRequests(ctx, workerId)
 	if err != nil {
 		return err
 	}
-	if res == 0 {
-		return &types.ErrWorkerNotFound{WorkerId: workerId}
+	if requeued > 0 {
+		log.Info().Str("worker_id", workerId).Int("request_count", requeued).Msg("requeued requests from removed worker")
+	}
+	if err := r.endClaimedContainers(ctx, workerId); err != nil {
+		return err
 	}
 
+	stateKey := common.RedisKeys.SchedulerWorkerState(workerId)
 	worker, err := r.getWorkerFromKey(stateKey)
-	if err != nil {
-		return err
-	}
-	requeued, err := r.requeueWorkerRequests(ctx, workerId)
 	if err != nil {
 		return err
 	}
 	if err := r.removeWorkerIndexEntries(ctx, stateKey, worker); err != nil {
 		return err
 	}
-	if err := r.rdb.Del(ctx, stateKey).Err(); err != nil {
-		return err
-	}
-	if requeued > 0 {
-		log.Info().Str("worker_id", workerId).Int("request_count", requeued).Msg("requeued requests from removed worker")
-	}
-	return nil
+	return r.rdb.Del(ctx, stateKey).Err()
 }
 
 func (r *WorkerRedisRepository) requeueWorkerRequests(ctx context.Context, workerId string) (int, error) {
-	now := time.Now()
+	now := r.now()
 	pipe := r.rdb.TxPipeline()
 	queued := pipe.LRange(ctx, common.RedisKeys.SchedulerWorkerRequests(workerId), 0, -1)
 	pending := pipe.HVals(ctx, common.RedisKeys.SchedulerWorkerPendingRequests(workerId))
@@ -688,26 +749,78 @@ func (r *WorkerRedisRepository) requeueWorkerRequests(ctx context.Context, worke
 			continue
 		}
 		seen[request.ContainerId] = struct{}{}
+		// The worker's copy names the machine it was placed on. Back in the
+		// backlog it may run anywhere, or it would wait for a machine that
+		// is gone.
+		request.ReleaseMachine()
 		request.RetryCount++
 		request.Timestamp = now
 		updated, err := json.Marshal(&request)
 		if err != nil {
 			return 0, fmt.Errorf("failed to encode requeued request for worker <%s>: %w", workerId, err)
 		}
-		args = append(args, request.ContainerId, updated)
+		args = append(args, request.ContainerId, updated, BacklogLane(&request))
 	}
 	requeued, err := requeueWorkerRequestsScript.Run(ctx, r.rdb, []string{
 		common.RedisKeys.SchedulerWorkerRequests(workerId),
 		common.RedisKeys.SchedulerWorkerPendingRequests(workerId),
 		common.RedisKeys.SchedulerContainerWorkerIndex(workerId),
 		common.RedisKeys.SchedulerContainerRequests(),
+		common.RedisKeys.SchedulerBackgroundRequests(),
 	}, args...).Int()
 	if err != nil {
 		return 0, fmt.Errorf("failed to requeue requests for worker <%s>: %w", workerId, err)
 	}
 
-	metrics.RecordSchedulerBacklogDepth(r.rdb.ZCard(ctx, common.RedisKeys.SchedulerContainerRequests()).Val())
+	// The backlog's depth is what waits in both lanes. If it cannot be read,
+	// the gauge keeps what it was last set to.
+	pipe = r.rdb.Pipeline()
+	foreground := pipe.ZCard(ctx, common.RedisKeys.SchedulerContainerRequests())
+	background := pipe.ZCard(ctx, common.RedisKeys.SchedulerBackgroundRequests())
+	if _, err := pipe.Exec(ctx); err == nil {
+		metrics.RecordSchedulerBacklogDepth(foreground.Val() + background.Val())
+	}
 	return requeued, nil
+}
+
+// BacklogLane is the sorted set a request waits in until the scheduler takes
+// it up. Work that only fills spare capacity has a lane of its own, which
+// the scheduler takes from after the other.
+func BacklogLane(request *types.ContainerRequest) string {
+	if request.Background() {
+		return common.RedisKeys.SchedulerBackgroundRequests()
+	}
+	return common.RedisKeys.SchedulerContainerRequests()
+}
+
+// endClaimedContainers ends the containers that a worker which is gone had
+// claimed and not started. A claim takes the request off the worker for
+// good, so there is nothing to return to the backlog, and the container's
+// state would say PENDING until its lease ran out, half an hour later, with
+// its owner counting a container that is starting. Ended, the container is
+// one its owner replaces.
+//
+// The worker may be alive after all, with only its record lost. It then
+// finds the container stopping at the container's next heartbeat, and stops
+// it.
+func (r *WorkerRedisRepository) endClaimedContainers(ctx context.Context, workerId string) error {
+	lease := time.Duration(types.ContainerStateTtlSWhileStopping) * time.Second
+	ended, err := endClaimedContainersScript.Run(ctx, r.rdb, []string{
+		common.RedisKeys.SchedulerContainerWorkerIndex(workerId),
+		common.RedisKeys.SchedulerContainerStateIndex(),
+	}, workerId, string(types.ContainerStatusPending), string(types.ContainerStatusStopping),
+		int64(lease.Seconds()), time.Now().Add(lease).Unix()).StringSlice()
+	if err != nil {
+		return fmt.Errorf("failed to end containers claimed by worker <%s>: %w", workerId, err)
+	}
+	if len(ended) > 0 {
+		containerIds := make([]string, len(ended))
+		for i, stateKey := range ended {
+			containerIds[i] = containerIDFromStateKey(stateKey)
+		}
+		log.Warn().Str("worker_id", workerId).Strs("container_ids", containerIds).Msg("ended containers that the worker had claimed and not started")
+	}
+	return nil
 }
 
 type pendingContainerRequest struct {
@@ -873,7 +986,7 @@ func (r *WorkerRedisRepository) getWorkerReservedCapacity(ctx context.Context, w
 		if state, ok := byID[request.ContainerId]; ok {
 			evictable = reclaimable(state, workerId)
 		}
-		usage.add(request.Cpu, capacityMemoryForRequest(request),
+		usage.add(request.CapacityCpu(), capacityMemoryForRequest(request),
 			gpuCountForCapacity(request.Gpu, request.GpuRequest, request.GpuCount), evictable)
 	}
 	for _, state := range states {
@@ -905,7 +1018,7 @@ func (c *workerReservedCapacity) addContainerState(state *types.ContainerState, 
 	}
 	memory := capacityMemoryForRequest(&types.ContainerRequest{Memory: state.Memory, UseVM: worker.Runtime == types.ContainerRuntimeMicroVM.String()})
 	gpu := gpuCountForCapacity(state.Gpu, nil, state.GpuCount)
-	c.add(state.Cpu, memory, gpu, reclaimable(state, worker.Id))
+	c.add(state.CapacityCpu(), memory, gpu, reclaimable(state, worker.Id))
 }
 
 func (c *workerReservedCapacity) add(cpu, memory int64, gpu uint32, evictable bool) {
@@ -950,12 +1063,41 @@ func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive ty
 		return err
 	}
 
+	// A worker opens its request stream only after it has started, and opening
+	// the stream makes a pending worker available. A record that is pending
+	// while the stream is open was therefore written later: the pool controller
+	// recreates a machine's worker as pending when Redis evicted or expired its
+	// record, or after disabling it for a transient health reason. No stream
+	// will open to make that record available, so the keepalive does. Disabled
+	// workers and rollouts are left alone, and a cordon is kept.
+	recovered := keepAlive.RequestStreamOpen && worker.Status == types.WorkerStatusPending && worker.RolloutGeneration == ""
+	if recovered {
+		worker.Status = types.WorkerStatusAvailable
+		if worker.CordonRequested {
+			worker.Status = types.WorkerStatusDisabled
+		} else if err := r.reconcileWorkerCapacity(ctx, worker); err != nil {
+			return err
+		}
+	}
+
 	oldMachineID := worker.MachineId
 	machineID := strings.TrimSpace(keepAlive.MachineId)
 	if machineID != "" {
 		worker.MachineId = machineID
 	}
 	pipe := r.rdb.TxPipeline()
+	pipe.HSet(ctx, stateKey, "cpu_tier_protocol", keepAlive.CPUTierProtocol)
+	if recovered {
+		pipe.HSet(ctx, stateKey,
+			"status", string(worker.Status),
+			"free_cpu", worker.FreeCpu,
+			"free_memory", worker.FreeMemory,
+			"gpu_count", worker.FreeGpuCount,
+			"evictable_cpu", worker.EvictableCpu,
+			"evictable_memory", worker.EvictableMemory,
+			"evictable_gpu_count", worker.EvictableGpuCount,
+		)
+	}
 	if worker.MachineId != oldMachineID {
 		pipe.HSet(ctx, stateKey, "machine_id", worker.MachineId)
 	}
@@ -964,7 +1106,7 @@ func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive ty
 	if keyChanged {
 		pipe.HSet(ctx, stateKey, "checkpoint_compatibility_key", keepAlive.CheckpointCompatibilityKey)
 	}
-	if worker.MachineId != oldMachineID || keyChanged {
+	if worker.MachineId != oldMachineID || keyChanged || recovered {
 		pipe.HIncrBy(ctx, stateKey, "resource_version", 1)
 	}
 	pipe.Expire(ctx, stateKey, time.Duration(types.WorkerStateTtlS)*time.Second)
@@ -974,6 +1116,9 @@ func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive ty
 
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("failed to set worker keepalive <%v>: %w", stateKey, err)
+	}
+	if recovered {
+		log.Info().Str("worker_id", workerId).Str("status", string(worker.Status)).Msg("worker was pending with its request stream open; keepalive set its status")
 	}
 	return nil
 }
@@ -1028,7 +1173,7 @@ func (r *WorkerRedisRepository) ToggleWorkerAvailable(workerId, generation strin
 			// Availability, credit, or disconnect reconciliation may disable a
 			// machine while its replacement starts. An image acknowledgment
 			// cannot undo that independent decision.
-			if !compute.AgentMachineConnected(machine, time.Now()) || machine.Cordoned {
+			if !compute.AgentMachineConnected(machine, r.now()) || machine.Cordoned {
 				worker.Status = types.WorkerStatusDisabled
 			}
 		}
@@ -1081,6 +1226,42 @@ func (r *WorkerRedisRepository) SetWorkerCordon(workerId string, cordoned bool) 
 	})
 }
 
+// CordonWorkerIfIdle cordons a worker that has nothing queued, delivered or
+// running, and reports whether it did. A worker with work is left as it is.
+// The check and the cordon happen under the lock scheduling takes, so no
+// request can be placed on the worker between them: a worker this cordons
+// can be removed without losing work.
+func (r *WorkerRedisRepository) CordonWorkerIfIdle(workerId string) (bool, error) {
+	cordoned := false
+	err := r.withWorker(workerId, func(ctx context.Context, stateKey string, worker *types.Worker) error {
+		busy, err := r.workerHasOutstandingWork(ctx, workerId)
+		if err != nil || busy {
+			return err
+		}
+		cordoned = true
+		return r.saveWorkerFields(ctx, stateKey, "cordon_requested", true, "status", string(types.WorkerStatusDisabled))
+	})
+	return cordoned, err
+}
+
+// KeepPendingWorker gives a worker that is still pending a full pending
+// lifetime again, for a worker whose machine takes longer to start than that.
+// It reports whether the worker exists; one that has left pending is not
+// touched.
+func (r *WorkerRedisRepository) KeepPendingWorker(workerId string) (bool, error) {
+	err := r.withWorker(workerId, func(ctx context.Context, stateKey string, worker *types.Worker) error {
+		if worker.Status != types.WorkerStatusPending {
+			return nil
+		}
+		return r.rdb.Expire(ctx, stateKey, r.config.CleanupPendingWorkerAgeLimit).Err()
+	})
+	var notFound *types.ErrWorkerNotFound
+	if errors.As(err, &notFound) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // PrepareWorkerRollout disables an agent worker immediately, then waits until
 // queued, delivered, and active container work is gone before allowing the
 // agent slot to change. The worker lock is shared with scheduling, so no new
@@ -1101,7 +1282,7 @@ func (r *WorkerRedisRepository) PrepareWorkerRollout(workerId, generation string
 			}
 		}
 		busy, err := r.workerHasOutstandingWork(ctx, workerId)
-		ready = !busy
+		ready = err == nil && !busy
 		return err
 	})
 	return ready, err
@@ -1138,11 +1319,53 @@ func (r *WorkerRedisRepository) CancelWorkerRollout(workerId, generation string)
 	})
 }
 
+// Prune only requests whose state has expired. Validate the batch before any
+// mutation, and keep live payloads, delivery tokens, and FIFO order unchanged.
+// Bounded batches let subsequent snapshots drain large orphaned queues without
+// holding Redis or the scheduling lock for an unbounded scan.
+var pruneExpiredRolloutRequestsScript = redis.NewScript(`
+local requests = redis.call("LRANGE", KEYS[1], 0, tonumber(ARGV[2]) - 1)
+local cursor = redis.call("HGET", KEYS[3], ARGV[3]) or "0"
+local scan = redis.call("HSCAN", KEYS[2], cursor, "COUNT", ARGV[2])
+local pending = scan[2]
+local kept = {}
+local expired = {}
+local function is_expired(raw)
+  local request = cjson.decode(raw)
+  assert(type(request) == "table" and type(request.container_id) == "string" and request.container_id ~= "", "invalid container request")
+  return redis.call("EXISTS", ARGV[1] .. request.container_id) == 0
+end
+for _, raw in ipairs(requests) do
+  if not is_expired(raw) then table.insert(kept, raw) end
+end
+for i = 1, #pending, 2 do
+  local delivery = cjson.decode(pending[i + 1])
+  if type(delivery) ~= "table" or type(delivery.request) ~= "string" then
+    return redis.error_reply("invalid pending container request")
+  end
+  if is_expired(delivery.request) then table.insert(expired, pending[i]) end
+end
+if #kept < #requests then
+  local ttl = redis.call("PTTL", KEYS[1])
+  redis.call("LTRIM", KEYS[1], #requests, -1)
+  for i = #kept, 1, -1 do redis.call("LPUSH", KEYS[1], kept[i]) end
+  if ttl > 0 then redis.call("PEXPIRE", KEYS[1], ttl) end
+end
+for _, assignment in ipairs(expired) do redis.call("HDEL", KEYS[2], assignment) end
+if scan[1] == "0" or redis.call("EXISTS", KEYS[2]) == 0 then
+  redis.call("HDEL", KEYS[3], ARGV[3])
+else
+  redis.call("HSET", KEYS[3], ARGV[3], scan[1])
+end
+return redis.call("EXISTS", KEYS[1], KEYS[2])
+`)
+
 func (r *WorkerRedisRepository) workerHasOutstandingWork(ctx context.Context, workerId string) (bool, error) {
-	pending, err := r.rdb.Exists(ctx,
+	pending, err := pruneExpiredRolloutRequestsScript.Run(ctx, r.rdb, []string{
 		common.RedisKeys.SchedulerWorkerRequests(workerId),
 		common.RedisKeys.SchedulerWorkerPendingRequests(workerId),
-	).Result()
+		common.RedisKeys.SchedulerWorkerState(workerId),
+	}, common.RedisKeys.SchedulerContainerState(""), workerRolloutRequestBatchSize, workerRolloutPendingCursor).Int()
 	if err != nil || pending > 0 {
 		return pending > 0, err
 	}
@@ -1251,47 +1474,9 @@ func (r *WorkerRedisRepository) removeWorkerIndexEntries(ctx context.Context, st
 	return nil
 }
 
-// getWorkers retrieves a list of worker objects from the Redis store that match a given pattern.
-// If useLock is set to true, a lock will be acquired for each worker and released after retrieval.
-// If you can afford to not have the most up-to-date worker information, you can set useLock to false.
-func (r *WorkerRedisRepository) getWorkers(useLock bool) ([]*types.Worker, error) {
-	workers := []*types.Worker{}
-
-	keys, err := r.rdb.SMembers(context.TODO(), common.RedisKeys.SchedulerWorkerIndex()).Result()
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve worker state keys: %v", err)
-	}
-
-	if !useLock {
-		workers, err := r.getWorkersFromKeys(keys, common.RedisKeys.SchedulerWorkerIndex())
-		if err != nil {
-			return nil, fmt.Errorf("failed to retrieve worker state keys: %v", err)
-		}
-
-		return workers, nil
-	}
-
-	for _, key := range keys {
-		workerId := strings.Split(key, ":")[3]
-
-		err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), common.RedisLockOptions{TtlS: 10, Retries: 0})
-		if err != nil {
-			continue
-		}
-
-		w, err := r.getWorkerFromKey(key)
-		if err != nil {
-			r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
-			continue
-		}
-
-		r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
-		workers = append(workers, w)
-	}
-
-	return workers, nil
-}
-
+// getWorkers returns every worker on the index, as each is on record at the
+// moment it is read. A worker that is on the index and has no record is
+// forgotten on the way (see forgetLostWorker).
 func (r *WorkerRedisRepository) GetWorkerById(workerId string) (*types.Worker, error) {
 	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), schedulerWorkerLockOptions)
 	if err != nil {
@@ -1334,8 +1519,11 @@ func (r *WorkerRedisRepository) getWorkersFromKeys(keys []string, cleanupIndexKe
 	var workers []*types.Worker
 	for i, cmd := range cmds {
 		res, err := cmd.Result()
-		if err != nil || len(res) == 0 {
-			r.removeMissingWorkerFromIndexes(context.TODO(), keys[i], cleanupIndexKeys...)
+		if err != nil {
+			continue
+		}
+		if len(res) == 0 {
+			r.forgetLostWorker(context.TODO(), keys[i], cleanupIndexKeys...)
 			continue
 		}
 
@@ -1345,15 +1533,51 @@ func (r *WorkerRedisRepository) getWorkersFromKeys(keys []string, cleanupIndexKe
 	return workers, nil
 }
 
-func (r *WorkerRedisRepository) removeMissingWorkerFromIndexes(ctx context.Context, stateKey string, indexKeys ...string) {
-	indexSet := map[string]struct{}{common.RedisKeys.SchedulerWorkerIndex(): {}}
-	for _, indexKey := range indexKeys {
-		if indexKey != "" {
-			indexSet[indexKey] = struct{}{}
+// forgetLostWorker handles a worker that is still indexed but has no state.
+// A state that nothing keeps alive expires: that of a worker that has
+// started, once it has sent no keepalive for types.WorkerStateTtlS. The
+// worker is taken to be gone. Nothing is scheduled on a worker with no
+// state, so the requests it never took would wait on it until their
+// containers expired. They return to the backlog, the containers it had
+// claimed and not started are ended, and only then does the worker leave the
+// indexes, so a step that fails is tried again on the next read.
+//
+// All of it happens under the worker's lock, which whoever writes the
+// worker's record holds. A worker that is on record again once the lock is
+// free is not lost. One whose lock is held is left for the next read: a read
+// does not wait for a lock.
+func (r *WorkerRedisRepository) forgetLostWorker(ctx context.Context, stateKey string, indexKeys ...string) {
+	workerId := stateKey[strings.LastIndex(stateKey, ":")+1:]
+	lockOptions := common.RedisLockOptions{TtlS: schedulerWorkerLockTTL}
+	err := r.lock.WithLease(ctx, common.RedisKeys.SchedulerWorkerLock(workerId), lockOptions, func(ctx context.Context) error {
+		if exists, err := r.rdb.Exists(ctx, stateKey).Result(); err != nil || exists > 0 {
+			return err
 		}
-	}
-	for indexKey := range indexSet {
-		_ = r.rdb.SRem(ctx, indexKey, stateKey).Err()
+
+		requeued, err := r.requeueWorkerRequests(ctx, workerId)
+		if err != nil {
+			return err
+		}
+		if requeued > 0 {
+			log.Warn().Str("worker_id", workerId).Int("request_count", requeued).Msg("requeued requests from lost worker")
+		}
+		if err := r.endClaimedContainers(ctx, workerId); err != nil {
+			return err
+		}
+
+		indexSet := map[string]struct{}{common.RedisKeys.SchedulerWorkerIndex(): {}}
+		for _, indexKey := range indexKeys {
+			if indexKey != "" {
+				indexSet[indexKey] = struct{}{}
+			}
+		}
+		for indexKey := range indexSet {
+			_ = r.rdb.SRem(ctx, indexKey, stateKey).Err()
+		}
+		return nil
+	})
+	if err != nil && !common.IsRedisLockNotObtained(err) {
+		log.Error().Err(err).Str("worker_id", workerId).Msg("failed to give up the work of lost worker")
 	}
 }
 
@@ -1447,6 +1671,10 @@ func workerFromHash(key string, res map[string]string) *types.Worker {
 			worker.WorkspaceId = v
 		case "control_plane_managed":
 			worker.ControlPlaneManaged = boolean(v)
+		case "cpu_tier_protocol":
+			worker.CPUTierProtocol = u32(v)
+		case "created_at":
+			worker.CreatedAt = i64(v)
 		}
 	}
 	return worker
@@ -1459,7 +1687,7 @@ func (r *WorkerRedisRepository) GetGpuCounts() (map[string]int, error) {
 		gpuCounts[gpuType.String()] = 0
 	}
 
-	workers, err := r.getWorkers(false)
+	workers, err := r.GetAllWorkers()
 	if err != nil {
 		return nil, err
 	}
@@ -1480,7 +1708,7 @@ func (r *WorkerRedisRepository) GetFreeGpuCounts() (map[string]int, error) {
 		gpuCounts[gpuType.String()] = 0
 	}
 
-	workers, err := r.getWorkers(false)
+	workers, err := r.GetAllWorkers()
 	if err != nil {
 		return nil, err
 	}
@@ -1494,25 +1722,34 @@ func (r *WorkerRedisRepository) GetFreeGpuCounts() (map[string]int, error) {
 	return gpuCounts, nil
 }
 
+// GetPreemptibleGpus lists the GPU types that pools on spot capacity serve.
+// Such a pool adds machines when it is asked for one, so its GPU is taken to
+// be available while the pool has no worker.
+//
+// A pool is on spot capacity when it says so, or when it is a Kubernetes pool
+// whose node selector does: no pool setting says that a pool's nodes are
+// added as they are needed, and deployed configs name their spot node groups
+// this way.
 func (r *WorkerRedisRepository) GetPreemptibleGpus() []string {
-	preemptibleGpus := []string{}
+	gpus := []string{}
 	for _, pool := range r.config.Pools {
-		if pool.GPUType == "" {
+		if pool.GPUType == "" || slices.Contains(gpus, pool.GPUType) {
 			continue
 		}
-
-		// FIXME: This should really use the commented out code below instead of checking the node selector
-		// if pool.Preemptable {
-		// 	preemptibleGpus = append(preemptibleGpus, pool.GPUType)
-		// }
-		for _, v := range pool.JobSpec.NodeSelector {
-			if strings.Contains(v, "spot") {
-				preemptibleGpus = append(preemptibleGpus, pool.GPUType)
-			}
+		if pool.Preemptable || selectsSpotNodes(pool) {
+			gpus = append(gpus, pool.GPUType)
 		}
 	}
+	return gpus
+}
 
-	return preemptibleGpus
+func selectsSpotNodes(pool types.WorkerPoolConfig) bool {
+	for _, value := range pool.JobSpec.NodeSelector {
+		if strings.Contains(value, "spot") {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *WorkerRedisRepository) GetGpuAvailability() (map[string]bool, error) {
@@ -1548,9 +1785,14 @@ func (r *WorkerRedisRepository) GetGpuAvailability() (map[string]bool, error) {
 }
 
 func (r *WorkerRedisRepository) GetAllWorkers() ([]*types.Worker, error) {
-	workers, err := r.getWorkers(false)
+	keys, err := r.rdb.SMembers(context.TODO(), common.RedisKeys.SchedulerWorkerIndex()).Result()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to retrieve worker state keys: %v", err)
+	}
+
+	workers, err := r.getWorkersFromKeys(keys, common.RedisKeys.SchedulerWorkerIndex())
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve worker state keys: %v", err)
 	}
 
 	return workers, nil
@@ -1576,52 +1818,30 @@ func capacityMemoryForRequest(request *types.ContainerRequest) int64 {
 	return request.CapacityMemory()
 }
 
+// UpdateWorkerCapacity brings the capacity on a worker's record back in line
+// with the containers it holds, after one of them has gone.
 func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, request *types.ContainerRequest, capacityUpdateType types.CapacityUpdateType) error {
 	if worker == nil || request == nil {
 		return errors.New("worker and container request are required")
 	}
-
-	if capacityUpdateType == types.AddCapacity {
-		return r.withWorker(worker.Id, func(ctx context.Context, stateKey string, current *types.Worker) error {
-			if err := r.reconcileStoredWorkerCapacity(ctx, stateKey, current); err != nil {
-				return err
-			}
-			worker.FreeCpu = current.FreeCpu
-			worker.FreeMemory = current.FreeMemory
-			worker.FreeGpuCount = current.FreeGpuCount
-			worker.EvictableCpu = current.EvictableCpu
-			worker.EvictableMemory = current.EvictableMemory
-			worker.EvictableGpuCount = current.EvictableGpuCount
-			worker.ResourceVersion = current.ResourceVersion
-			worker.MachineId = current.MachineId
-			return nil
-		})
-	}
-
-	direction := int64(1)
-	if capacityUpdateType == types.RemoveCapacity {
-		// Retained for legacy callers. Scheduling reserves capacity atomically in
-		// ScheduleContainerRequests; reconciliation remains authoritative.
-		direction = -1
-	} else {
+	if capacityUpdateType != types.AddCapacity {
 		return errors.New("invalid capacity update type")
 	}
-	result, err := r.adjustWorkerCapacity(
-		worker.Id,
-		direction*request.Cpu,
-		direction*capacityMemoryForRequest(request),
-		direction*int64(gpuCountForCapacity(request.Gpu, request.GpuRequest, request.GpuCount)),
-		1,
-	)
-	if err != nil {
-		return err
-	}
-	worker.FreeCpu = result.freeCPU
-	worker.FreeMemory = result.freeMemory
-	worker.FreeGpuCount = uint32(result.freeGPU)
-	worker.ResourceVersion = result.resourceVersion
-	worker.MachineId = result.machineID
-	return nil
+
+	return r.withWorker(worker.Id, func(ctx context.Context, stateKey string, current *types.Worker) error {
+		if err := r.reconcileStoredWorkerCapacity(ctx, stateKey, current); err != nil {
+			return err
+		}
+		worker.FreeCpu = current.FreeCpu
+		worker.FreeMemory = current.FreeMemory
+		worker.FreeGpuCount = current.FreeGpuCount
+		worker.EvictableCpu = current.EvictableCpu
+		worker.EvictableMemory = current.EvictableMemory
+		worker.EvictableGpuCount = current.EvictableGpuCount
+		worker.ResourceVersion = current.ResourceVersion
+		worker.MachineId = current.MachineId
+		return nil
+	})
 }
 
 type workerCapacityResult struct {
@@ -1630,22 +1850,6 @@ type workerCapacityResult struct {
 	freeMemory      int64
 	freeGPU         int64
 	resourceVersion int64
-}
-
-func (r *WorkerRedisRepository) adjustWorkerCapacity(workerID string, cpu, memory, gpu, version int64) (workerCapacityResult, error) {
-	value, err := adjustWorkerCapacityScript.Run(
-		context.TODO(),
-		r.rdb,
-		[]string{common.RedisKeys.SchedulerWorkerState(workerID)},
-		cpu,
-		memory,
-		gpu,
-		version,
-	).Result()
-	if err != nil {
-		return workerCapacityResult{}, err
-	}
-	return parseWorkerCapacityResult(workerID, value)
 }
 
 func parseWorkerCapacityResult(workerID string, value interface{}) (workerCapacityResult, error) {
@@ -1767,7 +1971,7 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 		if err != nil {
 			return err
 		}
-		scheduledAt = time.Now()
+		scheduledAt = r.now()
 		var cpu, memory, gpu int64
 		var evictableCPU, evictableMemory, evictableGPU int64
 		// idleOnly* is the share requested by evictable and opportunistic
@@ -1779,18 +1983,19 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 			request := queued[index].request
 			requestGPU := int64(gpuCountForCapacity(request.Gpu, request.GpuRequest, request.GpuCount))
 			requestMemory := capacityMemoryForRequest(request)
-			cpu += request.Cpu
+			requestCPU := request.CapacityCpu()
+			cpu += requestCPU
 			memory += requestMemory
 			gpu += requestGPU
 			if request.Evictable {
-				evictableCPU += request.Cpu
+				evictableCPU += requestCPU
 				evictableMemory += requestMemory
 				evictableGPU += requestGPU
 			}
 			if request.MayEvict() {
 				beneficiaries = append(beneficiaries, request.ContainerId)
 			} else {
-				idleOnlyCPU += request.Cpu
+				idleOnlyCPU += requestCPU
 				idleOnlyMemory += requestMemory
 				idleOnlyGPU += requestGPU
 			}
@@ -1834,7 +2039,7 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 		for index := range queued {
 			queuedRequest := *queued[index].request
 			queuedRequest.Timestamp = scheduledAt
-			queuedRequest.MachineId = current.MachineId
+			queuedRequest.AssignMachine(current.MachineId)
 			queuedRequest.EvictContainerIds = dependencies[queuedRequest.ContainerId]
 			queuedRequest.EvictDrainSeconds = drains[queuedRequest.ContainerId]
 			payload, err := json.Marshal(&queuedRequest)
@@ -1859,7 +2064,7 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 			args = append(args, victim.stateKey, victim.cpu, victim.memory, int64(victim.gpu))
 		}
 		for _, item := range queued {
-			args = append(args, item.stateKey, item.payload, item.request.Gpu, item.assignment)
+			args = append(args, item.stateKey, item.payload, item.request.Gpu, item.assignment, item.request.CapacityCpu())
 		}
 		value, runErr := scheduleContainerRequestsScript.Run(ctx, r.rdb, []string{
 			common.RedisKeys.SchedulerWorkerState(worker.Id),
@@ -1916,7 +2121,7 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 	worker.ResourceVersion = capacity.resourceVersion
 	worker.MachineId = capacity.machineID
 	for _, item := range queued {
-		item.request.MachineId = capacity.machineID
+		item.request.AssignMachine(capacity.machineID)
 		item.request.Timestamp = scheduledAt
 		item.request.EvictContainerIds = dependencies[item.request.ContainerId]
 		item.request.EvictDrainSeconds = drains[item.request.ContainerId]
@@ -1989,7 +2194,8 @@ func (r *WorkerRedisRepository) AddContainerToWorker(workerId, containerId, deli
 		common.RedisKeys.SchedulerContainerWorkerIndex(workerId),
 		common.RedisKeys.SchedulerWorkerPendingRequests(workerId),
 		common.RedisKeys.SchedulerWorkerState(workerId),
-	}, workerId, schedulerAssignmentIDField, schedulerDeliveryTokenField, deliveryToken, string(types.ContainerStatusStopping)).Int()
+	}, workerId, schedulerAssignmentIDField, schedulerDeliveryTokenField, deliveryToken, string(types.ContainerStatusStopping),
+		schedulerDeliveryAttemptField).Int()
 	if err != nil {
 		return fmt.Errorf("failed to add container to worker container index: %w", err)
 	}
@@ -2014,14 +2220,6 @@ func (r *WorkerRedisRepository) RemoveContainerFromWorker(workerId string, conta
 		return fmt.Errorf("failed to remove container from worker container index: %w", err)
 	}
 	return nil
-}
-
-func (r *WorkerRedisRepository) GetNextContainerRequest(workerId string) (*types.ContainerRequest, error) {
-	requests, err := r.GetNextContainerRequests(workerId, 1)
-	if err != nil || len(requests) == 0 {
-		return nil, err
-	}
-	return requests[0], nil
 }
 
 func (r *WorkerRedisRepository) RecoverPendingContainerRequests(workerId string) error {
@@ -2077,7 +2275,7 @@ func (r *WorkerRedisRepository) GetNextContainerRequests(workerId string, limit 
 	}
 	for _, request := range requests {
 		if !request.Timestamp.IsZero() {
-			metrics.RecordWorkerQueueReceiveLatency(workerId, time.Since(request.Timestamp), request)
+			metrics.RecordWorkerQueueReceiveLatency(workerId, r.now().Sub(request.Timestamp), request)
 		}
 	}
 	return requests, nil
@@ -2098,10 +2296,6 @@ func (r *WorkerRedisRepository) RequeueContainerRequests(workerId string, reques
 		common.RedisKeys.SchedulerWorkerRequests(workerId),
 		common.RedisKeys.SchedulerWorkerPendingRequests(workerId),
 	}, args...).Err()
-}
-
-func (r *WorkerRedisRepository) GetId() string {
-	return uuid.New().String()[:8]
 }
 
 func (r *WorkerRedisRepository) SetContainerResourceValues(workerId string, containerId string, usage types.ContainerResourceUsage) error {

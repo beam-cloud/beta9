@@ -440,7 +440,9 @@ type microVMPlacement struct {
 	cpus []int
 }
 
-func microVMHypervisorArgs(stateDir, kernel, cmdline string, vcpus int, memory int64, mac string, root microVMDisk, extra []microVMDisk, placement *microVMPlacement, devices ...string) []string {
+// ram, when set, is a file of preallocated guest RAM already on the
+// placement's NUMA node. vfio guests get their devices once they are running.
+func microVMHypervisorArgs(stateDir, kernel, cmdline string, vcpus int, memory int64, ram, mac string, root microVMDisk, extra []microVMDisk, placement *microVMPlacement, vfio bool) []string {
 	cpuArg := fmt.Sprintf("boot=%d", vcpus)
 	memoryArgs := []string{"--memory", fmt.Sprintf("size=%d,shared=on", memory)}
 	if placement != nil {
@@ -455,6 +457,9 @@ func microVMHypervisorArgs(stateDir, kernel, cmdline string, vcpus int, memory i
 		cpuArg += ",affinity=[" + strings.Join(affinity, ",") + "]"
 		memoryArgs = []string{"--memory", "size=0", "--memory-zone",
 			fmt.Sprintf("id=ram,size=%d,shared=on,host_numa_node=%d", memory, placement.node)}
+	}
+	if ram != "" {
+		memoryArgs = []string{"--memory", "size=0", "--memory-zone", fmt.Sprintf("id=ram,size=%d,shared=on,file=%s", memory, ram)}
 	}
 	args := []string{
 		"--api-socket", "path=" + filepath.Join(stateDir, microVMAPISocket),
@@ -477,12 +482,7 @@ func microVMHypervisorArgs(stateDir, kernel, cmdline string, vcpus int, memory i
 		"--serial", "tty",
 		"--console", "off",
 	)
-	if len(devices) > 0 {
-		args = append(args, "--device")
-		for _, device := range devices {
-			args = append(args, "path="+device)
-		}
-	} else {
+	if !vfio {
 		// VFIO pins guest RAM for DMA. Only CPU guests can return free pages.
 		args = append(args, "--balloon", "size=0,free_page_reporting=on")
 	}
@@ -499,21 +499,83 @@ func microVMRestoreArgs(stateDir, snapshotDir string) []string {
 	}
 }
 
+// snapshotHost is what a restored VM takes from the host it restarts on
+// instead of from the snapshot: its kernel file, the file holding its RAM
+// (huge pages a GPU can pin quickly, or none) and its place near the GPU it
+// is given. A snapshot carries no devices; the GPU is attached afterwards.
+type snapshotHost struct {
+	kernel    string
+	ram       string
+	ramBytes  int64
+	placement *microVMPlacement
+}
+
+// snapshotRAMInFile reports whether a snapshot's guest RAM was a file the
+// hypervisor was handed, as prepared huge pages are. Its restore needs one.
+func snapshotRAMInFile(config []byte) bool {
+	var cfg struct {
+		Memory struct {
+			Zones []struct {
+				File *string `json:"file"`
+			} `json:"zones"`
+		} `json:"memory"`
+	}
+	if json.Unmarshal(config, &cfg) != nil {
+		return false
+	}
+	return len(cfg.Memory.Zones) == 1 && cfg.Memory.Zones[0].File != nil
+}
+
 // rewriteSnapshotConfig points a snapshot's device config at this VM's
 // sockets, disk image and MAC. Devices are matched by position: --disk order
 // is root first, then the extra disks, and there is one net, fs and vsock.
-func rewriteSnapshotConfig(config []byte, stateDir string, network microvm.Network, root microVMDisk, extra []microVMDisk) ([]byte, error) {
+func rewriteSnapshotConfig(config []byte, stateDir string, network microvm.Network, root microVMDisk, extra []microVMDisk, host snapshotHost) ([]byte, error) {
 	var cfg map[string]any
 	if err := json.Unmarshal(config, &cfg); err != nil {
 		return nil, fmt.Errorf("decode snapshot config: %w", err)
 	}
 	if devices, _ := cfg["devices"].([]any); len(devices) > 0 {
-		return nil, fmt.Errorf("restoring a microvm with VFIO devices is unsupported; cold boot from its saved disks")
+		return nil, fmt.Errorf("snapshot was taken with %d VFIO devices attached; cold boot from its saved disks", len(devices))
+	}
+	// The hypervisor reads this path again when the guest reboots.
+	if payload, ok := cfg["payload"].(map[string]any); ok && host.kernel != "" {
+		payload["kernel"] = host.kernel
+	}
+	if cpus, ok := cfg["cpus"].(map[string]any); ok {
+		cpus["affinity"] = nil
+		if vcpus, _ := cpus["boot_vcpus"].(float64); host.placement != nil && vcpus > 0 {
+			affinity := make([]any, int(vcpus))
+			for i := range affinity {
+				affinity[i] = map[string]any{"vcpu": i, "host_cpus": host.placement.cpus}
+			}
+			cpus["affinity"] = affinity
+		}
 	}
 	// Eager RAM restore must not synchronously compact host memory for huge
 	// pages. Cold boots retain the hypervisor's normal allocation policy.
 	if memory, ok := cfg["memory"].(map[string]any); ok {
 		memory["thp"] = false
+		zones, _ := memory["zones"].([]any)
+		if len(zones) > 1 {
+			return nil, fmt.Errorf("snapshot has %d memory zones", len(zones))
+		}
+		for _, entry := range zones {
+			zone, ok := entry.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("snapshot memory zone is not an object")
+			}
+			// The snapshot names the file and NUMA node of the host it was
+			// taken on. Memory that is not in a file is allocated here.
+			zone["file"], zone["host_numa_node"] = nil, nil
+			switch size, _ := zone["size"].(float64); {
+			case host.ram != "" && int64(size) != host.ramBytes:
+				return nil, fmt.Errorf("snapshot has %d bytes of RAM, this VM has %d", int64(size), host.ramBytes)
+			case host.ram != "":
+				zone["file"], zone["shared"] = host.ram, true
+			case host.placement != nil:
+				zone["host_numa_node"] = host.placement.node
+			}
+		}
 	}
 	if nets, _ := cfg["net"].([]any); len(nets) == 1 {
 		if entry, ok := nets[0].(map[string]any); ok {

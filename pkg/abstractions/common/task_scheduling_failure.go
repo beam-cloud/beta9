@@ -88,6 +88,8 @@ func schedulingFailureMessage(failure common.ContainerSchedulingFailure) string 
 		return "Private compute had no capacity, and managed fallback exceeded the workspace concurrency limit."
 	case types.ContainerSchedulingFailureManagedFallbackNoCapacity:
 		return "Private compute and managed fallback had no compatible capacity."
+	case types.ContainerSchedulingFailureNoOpportunisticCapacity:
+		return "No spare capacity became available for this Spot workload before scheduling timed out. Try again later, or use the shared or performance CPU tier."
 	default:
 		return fmt.Sprintf("The task could not be scheduled (%s).", failure.Reason)
 	}

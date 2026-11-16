@@ -530,6 +530,82 @@ func TestRememberSpareSizePersistsOnlyChanges(t *testing.T) {
 	}
 }
 
+func TestRememberSpareSizeRetainsInMemoryWhenPersistenceFails(t *testing.T) {
+	manager, _ := newSpareTestManager(t)
+	defer manager.Close(context.Background())
+	if err := os.MkdirAll(manager.root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(manager.root, spareSizesFile), 0700); err != nil {
+		t.Fatal(err)
+	}
+	manager.rememberSpareSize(testSpareSize)
+	manager.mu.Lock()
+	retained := slices.Contains(manager.spareSizes, testSpareSize)
+	manager.mu.Unlock()
+	if !retained {
+		t.Fatal("failed persistence prevented replenishment from retaining the requested size")
+	}
+}
+
+func TestSpareSizeRecencyReleasesRetiredPools(t *testing.T) {
+	manager, _ := newSpareTestManager(t)
+	defer manager.Close(context.Background())
+	manager.rememberSpareSize(testSpareSize)
+	spare := pooledSpare(t, manager)
+	for i := int64(2); i <= spareSizesKept+1; i++ {
+		manager.rememberSpareSize(i * testSpareSize)
+	}
+	manager.spareWG.Wait()
+	manager.mu.Lock()
+	remaining := len(manager.spares[testSpareSize])
+	manager.mu.Unlock()
+	if remaining != 0 || fileExists(spare.dir) || fileExists(manager.runtimeDir(spare.state.Key)) {
+		t.Fatal("expired size retained its spare daemon or volume files")
+	}
+	manager.replenishSpares(testSpareSize)
+	manager.spareWG.Wait()
+	if spareCount(manager, testSpareSize) != 0 {
+		t.Fatal("a retired size was replenished")
+	}
+}
+
+func TestSpareSizeRecencyRejectsBuildThatFinishesAfterRetirement(t *testing.T) {
+	manager, host := newSpareTestManager(t)
+	defer manager.Close(context.Background())
+	manager.rememberSpareSize(testSpareSize)
+	formatting, resume := make(chan struct{}), make(chan struct{})
+	manager.run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "mkfs.ext4" {
+			close(formatting)
+			select {
+			case <-resume:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		return host.run(ctx, name, args...)
+	}
+	manager.replenishSpares(testSpareSize)
+	select {
+	case <-formatting:
+	case <-time.After(time.Second):
+		t.Fatal("spare builder never reached formatting")
+	}
+	for i := int64(2); i <= spareSizesKept+1; i++ {
+		manager.rememberSpareSize(i * testSpareSize)
+	}
+	close(resume)
+	manager.spareWG.Wait()
+	if spareCount(manager, testSpareSize) != 0 {
+		t.Fatal("an in-flight build repopulated a retired pool")
+	}
+	entries, _ := os.ReadDir(filepath.Join(manager.root, "volumes"))
+	if len(entries) != 0 {
+		t.Fatal("retired in-flight spare left volume files behind")
+	}
+}
+
 func TestRememberSpareSizeSurvivesConcurrentAttaches(t *testing.T) {
 	manager, _ := newSpareTestManager(t)
 	if err := os.MkdirAll(manager.root, 0o700); err != nil {
@@ -881,5 +957,59 @@ func TestPreparedRootsCoverConcurrentVMBursts(t *testing.T) {
 		manager.mu.Lock()
 		delete(manager.spareBuilds, testSpareSize)
 		manager.mu.Unlock()
+	}
+}
+
+func TestSpareRefillWaitsForQuietOnlyWhileInventoryRemains(t *testing.T) {
+	manager := NewManager(Config{SpareRefillQuietPeriod: 2 * time.Second})
+	defer manager.spareCancel()
+	now := time.Now()
+	manager.spares[testSpareSize] = []*Volume{nil}
+	if delay := manager.spareRefillDelay(testSpareSize, now); delay != 0 {
+		t.Fatalf("initial warm-up delayed: %s", delay)
+	}
+	manager.spareLastTaken[testSpareSize] = now
+	if delay := manager.spareRefillDelay(testSpareSize, now.Add(time.Second)); delay != time.Second {
+		t.Fatalf("quiet window not respected: %s", delay)
+	}
+	manager.spareLastTaken[testSpareSize] = now.Add(time.Second)
+	if delay := manager.spareRefillDelay(testSpareSize, now.Add(time.Second)); delay != 2*time.Second {
+		t.Fatalf("later take did not extend quiet window: %s", delay)
+	}
+	if delay := manager.spareRefillDelay(testSpareSize, now.Add(4*time.Second)); delay != 0 {
+		t.Fatalf("expired quiet window retained: %s", delay)
+	}
+	delete(manager.spares, testSpareSize)
+	if delay := manager.spareRefillDelay(testSpareSize, now.Add(time.Second)); delay != 0 {
+		t.Fatalf("exhausted pool refill delayed: %s", delay)
+	}
+	manager.retainSpareSizes([]int64{2 * testSpareSize})
+	if len(manager.spareLastTaken) != 0 {
+		t.Fatal("retired size retained refill state")
+	}
+}
+
+func TestCloseCancelsSpareRefillQuietWait(t *testing.T) {
+	manager, host := newSpareTestManager(t)
+	if err := manager.WarmSpares(context.Background(), testSpareSize); err != nil {
+		t.Fatal(err)
+	}
+	manager.spareRefillQuietPeriod = time.Hour
+	spare := manager.takeSpare(testSpareSize, ExportNBD)
+	if spare == nil {
+		t.Fatal("missing prepared spare")
+	}
+	defer spare.destroy()
+	formatted := len(host.ran("mkfs.ext4"))
+	manager.replenishSpares(testSpareSize)
+	done := make(chan struct{})
+	go func() { manager.destroySpares(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown waited for optional inventory's quiet window")
+	}
+	if len(host.ran("mkfs.ext4")) != formatted {
+		t.Fatal("quiet-window refill formatted a new disk before cancellation")
 	}
 }

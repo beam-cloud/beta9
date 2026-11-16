@@ -51,6 +51,7 @@ type logAttachmentStream struct {
 	attached bool
 	ctx      context.Context
 	output   strings.Builder
+	onSend   func()
 }
 
 type execCapturingRuntime struct {
@@ -114,6 +115,9 @@ func (s *logAttachmentStream) Context() context.Context {
 
 func (s *logAttachmentStream) Send(entry *pb.ContainerLogEntry) error {
 	_, err := s.output.WriteString(entry.Msg)
+	if s.onSend != nil {
+		s.onSend()
+	}
 	return err
 }
 
@@ -231,10 +235,9 @@ func TestContainerCheckpointReturnsNoIDWhenPersistenceFails(t *testing.T) {
 			return errors.New("checkpoint persistence failed")
 		},
 	}
-	server.containerInstances.Set(request.ContainerId, &ContainerInstance{
-		Id: request.ContainerId, Request: request,
-		Runtime: NewMockRuntime(types.ContainerRuntimeRunc.String(), betaruntime.Capabilities{CheckpointRestore: true}),
-	})
+	rt := NewMockRuntime(types.ContainerRuntimeRunc.String(), betaruntime.Capabilities{CheckpointRestore: true})
+	rt.state.Status = types.RuncContainerStatusStopped // the terminal capture ended it before persistence failed
+	server.containerInstances.Set(request.ContainerId, &ContainerInstance{Id: request.ContainerId, Request: request, Runtime: rt})
 	for _, call := range []struct {
 		terminal bool
 		captures int32
@@ -248,6 +251,50 @@ func TestContainerCheckpointReturnsNoIDWhenPersistenceFails(t *testing.T) {
 		require.Equal(t, "checkpoint persistence failed", response.ErrorMsg)
 		require.Equal(t, call.captures, calls.Load(), "only terminal calls may replay their failed result")
 	}
+}
+
+// A runtime may refuse a terminal checkpoint and leave the container running:
+// a GPU guest whose GPU is held by a process that cannot be suspended, say.
+// Asking again once that process is gone is a new attempt.
+func TestRefusedTerminalCheckpointCanBeRetried(t *testing.T) {
+	request := &types.ContainerRequest{ContainerId: "container-id"}
+	refuse := true
+	var calls atomic.Int32
+	server := &ContainerRuntimeServer{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		createCheckpoint: func(context.Context, *CreateCheckpointOpts) error {
+			calls.Add(1)
+			if refuse {
+				return errors.New("the GPU is in use by nvtop (pid 7)")
+			}
+			return nil
+		},
+	}
+	// The runtime takes a moment to say that the container still runs. Asked
+	// again in that moment, the worker must not answer with the refusal.
+	rt := slowStateRuntime{NewMockRuntime(types.ContainerRuntimeMicroVM.String(), betaruntime.Capabilities{CheckpointRestore: true})}
+	rt.state.Status = types.RuncContainerStatusRunning
+	server.containerInstances.Set(request.ContainerId, &ContainerInstance{Id: request.ContainerId, Request: request, Runtime: rt})
+	checkpoint := func() *pb.ContainerCheckpointResponse {
+		response, err := server.ContainerCheckpoint(context.Background(), &pb.ContainerCheckpointRequest{ContainerId: request.ContainerId, TerminateAfterCheckpoint: true})
+		require.NoError(t, err)
+		return response
+	}
+	require.Equal(t, "the GPU is in use by nvtop (pid 7)", checkpoint().ErrorMsg)
+	require.Equal(t, "the GPU is in use by nvtop (pid 7)", checkpoint().ErrorMsg)
+	require.Equal(t, int32(2), calls.Load(), "a refusal is not replayed")
+	refuse = false
+	accepted := checkpoint()
+	require.True(t, accepted.Ok)
+	require.Equal(t, accepted.CheckpointId, checkpoint().CheckpointId, "a taken terminal checkpoint is")
+	require.Equal(t, int32(3), calls.Load())
+}
+
+type slowStateRuntime struct{ *MockRuntime }
+
+func (r slowStateRuntime) State(ctx context.Context, containerID string) (betaruntime.State, error) {
+	time.Sleep(50 * time.Millisecond)
+	return r.MockRuntime.State(ctx, containerID)
 }
 
 func TestTerminalCheckpointJoinsAcrossLostResponseAndContainerRemoval(t *testing.T) {
@@ -764,6 +811,45 @@ func TestContainerSandboxExecDoesNotPollRuntimeStateBeforeProcessManagerReady(t 
 	require.False(t, resp.Ok)
 	require.Contains(t, resp.ErrorMsg, "Process manager failed")
 	require.Equal(t, int32(0), rt.stateCalls.Load())
+}
+
+type lateDeviceRuntime struct {
+	betaruntime.Runtime
+	devices chan struct{}
+}
+
+func (r lateDeviceRuntime) WaitForDevices(ctx context.Context, _ string) error {
+	select {
+	case <-r.devices:
+		return nil
+	case <-ctx.Done():
+		return errors.New("guest has no devices yet")
+	}
+}
+
+// A GPU microVM's process manager answers before its GPU is plugged in.
+func TestContainerSandboxExecWaitsForGuestDevices(t *testing.T) {
+	containerId := "sandbox-test"
+	rt := lateDeviceRuntime{devices: make(chan struct{})}
+	server := &ContainerRuntimeServer{containerInstances: common.NewSafeMap[*ContainerInstance]()}
+	server.containerInstances.Set(containerId, &ContainerInstance{
+		Id:                         containerId,
+		Runtime:                    rt,
+		SandboxProcessManagerReady: true,
+	})
+	exec := func() string {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		resp, err := server.ContainerSandboxExec(ctx, &pb.ContainerSandboxExecRequest{ContainerId: containerId, Cmd: "nvidia-smi"})
+		require.NoError(t, err)
+		require.False(t, resp.Ok)
+		return resp.ErrorMsg
+	}
+
+	require.Equal(t, "guest has no devices yet", exec())
+
+	close(rt.devices)
+	require.Equal(t, "Container spec not ready", exec())
 }
 
 func TestContainerSandboxStatusReportsPendingBeforeProcessManagerReady(t *testing.T) {
@@ -1406,8 +1492,11 @@ func TestRequestJournalReplaysConsumedOutputUntilAcknowledged(t *testing.T) {
 func TestCompletedContainerReplaysLogsWithoutRetainingContainer(t *testing.T) {
 	dockerfile := "FROM ubuntu:22.04"
 	for name, request := range map[string]*types.ContainerRequest{
-		"function": {Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeFunction)}}},
-		"build":    {BuildOptions: types.BuildOptions{Dockerfile: &dockerfile}},
+		"function":       {Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeFunction)}}},
+		"build":          {BuildOptions: types.BuildOptions{Dockerfile: &dockerfile}},
+		"pod":            {Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypePod)}}},
+		"pod run":        {Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypePodRun)}}},
+		"pod deployment": {Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypePodDeployment)}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			logs := common.NewLogBuffer()
@@ -1428,6 +1517,67 @@ func TestCompletedContainerReplaysLogsWithoutRetainingContainer(t *testing.T) {
 			stream := &logAttachmentStream{ctx: metadata.NewIncomingContext(context.Background(), metadata.Pairs(common.LogOffsetHeader, "6"))}
 			require.NoError(t, server.ContainerStreamLogs(&pb.ContainerStreamLogsRequest{ContainerId: name}, stream))
 			require.Equal(t, "remaining\n", stream.output.String())
+		})
+	}
+}
+
+func TestPodLogStreamDrainsAcrossContainerDeletion(t *testing.T) {
+	for _, withOffset := range []bool{false, true} {
+		t.Run(fmt.Sprintf("offset=%t", withOffset), func(t *testing.T) {
+			logs := common.NewLogBuffer()
+			t.Cleanup(logs.Dispose)
+			// Force multiple reads, with cleanup between the first and second.
+			output := strings.Repeat("pod output\n", 1024)
+			require.True(t, logs.Write([]byte(output)))
+
+			instances := common.NewSafeMap[*ContainerInstance]()
+			server := &ContainerRuntimeServer{containerInstances: instances}
+			worker := &Worker{containerInstances: instances, containerServer: server}
+			const containerID = "completed-pod"
+			instances.Set(containerID, &ContainerInstance{
+				LogBuffer: logs,
+				Request: &types.ContainerRequest{Stub: types.StubWithRelated{Stub: types.Stub{
+					Type: types.StubType(types.StubTypePodRun),
+				}}},
+			})
+
+			firstChunk, resume := make(chan struct{}), make(chan struct{})
+			release := sync.OnceFunc(func() { close(resume) })
+			defer release()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if withOffset {
+				ctx = metadata.NewIncomingContext(ctx, metadata.Pairs(common.LogOffsetHeader, "0"))
+			}
+			stream := &logAttachmentStream{ctx: ctx, onSend: sync.OnceFunc(func() {
+				close(firstChunk)
+				<-resume
+			})}
+			done := make(chan error, 1)
+			go func() {
+				done <- server.ContainerStreamLogs(&pb.ContainerStreamLogsRequest{ContainerId: containerID}, stream)
+			}()
+			select {
+			case <-firstChunk:
+			case <-ctx.Done():
+				t.Fatal("log stream did not send its first chunk")
+			}
+
+			worker.deleteContainer(containerID)
+			_, active := instances.Get(containerID)
+			require.False(t, active, "container cleanup must not wait for the reader")
+			// Log capture may still be flushing its final records during cleanup.
+			const tail = "last pod output\n"
+			require.True(t, logs.Write([]byte(tail)))
+			logs.Close()
+			release()
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-ctx.Done():
+				t.Fatal("log stream did not finish after cleanup")
+			}
+			require.Equal(t, output+tail, stream.output.String())
 		})
 	}
 }

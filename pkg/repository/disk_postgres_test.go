@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -412,4 +413,96 @@ func diskSnapshotRows() *sqlmock.Rows {
 		"deleted_at",
 		"public",
 	})
+}
+
+func TestPublishSnapshotRequiresHeadOwnership(t *testing.T) {
+	for _, public := range []bool{false, true} {
+		backend, mock := NewBackendPostgresRepositoryForTest()
+		mock.ExpectBegin()
+		query := mock.ExpectQuery(`SELECT .* FROM disk_snapshot .* FOR UPDATE`).
+			WithArgs(uint(8), "private-head", types.DiskSnapshotStatusAvailable)
+		if public {
+			query.WillReturnRows(sqlmock.NewRows([]string{"external_id", "workspace_id", "status", "public"}).
+				AddRow("private-head", uint(7), types.DiskSnapshotStatusAvailable, true))
+		} else {
+			query.WillReturnError(sql.ErrNoRows)
+		}
+		mock.ExpectRollback() // No visibility update may be attempted, even for a public foreign head.
+		err := backend.PublishDiskSnapshot(context.Background(), 8, "private-head")
+		require.ErrorAs(t, err, new(*types.ErrDiskSnapshotNotFound))
+		require.NoError(t, mock.ExpectationsWereMet())
+	}
+}
+
+func TestPublishSnapshotChainIsAtomicAndDoesNotReplayStatus(t *testing.T) {
+	for _, test := range []struct {
+		name                                                                   string
+		unavailable, updateFailure, withdrawn, artifactFailure, publicAncestor bool
+	}{
+		{name: "snapshot"},
+		{name: "public ancestor", publicAncestor: true},
+		{name: "unavailable ancestor", unavailable: true},
+		{name: "later update failure", updateFailure: true},
+		{name: "conditional update rejected", withdrawn: true},
+		{name: "artifact insert failure", artifactFailure: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			backend, mock := NewBackendPostgresRepositoryForTest()
+			repo := backend.(*PostgresBackendRepository)
+			mock.ExpectBegin()
+			locked := func(id, parent string, status types.DiskSnapshotStatus, owner uint, public bool) {
+				mock.ExpectQuery(`SELECT .* FROM disk_snapshot .* FOR UPDATE`).
+					WithArgs(uint(7), id, types.DiskSnapshotStatusAvailable).
+					WillReturnRows(sqlmock.NewRows([]string{"external_id", "workspace_id", "parent_snapshot_id", "status", "public"}).
+						AddRow(id, owner, parent, status, public))
+			}
+			locked("head", "base", types.DiskSnapshotStatusAvailable, 7, false)
+			status, owner := types.DiskSnapshotStatusAvailable, uint(7)
+			if test.unavailable {
+				status = types.DiskSnapshotStatusPending
+			}
+			if test.publicAncestor {
+				owner = 8
+			}
+			locked("base", "", status, owner, test.publicAncestor)
+			if !test.unavailable {
+				// Publishing must update visibility alone and fence withdrawn rows.
+				update := func(id string) *sqlmock.ExpectedExec {
+					return mock.ExpectExec(`UPDATE disk_snapshot SET public=TRUE,updated_at=CURRENT_TIMESTAMP WHERE workspace_id=\$1 AND external_id=\$2 AND status=\$3 AND deleted_at IS NULL`).
+						WithArgs(uint(7), id, types.DiskSnapshotStatusAvailable)
+				}
+				if !test.publicAncestor {
+					update("base").WillReturnResult(sqlmock.NewResult(0, 1))
+				}
+				if test.updateFailure {
+					update("head").WillReturnError(errors.New("update unavailable"))
+				} else if test.withdrawn {
+					update("head").WillReturnResult(sqlmock.NewResult(0, 0))
+				} else {
+					update("head").WillReturnResult(sqlmock.NewResult(0, 1))
+				}
+				if test.artifactFailure {
+					mock.ExpectExec(`INSERT INTO vm_artifact`).WillReturnError(errors.New("artifact unavailable"))
+				}
+			}
+			failed := test.unavailable || test.updateFailure || test.withdrawn || test.artifactFailure
+			if failed {
+				mock.ExpectRollback()
+			} else {
+				mock.ExpectCommit()
+			}
+			var err error
+			if test.artifactFailure {
+				err = repo.CreateVMArtifact(context.Background(), 7, &types.VMArtifact{ID: "template", Kind: types.VMArtifactTemplate, RootSnapshotID: "head", Public: true})
+			} else {
+				err = repo.PublishDiskSnapshot(context.Background(), 7, "head")
+			}
+			if failed {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }

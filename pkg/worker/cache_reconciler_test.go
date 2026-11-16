@@ -67,15 +67,26 @@ func (f *fakeEventRepo) PushStubCacheRequiredContent(schema types.EventStubCache
 		f.itemsByStub[stubKey] = bucket
 	}
 	for _, item := range schema.Items {
-		if item.Hash == "" {
-			continue
-		}
 		if item.Kind == "" {
 			item.Kind = schema.Kind
 		}
+		// Checkpoints are merged as the stream's reader merges them.
+		checkpoint := string(types.CacheContentKindCheckpoint)
+		if item.Retired {
+			if current, ok := bucket[checkpoint]; item.Kind == types.CacheContentKindCheckpoint && (!ok || current.Retired || current.CheckpointID == item.CheckpointID) {
+				bucket[checkpoint] = item
+			}
+			continue
+		}
+		if item.Hash == "" {
+			continue
+		}
 		key := item.Hash + "\x00" + item.RoutingKey
 		if item.Kind == types.CacheContentKindCheckpoint {
-			key = string(types.CacheContentKindCheckpoint)
+			key = checkpoint
+			if current := bucket[key]; current.Retired && current.CheckpointID == item.CheckpointID {
+				continue
+			}
 		}
 		bucket[key] = item
 	}
@@ -100,7 +111,9 @@ func (f *fakeEventRepo) ReadStubCacheRequiredContent(ctx context.Context, worksp
 		if bucket := f.itemsByStub[workspaceID+"|"+stubID]; len(bucket) > 0 {
 			items := make([]types.CacheRequiredContentItem, 0, len(bucket))
 			for _, item := range bucket {
-				items = append(items, item)
+				if !item.Retired {
+					items = append(items, item)
+				}
 			}
 			return items, nil
 		}
@@ -123,6 +136,87 @@ func newTestReporter(eventRepo repo.EventRepository) *cacheContentReporter {
 		recent:    make(map[reporterStubKey]struct{}),
 		reported:  make(map[string]struct{}),
 	}
+}
+
+func TestReporterCoalescesMutableRequirementsBeforePublishing(t *testing.T) {
+	for _, kind := range []types.CacheContentKind{types.CacheContentKindCheckpoint, types.CacheContentKindVolume} {
+		t.Run(string(kind), func(t *testing.T) {
+			events := &fakeEventRepo{}
+			r := newTestReporter(events)
+			for _, hash := range []string{"old", "new"} {
+				r.reportItems("ws", "stub", kind, []types.CacheRequiredContentItem{{Hash: hash, Source: "volume/path"}})
+			}
+			r.flush()
+			require.Len(t, events.pushed, 1)
+			require.Len(t, events.pushed[0].Items, 1)
+			require.Equal(t, "new", events.pushed[0].Items[0].Hash)
+		})
+	}
+}
+
+func TestReporterRetryCannotReplaceNewerRequirement(t *testing.T) {
+	r := newTestReporter(&fakeEventRepo{})
+	for _, kind := range []types.CacheContentKind{types.CacheContentKindCheckpoint, types.CacheContentKindVolume} {
+		old := types.CacheRequiredContentItem{Kind: kind, Hash: "old", Source: "path"}
+		newer := old
+		newer.Hash = "new"
+		r.reportItems("ws", "stub", kind, []types.CacheRequiredContentItem{newer})
+		key := reporterKey{workspaceID: "ws", stubID: "stub", kind: kind}
+		r.requeue(map[reporterKey]map[string]types.CacheRequiredContentItem{key: {old.CoalescingKey(): old}}, nil)
+		require.Equal(t, "new", r.pending[key][old.CoalescingKey()].Hash)
+	}
+}
+
+func TestReporterRetiresRestoredCheckpoint(t *testing.T) {
+	events := &fakeEventRepo{}
+	metadata := &claimedMetadataStore{}
+	r := newTestReporter(events)
+	r.metadata = metadata
+	report := func(id string) {
+		r.reportItems("ws", "stub", types.CacheContentKindCheckpoint, []types.CacheRequiredContentItem{{Hash: id + "-hash", CheckpointID: id}})
+	}
+	pending := func() types.CacheRequiredContentItem {
+		key := reporterKey{workspaceID: "ws", stubID: "stub", kind: types.CacheContentKindCheckpoint}
+		return r.pending[key][string(types.CacheContentKindCheckpoint)]
+	}
+	required := func() []types.CacheRequiredContentItem {
+		items, err := events.ReadStubCacheRequiredContent(context.Background(), "ws", "stub")
+		require.NoError(t, err)
+		return items
+	}
+
+	report("first")
+	r.flush()
+	require.Len(t, required(), 1)
+	r.retireCheckpoint("ws", "stub", "first")
+	r.flush()
+	require.Empty(t, required())
+	require.Len(t, events.pushed, 2)
+	require.Equal(t, []types.CacheRequiredContentItem{{
+		Kind:         types.CacheContentKindCheckpoint,
+		CheckpointID: "first",
+		Retired:      true,
+	}}, events.pushed[1].Items)
+	// Hosts read a stub's requirements again when the stub is seen again.
+	require.Equal(t, 2, metadata.recent)
+
+	// A checkpoint restored before its report is published is never
+	// published as required, however late that report is made.
+	report("second")
+	r.retireCheckpoint("ws", "stub", "second")
+	report("second")
+	require.True(t, pending().Retired)
+
+	// The next checkpoint takes the place of the restore before it, and
+	// keeps it from the record of a restore that is made late.
+	report("third")
+	r.retireCheckpoint("ws", "stub", "second")
+	r.retireCheckpoint("ws", "stub", "")
+	require.Equal(t, "third", pending().CheckpointID)
+	require.False(t, pending().Retired)
+	r.flush()
+	require.Len(t, required(), 1)
+	require.Equal(t, "third", required()[0].CheckpointID)
 }
 
 func TestAuditCacheChurnEventIncludesMachineFields(t *testing.T) {
@@ -588,19 +682,19 @@ func TestLoadRecentRequiredContentCachesByLastSeen(t *testing.T) {
 	content, complete := manager.loadRecentRequiredContent(stubs)
 	require.True(t, complete)
 	require.Len(t, content, 2)
-	require.Equal(t, []string{"ws|stub-a", "ws|stub-b"}, fake.readKeys)
+	require.ElementsMatch(t, []string{"ws|stub-a", "ws|stub-b"}, fake.readKeys)
 
 	// Unchanged scores are served from cache without new reads.
 	content, complete = manager.loadRecentRequiredContent(stubs)
 	require.True(t, complete)
 	require.Len(t, content, 2)
 	require.Equal(t, "h1", content[0].items[0].Hash)
-	require.Equal(t, []string{"ws|stub-a", "ws|stub-b"}, fake.readKeys)
+	require.ElementsMatch(t, []string{"ws|stub-a", "ws|stub-b"}, fake.readKeys)
 
 	// A bumped score (new activity/content) forces a re-read of that stub only.
 	stubs[1].LastSeen = seenB.Add(time.Second)
 	_, _ = manager.loadRecentRequiredContent(stubs)
-	require.Equal(t, []string{"ws|stub-a", "ws|stub-b", "ws|stub-b"}, fake.readKeys)
+	require.ElementsMatch(t, []string{"ws|stub-a", "ws|stub-b", "ws|stub-b"}, fake.readKeys)
 
 	// Stubs that age out of the recent index are evicted from the cache.
 	_, _ = manager.loadRecentRequiredContent(stubs[1:])
@@ -611,6 +705,95 @@ func TestLoadRecentRequiredContentCachesByLastSeen(t *testing.T) {
 	_, complete = manager.loadRecentRequiredContent([]cache.RecentStub{{WorkspaceID: "ws", StubID: "stub-c", LastSeen: seenA}})
 	require.False(t, complete)
 	require.NotContains(t, manager.requiredContentCache, "ws|stub-c")
+}
+
+type requiredContentReadFunc struct {
+	repo.EventRepository
+	read func(context.Context, string, string) ([]types.CacheRequiredContentItem, error)
+}
+
+func (f requiredContentReadFunc) ReadStubCacheRequiredContent(ctx context.Context, ws, stub string) ([]types.CacheRequiredContentItem, error) {
+	return f.read(ctx, ws, stub)
+}
+
+func TestLoadRecentRequiredContentBoundsParallelReadsAndRetriesFailures(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	gate := make(chan struct{})
+	release := sync.OnceFunc(func() { close(gate) })
+	defer release()
+	started := make(chan struct{}, 64)
+	var active, peak, calls atomic.Int32
+	var fail atomic.Bool
+	fail.Store(true)
+	reader := requiredContentReadFunc{read: func(ctx context.Context, _, stub string) ([]types.CacheRequiredContentItem, error) {
+		calls.Add(1)
+		n := active.Add(1)
+		defer active.Add(-1)
+		for old := peak.Load(); n > old && !peak.CompareAndSwap(old, n); old = peak.Load() {
+		}
+		started <- struct{}{}
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		if stub == "17" && fail.Load() {
+			return nil, errors.New("temporary S2 read failure")
+		}
+		return []types.CacheRequiredContentItem{{Hash: stub}}, nil
+	}}
+	manager := &WorkerCacheManager{ctx: ctx, eventRepo: reader}
+	stubs := make([]cache.RecentStub, 64)
+	for i := range stubs {
+		stubs[i] = cache.RecentStub{WorkspaceID: "ws", StubID: fmt.Sprint(i), LastSeen: time.Unix(100, 0)}
+	}
+	type outcome struct {
+		content  []recentStubContent
+		complete bool
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		content, complete := manager.loadRecentRequiredContent(stubs)
+		done <- outcome{content, complete}
+	}()
+	for range 32 {
+		select {
+		case <-started:
+		case <-ctx.Done():
+			t.Fatal("independent reads did not run concurrently")
+		}
+	}
+	require.Equal(t, int32(32), peak.Load())
+	select {
+	case <-started:
+		t.Fatal("required-content read bound exceeded")
+	default:
+	}
+	release()
+	var result outcome
+	select {
+	case result = <-done:
+	case <-ctx.Done():
+		t.Fatal("working-set read did not finish")
+	}
+	require.False(t, result.complete, "a missing protection record must still defer pruning")
+	require.Len(t, result.content, 63)
+	require.NotContains(t, manager.requiredContentCache, "ws|17")
+	for i, item := range result.content {
+		if i >= 17 {
+			i++
+		}
+		require.Equal(t, fmt.Sprint(i), item.items[0].Hash)
+	}
+	fail.Store(false)
+	content, complete := manager.loadRecentRequiredContent(stubs)
+	require.True(t, complete)
+	require.Len(t, content, 64)
+	require.Equal(t, int32(65), calls.Load(), "only the failed stub should need another read")
+	for i, item := range content {
+		require.Equal(t, fmt.Sprint(i), item.items[0].Hash)
+	}
 }
 
 // An S2 outage must not turn a retained object into an eviction candidate.
@@ -1268,6 +1451,32 @@ func TestEnsureCheckpointMaterializedReportsMissingCheckpointDemand(t *testing.T
 	require.Equal(t, checkpoint.Accelerator, fake.pushed[0].Items[0].Accelerator)
 }
 
+// A persistent VM's restore uses its checkpoint up: no other host has a use
+// for a copy of it.
+func TestEnsureCheckpointMaterializedReportsNoDemandForPersistentVM(t *testing.T) {
+	fake := &fakeEventRepo{}
+	reporter := newTestReporter(fake)
+	reporter.metadata = &claimedMetadataStore{}
+	worker := &Worker{
+		cacheManager: &WorkerCacheManager{
+			checkpointRoot: t.TempDir(),
+			reporter:       reporter,
+			reconcileNow:   make(chan struct{}, 1),
+		},
+	}
+
+	_, err := worker.ensureCheckpointMaterialized(context.Background(), persistentVMRequest(), &types.Checkpoint{
+		CheckpointId:   "checkpoint-a",
+		CacheHash:      strings.Repeat("a", 64),
+		CacheSizeBytes: 1,
+		OriginKey:      "checkpoints/checkpoint-a.tar",
+	})
+	require.Error(t, err)
+	reporter.flush()
+
+	require.Empty(t, fake.pushed)
+}
+
 func TestCheckpointMaterializationLockSerializesSameCheckpoint(t *testing.T) {
 	manager := &WorkerCacheManager{}
 	release, err := manager.acquireCheckpointMaterialization(context.Background(), "checkpoint-a")
@@ -1858,7 +2067,7 @@ func TestPruneLocalCheckpointsKeepsActiveAndFresh(t *testing.T) {
 	require.NoError(t, os.Chtimes(filepath.Join(root, "drop"), old, old))
 	require.NoError(t, os.Chtimes(filepath.Join(root, "drop"+checkpointArchiveExtension), old, old))
 
-	manager.pruneLocalCheckpoints(map[string]struct{}{"keep": struct{}{}}, 0)
+	manager.pruneLocalCheckpoints(map[string]struct{}{"keep": struct{}{}}, 0, 0)
 
 	require.DirExists(t, filepath.Join(root, "keep"))
 	require.FileExists(t, filepath.Join(root, "keep"+checkpointArchiveExtension))
@@ -1885,7 +2094,7 @@ func TestCheckpointPressureEvictsOldestWarmCopy(t *testing.T) {
 	require.NoError(t, err)
 	defer release()
 
-	manager.pruneLocalCheckpoints(map[string]struct{}{"old": {}, "new": {}}, 1)
+	manager.pruneLocalCheckpoints(map[string]struct{}{"old": {}, "new": {}}, 1, 1)
 
 	require.NoDirExists(t, filepath.Join(root, "old"))
 	for _, id := range []string{"extracting", "running", "new"} {
@@ -1893,9 +2102,57 @@ func TestCheckpointPressureEvictsOldestWarmCopy(t *testing.T) {
 	}
 
 	instances.Delete("running")
-	manager.pruneLocalCheckpoints(map[string]struct{}{"new": {}}, 1)
+	manager.pruneLocalCheckpoints(map[string]struct{}{"new": {}}, 1, 1)
 	require.NoDirExists(t, filepath.Join(root, "running"))
 	require.DirExists(t, filepath.Join(root, "new"))
+}
+
+func TestCheckpointPressureEvictsCopiesNoStubNeedsFirst(t *testing.T) {
+	root := t.TempDir()
+	manager := &WorkerCacheManager{checkpointRoot: root}
+	copies := func(ids ...string) {
+		for i, id := range ids {
+			path := filepath.Join(root, id)
+			createMaterializedCheckpointForTest(t, path)
+			modified := time.Now().Add(time.Duration(i-len(ids))*time.Minute - time.Hour)
+			require.NoError(t, os.Chtimes(path, modified, modified))
+		}
+	}
+	warm := map[string]struct{}{"warm-old": {}, "warm-new": {}}
+
+	// The oldest copy is one a paused VM waits on. The newer ones have been
+	// restored from, and are what the room is taken from.
+	copies("warm-old", "used-old", "used-new", "warm-new")
+	manager.pruneLocalCheckpoints(warm, 1, 1)
+	require.NoDirExists(t, filepath.Join(root, "used-old"))
+	for _, id := range []string{"warm-old", "used-new", "warm-new"} {
+		require.DirExists(t, filepath.Join(root, id))
+	}
+
+	// Below the watermark that evicts and above the one that reconciliation
+	// resumes at, only the copies nothing needs are given up.
+	copies("warm-old", "used-old", "used-new", "warm-new")
+	manager.pruneLocalCheckpoints(warm, 0, math.MaxInt64)
+	for _, id := range []string{"used-old", "used-new"} {
+		require.NoDirExists(t, filepath.Join(root, id))
+	}
+	for _, id := range []string{"warm-old", "warm-new"} {
+		require.DirExists(t, filepath.Join(root, id))
+	}
+
+	// A copy this host has only just made is not yet known to be needed. It
+	// is kept as one that is.
+	createMaterializedCheckpointForTest(t, filepath.Join(root, "just-made"))
+	manager.pruneLocalCheckpoints(warm, 0, math.MaxInt64)
+	require.DirExists(t, filepath.Join(root, "just-made"))
+
+	// With nothing else to take, the oldest of the copies that are needed
+	// goes.
+	manager.pruneLocalCheckpoints(warm, 1, 1)
+	require.NoDirExists(t, filepath.Join(root, "warm-old"))
+	for _, id := range []string{"warm-new", "just-made"} {
+		require.DirExists(t, filepath.Join(root, id))
+	}
 }
 
 func testClipV1Metadata(t *testing.T) *clipCommon.ClipArchiveMetadata {

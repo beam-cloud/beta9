@@ -124,14 +124,49 @@ func TestPresignEndpointForStorage(t *testing.T) {
 	}
 }
 
-func TestStorageMultipartUploaderConfig(t *testing.T) {
-	uploader := newStorageMultipartUploader(nil, bytes.NewReader(nil))
+type zeroes struct{}
 
-	if uploader.PartSize != storageMultipartUploadPartSize {
-		t.Fatalf("uploader PartSize = %d, want %d", uploader.PartSize, storageMultipartUploadPartSize)
+func (zeroes) ReadAt(p []byte, _ int64) (int, error) {
+	clear(p)
+	return len(p), nil
+}
+
+func TestStorageMultipartUploaderConfig(t *testing.T) {
+	const workers = storageMultipartUploadWorkers
+	for size, want := range map[int64]int64{
+		0:                                 storageMultipartUploadMinPart,
+		storageMultipartUploadMinPart + 1: storageMultipartUploadMinPart,
+		// Every worker has a part of an object they can share.
+		workers*storageMultipartUploadMinPart + workers:     storageMultipartUploadMinPart + 1,
+		workers*storageMultipartUploadMinPart + workers + 1: storageMultipartUploadMinPart + 2,
+		workers * storageMultipartUploadPartSize:            storageMultipartUploadPartSize,
+		100 * workers * storageMultipartUploadPartSize:      storageMultipartUploadPartSize,
+	} {
+		uploader := newStorageMultipartUploader(nil, io.NewSectionReader(zeroes{}, 0, size))
+
+		if uploader.PartSize != want {
+			t.Errorf("uploader PartSize for %d bytes = %d, want %d", size, uploader.PartSize, want)
+		}
+		if uploader.Concurrency != workers {
+			t.Errorf("uploader Concurrency for %d bytes = %d, want %d", size, uploader.Concurrency, workers)
+		}
 	}
-	if uploader.Concurrency != storageMultipartUploadWorkers {
-		t.Fatalf("uploader Concurrency = %d, want %d", uploader.Concurrency, storageMultipartUploadWorkers)
+}
+
+func TestStorageMultipartUploaderSizesPartsForWhatIsLeftToRead(t *testing.T) {
+	const read = 3 * storageMultipartUploadMinPart
+	body := io.NewSectionReader(zeroes{}, 0, read+storageMultipartUploadWorkers*2*storageMultipartUploadMinPart)
+	if _, err := body.Seek(read, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+
+	uploader := newStorageMultipartUploader(nil, body)
+
+	if uploader.PartSize != 2*storageMultipartUploadMinPart {
+		t.Fatalf("uploader PartSize = %d, want %d", uploader.PartSize, 2*storageMultipartUploadMinPart)
+	}
+	if at, err := body.Seek(0, io.SeekCurrent); err != nil || at != read {
+		t.Fatalf("body is at %d (%v), want %d: the upload starts where the body was", at, err, read)
 	}
 }
 

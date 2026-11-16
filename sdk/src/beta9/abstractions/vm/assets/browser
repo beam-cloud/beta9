@@ -1,4 +1,5 @@
 #!/bin/sh
 set -eu
 /opt/beam-vm/browser-trust
-exec /usr/bin/google-chrome-stable "$@"
+exec /usr/bin/google-chrome-stable --no-first-run --no-default-browser-check \
+  --disable-dev-shm-usage --force-device-scale-factor=2 "$@"

@@ -42,7 +42,7 @@ type evictionVictim struct {
 // indexedContainerFields is the subset of a container state hash the
 // scheduler reads for capacity and victim selection.
 var indexedContainerFields = []string{"container_id", "status", "worker_id", "evictable", "evicting",
-	"cpu", "memory", "gpu", "gpu_count", "drain_seconds", "evict_order", "started_at"}
+	"cpu", "memory", "gpu", "gpu_count", "drain_seconds", "evict_order", "started_at", "reserved_cpu"}
 
 // indexedContainerStates loads the worker's containers in one pipelined round trip.
 func (r *WorkerRedisRepository) indexedContainerStates(ctx context.Context, workerID string) ([]*types.ContainerState, error) {
@@ -115,6 +115,7 @@ func containerStateFromFields(values []interface{}) (*types.ContainerState, bool
 		DrainSeconds: uint32(i64(9)),
 		EvictOrder:   int32(i64(10)),
 		StartedAt:    i64(11),
+		ReservedCpu:  i64(12),
 	}, true
 }
 
@@ -147,7 +148,7 @@ func chooseVictims(states []*types.ContainerState, worker *types.Worker, deficit
 			evictionVictim: evictionVictim{
 				containerID:  state.ContainerId,
 				stateKey:     common.RedisKeys.SchedulerContainerState(state.ContainerId),
-				cpu:          state.Cpu,
+				cpu:          state.CapacityCpu(),
 				memory:       capacityMemoryForRequest(&types.ContainerRequest{Memory: state.Memory, UseVM: worker.Runtime == types.ContainerRuntimeMicroVM.String()}),
 				gpu:          gpuCountForCapacity(state.Gpu, nil, state.GpuCount),
 				drainSeconds: state.DrainSeconds,
@@ -214,7 +215,7 @@ func requestDependencies(queued []queuedContainerRequest, free [3]int64, victims
 		}
 	}
 	for _, request := range order {
-		need := [3]int64{request.Cpu, capacityMemoryForRequest(request),
+		need := [3]int64{request.CapacityCpu(), capacityMemoryForRequest(request),
 			int64(gpuCountForCapacity(request.Gpu, request.GpuRequest, request.GpuCount))}
 		for axis := range need {
 			take := min(need[axis], max(free[axis], 0))

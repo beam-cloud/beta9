@@ -17,7 +17,7 @@ from ..clients.gateway import (
     StringList,
 )
 from ..config import DEFAULT_CONTEXT_NAME, get_config_context
-from ..type import DurableDisk
+from ..type import CPU_TIERS, DurableDisk
 from ..utils import get_init_args_kwargs
 
 CLICK_CONTEXT_SETTINGS = dict(
@@ -96,6 +96,7 @@ class Beta9Command(click.Command):
         "dockerfile": "Build from a Dockerfile.",
         "entrypoint": "Command to run when no handler is provided.",
         "cpu": "CPU cores, such as 0.5 or 2.",
+        "cpu_tier": "CPU capacity: spot, shared or performance.",
         "memory": "Memory, such as 512Mi or 2Gi.",
         "gpu": "GPU type, such as T4.",
         "port": "Port to expose; repeat for multiple ports.",
@@ -444,6 +445,11 @@ class CommaSeparatedList(click.ParamType):
         return [self.type.convert(v, param, ctx) for v in values]
 
 
+cpu_tier_option = click.option(
+    "--cpu-tier", type=click.Choice(CPU_TIERS), help="CPU capacity tier; Spot may be interrupted."
+)
+
+
 def override_config_options(func: click.Command):
     f = click.option(
         "--cpu",
@@ -532,6 +538,7 @@ def override_config_options(func: click.Command):
         multiple=True,
         help="Environment variables to pass to the container (e.g. --env VAR1=value --env VAR2=value).",
     )(f)
+    f = cpu_tier_option(f)
     f = click.option(
         "--pool",
         type=click.STRING,

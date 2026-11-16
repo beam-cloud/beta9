@@ -148,36 +148,57 @@ def configure_agents(
 
 @setup.command(
     name="vm",
-    help="Sign in, connect your agents and start a persistent CPU VM with a browser desktop. "
-    "Run again to resume.",
+    help="Sign in, connect your agents and start a persistent CPU VM with a browser desktop, "
+    "or from a VM template. Run again to resume.",
 )
 @click.option("--name", help="Name of the first VM. Generated if omitted.")
-@click.option("--desktop/--no-desktop", default=True, help="Include a browser desktop.")
+@click.option(
+    "--template",
+    metavar="NAME|ID",
+    help="Start from a VM template: a public template ID, or a template in this workspace.",
+)
+@click.option(
+    "--desktop/--no-desktop",
+    default=None,
+    help="Include a browser desktop. Default: on, or the template's setting.",
+)
 @click.option("--client", "clients", type=click.Choice(CLIENT_IDS), multiple=True)
 @click.option("--skip-agents", is_flag=True, help="Sign in and prepare the VM only.")
 @click.option("-y", "--yes", is_flag=True, help="Approve creation without prompting.")
 @extraclick.config_context_option
-def setup_vm(name, desktop, clients, skip_agents, yes, context):
+def setup_vm(name, template, desktop, clients, skip_agents, yes, context):
     from ..auth import LoginError
     from ..channel import GatewayHTTPError, ServiceClient
     from ..config import get_config_context
-    from ..deployment.onboarding import prepare_vm
+    from ..deployment.onboarding import prepare_vm, vm_template
 
     selected = context or extraclick.selected_context()
     steps = terminal.StepTracker()
+    if not template and desktop is None:
+        desktop = True
     try:
         with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
             selected_context, agents = connect_onboarding(selected, clients, skip_agents, yes)
+        label, size, disk = "a VM", {}, "50 GiB"
+        if template:
+            with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
+                with ServiceClient(get_config_context(selected)) as service:
+                    with steps.step("Reading VM template"):
+                        source = vm_template(service, template)
+            label = f"a VM from template {source.get('name') or template}"
+            template, (size, disk) = source["id"], template_size(source.get("spec") or {})
         with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
             with (
                 steps.step("Checking VM hourly price")
                 if selected_context.api_url
                 else nullcontext()
             ):
-                price = vm_hourly_price(selected_context)
+                price = vm_hourly_price(selected_context, **size)
+        cpu, memory = (size.get(key, default) for key, default in (("cpu", 4), ("memory_gib", 8)))
         cost = f", ${price:.4f}/hour" if price is not None else ""
         if not confirm_workload(
-            f"Start a VM (4 vCPU, 8 GiB RAM, 50 GiB disk{cost}, runs until stopped)?", yes
+            f"Start {label} ({cpu} vCPU, {memory} GiB RAM, {disk} disk{cost}, runs until stopped)?",
+            yes,
         ):
             return
         with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
@@ -188,6 +209,7 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
                         get_settings().config_path.parent / "onboarding",
                         name,
                         desktop=desktop,
+                        template=template,
                     )
         dashboard = dashboard_link(selected_context, "vm", result["id"])
         if terminal.json_output():
@@ -201,6 +223,8 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
                 }
             )
         else:
+            apps = app_urls(result)
+            protected = set(result.get("spec", {}).get("protected_ports") or [])
             terminal.print("")
             terminal.resource(
                 result["name"],
@@ -210,6 +234,10 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
                     "IPv6": result.get("public_ipv6"),
                     "Terminal": result.get("terminal_url"),
                     "Desktop": result.get("desktop_url"),
+                    **{
+                        f"Port {port} ({'private' if port in protected else 'public'})": url
+                        for port, url in apps.items()
+                    },
                 },
             )
             terminal.detail(
@@ -224,13 +252,39 @@ def setup_vm(name, desktop, clients, skip_agents, yes, context):
                 terminal.print(f"  {command} vm {action} {name}", markup=False)
             if result.get("desktop_url"):
                 terminal.print(f"  {command} vm desktop {name}", markup=False)
+            for port in apps:
+                terminal.print(f"  {command} vm open {name} {port}", markup=False)
     except click.Abort:
         raise
     except (LoginError, GatewayHTTPError, RuntimeError, TimeoutError, ValueError, OSError) as exc:
         raise click.ClickException(str(exc)) from exc
 
 
-def vm_hourly_price(context: ConfigContext) -> Optional[Decimal]:
+def app_urls(info: Dict[str, Any]) -> Dict[int, str]:
+    """Published HTTP ports other than the terminal and desktop, in port order."""
+    urls = {int(port): url for port, url in (info.get("urls") or {}).items() if url}
+    return {port: urls[port] for port in sorted(urls) if port not in (7681, 8080)}
+
+
+def template_size(spec: Dict[str, Any]) -> Tuple[Dict[str, Decimal], str]:
+    """A template's vCPU and GiB of memory, for pricing, and its disk size as text."""
+    import re
+
+    size = {
+        "cpu": (Decimal(spec.get("cpu") or 4000) / 1000).normalize(),
+        "memory_gib": (Decimal(spec.get("memory") or 8192) / 1024).normalize(),
+    }
+    disk = str(spec.get("disk_size") or "50Gi")
+    if disk.isdigit():
+        disk = f"{int(disk) / 2**30:g} GiB"
+    elif match := re.fullmatch(r"(\d+)\s*Gi(?:B)?", disk):
+        disk = f"{match.group(1)} GiB"
+    return size, disk
+
+
+def vm_hourly_price(
+    context: ConfigContext, cpu: Decimal = Decimal(4), memory_gib: Decimal = Decimal(8)
+) -> Optional[Decimal]:
     """Read the same public VM rate card used by the dashboard and billing."""
     import requests
 
@@ -246,10 +300,10 @@ def vm_hourly_price(context: ConfigContext) -> Optional[Decimal]:
             return None  # A self-hosted API may not expose billing.
         response.raise_for_status()
         rates = response.json(parse_float=Decimal)["vm"]
-        cpu, memory = (Decimal(str(rates[key])) for key in ("cpu", "memory"))
-        if not all(rate.is_finite() and rate >= 0 for rate in (cpu, memory)):
+        cpu_rate, memory_rate = (Decimal(str(rates[key])) for key in ("cpu", "memory"))
+        if not all(rate.is_finite() and rate >= 0 for rate in (cpu_rate, memory_rate)):
             raise ValueError("invalid VM rates")
-        return (4 * cpu + 8 * memory) * 3_600_000
+        return (cpu_rate * cpu + memory_rate * memory_gib) * 3_600_000
     except (requests.RequestException, KeyError, TypeError, ValueError, InvalidOperation) as exc:
         raise RuntimeError("Could not load the VM hourly price. Try setup again shortly.") from exc
 

@@ -2,6 +2,9 @@
 # Merged with scripts/kconfig/merge_config.sh; the Dockerfile then runs
 # `make olddefconfig` and asserts the load-bearing symbols below survived.
 
+# Disable unprivileged eBPF from boot while retaining privileged BPF use.
+CONFIG_BPF_UNPRIV_DEFAULT_OFF=y
+
 # GPU drivers are built into guest images against the published kernel-devel tree.
 CONFIG_MODULES=y
 CONFIG_MODULE_UNLOAD=y

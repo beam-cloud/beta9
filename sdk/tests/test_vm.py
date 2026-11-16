@@ -10,7 +10,6 @@ import json
 import os
 from pathlib import Path
 import runpy
-import shlex
 import shutil
 import socket
 import subprocess
@@ -18,6 +17,7 @@ import sys
 import tarfile
 import textwrap
 import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -26,6 +26,7 @@ import pytest
 from click.testing import CliRunner
 from jsonschema import Draft202012Validator
 
+from beta9 import channel as channel_module
 from beta9.abstractions import vm as vm_module
 from beta9.abstractions.image import Image
 from beta9.abstractions.vm import Kiosk, MCPServer, VM, prepare_image
@@ -171,6 +172,9 @@ def test_vm_image_is_deterministic_and_uses_selected_profile():
     assert a.channel is selected.channel
     assert a.gateway_stub is selected.gateway
     assert len(a.build_steps) == len(original) + 1
+    # The worker must see that VM setup owns its apt configuration; otherwise
+    # retained package indexes refer to the temporary build mirror at runtime.
+    assert "/etc/apt/keyrings" in a.build_steps[-1].command
     # The shipped bundle has a fixed gzip header on every client.
     archive = base64.b64decode(a.build_steps[-1].command.split("'")[3])
     assert archive[9] == 255
@@ -179,7 +183,7 @@ def test_vm_image_is_deterministic_and_uses_selected_profile():
         assert assets.getmember("browser-trust").mode == 0o755
         installer = assets.extractfile("install").read().decode()
         assert "libnss3-tools" in installer
-        assert "env GDK_SCALE=1 GDK_DPI_SCALE=1 pcmanfm --desktop" in installer
+        assert "gnome-shell-extension-desktop-icons-ng" in installer
         assert "/etc/ca-certificates/update.d/beam-browser" in installer
 
 
@@ -193,7 +197,7 @@ def test_vm_image_bundle_matches_guest_files():
             assert archive.extractfile(name).read() == path.read_bytes(), (
                 f"Stale VM bundle: run python bin/generate_vm_assets.py after updating {name}"
             )
-            mode = 0o644 if path.suffix in (".service", ".desktop", ".svg", ".xml") else 0o755
+            mode = 0o644 if path.suffix in (".service", ".desktop", ".svg", ".xml", ".rc", ".override", ".rules") else 0o755
             assert archive.getmember(name).mode == mode
 
 
@@ -203,11 +207,9 @@ def test_xstartup_preserves_defaults_and_tolerates_failed_user_resources(
 ):
     directory = Path(vm_module.__file__).parent
     script = tmp_path / "xstartup"
-    script.write_text(
-        (directory / "assets/xstartup")
-        .read_text()
-        .replace("HOME=/root", f"HOME={shlex.quote(str(tmp_path))}")
-    )
+    script.write_text((directory / "assets/xstartup").read_text())
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
     commands = {
         "xrdb": (
             'if [ "$#" -eq 1 ]; then cat > "$TEST_DIR/defaults"; '
@@ -230,7 +232,7 @@ def test_xstartup_preserves_defaults_and_tolerates_failed_user_resources(
     result = subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=5)
     assert result.returncode == 0, result.stderr
     assert "XTerm*faceSize: 12\n" in (tmp_path / "defaults").read_text()
-    assert (tmp_path / "launched").read_text() == "--\nopenbox-session\n"
+    assert (tmp_path / "launched").read_text() == "--\ngnome-session\n--session=ubuntu\n"
     if resource_exit is not None:
         assert (tmp_path / "overrides").read_text() == "XTerm*faceSize: 20\n"
     else:
@@ -250,24 +252,6 @@ def test_vm_image_does_not_depend_on_client_archive_libraries(monkeypatch):
         base64.b64decode(encoded)
         == Path(vm_module.__file__).with_name("assets.tar.gz").read_bytes()
     )
-
-
-def test_desktop_clipboard_patch_is_idempotent_and_checks_upstream(tmp_path):
-    installer = (Path(vm_module.__file__).parent / "assets/install").read_text()
-    patch = installer.rsplit("  python3 - <<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
-    patch = patch.replace(
-        "Path('/usr/share/kasmvnc/www/assets')", "Path(" + repr(str(tmp_path)) + ")"
-    )
-    client = tmp_path / "ui.js"
-    client.write_text("class RFB { async clipboardPasteDataFrom(data) { return data; } }")
-    exec(patch, {})
-    once = client.read_text()
-    exec(patch, {})
-    assert client.read_text() == once, "Custom images may already contain the clipboard fix"
-    assert "async beamClipboardPasteDataFrom(data)" in once
-    client.write_text("class RFB { async differentClipboardAPI(data) { return data; } }")
-    with pytest.raises(AssertionError, match="no longer matches"):
-        exec(patch, {})
 
 
 def test_vm_rejects_gpu_build_and_does_not_modify_explicit_image():
@@ -342,6 +326,15 @@ def test_template_preserves_unspecified_fields_and_channel():
     assert vm._service is selected
 
 
+def test_template_vm_enables_ssh_with_this_machines_key(monkeypatch):
+    monkeypatch.setattr(vm_module, "public_key", lambda: "ssh-ed25519 test")
+    selected = service()
+    selected.http.json.return_value = {"id": "resource", "name": "dev", "status": "starting"}
+    VM("dev", template="public-template", _service=selected).create(wait=False)
+    spec = selected.http.json.call_args.kwargs["json"]["spec"]
+    assert spec == {"ssh": True, "ssh_public_key": "ssh-ed25519 test"}
+
+
 def test_prepare_freezes_request_without_allocating_compute():
     selected = service()
     vm = VM("dev", template="base", ssh=False, _service=selected)
@@ -402,6 +395,37 @@ def test_verified_launch_reuses_ready_connection_for_first_operation():
     )
     assert vm._sandbox() is vm._connected
     selected.http.json.assert_not_called()
+
+
+@pytest.mark.parametrize("action", ["create", "start"])
+def test_verified_launch_does_not_repeat_wait_or_touch_idle_lease(monkeypatch, action):
+    selected = service()
+    vm = VM("dev", template="base", _service=selected)
+    monkeypatch.setattr(vm, "prepare", lambda: vm)
+    api = MagicMock(return_value={
+        "id": "vm-id", "name": "dev", "status": "running",
+        "container_id": "runtime", "stub_id": "stub",
+        "spec": {"idle_timeout": 900}, "exec_ready": True,
+    })
+    monkeypatch.setattr(vm, "_api", api)
+    assert getattr(vm, action)() is vm
+    assert api.call_count == 1
+    assert api.call_args.kwargs["params"] == {"wait": "exec"}
+    assert vm._connected is not None
+
+
+@pytest.mark.parametrize("action", ["create", "start"])
+def test_launch_without_server_readiness_keeps_client_wait(monkeypatch, action):
+    vm = VM("dev", template="base", _service=service())
+    monkeypatch.setattr(vm, "prepare", lambda: vm)
+    monkeypatch.setattr(vm, "_api", MagicMock(return_value={
+        "id": "vm-id", "name": "dev", "status": "starting",
+        "container_id": "runtime", "spec": {"idle_timeout": 900},
+    }))
+    wait = MagicMock(return_value=vm)
+    monkeypatch.setattr(vm, "wait", wait)
+    assert getattr(vm, action)() is vm
+    wait.assert_called_once_with()
 
 
 def test_ready_connection_refreshes_after_lease_to_observe_external_stop(monkeypatch):
@@ -754,6 +778,36 @@ def test_wait_for_exec_uses_live_connection_without_status_ticker(sandbox_vm, mo
     sandbox.process.run_code.assert_not_called()
 
 
+def test_wait_follows_a_vm_to_the_container_that_replaced_its_own(monkeypatch):
+    vm = VM(_service=service())._set(
+        {"name": "dev", "status": "starting", "container_id": "lost", "spec": {}}
+    )
+    monkeypatch.setattr(vm, "refresh", lambda: vm._set({**vm.info, "container_id": "replacement"}))
+    sandbox = SimpleNamespace(process=MagicMock())
+    asked = []
+
+    def connect(**kwargs):
+        asked.append(vm.info["container_id"])
+        # No longer than this is spent on a container that may be gone.
+        assert channel_module._deadline.get() - time.monotonic() <= vm_module.CONTAINER_WAIT
+        if vm.info["container_id"] == "lost":
+            raise ConnectionError("Failed to connect to sandbox")
+        return sandbox
+
+    monkeypatch.setattr(vm, "_sandbox", connect)
+    assert vm.wait() is vm
+    assert asked == ["lost", "replacement"]
+    assert vm.info["status"] == "running"
+
+
+def test_wait_reports_what_is_not_a_lost_connection(sandbox_vm, monkeypatch):
+    vm, _ = sandbox_vm
+    vm.info["status"] = "starting"
+    monkeypatch.setattr(vm, "_sandbox", MagicMock(side_effect=ValueError("invalid workspace")))
+    with pytest.raises(ValueError, match="invalid workspace"):
+        vm.wait()
+
+
 @pytest.fixture
 def cli_service(monkeypatch):
     selected = service()
@@ -1018,6 +1072,104 @@ def test_cli_reports_ready_once_vm_accepts_commands(cli_service, monkeypatch, ar
     assert result.exit_code == 0, result.output
     assert "✓ VM ready" in result.output
     vm.wait.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "command,options,method,call_args,call_kwargs",
+    [
+        ("start", [], "start", (), {"cold": False}),
+        ("start", ["--cold"], "start", (), {"cold": True}),
+        ("resume", [], "start", (), {"cold": False}),
+        ("resume", ["--cold"], "start", (), {"cold": True}),
+        ("pause", [], "pause", (), {}),
+        ("stop", [], "stop", (False,), {}),
+        ("stop", ["--no-snapshot"], "stop", (True,), {}),
+    ],
+)
+@pytest.mark.parametrize("json_mode", [None, "command", "global", "env"])
+def test_cli_lifecycle_accepts_multiple_vms(
+    cli_service, monkeypatch, command, options, method, call_args, call_kwargs, json_mode
+):
+    names = ["dev", "vm-12ab34cd56ef7890", "staging"]
+    vms = [
+        MagicMock(info={"name": name, "id": f"vm-{index}", "status": "running", "spec": {}})
+        for index, name in enumerate(names)
+    ]
+    for vm in vms:
+        getattr(vm, method).return_value = vm
+    lookup = MagicMock(side_effect=vms)
+    monkeypatch.setattr(vm_cli.VM, "get", lookup)
+    cli = load_cli(check_config=False, settings=SDKSettings(name="Beam"))
+    argv = (["--json"] if json_mode == "global" else []) + ["vm", command, *names]
+    argv.extend(options)
+    if json_mode == "command":
+        argv.append("--json")
+
+    result = CliRunner().invoke(
+        cli.common_group, argv, env={"BETA9_JSON": "1" if json_mode == "env" else "0"}
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [entry.args for entry in lookup.call_args_list] == [(name,) for name in names]
+    assert all(entry.kwargs == {"_service": cli_service} for entry in lookup.call_args_list)
+    for vm in vms:
+        getattr(vm, method).assert_called_once_with(*call_args, **call_kwargs)
+    if json_mode:
+        assert json.loads(result.output) == [vm.info for vm in vms]
+    else:
+        for name in names:
+            assert name in result.output
+
+
+@pytest.mark.parametrize("names", [["dev"], ["dev", "vm-12ab34cd56ef7890", "staging"]])
+def test_cli_rm_accepts_multiple_vms(cli_service, monkeypatch, names):
+    vms = [MagicMock() for _ in names]
+    lookup = MagicMock(side_effect=vms)
+    monkeypatch.setattr(vm_cli.VM, "get", lookup)
+
+    result = CliRunner().invoke(vm_cli.management, ["rm", *names])
+
+    assert result.exit_code == 0, result.output
+    assert [entry.args for entry in lookup.call_args_list] == [(name,) for name in names]
+    for vm in vms:
+        vm.remove.assert_called_once_with()
+    if len(names) > 1:
+        for name in names:
+            assert f"VM removed {name}" in result.output
+
+
+@pytest.mark.parametrize("command", ["start", "resume", "pause", "stop", "rm"])
+def test_cli_lifecycle_requires_a_vm(cli_service, command):
+    result = CliRunner().invoke(vm_cli.management, [command])
+
+    assert result.exit_code == 2
+    assert "Missing argument" in result.output
+    cli_service.http.json.assert_not_called()
+
+
+@pytest.mark.parametrize("command,method", [("start", "start"), ("resume", "start")])
+def test_cli_lifecycle_checks_each_vm_readiness(cli_service, monkeypatch, command, method):
+    vms = [
+        MagicMock(info={"name": name, "id": name, "spec": {"kiosk": {}}})
+        for name in ("dev", "staging", "prod")
+    ]
+    for vm in vms:
+        getattr(vm, method).return_value = vm
+    vms[1].wait.side_effect = TimeoutError("staging did not become ready")
+    lookup = MagicMock(side_effect=vms)
+    monkeypatch.setattr(vm_cli.VM, "get", lookup)
+
+    result = CliRunner().invoke(vm_cli.management, [command, "dev", "staging", "prod"])
+
+    assert result.exit_code == 1
+    assert "Error: staging did not become ready" in result.output
+    assert "✓ VM ready dev" in result.output
+    assert "✓ VM ready staging" not in result.output
+    assert "Traceback" not in result.output
+    vms[0].wait.assert_called_once_with(services=True)
+    vms[1].wait.assert_called_once_with(services=True)
+    assert lookup.call_count == 2
+    getattr(vms[2], method).assert_not_called()
 
 
 def test_cli_new_shows_sync_progress(cli_service, monkeypatch, tmp_path):
@@ -2962,6 +3114,131 @@ def test_setup_vm_emits_one_json_result_after_guest_readiness(
     prepare.assert_called_once()
     assert prepare.call_args.args[2] == name
     assert prepare.call_args.kwargs["desktop"] is desktop
+    assert prepare.call_args.kwargs["template"] is None
+
+
+def test_template_size_and_price_follow_the_template_spec(monkeypatch):
+    from decimal import Decimal
+    from beta9.cli import setup
+
+    assert setup.template_size({"cpu": 2000, "memory": 4096, "disk_size": "100Gi"}) == (
+        {"cpu": Decimal(2), "memory_gib": Decimal(4)},
+        "100 GiB",
+    )
+    assert setup.template_size({}) == ({"cpu": Decimal(4), "memory_gib": Decimal(8)}, "50 GiB")
+    assert setup.template_size({"disk_size": "53687091200"})[1] == "50 GiB"
+
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"vm": {"cpu": "0.0000000011875", "memory": "0.00000000059375"}}
+    monkeypatch.setattr("requests.get", lambda *_, **__: response)
+    context = ConfigContext(api_url="https://api.example/v2")
+    assert setup.vm_hourly_price(context, Decimal(2), Decimal(4)) == Decimal("0.0171")
+
+
+@pytest.mark.parametrize(("args", "desktop"), [([], None), (["--no-desktop"], False)])
+def test_setup_vm_from_template_prices_it_and_keeps_its_settings(
+    tmp_path, monkeypatch, args, desktop
+):
+    from decimal import Decimal
+    from click.testing import CliRunner
+    from beta9.cli import setup
+
+    template_id = "0b6f0f4e-7c1a-4b8e-9f1d-2a3b4c5d6e7f"
+    monkeypatch.setattr(setup, "connect_onboarding", lambda *_: (ConfigContext(), None))
+    monkeypatch.setattr(
+        setup, "get_settings", lambda: SimpleNamespace(config_path=tmp_path / "config")
+    )
+    monkeypatch.setattr(setup, "dashboard_link", lambda *_: None)
+    monkeypatch.setattr("beta9.config.get_config_context", lambda _: ConfigContext())
+    monkeypatch.setattr("beta9.channel.ServiceClient", lambda _: MagicMock())
+    lookup = MagicMock(
+        return_value={
+            "id": template_id,
+            "name": "n8n",
+            "spec": {"cpu": 2000, "memory": 4096, "disk_size": "50Gi"},
+        }
+    )
+    monkeypatch.setattr(onboarding, "vm_template", lookup)
+    price = MagicMock(return_value=Decimal("0.0171"))
+    monkeypatch.setattr(setup, "vm_hourly_price", price)
+    prepare = MagicMock(
+        return_value={
+            "name": "n8n",
+            "id": "vm-id",
+            "terminal_url": "https://terminal.example/",
+            "urls": {"7681": "https://terminal.example/", "5678": "https://n8n.example/"},
+            "spec": {"ports": [5678], "protected_ports": [5678]},
+        }
+    )
+    monkeypatch.setattr(onboarding, "prepare_vm", prepare)
+
+    result = CliRunner().invoke(
+        setup.common,
+        ["setup", "vm", "--template", "n8n", "--name", "n8n", "--skip-agents", *args],
+        input="y\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert lookup.call_args.args[1] == "n8n"
+    assert price.call_args.kwargs == {"cpu": Decimal(2), "memory_gib": Decimal(4)}
+    assert (
+        "Start a VM from template n8n (2 vCPU, 4 GiB RAM, 50 GiB disk, $0.0171/hour" in result.output
+    )
+    assert prepare.call_args.args[2] == "n8n"
+    assert prepare.call_args.kwargs == {"desktop": desktop, "template": template_id}
+    assert "Port 5678 (private)" in result.output
+    assert "https://n8n.example/" in result.output
+    assert "vm open n8n 5678" in result.output
+    assert "vm open n8n 7681" not in result.output
+
+
+def test_declining_a_template_vm_never_prepares_it(monkeypatch):
+    from click.testing import CliRunner
+    from beta9.cli import setup
+
+    monkeypatch.setattr(setup, "connect_onboarding", lambda *_: (ConfigContext(), None))
+    monkeypatch.setattr("beta9.config.get_config_context", lambda _: ConfigContext())
+    monkeypatch.setattr("beta9.channel.ServiceClient", lambda _: MagicMock())
+    monkeypatch.setattr(onboarding, "vm_template", lambda *_: {"id": "tpl", "spec": {}})
+    prepare = MagicMock()
+    monkeypatch.setattr(onboarding, "prepare_vm", prepare)
+    result = CliRunner().invoke(setup.common, ["setup", "vm", "--template", "tpl"], input="n\n")
+    assert result.exit_code == 0, result.output
+    assert "Setup canceled." in result.output
+    prepare.assert_not_called()
+
+
+def test_missing_template_is_a_clear_error(monkeypatch):
+    factory = MagicMock()
+    factory.return_value._api.side_effect = GatewayHTTPError(404, "template not found")
+    monkeypatch.setattr(onboarding, "VM", factory)
+    with pytest.raises(ValueError, match="VM template 'n8n' was not found"):
+        onboarding.vm_template(object(), "n8n")
+    factory.return_value._api.assert_called_once_with("GET", "/artifacts/template/n8n")
+
+
+def test_template_vm_keeps_template_settings_and_its_own_state(tmp_path, monkeypatch):
+    selected = SimpleNamespace(http=SimpleNamespace(workspace_id="workspace"))
+    vm = MagicMock(info={"id": "vm-id"})
+    vm._creation_body = None
+    vm.prepare.side_effect = lambda: setattr(vm, "_creation_body", {"request_id": "original"})
+    vm.process.exec.return_value.wait.return_value = 0
+    vm.process.exec.return_value.stdout.read.return_value = "Linux\n"
+    vm.refresh.return_value.info = {"name": "n8n", "id": "vm-id"}
+    factory = MagicMock(return_value=vm)
+    factory.get.side_effect = GatewayHTTPError(404, "missing")
+    monkeypatch.setattr(onboarding, "VM", factory)
+
+    onboarding.prepare_vm(selected, tmp_path, "n8n", desktop=None, template="tpl-id")
+    kwargs = factory.call_args.kwargs
+    assert (kwargs["template"], kwargs["desktop"], kwargs["docker_enabled"]) == ("tpl-id", None, None)
+    assert kwargs["ssh"] is True
+
+    vm._creation_body = None
+    onboarding.prepare_vm(selected, tmp_path, "n8n")
+    kwargs = factory.call_args.kwargs
+    assert (kwargs["template"], kwargs["desktop"], kwargs["docker_enabled"]) == (None, True, True)
+    assert kwargs["ssh"] is None
+    assert len(list(tmp_path.rglob("*.json"))) == 2
 
 
 def test_setup_vm_does_not_report_success_after_failed_probe(tmp_path, monkeypatch):
@@ -3270,6 +3547,10 @@ def test_openbox_policy_rejects_changed_source_without_partial_writes(tmp_path, 
 
 def test_kiosk_configuration_is_frozen_and_builds_a_distinct_image():
     from beta9.abstractions.image import Image
+    from beta9.abstractions.vm.kiosk_config import KioskRuntime
+
+    assert KioskRuntime(8080, 8081, 8443).status_port == 8081
+    assert KioskRuntime(8080, 8081, 8443).media_port == 8443
 
     service = SimpleNamespace(channel=MagicMock(), gateway=MagicMock())
     config = Kiosk(
@@ -3322,31 +3603,54 @@ def test_kiosk_cli_preserves_argv_and_reports_bad_json(tmp_path, monkeypatch):
     factory.assert_not_called()
 
 
-def test_guest_processes_share_the_display_but_not_the_bootstrap_config():
+@pytest.mark.parametrize("desktop", [False, True])
+def test_guest_processes_share_the_display_but_not_the_bootstrap_config(desktop, monkeypatch):
     guest = guest_module("kiosk")
+    monkeypatch.setenv("BEAM_VM_DESKTOP_TRANSPORT", "webrtc")
     session = guest.Session(
-        {"command": ["editor"], "env": {"DISPLAY": ":99", "APP_SETTING": "custom"}}
+        None if desktop else {
+            "command": ["editor"],
+            "transport": "webrtc",
+            "env": {"DISPLAY": ":99", "APP_SETTING": "custom"},
+        }
     )
+    assert session.desktop == desktop
+    assert session.state.transport == "webrtc"
     assert session.env["DISPLAY"] == ":1"
-    assert session.env["APP_SETTING"] == "custom"
+    assert session.env["HOME"] == str(Path.home())
+    if not desktop:
+        assert session.env["APP_SETTING"] == "custom"
     assert "BEAM_VM_KIOSK" not in session.env
     assert [session.retry_allowed("application") for _ in range(4)] == [True, True, True, False]
     assert session.retry_allowed("mcp")
 
 
+@pytest.mark.parametrize("code,response,ready", [
+    (0, "(true,)\n", True), (0, "(false,)\n", False), (1, "", False),
+])
+def test_full_desktop_readiness_uses_the_native_session_manager(monkeypatch, code, response, ready):
+    guest = guest_module("kiosk")
+    monkeypatch.setattr(
+        guest, "run_command", lambda *a, **k: SimpleNamespace(returncode=code, stdout=response)
+    )
+    assert guest.visible_desktop({}) is ready
+
+
 @pytest.mark.parametrize(
-    "configured,classes,expected",
+    "kiosk,configured,classes,expected",
     [
-        (False, [], "Xvfb"),
-        (False, ["0x030000"], "Xvfb"),
-        (True, [], "Xvfb"),
-        (True, ["0x020000", "0x040300"], "Xvfb"),
-        (True, ["0x030000", "0x040300"], "Xorg"),
-        (True, ["0x030200"], "Xorg"),
+        (True, False, [], "Xvfb"),
+        (True, False, ["0x030000"], "Xvfb"),
+        (True, True, [], "Xvfb"),
+        (True, True, ["0x020000", "0x040300"], "Xvfb"),
+        (True, True, ["0x030000", "0x040300"], "Xorg"),
+        (True, True, ["0x030200"], "Xorg"),
+        (False, True, ["0x030000", "0x040300"], "Xvfb"),
+        (False, True, ["0x030200"], "Xvfb"),
     ],
 )
 def test_kiosk_native_display_requires_attached_display_gpu(
-    tmp_path, monkeypatch, configured, classes, expected
+    tmp_path, monkeypatch, kiosk, configured, classes, expected
 ):
     module = guest_module("kiosk")
     pci = tmp_path / "pci"
@@ -3361,7 +3665,7 @@ def test_kiosk_native_display_requires_attached_display_gpu(
     monkeypatch.setattr(
         module, "run_command", MagicMock(return_value=SimpleNamespace(returncode=0))
     )
-    session = module.Session({"command": ["editor"]})
+    session = module.Session({"command": ["editor"]} if kiosk else None)
     session.env["HOME"] = str(tmp_path)
     session.env["BEAM_KIOSK_XORG_CONFIG"] = "/etc/X11/custom.conf" if configured else ""
     session.env.update(
@@ -4191,3 +4495,141 @@ def test_image_build_cannot_upload_home_or_escape_context(tmp_path):
             }
         )["isError"]
     tools.start_command.assert_not_called()
+
+
+def test_full_desktop_supervision_does_not_depend_on_application_windows(
+    tmp_path, monkeypatch
+):
+    guest = guest_module("kiosk")
+    monkeypatch.setattr(guest, "RUNTIME", tmp_path)
+    session = guest.Session()
+    session.env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/run/test-bus"
+    (tmp_path / "session-bus").write_text("stale address")
+    (tmp_path / "session-bus").chmod(0o644)
+    session.processes = {
+        name: SimpleNamespace(poll=lambda: None)
+        for name in ("display", "window-manager", "stream", "settings")
+    }
+    server = MagicMock()
+    session.control_server = lambda: server
+    session.start_display = session.start_stream = session.wait_for = MagicMock()
+    session.sync_display = MagicMock()
+    session.stop = MagicMock()
+    session.stopping = MagicMock()
+    session.stopping.wait.side_effect = [False, True]
+    session.launch = session.launch_mcp = MagicMock(
+        side_effect=AssertionError("Desktop owns a session, not an app")
+    )
+    assert session.run() is None
+    assert session.status()["state"] == "ready"
+    assert session.status()["mcp"] == "disabled"
+    assert session.status()["desktop"] is True
+    assert (tmp_path / "session-bus").read_text() == "unix:path=/run/test-bus\n"
+    assert (tmp_path / "session-bus").stat().st_mode & 0o777 == 0o600
+    session.sync_display.assert_called_once()
+    server.shutdown.assert_called_once()
+
+
+def test_public_template_cli_uses_explicit_publication(cli_service, monkeypatch):
+    vm = MagicMock()
+    vm.create_template.return_value = {"id": "shared-template", "public": True}
+    monkeypatch.setattr(vm_cli, "_vm", lambda *_: vm)
+    result = CliRunner().invoke(
+        vm_cli.management,
+        ["template", "create", "clean", "app-desktop", "--public", "--json"],
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["public"] is True
+    vm.create_template.assert_called_once_with("app-desktop", "", public=True)
+
+
+def test_streaming_desktop_resize_uses_the_shared_display_contract(
+    sandbox_vm, monkeypatch
+):
+    vm, _ = sandbox_vm
+    vm.info["spec"].update(desktop=True, desktop_transport="webrtc")
+    desktop = vm.desktop
+    run = MagicMock()
+    monkeypatch.setattr(desktop, "_run", run)
+    desktop.resize(2560, 1440)
+    run.assert_called_once_with("/opt/beam-vm/kiosk", "--resize", "2560", "1440")
+
+
+def test_streaming_desktop_launch_uses_its_session_user(sandbox_vm):
+    vm, sandbox = sandbox_vm
+    vm.info["spec"].update(desktop=True, desktop_transport="webrtc")
+    vm.desktop.launch("editor", "/workspace/project with spaces")
+    sandbox.process.exec.assert_called_once_with(
+        "/opt/beam-vm/desktop", "--launch", "editor", "/workspace/project with spaces"
+    )
+
+
+@pytest.mark.parametrize("config", [None, {"command": ["editor"]}])
+def test_graphical_stream_failure_returns_to_systemd_for_recovery(
+    tmp_path, monkeypatch, config
+):
+    guest = guest_module("kiosk")
+    monkeypatch.setattr(guest, "RUNTIME", tmp_path)
+    monkeypatch.setattr(
+        guest,
+        "POLICY",
+        guest.replace(guest.POLICY, mcp_defaults=str(tmp_path / "mcp.json")),
+    )
+    session = guest.Session(config)
+    session.env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/run/test-bus"
+    server = MagicMock()
+    session.control_server = lambda: server
+    session.start_display = MagicMock(side_effect=RuntimeError("display failed"))
+    session.stop = MagicMock()
+    assert session.run() == 1
+    assert session.status()["state"] == "error"
+    server.shutdown.assert_called_once()
+
+
+def test_invalid_kiosk_command_keeps_the_session_available_for_restart(tmp_path, monkeypatch):
+    guest = guest_module("kiosk")
+    monkeypatch.setattr(
+        guest, "POLICY", guest.replace(guest.POLICY, mcp_config=str(tmp_path / "mcp.json"))
+    )
+    session = guest.Session({"command": ["missing-application", "private-argument"]})
+    monkeypatch.setattr(
+        session, "spawn", MagicMock(side_effect=FileNotFoundError("private"))
+    )
+    session.launch()
+    assert session.status()["state"] == "error"
+    assert session.status()["application"] == "error"
+    assert "private" not in session.status()["error"]
+    session.poll_application()
+    session.poll_mcp()
+    assert not session.stopping.is_set()
+
+
+@pytest.mark.parametrize("config", [None, {"command": ["editor"]}])
+def test_graphical_restart_invalidates_readiness_before_acknowledging(
+    config, monkeypatch
+):
+    from urllib.error import HTTPError
+    from urllib.request import Request, urlopen
+
+    guest = guest_module("kiosk")
+    monkeypatch.setattr(guest, "POLICY", guest.replace(guest.POLICY, status_port=0))
+    session = guest.Session(config)
+    session.update(state="ready", application="ready")
+    server = session.control_server()
+    url = f"http://127.0.0.1:{server.server_port}/restart"
+    try:
+        with pytest.raises(HTTPError) as error:
+            urlopen(Request(url, data=b"", method="POST"), timeout=2)
+        assert error.value.code == 403
+        assert session.status()["state"] == "ready"
+        request = Request(
+            url, data=b"", method="POST", headers={"X-Beam-Kiosk-Action": "restart"}
+        )
+        with urlopen(request, timeout=2) as response:
+            assert response.status == 202
+        assert session.restart.is_set()
+        assert session.status()["state"] == "starting"
+        assert session.status()["application"] == "starting"
+    finally:
+        server.shutdown()
+        server.server_close()

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # NVIDIA guest base; the SDK adds the standard VM and kiosk services.
-ARG KERNEL_DEVEL=public.ecr.aws/n4e0e1y0/beta9-microvm:d05046b2646a-kernel-devel
+ARG KERNEL_DEVEL=public.ecr.aws/n4e0e1y0/beta9-microvm:d22ea0c29c1c-kernel-devel
 ARG NVIDIA_DRIVER_VERSION=580.126.18
 ARG NVIDIA_DRIVER_SHA256=a7781b2e1c2d65c6580914c76e79ed454d02945df84711c033070a092a9ab49d
 FROM ${KERNEL_DEVEL} AS kernel-devel

@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	types "github.com/beam-cloud/beta9/pkg/types"
@@ -20,6 +21,109 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )
+
+func TestNativeCheckpointTarEncoderFailureCannotHangProducer(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "failed-encoder")
+	require.NoError(t, os.WriteFile(binary, []byte("#!/bin/sh\nexit 7\n"), 0700))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	producer := exec.CommandContext(ctx, "sh", "-c", "exec yes checkpoint")
+	err := writeCheckpointTarNative(ctx, producer, &bytes.Buffer{}, binary)
+	require.ErrorContains(t, err, "compress checkpoint")
+	require.NoError(t, ctx.Err(), "encoder exit must close the pipe rather than wait for cancellation")
+	require.Zero(t, checkpointEncoders.Load())
+}
+
+func TestCheckpointEncoderThreadsFollowConcurrency(t *testing.T) {
+	require.Equal(t, "-T2", checkpointEncoderThreads(1))
+	require.Equal(t, "-T2", checkpointEncoderThreads(checkpointEncoderBurst))
+	require.Equal(t, "--single-thread", checkpointEncoderThreads(checkpointEncoderBurst+1))
+}
+
+func TestHashBehindCoversEverythingWritten(t *testing.T) {
+	data := make([]byte, 3<<20+17)
+	for i := range data {
+		data[i] = byte(i*31 + i>>9)
+	}
+	hasher := sha256.New()
+	hashing := hashBehind(hasher)
+	// The writer reuses its buffer, as io.Copy does.
+	buffer := make([]byte, 64<<10)
+	for rest, size := data, 1; len(rest) > 0; size = size*3%len(buffer) + 1 {
+		n := copy(buffer[:size], rest)
+		written, err := hashing.Write(buffer[:n])
+		require.NoError(t, err)
+		require.Equal(t, n, written)
+		clear(buffer)
+		rest = rest[n:]
+	}
+	hashing.Close()
+	hashing.Close()
+
+	want := sha256.Sum256(data)
+	require.Equal(t, want[:], hasher.Sum(nil))
+}
+
+func TestNativeCheckpointTarProducerFailureIsNotPublishedAsSuccess(t *testing.T) {
+	binary, err := exec.LookPath("zstd")
+	if err != nil {
+		t.Skip("native zstd is not installed")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	producer := exec.CommandContext(ctx, "sh", "-c", "exit 9")
+	require.Error(t, writeCheckpointTarNative(ctx, producer, &bytes.Buffer{}, binary))
+	require.NoError(t, ctx.Err())
+}
+
+func TestNativeCheckpointRestoresThroughProductionDecoder(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("needs GNU tar")
+	}
+	if _, err := exec.LookPath("zstd"); err != nil {
+		t.Skip("native zstd is not installed")
+	}
+	root := t.TempDir()
+	src := filepath.Join(root, "checkpoint")
+	require.NoError(t, os.Mkdir(src, 0755))
+	file, err := os.Create(filepath.Join(src, "memory"))
+	require.NoError(t, err)
+	require.NoError(t, file.Truncate(1<<30))
+	payload := bytes.Repeat([]byte("checkpoint native memory roundtrip\n"), 4096)
+	_, err = file.WriteAt(payload, 1<<29)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	require.NoError(t, unix.Setxattr(filepath.Join(src, "memory"), "user.beta9.test", []byte("native"), 0))
+	archive := filepath.Join(root, "archive.zst")
+	_, size, err := createTarWithSHA256(src, archive)
+	require.NoError(t, err)
+	require.Less(t, size, int64(1<<20))
+	data, err := os.ReadFile(archive)
+	require.NoError(t, err)
+	dst := filepath.Join(root, "decoded")
+	require.NoError(t, os.Mkdir(dst, 0755))
+	require.NoError(t, untarCheckpointReader(context.Background(), bytes.NewReader(data), dst))
+	restored := filepath.Join(dst, "checkpoint", "memory")
+	info, err := os.Stat(restored)
+	require.NoError(t, err)
+	require.Equal(t, int64(1<<30), info.Size())
+	require.Less(t, info.Sys().(*syscall.Stat_t).Blocks*512, int64(1<<20))
+	got := make([]byte, len(payload))
+	file, err = os.Open(restored)
+	require.NoError(t, err)
+	_, err = file.ReadAt(got, 1<<29)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	require.Equal(t, payload, got)
+	xattr := make([]byte, 32)
+	n, err := unix.Getxattr(restored, "user.beta9.test", xattr)
+	require.NoError(t, err)
+	require.Equal(t, "native", string(xattr[:n]))
+	data[len(data)-1] ^= 1
+	bad := filepath.Join(root, "bad")
+	require.NoError(t, os.Mkdir(bad, 0755))
+	require.Error(t, untarCheckpointReader(context.Background(), bytes.NewReader(data), bad), "a corrupt frame footer must fail after tar reaches its end marker")
+}
 
 func TestDirectoryArchivePreservesOverlayWhiteoutWithoutMaterializingItInCache(t *testing.T) {
 	if runtime.GOOS != "linux" {
@@ -279,6 +383,7 @@ func TestCreateTarWithSHA256ReportsProgress(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, updates)
+	require.Zero(t, updates[0], "an archive starts from nothing, each time it is started")
 	require.Equal(t, size, updates[len(updates)-1])
 }
 

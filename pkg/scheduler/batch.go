@@ -3,8 +3,9 @@ package scheduler
 import (
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
-	"time"
 
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
@@ -82,10 +83,10 @@ func (b *schedulingBatch) plan(requests []*types.ContainerRequest) {
 }
 
 func (b *schedulingBatch) planRequest(request *types.ContainerRequest, attempt *schedulingAttempt, runnable bool) {
-	planStart := time.Now()
+	planStart := b.scheduler.now()
 	planned := false
 	defer func() {
-		b.scheduler.recordContainerLifecycle(request, types.ContainerLifecycleSchedulerBatchPlan, planStart, time.Now(), true, map[string]string{
+		b.scheduler.recordContainerLifecycle(request, types.ContainerLifecycleSchedulerBatchPlan, planStart, b.scheduler.now(), true, map[string]string{
 			"batch_size":           fmt.Sprintf("%d", b.batchSize),
 			"worker_count":         fmt.Sprintf("%d", len(b.workers)),
 			"planned":              fmt.Sprintf("%t", planned),
@@ -104,9 +105,9 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest, attempt *
 
 	normalizeGPURequest(request)
 
-	selectionStart := time.Now()
+	selectionStart := b.scheduler.now()
 	worker, err := b.scheduler.selectWorkerFromWorkers(b.workers, request)
-	b.scheduler.recordContainerLifecycle(request, types.ContainerLifecycleSchedulerWorkerSelection, selectionStart, time.Now(), err == nil && worker != nil, map[string]string{
+	b.scheduler.recordContainerLifecycle(request, types.ContainerLifecycleSchedulerWorkerSelection, selectionStart, b.scheduler.now(), err == nil && worker != nil, map[string]string{
 		"candidate_workers": fmt.Sprintf("%d", len(b.workers)),
 	})
 	if err != nil || worker == nil {
@@ -115,9 +116,9 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest, attempt *
 	}
 
 	workerForSchedule := cloneWorker(worker)
-	reserveStart := time.Now()
+	reserveStart := b.scheduler.now()
 	reserved := b.scheduler.reserveWorkerCapacity(worker, request)
-	b.scheduler.recordContainerLifecycle(request, types.ContainerLifecycleSchedulerReserveCapacity, reserveStart, time.Now(), reserved, map[string]string{
+	b.scheduler.recordContainerLifecycle(request, types.ContainerLifecycleSchedulerReserveCapacity, reserveStart, b.scheduler.now(), reserved, map[string]string{
 		"worker_id": worker.Id,
 	})
 	if !reserved {
@@ -134,7 +135,7 @@ func (b *schedulingBatch) planRequest(request *types.ContainerRequest, attempt *
 
 // unplaced handles a request that fits no worker in this batch.
 func (b *schedulingBatch) unplaced(attempt *schedulingAttempt) {
-	if isBackground(attempt.request) {
+	if attempt.request.Background() {
 		b.deferred = append(b.deferred, attempt)
 		return
 	}
@@ -146,12 +147,12 @@ func (b *schedulingBatch) unplaced(attempt *schedulingAttempt) {
 func (b *schedulingBatch) settleDeferred() {
 	for _, attempt := range b.deferred {
 		backgroundSettle <- struct{}{}
-		go func(attempt *schedulingAttempt) {
+		b.scheduler.background(func() {
 			defer func() { <-backgroundSettle }()
 			if attempt.runnable() {
 				attempt.runWaitingOrProvisioning()
 			}
-		}(attempt)
+		})
 	}
 }
 
@@ -218,7 +219,7 @@ func (b *schedulingBatch) completeSchedule(schedule plannedSchedule, err error) 
 			reason, level = "worker_capacity_changed", zerolog.DebugLevel
 		}
 		attempt.recordBacklogWait(false, reason)
-		metrics.RecordSchedulerWorkerWait(time.Since(schedule.request.Timestamp), schedule.request, reason)
+		metrics.RecordSchedulerWorkerWait(b.scheduler.since(schedule.request.Timestamp), schedule.request, reason)
 		workerLog(requestLog(log.WithLevel(level), schedule.request), schedule.worker).Err(err).Msg("unable to schedule planned request on worker")
 		switch {
 		case !attempt.runnable():
@@ -227,25 +228,59 @@ func (b *schedulingBatch) completeSchedule(schedule plannedSchedule, err error) 
 		case errors.Is(err, repo.ErrEvictionVictimsChanged) || errors.Is(err, repo.ErrInsufficientEvictableCapacity):
 			attempt.requeueForWorkerWaitDelay(provisioningWorkerRequeueDelay, "reclaimable_capacity_changed")
 		default:
-			attempt.retrySoon(reason)
+			attempt.retry(reason)
 		}
 		return
 	}
 
-	duration := time.Since(schedule.request.Timestamp)
+	duration := b.scheduler.since(schedule.request.Timestamp)
 	attempt.recordBacklogWait(true, "scheduled")
-	b.scheduler.emitContainerPlaced(
-		schedule.worker,
-		schedule.request,
-		b.scheduler.failoverChainFor(schedule.request),
-	)
+	b.scheduler.recordPlacement(schedule.worker, schedule.request)
 	metrics.RecordRequestSchedulingDuration(duration, schedule.request)
 	metrics.RecordSchedulerWorkerWait(duration, schedule.request, "scheduled")
 }
 
-// isBackground reports whether a request only fills spare capacity.
-func isBackground(request *types.ContainerRequest) bool {
-	return request != nil && (request.Evictable || request.OpportunisticOnly)
+// recordPlacement reports where a request landed: a container.placed event,
+// and a counter by requested GPU, pool and route rank. Rank 0 is a pool the
+// request asked for; anything higher is overflow into a pool that also serves
+// it, so the share of placements above rank 0 is the overflow rate.
+func (s *Scheduler) recordPlacement(worker *types.Worker, request *types.ContainerRequest) {
+	if worker == nil || request == nil {
+		return
+	}
+
+	rank, _ := s.routeFor(request).rankOf(worker)
+	requestedGPUs := gpuRequestsForScheduling(request)
+	if request.PoolSelector == "" {
+		// A request that names its pool always lands there, and counting
+		// those would add a series for every pool a workspace names.
+		preferred := ""
+		if len(requestedGPUs) > 0 {
+			preferred = requestedGPUs[0]
+		}
+		metrics.RecordContainerPlacement(preferred, worker.PoolName, rank)
+	}
+
+	if s.pushComputeEvent == nil {
+		return
+	}
+	waitMs := int64(0)
+	if !request.Timestamp.IsZero() {
+		waitMs = s.since(request.Timestamp).Milliseconds()
+	}
+	s.pushComputeEvent(types.EventComputeSchema{
+		PoolName:    worker.PoolName,
+		WorkerID:    worker.Id,
+		MachineID:   worker.MachineId,
+		ContainerID: request.ContainerId,
+		Action:      types.EventComputeActionContainerPlaced,
+		Attrs: map[string]string{
+			types.EventComputeAttrRouteRank:    strconv.Itoa(rank),
+			types.EventComputeAttrRequestedGPU: strings.Join(requestedGPUs, ","),
+			types.EventComputeAttrPlacedGPU:    worker.Gpu,
+			types.EventComputeAttrWaitMs:       strconv.FormatInt(waitMs, 10),
+		},
+	})
 }
 
 // foregroundFirst returns requests with background ones moved to the end,
@@ -253,12 +288,12 @@ func isBackground(request *types.ContainerRequest) bool {
 func foregroundFirst(requests []*types.ContainerRequest) []*types.ContainerRequest {
 	ordered := make([]*types.ContainerRequest, 0, len(requests))
 	for _, request := range requests {
-		if !isBackground(request) {
+		if !request.Background() {
 			ordered = append(ordered, request)
 		}
 	}
 	for _, request := range requests {
-		if isBackground(request) {
+		if request.Background() {
 			ordered = append(ordered, request)
 		}
 	}

@@ -7,10 +7,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type workerPoolCapacityChecker interface {
-	HasWorkerCapacity(cpu int64, memory int64, gpuCount uint32) (bool, error)
-}
-
+// tryPrivatePoolFallback moves a request that names its workspace's own pool
+// onto the regular pools when that pool cannot take it and the stub allows
+// it. The request goes back to the backlog without its pool, and the next
+// pass plans it like any other. It reports whether it dealt with the
+// request.
 func (a *schedulingAttempt) tryPrivatePoolFallback() bool {
 	fallbackRequest, poolName, ok := a.privatePoolFallbackRequest()
 	if !ok {
@@ -25,45 +26,60 @@ func (a *schedulingAttempt) tryPrivatePoolFallback() bool {
 	if !fallback.hasManagedFallbackPath() {
 		return false
 	}
-	if err := fallback.reserveManagedFallbackQuota(); err != nil {
-		var notFound *types.ErrContainerStateNotFound
-		if errors.As(err, &notFound) {
-			return true
-		}
-		pending, stateErr := a.scheduler.containerRequestPending(fallbackRequest.ContainerId)
-		if stateErr == nil && !pending {
-			requestLog(log.Debug(), fallbackRequest).
-				Msg("private pool fallback canceled because container is no longer pending")
-			return true
-		}
-		requestLog(log.Error(), fallbackRequest).
+
+	refusal, err := fallback.admitToRegularPools()
+	if err == nil {
+		// The request keeps its place in line.
+		fallback.requeueForWorkerWaitDelay(0, "managed_fallback")
+		return true
+	}
+	// A container that was stopped in the meantime has nothing left to
+	// schedule.
+	if !a.runnable() {
+		return true
+	}
+	if refusal == "" {
+		// No answer is not a refusal: the request asks again.
+		requestLog(log.Warn(), fallbackRequest).
 			Err(err).
-			Msg("private pool fallback blocked by managed concurrency limit")
-		a.fail(types.ContainerSchedulingFailureManagedFallbackConcurrencyLimit)
+			Msg("unable to ask whether private pool fallback is allowed")
+		a.retry("managed_fallback_check_failed")
 		return true
 	}
-
-	if fallback.scheduleOnAvailableWorker() {
-		return true
-	}
-	if fallback.reservePendingWorkerCapacity() {
-		return true
-	}
-	if !fallback.canProvisionWorker() {
-		requestLog(log.Error(), fallbackRequest).
-			Msg("private pool fallback has no managed capacity path")
-		a.fail(types.ContainerSchedulingFailureManagedFallbackNoCapacity)
-		return true
-	}
-
-	fallback.provisionWorker()
+	requestLog(log.Info(), fallbackRequest).
+		Err(err).
+		Msg("private pool fallback refused")
+	a.fail(refusal)
 	return true
 }
 
-func (a *schedulingAttempt) privatePoolFallbackRequest() (*types.ContainerRequest, string, bool) {
-	if a == nil || a.request == nil {
-		return nil, "", false
+// admitToRegularPools asks what Run asks of a request for the regular pools,
+// and what this request was exempt from on its workspace's own pool: whether
+// the workspace has credit, and whether the request fits within the
+// workspace's concurrency limit, which it then counts against.
+//
+// It returns nil when the request is admitted. Otherwise the error is the
+// answer: refusal is why the request fails when the answer is no, and empty
+// when there was no answer.
+func (a *schedulingAttempt) admitToRegularPools() (refusal types.ContainerSchedulingFailureReason, err error) {
+	err = a.scheduler.checkWorkspaceCredit(a.request, false)
+	var noCredit *types.InsufficientCreditsError
+	if errors.As(err, &noCredit) && noCredit.Code != creditGateErrorBillingUnavailable {
+		return types.ContainerSchedulingFailureManagedFallbackNoCredit, err
 	}
+	if err != nil {
+		return "", err
+	}
+
+	err = a.reserveManagedFallbackQuota()
+	var overLimit *types.ThrottledByConcurrencyLimitError
+	if errors.As(err, &overLimit) {
+		return types.ContainerSchedulingFailureManagedFallbackConcurrencyLimit, err
+	}
+	return "", err
+}
+
+func (a *schedulingAttempt) privatePoolFallbackRequest() (*types.ContainerRequest, string, bool) {
 	if a.request.HasDurableDiskMount() {
 		// Durable disk fallback is handled before scheduling so snapshot
 		// availability is checked before the pool selector is cleared.
@@ -78,16 +94,12 @@ func (a *schedulingAttempt) privatePoolFallbackRequest() (*types.ContainerReques
 		return nil, "", false
 	}
 
+	// Without workspace storage the request cannot run on the private pool
+	// at all. With it, the request stays unless the pool has no machine with
+	// room for it.
 	if a.request.StorageAvailable() {
-		checker, ok := pool.Controller.(workerPoolCapacityChecker)
-		if !ok {
-			return nil, "", false
-		}
-
-		cpu := a.scheduler.workerCPUForControllerRequest(pool.Controller, a.request)
-		memory := a.scheduler.workerMemoryForControllerRequest(pool.Controller, a.request)
-		gpuCount := a.scheduler.workerGPUCountForControllerRequest(pool.Controller, a.request)
-		hasCapacity, err := checker.HasWorkerCapacity(cpu, memory, gpuCount)
+		size := a.scheduler.workerSizeFor(pool, a.request)
+		canAdd, err := pool.Controller.CanAddWorker(size.cpu, size.memory, size.gpuCount)
 		if err != nil {
 			requestLog(log.Debug(), a.request).
 				Str("pool_name", pool.Name).
@@ -95,15 +107,12 @@ func (a *schedulingAttempt) privatePoolFallbackRequest() (*types.ContainerReques
 				Msg("unable to check private pool capacity for fallback")
 			return nil, "", false
 		}
-		if hasCapacity {
+		if canAdd {
 			return nil, "", false
 		}
 	}
 
 	fallback := a.request.Clone()
-	if fallback == nil {
-		return nil, "", false
-	}
 	fallback.PoolSelector = ""
 	return fallback, pool.Name, true
 }
@@ -115,7 +124,7 @@ func (a *schedulingAttempt) hasManagedFallbackPath() bool {
 	if worker, err := a.scheduler.selectWorkerFromWorkersByStatus(a.workers, a.request, types.WorkerStatusPending); err == nil && worker != nil {
 		return true
 	}
-	return a.canProvisionWorker()
+	return a.canGrow()
 }
 
 func (a *schedulingAttempt) privatePoolAllowsManagedFallback() bool {
@@ -128,9 +137,6 @@ func (a *schedulingAttempt) privatePoolAllowsManagedFallback() bool {
 }
 
 func (a *schedulingAttempt) reserveManagedFallbackQuota() error {
-	if a == nil || a.scheduler == nil || a.request == nil {
-		return nil
-	}
 	quota, err := a.scheduler.managedConcurrencyLimit(a.request)
 	if err != nil {
 		return err
@@ -139,7 +145,7 @@ func (a *schedulingAttempt) reserveManagedFallbackQuota() error {
 }
 
 func (a *schedulingAttempt) selectedPrivatePool() (*WorkerPool, bool) {
-	if a == nil || a.scheduler == nil || a.request == nil || a.request.PoolSelector == "" || a.scheduler.workerPoolManager == nil {
+	if a.request.PoolSelector == "" || a.scheduler.workerPoolManager == nil {
 		return nil, false
 	}
 
@@ -148,13 +154,4 @@ func (a *schedulingAttempt) selectedPrivatePool() (*WorkerPool, bool) {
 		return nil, false
 	}
 	return pool, true
-}
-
-func (a *schedulingAttempt) canProvisionWorker() bool {
-	controllers, err := a.scheduler.getControllers(a.request)
-	if err != nil {
-		return false
-	}
-	controller, _, err := a.scheduler.workerProvisioningControllerForRequest(controllers, a.request)
-	return err == nil && controller != nil
 }

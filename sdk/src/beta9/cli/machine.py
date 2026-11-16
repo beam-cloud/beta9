@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 import click
@@ -38,6 +39,7 @@ from ..clients.gateway import (
     PrivatePool,
 )
 from .extraclick import ClickCommonGroup, ClickManagementGroup
+from .machine_agent import restart_machine_agent
 from .machine_format import gpu_inventory_table, machine_table, tailnet_ssh_hint
 from .worker_management import apply_worker_action, worker_ids_for_machine
 
@@ -132,6 +134,9 @@ def _inventory_json(
     epilog="""
     Examples:
 
+      # List all machines (the default)
+      {cli_name} machine list
+
       # List the first 10 machines
       {cli_name} machine list --limit 10
 
@@ -145,9 +150,9 @@ def _inventory_json(
 )
 @click.option(
     "--limit",
-    type=click.IntRange(1, 100),
-    default=20,
-    help="The number of machines to fetch.",
+    type=click.IntRange(0, 2**32 - 1),
+    default=0,
+    help="Maximum number of machines to fetch (0 means all).",
 )
 @click.option(
     "--format",
@@ -269,6 +274,56 @@ def ssh_machine(service: ServiceClient, machine_id: str):
         gpu_count=free_gpu_count,
     )
     return pod.shell(machine_id=machine_id)
+
+
+@management.command(
+    name="restart-agent",
+    help="Restart a Linux machine's beam-agent service over Tailscale SSH or public-IP SSH.",
+    epilog="""
+    Examples:
+
+      {cli_name} machine restart-agent MACHINE_ID
+
+      # Select the only machine in a pool
+      {cli_name} machine restart-agent --pool microvm-cpu --context staging-admin
+
+      # Use a host SSH key before Tailscale SSH is enabled
+      {cli_name} machine restart-agent --pool microvm-cpu --ssh-key ~/remote.pem
+      \b
+    """,
+)
+@click.argument("machine_id", required=False)
+@click.option("--pool", "-p", help="Select a pool; omit MACHINE_ID when it has one machine.")
+@click.option(
+    "--ssh-key",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="SSH private key for root access through the machine's public IP.",
+)
+@click.option(
+    "--timeout", type=click.IntRange(1), default=120, help="Seconds to wait for the agent."
+)
+@extraclick.pass_service_client
+def restart_agent(
+    service: ServiceClient,
+    machine_id: Optional[str],
+    pool: Optional[str],
+    ssh_key: Optional[Path],
+    timeout: int,
+):
+    if not machine_id and not pool:
+        raise click.UsageError("Provide MACHINE_ID or --pool.")
+    res = service.gateway.list_machines(ListMachinesRequest(pool_name=pool or "", limit=0))
+    if not res.ok:
+        return terminal.error(res.err_msg)
+    matches = [m for m in res.machines if not machine_id or m.id == machine_id]
+    if not matches:
+        return terminal.error("No matching machine found.")
+    if len(matches) != 1:
+        return terminal.error("The pool has multiple machines; provide MACHINE_ID.")
+    machine = matches[0]
+    terminal.detail(f"Restarting agent on {machine.id} ({machine.pool_name})...")
+    restart_machine_agent(machine, ssh_key, timeout)
+    terminal.done(f"Agent restarted on {machine.id}")
 
 
 @management.command(

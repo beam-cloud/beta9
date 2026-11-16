@@ -46,6 +46,7 @@ const (
 	containerRepositoryRetryInterval         = 100 * time.Millisecond
 	containerRuntimeStateTimeout             = 2 * time.Second
 	observedStoppingSignalTimeout            = 5 * time.Second
+	stopSignalRetryInterval                  = 250 * time.Millisecond
 	cpuQuotaApplyTimeout                     = 2 * time.Second
 	sandboxCPUQuotaGrace                     = 10 * time.Second
 	sandboxCPUQuotaRetryWindow               = 30 * time.Second
@@ -66,6 +67,9 @@ type containerResourceUpdater interface {
 }
 
 func (s *Worker) containerTerminationGrace(request *types.ContainerRequest) time.Duration {
+	if request.Borrowed() {
+		return time.Duration(request.DrainSeconds) * time.Second
+	}
 	grace := time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second
 	if request.IsPersistentVM() {
 		// Standard systemd units default to 90 seconds to stop. Allow
@@ -226,24 +230,30 @@ func (s *Worker) stopObservedContainer(containerID string, request *types.Contai
 	needsStop := forceImmediately
 	var stopSignalErr error
 	if !forceImmediately {
-		graceStarted := time.Now()
-		stopCtx, cancelStop := context.WithTimeout(context.Background(), observedStoppingSignalTimeout)
-		stopSignalErr = s.stopContainerWithContext(stopCtx, containerID, false)
-		cancelStop()
+		grace := s.containerTerminationGrace(request)
+		graceEnded := time.NewTimer(grace)
+		defer graceEnded.Stop()
+		stopSignalErr = s.stopContainer(containerID, false)
 		if stopSignalErr != nil && !runtimeContainerNotFound(stopSignalErr) {
 			log.Warn().Str("container_id", containerID).Err(stopSignalErr).Msg("failed to send graceful stop for persisted STOPPING container")
 		}
 
-		grace := s.containerTerminationGrace(request)
-		if remaining := grace - time.Since(graceStarted); remaining > 0 {
-			timer := time.NewTimer(remaining)
-			defer timer.Stop()
-			workerCtx := s.ctx
-			if workerCtx == nil {
-				workerCtx = context.Background()
-			}
+		// A stop can be observed before the runtime can be signalled. Signal
+		// it once it has started, rather than when the grace period ends.
+		retry := time.NewTicker(stopSignalRetryInterval)
+		defer retry.Stop()
+		workerCtx := s.ctx
+		if workerCtx == nil {
+			workerCtx = context.Background()
+		}
+		for waiting := true; waiting; {
 			select {
-			case <-timer.C:
+			case <-graceEnded.C:
+				waiting = false
+			case <-retry.C:
+				if stopSignalErr != nil && s.runtimeAwaitsStop(containerID) {
+					stopSignalErr = s.stopContainer(containerID, false)
+				}
 			case <-workerCtx.Done():
 				return
 			}
@@ -361,6 +371,18 @@ func (s *Worker) scheduleStuckWorkspaceMountRecovery(instance *ContainerInstance
 	}()
 }
 
+// runtimeAwaitsStop reports whether the container's runtime has started and
+// has not exited.
+func (s *Worker) runtimeAwaitsStop(containerID string) bool {
+	instance, exists := s.containerInstances.Get(containerID)
+	if !exists || instance == nil {
+		return false
+	}
+	started, _ := instance.runtimeStartState()
+	exitCode, _ := instance.lifecycleState()
+	return started && exitCode < 0
+}
+
 func (s *Worker) observedContainerRuntime(containerID string) (*ContainerInstance, runtime.Runtime, bool) {
 	instance, exists := s.containerInstances.Get(containerID)
 	if !exists || instance == nil {
@@ -414,34 +436,31 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	}
 
 	if hasDurableDisk {
+		// The runtime has exited, so the container's CPU set and GPUs go back
+		// before its final sync, which a request that evicted it doesn't wait
+		// for (see waitForContainersReleased).
+		s.releaseContainerResources(containerId, request)
+		s.markContainerResourcesReleased(containerId)
 		exitCode, exitReported = s.finalizeDurableDiskMounts(containerId, request, exitCode, exitReported)
 		phases.Mark("disks")
 	}
 	if containerId != "" && !strings.HasPrefix(containerId, types.StubTypeVM+"-") {
 		_ = os.RemoveAll(filepath.Join(baseConfigPath, containerId))
 	}
-	if !exitReported {
+	// A failed or unconfirmed GPU run defers its receipt until the existing
+	// resource cleanup below has handed back its physical allocation.
+	waitForGPURelease := s.physicalGPUAllocation(containerId) != nil
+	if !exitReported && !waitForGPURelease {
 		exitReported = s.setContainerExitCode(containerId, exitCode)
 	}
 
+	if !hasDurableDisk {
+		s.releaseContainerResources(containerId, request)
+	}
+	if !exitReported && waitForGPURelease {
+		exitReported = s.setContainerExitCode(containerId, exitCode)
+	}
 	phases.Mark("exit_code")
-
-	// Only the CPU set hand-back shares state with reserveContainerInstance.
-	// The GPU and network managers synchronize themselves, and their teardown
-	// (a Thunder RPC, a netns deletion that waits on the kernel) must not hold
-	// up the request stream, which reserves under the same lock.
-	s.containerLock.Lock()
-	if instance, exists := s.containerInstances.Get(containerId); exists {
-		instance.CPUSet = ""
-		instance.RestoreCPUAffinityDeferred = false
-		s.containerInstances.Set(containerId, instance)
-	}
-	s.containerLock.Unlock()
-
-	// De-allocate GPU devices so they are available for new containers
-	if manager := s.gpuManagerForRequest(request); request != nil && request.RequiresGPU() && manager != nil {
-		manager.UnassignGPUDevices(context.Background(), containerId)
-	}
 
 	// Tear down container network components - best effort
 	if err := s.containerNetworkManager.TearDown(request.ContainerId); err != nil {
@@ -468,6 +487,72 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 	s.finishContainerShutdown(containerId, request, phases)
 	phases.Fields(log.Info().Str("container_id", containerId)).Msg("finalized container shutdown")
+}
+
+// releaseContainerResources hands back an exited container's CPU set and GPUs.
+func (s *Worker) releaseContainerResources(containerId string, request *types.ContainerRequest) {
+	// Only the CPU set hand-back shares state with reserveContainerInstance.
+	// The GPU and network managers synchronize themselves, and their teardown
+	// (a Thunder RPC, a netns deletion that waits on the kernel) must not hold
+	// up the request stream, which reserves under the same lock.
+	s.containerLock.Lock()
+	if instance, exists := s.containerInstances.Get(containerId); exists {
+		instance.CPUSet = ""
+		instance.RestoreCPUAffinityDeferred = false
+		s.containerInstances.Set(containerId, instance)
+	}
+	s.containerLock.Unlock()
+
+	// De-allocate GPU devices so they are available for new containers
+	if manager := s.gpuManagerForRequest(request); request != nil && request.RequiresGPU() && manager != nil {
+		manager.UnassignGPUDevices(context.Background(), containerId)
+	}
+}
+
+// markContainerResourcesReleased wakes requests waiting for a finalizing
+// container to release its resources once its runtime has stopped. A runtime
+// still exiting, or a state check that fails, is checked again until the
+// container is gone, so the waiters don't wait out its final sync.
+func (s *Worker) markContainerResourcesReleased(containerId string) {
+	if s.releaseIfRuntimeStopped(containerId) {
+		return
+	}
+	go func() {
+		workerCtx := s.ctx
+		if workerCtx == nil {
+			workerCtx = context.Background()
+		}
+		recheck := time.NewTicker(evictionRecheckInterval)
+		defer recheck.Stop()
+		for {
+			select {
+			case <-workerCtx.Done():
+				return
+			case <-recheck.C:
+			}
+			if s.releaseIfRuntimeStopped(containerId) {
+				return
+			}
+		}
+	}()
+}
+
+// releaseIfRuntimeStopped marks a finalizing container's resources released
+// once its runtime has stopped, and reports whether there is nothing left to
+// check.
+func (s *Worker) releaseIfRuntimeStopped(containerId string) bool {
+	instance, rt, exists := s.observedContainerRuntime(containerId)
+	if !exists {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), containerRuntimeStateTimeout)
+	defer cancel()
+	if runtimeNeedsGraceKill(ctx, rt, containerId) {
+		return false
+	}
+	instance.resourcesReleased.Store(true)
+	s.containerInstances.Wake()
+	return true
 }
 
 // Publication outlives the container's canceled execution context. Keep the
@@ -560,6 +645,38 @@ func (s *Worker) setLocalContainerExitCode(containerId string, exitCode int) {
 	s.containerInstances.Set(containerId, instance)
 }
 
+// physicalGPUAllocation excludes runtime-owned VFIO devices and Thunder
+// enrollments. Only the local NVIDIA allocation map can be released early.
+func (s *Worker) physicalGPUAllocation(containerId string) *ContainerNvidiaManager {
+	if s.containerInstances == nil || s.containerGPUManager == nil || s.gpuVirtualized {
+		return nil
+	}
+	instance, rt, exists := s.observedContainerRuntime(containerId)
+	if !exists || instance.Request == nil || !instance.Request.RequiresGPU() {
+		return nil
+	}
+	if rt != nil && rt.Capabilities().BlockRoot {
+		return nil
+	}
+	manager, ok := s.containerGPUManager.(*ContainerNvidiaManager)
+	if !ok || len(manager.GetContainerGPUDevices(containerId)) == 0 {
+		return nil
+	}
+	return manager
+}
+
+func (s *Worker) publishContainerRunExit(containerId string, rawExitCode int, runErr error, mappedExitCode int) bool {
+	if manager := s.physicalGPUAllocation(containerId); manager != nil {
+		// Defer runtime errors (including native OOM errors) and unknown raw
+		// statuses. A watcher-only OOM annotation does not invalidate an exit.
+		if runErr != nil || rawExitCode < 0 {
+			return false
+		}
+		manager.UnassignGPUDevices(context.Background(), containerId)
+	}
+	return s.setContainerExitCode(containerId, mappedExitCode)
+}
+
 func (s *Worker) setContainerExitCode(containerId string, exitCode int) bool {
 	if s.containerRepoClient == nil {
 		return false
@@ -606,24 +723,31 @@ func (s *Worker) markContainerStopping(containerId string, expirySeconds int64) 
 }
 
 func (s *Worker) deleteContainer(containerId string) {
-	if instance, exists := s.containerInstances.Get(containerId); exists {
+	instance, exists := s.containerInstances.Get(containerId)
+	if exists {
 		instance.tunnels.close()
 		if instance.LogBuffer != nil {
-			if s.containerServer != nil && instance.Request != nil && (instance.Request.Stub.Type.Kind() == types.StubTypeFunction || instance.Request.IsBuildRequest()) {
+			// Attached readers can still be draining logs after container cleanup.
+			if s.containerServer != nil && instance.Request != nil &&
+				(instance.Request.Stub.Type.Kind() == types.StubTypeFunction ||
+					instance.Request.Stub.Type.Kind() == types.StubTypePod || instance.Request.IsBuildRequest()) {
 				s.containerServer.retainCompletedLogs(containerId, instance.LogBuffer)
 			} else {
 				instance.LogBuffer.Dispose()
 			}
 		}
-	}
-	if instance, exists := s.containerInstances.Get(containerId); exists && instance.SandboxProcessManager != nil {
-		if err := instance.SandboxProcessManager.Cleanup(); err != nil {
-			log.Debug().Str("container_id", containerId).Err(err).Msg("failed to cleanup sandbox process manager client")
+		if instance.SandboxProcessManager != nil {
+			if err := instance.SandboxProcessManager.Cleanup(); err != nil {
+				log.Debug().Str("container_id", containerId).Err(err).Msg("failed to cleanup sandbox process manager client")
+			}
 		}
 	}
 
 	if err := s.deleteContainerState(containerId); err != nil {
 		log.Debug().Str("container_id", containerId).Err(err).Msg("failed to remove remote container state")
+	}
+	if exists && instance.Request != nil {
+		s.imageClient.touchImageMount(instance.Request.ImageId)
 	}
 	s.containerInstances.Delete(containerId)
 }
@@ -1356,6 +1480,14 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 				startupCPU.Quota = nil
 				startupCPU.Burst = nil
 				startupCPU.Period = nil
+				if s.runtime != nil && s.runtime.Name() == types.ContainerRuntimeMicroVM.String() {
+					// Guest init and the VMM need host CPU before application limits land.
+					startupCPU.Shares = nil
+					if request.Checkpoint == nil {
+						shares := uint64(400)
+						startupCPU.Shares = &shares
+					}
+				}
 				// gVisor fixes the guest CPU topology when the sandbox starts;
 				// a later resource update cannot change what nproc reports.
 				if !requestForcesResourceLimits(request) {
@@ -2047,7 +2179,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				return
 			}
 
-			go s.applyDeferredSandboxCPUThrottle(ctx, request, sandboxCPUQuotaGrace)
+			go s.applyDeferredSandboxCPUThrottle(ctx, request, sandboxCPUThrottleGrace(instance.Runtime.Name()))
 			if request.DockerEnabled {
 				go s.startDockerDaemon(ctx, containerId, instance)
 			}
@@ -2121,7 +2253,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// cleanup so clients are never blocked on resource reclamation. Durable-disk
 	// containers are reported by finalizeContainer after their final sync.
 	if !request.HasDurableDiskMount() {
-		exitReported = s.setContainerExitCode(containerId, exitCode)
+		// A confirmed runc exit may hand back GPUs while deletion of the old
+		// container ID is still pending. runsc attempts deletion before Run returns.
+		exitReported = s.publishContainerRunExit(containerId, rawExitCode, err, exitCode)
 	}
 	if err := s.deleteRuntimeContainer(containerId); err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
@@ -2770,6 +2904,13 @@ func (s *Worker) deferCPUThrottle(request *types.ContainerRequest, cpu *specs.Li
 	instance.DeferredCPUQuota = cpu
 	s.containerInstances.Set(request.ContainerId, instance)
 	return true
+}
+
+func sandboxCPUThrottleGrace(runtimeName string) time.Duration {
+	if runtimeName == types.ContainerRuntimeMicroVM.String() {
+		return 0
+	}
+	return sandboxCPUQuotaGrace
 }
 
 func (s *Worker) applyDeferredCPUThrottle(request *types.ContainerRequest, instance *ContainerInstance) error {

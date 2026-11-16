@@ -20,6 +20,24 @@ func TestVMKioskCloneIsolatesApplicationAndMCPState(t *testing.T) {
 	require.Nil(t, (*VMKioskSpec)(nil).Clone())
 }
 
+func TestPublicTemplateRemovesWorkspaceAdaptersAndSSHWithoutMutatingSource(t *testing.T) {
+	source := VMSpec{SSH: true, SSHPublicKey: "source-key", Ports: []uint32{VMSSHPort, VMDesktopPort}, Kiosk: &VMKioskSpec{
+		Command: []string{"editor"}, Env: map[string]string{"TOKEN": "secret"},
+		MCP: map[string]VMKioskMCPServer{"remote": {URL: "https://server.test/mcp", Headers: map[string]string{"Authorization": "secret"}}},
+	}}
+	shared := source.PublicTemplate()
+	require.False(t, shared.SSH)
+	require.Empty(t, shared.SSHPublicKey)
+	require.Equal(t, []uint32{VMDesktopPort}, shared.Ports)
+	require.Nil(t, shared.Kiosk.Env)
+	require.Nil(t, shared.Kiosk.MCP)
+	require.Equal(t, source.Kiosk.Command, shared.Kiosk.Command)
+	require.True(t, source.SSH)
+	require.Contains(t, source.Ports, uint32(VMSSHPort))
+	require.NotEmpty(t, source.Kiosk.MCP["remote"].URL)
+	require.NotEmpty(t, source.Kiosk.Env)
+}
+
 func TestVMWebRTCPolicyDefaultsAndRejectsUnsafeTiming(t *testing.T) {
 	var policy VMWebRTCConfig
 	require.NoError(t, policy.ApplyDefaults())
@@ -38,18 +56,25 @@ func TestVMWebRTCPolicyDefaultsAndRejectsUnsafeTiming(t *testing.T) {
 	}
 }
 
-func TestVMKioskPrivatePorts(t *testing.T) {
+func TestVMDesktopPrivatePorts(t *testing.T) {
 	for _, test := range []struct {
 		name  string
-		kiosk *VMKioskSpec
+		spec  VMSpec
 		ports []uint32
 	}{
-		{"desktop", nil, nil},
-		{"websockets", &VMKioskSpec{Transport: VMKioskTransportWebSockets}, []uint32{VMKioskStatusPort, VMKioskMCPPort}},
-		{"webrtc", &VMKioskSpec{Transport: VMKioskTransportWebRTC}, []uint32{VMKioskMediaPort, VMKioskStatusPort, VMKioskMCPPort}},
+		{"headless", VMSpec{}, nil},
+		{"legacy desktop", VMSpec{Desktop: true}, nil},
+		{"desktop websockets", VMSpec{Desktop: true, DesktopTransport: VMDesktopTransportWebSockets}, []uint32{VMKioskStatusPort}},
+		{"desktop webrtc", VMSpec{Desktop: true, DesktopTransport: VMDesktopTransportWebRTC}, []uint32{VMKioskMediaPort, VMKioskStatusPort}},
+		{"kiosk websockets", VMSpec{Kiosk: &VMKioskSpec{Transport: VMKioskTransportWebSockets}}, []uint32{VMKioskStatusPort, VMKioskMCPPort}},
+		{"kiosk webrtc", VMSpec{Kiosk: &VMKioskSpec{Transport: VMKioskTransportWebRTC}}, []uint32{VMKioskMediaPort, VMKioskStatusPort, VMKioskMCPPort}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			require.Equal(t, test.ports, test.kiosk.PrivatePorts())
+			require.Equal(t, test.ports, test.spec.DesktopPrivatePorts())
+			if test.spec.Kiosk != nil {
+				require.Equal(t, test.ports, test.spec.Kiosk.PrivatePorts())
+			}
 		})
 	}
+	require.Nil(t, (*VMKioskSpec)(nil).PrivatePorts())
 }

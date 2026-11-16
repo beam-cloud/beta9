@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -86,6 +87,7 @@ func normalizeManagedPoolConfig(config types.WorkerPoolConfig) (types.WorkerPool
 	if config.Mode != types.PoolModeExternal {
 		return types.WorkerPoolConfig{}, fmt.Errorf("managed pools must use mode %q", types.PoolModeExternal)
 	}
+	config.ApplyProvisioning()
 	// Selector-bound agent capacity uses private pool state, not managed pools.
 	config.RequiresPoolSelector = false
 	// Runtime is the Kubernetes RuntimeClass used by local workers.
@@ -103,7 +105,7 @@ func normalizeManagedPoolConfig(config types.WorkerPoolConfig) (types.WorkerPool
 	default:
 		return types.WorkerPoolConfig{}, fmt.Errorf("unsupported container runtime %q", config.ContainerRuntime)
 	}
-	if err := config.CPUShareMultiplier.Validate(); err != nil {
+	if err := config.Validate(); err != nil {
 		return types.WorkerPoolConfig{}, err
 	}
 	for field, path := range map[string]string{
@@ -203,9 +205,6 @@ func (s *Service) activeManagedPoolState(state *model.PoolState) (*model.PoolSta
 	normalized, err := normalizeManagedPoolConfig(config)
 	if err != nil {
 		return nil, err
-	}
-	if state.CreatedByTokenID == types.FailoverOnDemandPoolCreator {
-		normalized.RequiresPoolSelector = true
 	}
 	return managedPoolStateWithConfig(state, normalized), nil
 }
@@ -560,6 +559,9 @@ func (s *Service) CreateManagedPool(ctx context.Context, authInfo *auth.AuthInfo
 		return nil, model.ErrManagedPoolConflict
 	}
 	config, err = normalizeManagedPoolConfig(config)
+	if err == nil {
+		err = s.validateProvider(config)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", model.ErrInvalidManagedPoolConfig, err)
 	}
@@ -585,9 +587,8 @@ func (s *Service) CreateManagedPool(ctx context.Context, authInfo *auth.AuthInfo
 }
 
 func (s *Service) managedPoolHasInventory(ctx context.Context, state *model.PoolState) (bool, error) {
-	for i := range state.Reservations {
-		reservation := &state.Reservations[i]
-		if reservation.Managed() && !reservationClosed(reservation.Status) {
+	for _, reservation := range state.Reservations {
+		if reservation.Managed() && !reservation.Closed() {
 			return true, nil
 		}
 	}
@@ -608,7 +609,9 @@ func (s *Service) managedPoolHasInventory(ctx context.Context, state *model.Pool
 	if err != nil {
 		return false, err
 	}
-	return len(workers) > 0, nil
+	// A workspace can give a pool of its own this pool's name. The workers of
+	// that pool are not this one's.
+	return slices.ContainsFunc(workers, func(worker *types.Worker) bool { return worker.ControlPlaneManaged }), nil
 }
 
 func (s *Service) UpdateManagedPool(ctx context.Context, authInfo *auth.AuthInfo, name string, config types.WorkerPoolConfig) (*model.ManagedPool, error) {
@@ -620,6 +623,9 @@ func (s *Service) UpdateManagedPool(ctx context.Context, authInfo *auth.AuthInfo
 		return nil, err
 	}
 	config, err = normalizeManagedPoolConfig(config)
+	if err == nil {
+		err = s.validateProvider(config)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", model.ErrInvalidManagedPoolConfig, err)
 	}
@@ -641,6 +647,16 @@ func (s *Service) UpdateManagedPool(ctx context.Context, authInfo *auth.AuthInfo
 		if reflect.DeepEqual(*existing.WorkerConfig, config) {
 			updated = existing
 			return nil
+		}
+		if config.Buys() && !existing.WorkerConfig.Buys() {
+			inUse, err := s.managedPoolHasInventory(lockCtx, existing)
+			if err != nil {
+				return err
+			}
+			if inUse {
+				return fmt.Errorf("%w: %q has machines that were joined by hand; remove them first, or create a new pool",
+					model.ErrManagedPoolBuysMachines, name)
+			}
 		}
 		updated = managedPoolStateWithConfig(existing, config)
 		updated.UpdatedAt = time.Now().UTC()
@@ -677,12 +693,18 @@ func (s *Service) DeleteManagedPool(ctx context.Context, authInfo *auth.AuthInfo
 		if state.ManagementSource != types.WorkerPoolManagementSourceAPI {
 			return model.ErrManagedPoolImmutable
 		}
-		inUse, err := s.managedPoolHasInventory(lockCtx, state)
-		if err != nil {
-			return err
-		}
-		if inUse {
-			return model.ErrManagedPoolInUse
+		// A pool that buys its machines can be deleted while it has some:
+		// the provisioner drains them and gives them back. Machines that
+		// were joined by hand have nobody to take them away, and such a pool
+		// has none.
+		if state.WorkerConfig == nil || !state.WorkerConfig.Buys() {
+			inUse, err := s.managedPoolHasInventory(lockCtx, state)
+			if err != nil {
+				return err
+			}
+			if inUse {
+				return model.ErrManagedPoolInUse
+			}
 		}
 		if s.workerPoolRepo != nil {
 			if err := s.workerPoolRepo.DeleteWorkerPoolState(lockCtx, name); err != nil {
@@ -714,23 +736,20 @@ func (s *Service) CreateManagedMachine(ctx context.Context, authInfo *auth.AuthI
 			return nil, model.ErrManagedPoolNotFound
 		}
 	}
+	if state.WorkerConfig.Buys() {
+		return nil, fmt.Errorf("%w: %q gets its machines from %s; raise provisioning.maxNodes for more",
+			model.ErrManagedPoolBuysMachines, state.Name, state.WorkerConfig.Provisioning.Provider)
+	}
 	machineID := "machine-" + uuid.NewString()
-	token, tokenState, err := newPoolJoinToken(state.WorkspaceID, state.Name, time.Time{}, defaultPrivateJoinTTL, machineID)
+	token, _, err := s.createManagedMachineJoinToken(ctx, state, machineID, defaultPrivateJoinTTL)
 	if err != nil {
 		return nil, err
 	}
-	tokenState.Mode = string(types.PoolModeExternal)
-	tokenState.ManagedPoolInstanceID = state.ManagedInstanceID
-	if err := s.savePoolJoinToken(ctx, tokenState, defaultPrivateJoinTTL); err != nil {
-		return nil, err
-	}
-	gatewayURL := strings.TrimRight(s.appConfig.GatewayService.HTTP.GetExternalURL(), "/")
-	command := agentInstallCommand(gatewayURL, token, isLocalGatewayURL(gatewayURL), agentWorkerImage(s.appConfig))
 	return &ManagedMachineBootstrap{
 		MachineID:      machineID,
 		PoolName:       state.Name,
 		Token:          token,
-		InstallCommand: command,
+		InstallCommand: s.joinCommandForToken(token),
 	}, nil
 }
 
@@ -767,6 +786,7 @@ func (s *Service) ListManagedMachines(ctx context.Context, authInfo *auth.AuthIn
 	if !found {
 		return nil, model.ErrManagedPoolNotFound
 	}
+	s.fillMissingMachineNetwork(ctx, out)
 	sort.Slice(out, func(i, j int) bool { return out[i].Id < out[j].Id })
 	return out, nil
 }
@@ -786,6 +806,12 @@ func (s *Service) DeleteManagedMachine(ctx context.Context, authInfo *auth.AuthI
 	if machine == nil {
 		return model.ErrManagedPoolNotFound
 	}
+	// A machine the pool bought is the provisioner's to give back. Removed
+	// here it would be paid for until the provisioner missed its worker, and
+	// could join again in the meantime.
+	if s.buysMachines(state) {
+		return fmt.Errorf("%w: %q gives its machines back itself, once they are idle", model.ErrManagedPoolBuysMachines, state.Name)
+	}
 	if s.containerRepo != nil {
 		containers, err := s.containerRepo.GetActiveContainersByWorkerId(model.AgentMachineWorkerID(machine.MachineID))
 		if err != nil {
@@ -796,6 +822,16 @@ func (s *Service) DeleteManagedMachine(ctx context.Context, authInfo *auth.AuthI
 		}
 	}
 	return s.removePrivateMachine(ctx, machine)
+}
+
+// buysMachines reports whether the pool of a stored record buys its machines.
+// A pool of the config file is what this replica's config says it is: its
+// record keeps the config the pool was first stored with.
+func (s *Service) buysMachines(stored *model.PoolState) bool {
+	if stored.ManagementSource == types.WorkerPoolManagementSourceConfig {
+		return s.appConfig.Worker.Pools[stored.Name].Buys()
+	}
+	return stored.WorkerConfig.Buys()
 }
 
 // SetAgentWorkerCordon persists operator intent on every agent-managed machine
@@ -822,4 +858,170 @@ func (s *Service) SetAgentWorkerCordon(ctx context.Context, worker *types.Worker
 		log.Warn().Err(err).Str("worker_id", worker.Id).Msg("failed to notify cordoned agent; periodic refresh remains active")
 	}
 	return true, nil
+}
+
+// The gateway's side of machines that are bought for a pool. The provisioner
+// (pkg/provisioner) decides what to buy and when to give it back; this is
+// how such a machine joins its pool, and what is cleaned up when it leaves.
+
+// BuyingPools returns the config of every pool that buys its machines, by
+// name, and why each pool that could not be loaded could not. Such a pool
+// may buy machines too. It fails when the pools could not be read at all.
+func (s *Service) BuyingPools(ctx context.Context) (map[string]types.WorkerPoolConfig, map[string]error, error) {
+	if err := s.requireManagedPoolRepository(); err != nil {
+		return nil, nil, err
+	}
+	// What the catalog found wrong with single pools is reported by the
+	// reconciler of managed pools. Here it only says which pools are in
+	// doubt.
+	catalog, catalogErr := s.managedPoolCatalog(ctx)
+	if catalog == nil && catalogErr != nil {
+		return nil, nil, catalogErr
+	}
+
+	pools := map[string]types.WorkerPoolConfig{}
+	unloaded := map[string]error{}
+	for name, persisted := range catalog {
+		state, err := s.activeManagedPoolState(persisted)
+		switch {
+		case err != nil:
+			unloaded[name] = err
+		case state != nil && state.WorkerConfig.Buys():
+			// Nil is a pool this replica's config no longer has.
+			pools[name] = *state.WorkerConfig
+		}
+	}
+	// A pool of this replica's config that the catalog left out is one it
+	// found something wrong with.
+	if catalogErr != nil {
+		for name, config := range s.appConfig.Worker.Pools {
+			if _, listed := catalog[name]; !listed && config.Buys() {
+				unloaded[name] = catalogErr
+			}
+		}
+	}
+	return pools, unloaded, nil
+}
+
+// JoinScript returns the shell script that makes a new machine join the pool
+// as machineID, and the hash of the token in it.
+func (s *Service) JoinScript(ctx context.Context, pool, machineID string) (string, string, error) {
+	state, err := s.buyingPoolState(ctx, pool)
+	if err != nil {
+		return "", "", err
+	}
+	// How long a machine takes to boot is the provider's business, so the
+	// token does not expire. It admits one machine ID, and it is revoked
+	// when the machine is given back.
+	token, tokenState, err := s.createManagedMachineJoinToken(ctx, state, machineID, 0)
+	if err != nil {
+		return "", "", err
+	}
+	return s.joinCommandForToken(token), tokenState.TokenHash, nil
+}
+
+// ForgetMachine removes what the gateway holds about a machine that was
+// bought for a pool: the token it joins with, its worker, whose requests go
+// back to the backlog, and its agent. A machine may be forgotten twice, or
+// before it ever joined.
+func (s *Service) ForgetMachine(ctx context.Context, pool, machineID, tokenHash string) error {
+	workspaceID, err := s.adminWorkspaceID(ctx)
+	if err != nil {
+		return err
+	}
+	if err := s.forgetJoinToken(ctx, tokenHash); err != nil {
+		return err
+	}
+	machine, err := s.computeRepo.GetAgentMachineState(ctx, workspaceID, pool, machineID)
+	if err != nil {
+		return err
+	}
+	if machine == nil {
+		// It never joined. All it has is the worker that stood for it while
+		// it booted.
+		return s.removePrivateMachineWorker(&model.AgentTokenState{WorkspaceID: workspaceID, PoolName: pool, MachineID: machineID})
+	}
+	return s.removePrivateMachine(ctx, machine)
+}
+
+// revokedJoinTokenKept is how long the join token of a machine that was
+// bought stays in Redis once it is revoked: the shortest life the repository
+// gives a token.
+const revokedJoinTokenKept = time.Second
+
+// forgetJoinToken ends the join token of a machine that was bought: it
+// admits nothing from now on, and a moment later it is gone from Redis. The
+// token does not expire, so one that was only marked as revoked would stay
+// for good. A token that is gone already is not an error.
+//
+// The repository cannot delete a token, so it is saved once more: marked as
+// revoked, which every release honours, and to lapse at once.
+func (s *Service) forgetJoinToken(ctx context.Context, tokenHash string) error {
+	if tokenHash == "" {
+		return nil
+	}
+	state, err := s.computeRepo.GetJoinTokenState(ctx, tokenHash)
+	if err != nil || state == nil {
+		return err
+	}
+	state.Revoked = true
+	return s.saveComputeJoinTokenState(ctx, state, revokedJoinTokenKept)
+}
+
+// buyingPoolState returns the state of a pool that buys its machines, as
+// this replica runs it.
+func (s *Service) buyingPoolState(ctx context.Context, pool string) (*model.PoolState, error) {
+	if err := s.requireManagedPoolRepository(); err != nil {
+		return nil, err
+	}
+	workspaceID, err := s.adminWorkspaceID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	persisted, err := s.managedPoolRepo.GetManagedPoolState(ctx, workspaceID, pool)
+	if err != nil {
+		return nil, err
+	}
+	state, err := s.activeManagedPoolState(persisted)
+	if err != nil {
+		return nil, err
+	}
+	if state == nil || !state.WorkerConfig.Buys() {
+		return nil, fmt.Errorf("pool %q does not buy machines", pool)
+	}
+	if state.ManagedInstanceID == "" {
+		return nil, fmt.Errorf("pool %q has not completed secure reconciliation", pool)
+	}
+	return state, nil
+}
+
+// createManagedMachineJoinToken stores a token that lets one machine join a
+// managed pool as machineID. A ttl of zero means it does not expire.
+func (s *Service) createManagedMachineJoinToken(ctx context.Context, state *model.PoolState, machineID string, ttl time.Duration) (string, *model.JoinTokenState, error) {
+	token, tokenState, err := newPoolJoinToken(state.WorkspaceID, state.Name, time.Time{}, ttl, machineID)
+	if err != nil {
+		return "", nil, err
+	}
+	tokenState.Mode = string(types.PoolModeExternal)
+	tokenState.ManagedPoolInstanceID = state.ManagedInstanceID
+	if err := s.savePoolJoinToken(ctx, tokenState, ttl); err != nil {
+		return "", nil, err
+	}
+	return token, tokenState, nil
+}
+
+// validateProvider reports a pool that is to buy from a provider this
+// gateway has no credentials for.
+func (s *Service) validateProvider(config types.WorkerPoolConfig) error {
+	if !config.Buys() {
+		return nil
+	}
+	if _, ok := s.providers.Get(config.Provisioning.Provider); ok {
+		return nil
+	}
+	configured := "none are"
+	if names := s.providers.Names(); len(names) > 0 {
+		configured = "configured: " + strings.Join(names, ", ")
+	}
+	return fmt.Errorf("provisioning.provider %q is not configured under providers (%s)", config.Provisioning.Provider, configured)
 }

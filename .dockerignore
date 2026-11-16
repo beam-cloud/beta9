@@ -13,6 +13,7 @@
 !deploy/github-builder/**
 !docker/patches
 !docker/patches/**
+!docker/goproc.sha256
 !docker/microvm
 !docker/microvm/**
 !bin/volume_cache_*

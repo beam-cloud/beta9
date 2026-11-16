@@ -112,6 +112,7 @@ func (s *WorkerRepositoryService) ListRecentCacheStubs(ctx context.Context, req 
 	if err != nil {
 		return &pb.ListRecentCacheStubsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
+	stubs = s.filterRetiredVMCacheStubs(ctx, stubs)
 	resp := &pb.ListRecentCacheStubsResponse{Ok: true, Stubs: make([]*pb.RecentCacheStub, 0, len(stubs))}
 	for _, stub := range stubs {
 		resp.Stubs = append(resp.Stubs, &pb.RecentCacheStub{
@@ -121,6 +122,43 @@ func (s *WorkerRepositoryService) ListRecentCacheStubs(ctx context.Context, req 
 		})
 	}
 	return resp, nil
+}
+
+type retiredVMCacheStubRepository interface {
+	ListRetiredVMCacheStubKeys(context.Context, []string) ([]string, error)
+}
+
+func (s *WorkerRepositoryService) filterRetiredVMCacheStubs(ctx context.Context, stubs []cache.RecentStub) []cache.RecentStub {
+	if !s.appConfig.Cache.Reconciliation.FilterRetiredVMStubs || len(stubs) == 0 {
+		return stubs
+	}
+	backend, ok := s.backendRepo.(retiredVMCacheStubRepository)
+	if !ok {
+		return stubs
+	}
+	keys := make([]string, len(stubs))
+	for i, stub := range stubs {
+		keys[i] = cache.RecentStubKey(stub.WorkspaceID, stub.StubID)
+	}
+	retired, err := backend.ListRetiredVMCacheStubKeys(ctx, keys)
+	if err != nil {
+		log.Warn().Err(err).Msg("could not classify retired VM cache stubs; retaining the current working set")
+		return stubs
+	}
+	if len(retired) == 0 {
+		return stubs
+	}
+	deleted := make(map[string]struct{}, len(retired))
+	for _, key := range retired {
+		deleted[key] = struct{}{}
+	}
+	filtered := make([]cache.RecentStub, 0, len(stubs))
+	for _, stub := range stubs {
+		if _, retired := deleted[cache.RecentStubKey(stub.WorkspaceID, stub.StubID)]; !retired {
+			filtered = append(filtered, stub)
+		}
+	}
+	return filtered
 }
 
 func (s *WorkerRepositoryService) AcquireCacheReconcileLock(ctx context.Context, req *pb.AcquireCacheReconcileLockRequest) (*pb.AcquireCacheReconcileLockResponse, error) {

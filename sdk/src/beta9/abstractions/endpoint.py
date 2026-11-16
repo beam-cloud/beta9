@@ -29,6 +29,7 @@ from ..env import is_local
 from ..schema import Schema
 from ..type import (
     Autoscaler,
+    CpuTier,
     DurableDisk,
     GpuType,
     GpuTypeAlias,
@@ -156,9 +157,11 @@ class Endpoint(RunnerAbstraction):
         inputs: Optional[Schema] = None,
         outputs: Optional[Schema] = None,
         pool: Optional[Union[str, Pool]] = None,
+        cpu_tier: Optional[CpuTier] = None,
     ):
         super().__init__(
             cpu=cpu,
+            cpu_tier=cpu_tier,
             memory=memory,
             gpu=gpu,
             gpu_count=gpu_count,
@@ -322,10 +325,12 @@ class ASGI(Endpoint):
         callback_url: Optional[str] = None,
         checkpoint_enabled: bool = False,
         pool: Optional[Union[str, Pool]] = None,
+        cpu_tier: Optional[CpuTier] = None,
     ):
         self.concurrent_requests = concurrent_requests
         super().__init__(
             cpu=cpu,
+            cpu_tier=cpu_tier,
             memory=memory,
             gpu=gpu,
             gpu_count=gpu_count,
@@ -462,9 +467,11 @@ class RealtimeASGI(ASGI):
         callback_url: Optional[str] = None,
         checkpoint_enabled: bool = False,
         pool: Optional[Union[str, Pool]] = None,
+        cpu_tier: Optional[CpuTier] = None,
     ):
         super().__init__(
             cpu=cpu,
+            cpu_tier=cpu_tier,
             memory=memory,
             gpu=gpu,
             gpu_count=gpu_count,

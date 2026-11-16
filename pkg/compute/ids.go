@@ -18,9 +18,6 @@ func AgentMachineID(workspaceID, poolName, fingerprint string) string {
 }
 
 func ManagedMachineID(workspaceID, poolName, seed string) string {
-	if seed == "" {
-		seed = nowSeed()
-	}
 	return shortComputeID("managed", workspaceID, poolName, seed)
 }
 
@@ -39,6 +36,9 @@ func AgentMachineWorkerID(machineID string) string {
 	return shortComputeID(machineID)
 }
 
+// ManagedNodeName is the name a machine bought for a pool carries at its
+// provider. It ends in the machine's ID, which is one ManagedMachineID made,
+// and what comes before is cut to keep the name within managedNodeNameMaxLen.
 func ManagedNodeName(workspaceID, poolName, machineID string) string {
 	workspace := cleanNodeNamePart(workspaceID)
 	if len(workspace) > 8 {
@@ -46,11 +46,6 @@ func ManagedNodeName(workspaceID, poolName, machineID string) string {
 	}
 	pool := cleanNodeNamePart(poolName)
 	machine := cleanNodeNamePart(machineID)
-	if machine == "" {
-		machine = shortComputeID(workspaceID, poolName)
-	} else if len(machine) >= managedNodeNameMaxLen {
-		machine = shortComputeID(machine)
-	}
 
 	parts := []string{"beam"}
 	if workspace != "" {
@@ -62,23 +57,10 @@ func ManagedNodeName(workspaceID, poolName, machineID string) string {
 
 	prefix := strings.Join(parts, "-")
 	prefixLen := managedNodeNameMaxLen - len(machine) - 1
-	if prefixLen <= 0 {
-		return machine
-	}
 	if len(prefix) > prefixLen {
 		prefix = strings.Trim(prefix[:prefixLen], "-")
 	}
-	if prefix == "" {
-		return machine
-	}
 	return prefix + "-" + machine
-}
-
-func ReservationNodeName(req ReservationRequest) string {
-	if name := trimNodeName(cleanNodeNamePart(req.Name)); name != "" {
-		return name
-	}
-	return ManagedNodeName("", req.PoolName, req.MachineID)
 }
 
 // shortComputeID derives a stable 8-hex-char id from its parts. Parts are
@@ -109,11 +91,4 @@ func cleanNodeNamePart(value string) string {
 		}
 	}
 	return strings.Trim(b.String(), "-")
-}
-
-func trimNodeName(value string) string {
-	if len(value) <= managedNodeNameMaxLen {
-		return value
-	}
-	return strings.Trim(value[:managedNodeNameMaxLen], "-")
 }

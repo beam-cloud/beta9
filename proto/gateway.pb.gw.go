@@ -531,6 +531,27 @@ func local_request_GatewayService_ListTasks_0(ctx context.Context, marshaler run
 	return msg, metadata, err
 }
 
+func request_GatewayService_GetCPUTierCatalog_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq GetCPUTierCatalogRequest
+		metadata runtime.ServerMetadata
+	)
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	msg, err := client.GetCPUTierCatalog(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	return msg, metadata, err
+}
+
+func local_request_GatewayService_GetCPUTierCatalog_0(ctx context.Context, marshaler runtime.Marshaler, server GatewayServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq GetCPUTierCatalogRequest
+		metadata runtime.ServerMetadata
+	)
+	msg, err := server.GetCPUTierCatalog(ctx, &protoReq)
+	return msg, metadata, err
+}
+
 func request_GatewayService_GetOrCreateStub_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq GetOrCreateStubRequest
@@ -2701,6 +2722,26 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_ListTasks_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
+	mux.Handle(http.MethodGet, pattern_GatewayService_GetCPUTierCatalog_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		var stream runtime.ServerTransportStream
+		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/GetCPUTierCatalog", runtime.WithHTTPPathPattern("/cpu-tiers"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := local_request_GatewayService_GetCPUTierCatalog_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_GatewayService_GetCPUTierCatalog_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
 	mux.Handle(http.MethodPost, pattern_GatewayService_GetOrCreateStub_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
@@ -4027,6 +4068,23 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_ListTasks_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
+	mux.Handle(http.MethodGet, pattern_GatewayService_GetCPUTierCatalog_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/GetCPUTierCatalog", runtime.WithHTTPPathPattern("/cpu-tiers"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := request_GatewayService_GetCPUTierCatalog_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_GatewayService_GetCPUTierCatalog_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
 	mux.Handle(http.MethodPost, pattern_GatewayService_GetOrCreateStub_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
@@ -4931,6 +4989,7 @@ var (
 	pattern_GatewayService_EndTask_0                         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"tasks", "end"}, ""))
 	pattern_GatewayService_StopTasks_0                       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"tasks", "stop"}, ""))
 	pattern_GatewayService_ListTasks_0                       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"tasks"}, ""))
+	pattern_GatewayService_GetCPUTierCatalog_0               = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"cpu-tiers"}, ""))
 	pattern_GatewayService_GetOrCreateStub_0                 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"stubs"}, ""))
 	pattern_GatewayService_DeployStub_0                      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"stubs", "deploy"}, ""))
 	pattern_GatewayService_GetURL_0                          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"stubs", "stub_id", "url"}, ""))
@@ -5002,6 +5061,7 @@ var (
 	forward_GatewayService_EndTask_0                         = runtime.ForwardResponseMessage
 	forward_GatewayService_StopTasks_0                       = runtime.ForwardResponseMessage
 	forward_GatewayService_ListTasks_0                       = runtime.ForwardResponseMessage
+	forward_GatewayService_GetCPUTierCatalog_0               = runtime.ForwardResponseMessage
 	forward_GatewayService_GetOrCreateStub_0                 = runtime.ForwardResponseMessage
 	forward_GatewayService_DeployStub_0                      = runtime.ForwardResponseMessage
 	forward_GatewayService_GetURL_0                          = runtime.ForwardResponseMessage

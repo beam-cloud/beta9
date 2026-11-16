@@ -74,7 +74,7 @@ func durableDisksReadOnly(disks []*pb.DurableDisk) bool {
 }
 
 func ConfigureUnavailablePrivatePoolFallback(ctx context.Context, repos DurableDiskPlacementRepos, workspace *types.Workspace, stubConfig *types.StubConfigV1) error {
-	if stubConfig == nil {
+	if stubConfig == nil || stubConfig.CPUTier != "" {
 		return nil
 	}
 	poolName := stubConfig.PoolSelector()
@@ -243,5 +243,5 @@ func durableDiskGatewayDriver(configured string) string {
 	if driver := types.NormalizeDurableDiskDriver(configured); driver != "" {
 		return driver
 	}
-	return types.NormalizeDurableDiskDriver(os.Getenv("BETA9_DURABLE_DISK_DRIVER"))
+	return types.NormalizeDurableDiskDriver(os.Getenv(types.DurableDiskDriverEnv))
 }

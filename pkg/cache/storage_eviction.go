@@ -318,9 +318,14 @@ func (cas *Store) indexCompleteContent(hash string, size, pageCount int64) {
 }
 
 func (cas *Store) evictWatermarkPct() float64 {
-	pct := normalizedPct(cas.serverConfig.DiskCacheEvictWatermarkPct)
+	return NormalizeEvictWatermarkPct(cas.serverConfig.DiskCacheEvictWatermarkPct)
+}
+
+// NormalizeEvictWatermarkPct applies the shared fraction/whole-percent policy.
+func NormalizeEvictWatermarkPct(value float64) float64 {
+	pct := normalizedPct(value)
 	if pct <= 0 || pct > 1 {
-		pct = defaultDiskCacheEvictWatermarkPct
+		return defaultDiskCacheEvictWatermarkPct
 	}
 	return pct
 }

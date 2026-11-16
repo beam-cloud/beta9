@@ -172,9 +172,10 @@ class Channel(InterceptorChannel):
                 ("grpc.max_receive_message_length", GRPC_MAX_MESSAGE_SIZE),
                 ("grpc.max_send_message_length", GRPC_MAX_MESSAGE_SIZE),
             ]
+        # min_reconnect_backoff_ms also sets the connection handshake timeout.
+        # Keep its 20s default so fast retries don't break high-latency connections.
         options = list(options) + [
             ("grpc.initial_reconnect_backoff_ms", int(RECOVERY_INITIAL_DELAY * 1000)),
-            ("grpc.min_reconnect_backoff_ms", int(RECOVERY_INITIAL_DELAY * 1000)),
             ("grpc.max_reconnect_backoff_ms", int(RECOVERY_MAX_DELAY * 1000)),
         ]
 

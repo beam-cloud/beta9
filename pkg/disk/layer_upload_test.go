@@ -41,7 +41,8 @@ func TestUploadLayerSharesCancellableBudgetAcrossVolumes(t *testing.T) {
 	var once sync.Once
 	unblock := func() { once.Do(func() { close(release) }) }
 	t.Cleanup(unblock)
-	sink := &heldChunkSink{entered: make(chan struct{}, 3*chunkUploadConcurrency), release: release}
+	limit := cap(chunkUploads)
+	sink := &heldChunkSink{entered: make(chan struct{}, 3*limit), release: release}
 	path := filepath.Join(t.TempDir(), "layer.qcow2")
 	if err := os.WriteFile(path, make([]byte, uploadConcurrency), 0600); err != nil {
 		t.Fatal(err)
@@ -50,12 +51,12 @@ func TestUploadLayerSharesCancellableBudgetAcrossVolumes(t *testing.T) {
 	for i := range uploadConcurrency {
 		layer.Chunks = append(layer.Chunks, types.DiskSnapshotChunk{OffsetBytes: int64(i), SizeBytes: 1})
 	}
-	volumes := (chunkUploadConcurrency + uploadConcurrency - 1) / uploadConcurrency
+	volumes := (limit + uploadConcurrency - 1) / uploadConcurrency
 	results := make(chan error, volumes)
 	for range volumes {
 		go func() { results <- UploadLayer(ctx, sink, path, layer) }()
 	}
-	for range chunkUploadConcurrency {
+	for range limit {
 		select {
 		case <-sink.entered:
 		case <-ctx.Done():
@@ -72,7 +73,7 @@ func TestUploadLayerSharesCancellableBudgetAcrossVolumes(t *testing.T) {
 	sink.mu.Lock()
 	peak := sink.peak
 	sink.mu.Unlock()
-	if peak > chunkUploadConcurrency {
+	if peak > limit {
 		t.Fatalf("concurrent volumes exceeded the shared budget: %d", peak)
 	}
 	unblock()
@@ -83,5 +84,19 @@ func TestUploadLayerSharesCancellableBudgetAcrossVolumes(t *testing.T) {
 	}
 	if err := UploadLayer(ctx, sink, path, layer); err != nil {
 		t.Fatalf("upload slots were not released: %v", err)
+	}
+}
+
+func TestConfiguredChunkUploadConcurrency(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  int
+	}{{"", 256}, {"0", 256}, {"-1", 256}, {"257", 256}, {"invalid", 256}, {"1", 1}, {"32", 32}, {"256", 256}} {
+		t.Run(tc.value, func(t *testing.T) {
+			got := configuredChunkUploadConcurrency(func(string) string { return tc.value })
+			if got != tc.want {
+				t.Fatalf("limit = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }

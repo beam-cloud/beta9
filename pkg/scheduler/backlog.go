@@ -3,19 +3,29 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
+	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog/log"
 )
 
 type RequestBacklog struct {
 	rdb   *common.RedisClient
 	ready chan struct{}
+	// now is the clock delays are measured on. Nil means the wall clock.
+	now func() time.Time
+}
+
+func (rb *RequestBacklog) clockNow() time.Time {
+	if rb.now == nil {
+		return time.Now()
+	}
+	return rb.now()
 }
 
 // popReadyBacklogScript fills the batch from the foreground lane first, then
@@ -44,37 +54,30 @@ out[#out + 1] = depth
 return out
 `)
 
-// lane is the backlog sorted set a request waits in.
-func lane(request *types.ContainerRequest) string {
-	if request.Evictable || request.OpportunisticOnly {
-		return common.RedisKeys.SchedulerBackgroundRequests()
-	}
-	return common.RedisKeys.SchedulerContainerRequests()
-}
-
 func NewRequestBacklog(rdb *common.RedisClient) *RequestBacklog {
 	return &RequestBacklog{rdb: rdb, ready: make(chan struct{}, 1)}
 }
 
-// Pushes a new container request into the sorted set
-func (rb *RequestBacklog) Push(request *types.ContainerRequest) error {
-	return rb.PushAfter(request, 0)
-}
-
+// PushAfter puts a request in its lane, to be taken up once delay has
+// passed. With no delay it takes the place its timestamp gives it.
 func (rb *RequestBacklog) PushAfter(request *types.ContainerRequest, delay time.Duration) error {
-	jsonData, err := json.Marshal(request)
+	// A request that waits for a worker is not on a machine: only a pin its
+	// caller set limits where it runs next.
+	waiting := *request
+	waiting.ReleaseMachine()
+	jsonData, err := json.Marshal(&waiting)
 	if err != nil {
 		return err
 	}
 
-	readyAt := time.Now().Add(delay)
+	readyAt := rb.clockNow().Add(delay)
 	if delay == 0 && !request.Timestamp.IsZero() {
 		readyAt = request.Timestamp
 	}
 
 	ctx := context.TODO()
 	pipe := rb.rdb.Pipeline()
-	pipe.ZAdd(ctx, lane(request), redis.Z{Score: float64(readyAt.UnixNano()), Member: jsonData})
+	pipe.ZAdd(ctx, repo.BacklogLane(request), redis.Z{Score: float64(readyAt.UnixNano()), Member: jsonData})
 	foreground := pipe.ZCard(ctx, common.RedisKeys.SchedulerContainerRequests())
 	background := pipe.ZCard(ctx, common.RedisKeys.SchedulerBackgroundRequests())
 	if _, err := pipe.Exec(ctx); err != nil {
@@ -91,23 +94,14 @@ func (rb *RequestBacklog) PushAfter(request *types.ContainerRequest, delay time.
 	return nil
 }
 
-// Pops the oldest container request from the sorted set
-func (rb *RequestBacklog) Pop() (*types.ContainerRequest, error) {
-	requests, err := rb.PopN(1)
-	if err != nil {
-		return nil, err
-	}
-
-	return requests[0], nil
-}
-
-// Pops the oldest container requests from the sorted set.
+// PopN takes up to count requests that are ready, the oldest first. It
+// returns none, and no error, when none is ready.
 func (rb *RequestBacklog) PopN(count int64) ([]*types.ContainerRequest, error) {
 	result, err := popReadyBacklogScript.Run(
 		context.TODO(),
 		rb.rdb,
 		[]string{common.RedisKeys.SchedulerContainerRequests(), common.RedisKeys.SchedulerBackgroundRequests()},
-		time.Now().UnixNano(),
+		rb.clockNow().UnixNano(),
 		count,
 	).Result()
 	if err != nil {
@@ -126,36 +120,31 @@ func (rb *RequestBacklog) PopN(count int64) ([]*types.ContainerRequest, error) {
 	items = items[:len(items)-1]
 	metrics.RecordSchedulerBacklogDepth(depth)
 
-	if len(items) == 0 {
-		return nil, errors.New("backlog empty")
-	}
-
-	requests := make([]*types.ContainerRequest, 0, len(items))
+	// The script has taken these out of the backlog, so each is read on its
+	// own: one that cannot be read is lost, and the rest are not lost with
+	// it.
+	var requests []*types.ContainerRequest
 	for _, item := range items {
-		member, ok := item.(string)
-		if !ok {
-			return nil, fmt.Errorf("unexpected backlog request type: %T", item)
-		}
-
-		var poppedItem types.ContainerRequest
-		err = json.Unmarshal([]byte(member), &poppedItem)
+		request, err := decodeBacklogEntry(item)
 		if err != nil {
-			return nil, err
+			// The entry itself stays out of the log: a request can hold its
+			// workspace's secrets.
+			requestLog(log.Error(), request).Err(err).Msg("dropped a backlog entry that could not be read")
+			continue
 		}
-		requests = append(requests, &poppedItem)
+		requests = append(requests, request)
 	}
 
 	return requests, nil
 }
 
-// Len is the number of requests waiting in both lanes.
-func (rb *RequestBacklog) Len() int64 {
-	ctx := context.TODO()
-	pipe := rb.rdb.Pipeline()
-	foreground := pipe.ZCard(ctx, common.RedisKeys.SchedulerContainerRequests())
-	background := pipe.ZCard(ctx, common.RedisKeys.SchedulerBackgroundRequests())
-	if _, err := pipe.Exec(ctx); err != nil {
-		return 0
+// decodeBacklogEntry reads one member of a backlog lane. With an error it
+// still returns the fields it could read, which name the request in the log.
+func decodeBacklogEntry(item interface{}) (*types.ContainerRequest, error) {
+	request := &types.ContainerRequest{}
+	member, ok := item.(string)
+	if !ok {
+		return request, fmt.Errorf("unexpected backlog request type: %T", item)
 	}
-	return foreground.Val() + background.Val()
+	return request, json.Unmarshal([]byte(member), request)
 }

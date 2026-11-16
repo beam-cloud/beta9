@@ -2,8 +2,11 @@ package vm
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/labstack/echo/v4"
 
@@ -86,6 +89,54 @@ func TestPauseReleasesComputeAndRestoresPairedMemory(t *testing.T) {
 	require.Empty(t, v.MemoryCheckpointID, "consume the checkpoint after successful restore")
 }
 
+func (r *vmRuntime) SandboxStatFile(_ context.Context, req *pb.PodSandboxStatFileRequest) (*pb.PodSandboxStatFileResponse, error) {
+	return &pb.PodSandboxStatFileResponse{Ok: r.guestAnswers && r.containers.states[req.ContainerId] != nil}, nil
+}
+
+// A GPU held by a process that is not a CUDA program cannot be taken from
+// the guest. The worker says so and leaves the guest as it was.
+func TestRefusedPauseLeavesVMRunning(t *testing.T) {
+	s, v, info, runtime, gateway := fixture()
+	v.TokenID = info.Token.ExternalId
+	runtime.guestAnswers = true
+	container := v.ContainerID
+	e := managementAPI(s, info)
+	response := vmRequest(e, "POST", "/"+info.Workspace.ExternalId+"/"+v.ID+"/pause", `{}`)
+	require.Equal(t, 409, response.Code, response.Body.String())
+	require.Contains(t, response.Body.String(), "still running: checkpoint unavailable")
+	ctx := auth.ContextWithAuthInfo(context.Background(), info)
+	stored, err := s.repo.GetVM(ctx, v.WorkspaceID, v.ID)
+	require.NoError(t, err)
+	require.Equal(t, "running", stored.DesiredState)
+	require.Equal(t, "running", stored.Status)
+	require.Equal(t, container, stored.ContainerID)
+	require.NoError(t, s.reconcileVM(ctx, stored))
+	require.Zero(t, gateway.stops, "a refused pause does not cost the VM its processes")
+
+	// Once whatever was in the way is gone, the same VM pauses.
+	runtime.memoryResponse = &pb.PodSandboxSnapshotMemoryResponse{Ok: true, Runtime: "microvm", CheckpointId: "memory", DiskSnapshots: []*pb.PodSandboxDiskSnapshot{{DiskName: rootDisk(v), SnapshotId: "root-after-shutdown"}}}
+	require.NoError(t, s.pause(ctx, stored))
+	require.Equal(t, "paused", stored.Status)
+	require.Equal(t, "memory", stored.MemoryCheckpointID)
+}
+
+func TestIdleVMThatCannotPauseStops(t *testing.T) {
+	s, v, info, runtime, gateway := fixture()
+	v.TokenID, v.Spec.IdleTimeout, v.Spec.IdleAction = info.Token.ExternalId, 30, "pause"
+	v.LastActiveAt = time.Now().Add(-time.Minute)
+	runtime.guestAnswers = true
+	ctx := context.Background()
+	loaded := *v // as the reconciler reads it, apart from the stored row
+	v = &loaded
+	require.NoError(t, s.reconcileVM(ctx, v))
+	require.Equal(t, "stopped", v.DesiredState)
+	require.Equal(t, "stopped", v.Status)
+	require.Equal(t, 1, gateway.stops, "idle compute is released even when memory cannot be kept")
+	require.Empty(t, v.MemoryCheckpointID)
+	require.NoError(t, s.activate(auth.ContextWithAuthInfo(ctx, info), info, v), "the next start needs no cold=true")
+	require.Empty(t, runtime.checkpoint)
+}
+
 func TestPauseFailureRequiresExplicitColdRecovery(t *testing.T) {
 	s, v, info, runtime, _ := fixture()
 	ctx := auth.ContextWithAuthInfo(context.Background(), info)
@@ -100,6 +151,74 @@ func TestPauseFailureRequiresExplicitColdRecovery(t *testing.T) {
 	response := vmRequest(e, "POST", "/"+info.Workspace.ExternalId+"/"+v.ID+"/start", `{"cold":true}`)
 	require.Equal(t, 200, response.Code, response.Body.String())
 	require.Len(t, runtime.requests, 1)
+}
+
+// endedContainers has no state for any container once one has ended.
+type endedContainers struct {
+	*vmContainers
+	ended atomic.Bool
+}
+
+func (r *endedContainers) GetContainerState(id string) (*types.ContainerState, error) {
+	if r.ended.Load() {
+		return nil, &types.ErrContainerStateNotFound{ContainerId: id}
+	}
+	return r.vmContainers.GetContainerState(id)
+}
+
+// unansweredPauseRuntime is a worker that went away with the guest it was
+// saving: the container ends, and nothing answers for it.
+type unansweredPauseRuntime struct {
+	*vmRuntime
+	containers *endedContainers
+}
+
+func (r *unansweredPauseRuntime) SandboxSnapshotMemory(ctx context.Context, _ *pb.PodSandboxSnapshotMemoryRequest) (*pb.PodSandboxSnapshotMemoryResponse, error) {
+	r.containers.ended.Store(true)
+	<-ctx.Done()
+	return &pb.PodSandboxSnapshotMemoryResponse{ErrorMsg: ctx.Err().Error()}, nil
+}
+
+func TestPauseDoesNotWaitForAContainerThatEnded(t *testing.T) {
+	s, v, info, runtime, _ := fixture()
+	containers := &endedContainers{vmContainers: s.containers.(*vmContainers)}
+	s.containers = containers
+	s.runtime = &unansweredPauseRuntime{vmRuntime: runtime, containers: containers}
+	poll, grace := pauseContainerPoll, pauseContainerGrace
+	pauseContainerPoll, pauseContainerGrace = time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { pauseContainerPoll, pauseContainerGrace = poll, grace })
+
+	e := managementAPI(s, info)
+	began := time.Now()
+	response := vmRequest(e, "POST", "/"+info.Workspace.ExternalId+"/"+v.ID+"/pause", `{}`)
+	require.Less(t, time.Since(began), 5*time.Second, "the pause has 10 minutes")
+	require.Equal(t, http.StatusBadRequest, response.Code, response.Body.String())
+	require.Contains(t, response.Body.String(), errPauseContainerGone.Error())
+	stored, err := s.repo.GetVM(context.Background(), v.WorkspaceID, v.ID)
+	require.NoError(t, err)
+	require.Equal(t, "paused", stored.DesiredState)
+	require.Equal(t, "error", stored.Status)
+	require.Empty(t, stored.MemoryCheckpointID)
+
+	// What it had in memory went with the worker; its disk starts it.
+	response = vmRequest(e, "POST", "/"+info.Workspace.ExternalId+"/"+v.ID+"/start", `{}`)
+	require.Equal(t, http.StatusConflict, response.Code, response.Body.String())
+	response = vmRequest(e, "POST", "/"+info.Workspace.ExternalId+"/"+v.ID+"/start", `{"cold":true}`)
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	require.Len(t, runtime.requests, 1)
+}
+
+func TestFailureIsRecordedOnceTheOperationHasRunOutOfTime(t *testing.T) {
+	s, v, _, _, _ := fixture()
+	s.repo = &contextAwarePauseStore{vmStore: s.repo.(*vmStore)}
+	loaded, err := s.repo.GetVM(context.Background(), v.WorkspaceID, v.ID)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.failed(ctx, loaded, errors.New("took too long"))
+	stored, err := s.repo.GetVM(context.Background(), v.WorkspaceID, v.ID)
+	require.NoError(t, err)
+	require.Equal(t, "took too long", stored.Error)
 }
 
 func TestWarmResumeRejectsChangedDisk(t *testing.T) {

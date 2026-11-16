@@ -37,10 +37,12 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	var warning string
 	var capacity stubCapacityVerdict
 
-	if err := repository.AuthorizeImage(ctx, gws.backendRepo, authInfo.Workspace.ExternalId, in.ImageId); err != nil {
+	imageErr := repository.AuthorizeImage(ctx, gws.backendRepo, authInfo.Workspace.ExternalId, in.ImageId)
+
+	if imageErr != nil {
 		return &pb.GetOrCreateStubResponse{
 			Ok:     false,
-			ErrMsg: err.Error(),
+			ErrMsg: imageErr.Error(),
 		}, nil
 	}
 
@@ -166,6 +168,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			Memory:   in.Memory,
 			ImageId:  in.ImageId,
 		},
+		CPUTier:            types.CPUTier(in.CpuTier),
 		Handler:            in.Handler,
 		OnStart:            in.OnStart,
 		OnDeploy:           in.OnDeploy,
@@ -200,6 +203,9 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Pool:               resourcePolicy.pool,
 		Disks:              in.Disks,
 		ManagedEndpoint:    managedEndpoint,
+	}
+	if err := gws.resolveStubCPUTier(ctx, authInfo.Workspace, types.StubType(in.StubType), &stubConfig, !resourcePolicy.privatePoolTargeted); err != nil {
+		return &pb.GetOrCreateStubResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	stubConfig.PreparationCacheKey = preparedStubCacheKey(ctx)
 
@@ -326,7 +332,9 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
-	if err := gws.configureDurableDiskPlacement(ctx, authInfo.Workspace, &stubConfig); err != nil {
+	err = gws.configureDurableDiskPlacement(ctx, authInfo.Workspace, &stubConfig)
+
+	if err != nil {
 		return &pb.GetOrCreateStubResponse{
 			Ok:     false,
 			ErrMsg: err.Error(),
@@ -380,11 +388,16 @@ func (gws *GatewayService) prepareStubIdentity(ctx context.Context, workspace *t
 	var app *types.App
 	var object types.Object
 	group.Go(func() error {
+
+		diskCtx := prepareCtx
+		if in.StubType == types.StubTypeVM {
+			diskCtx = repository.ContextWithVMDiskBurst(diskCtx)
+		}
 		for _, disk := range disks {
 			if disk == nil || disk.Name == "" {
 				continue
 			}
-			if _, err := gws.backendRepo.GetOrCreateDisk(prepareCtx, workspace.Id, &types.Disk{
+			if _, err := gws.backendRepo.GetOrCreateDisk(diskCtx, workspace.Id, &types.Disk{
 				Name: types.SafeDurableDiskName(disk.Name), Size: disk.Size,
 				Filesystem: disk.Filesystem, Driver: disk.Driver, MountPath: disk.MountPath,
 			}); err != nil {

@@ -1,16 +1,21 @@
 from datetime import datetime, timedelta, timezone
 from io import StringIO
+from types import SimpleNamespace
 
+import pytest
+from click.testing import CliRunner
 from rich.console import Console
 
+from beta9.cli import extraclick
 from beta9.cli.machine import (
     _cheapest_offers_by_gpu,
     _machine_list_renderables,
     _release_candidates,
     _release_expiry,
     _release_options,
+    management,
 )
-from beta9.cli.machine_format import gpu_inventory_table
+from beta9.cli.machine_format import format_gpu, gpu_inventory_table
 from beta9.clients.gateway import (
     ListMachinesResponse,
     Machine,
@@ -28,6 +33,50 @@ def _render(renderables) -> str:
     for renderable in renderables:
         console.print(renderable)
     return output.getvalue()
+
+
+@pytest.mark.parametrize(
+    "args, expected_limit",
+    [([], 0), (["--limit", "0"], 0), (["--limit", "10"], 10), (["--limit", "150"], 150)],
+)
+def test_machine_list_fetches_all_machines_by_default(monkeypatch, args, expected_limit):
+    import json
+
+    requests = []
+    # The production inventory had 20 CPU machines sorting before six GPU machines.
+    machines = [Machine(id=f"cpu-{i}", pool_name="cpu-pool") for i in range(20)] + [
+        Machine(id=f"gpu-{i}", pool_name="skynet-pool", gpu="RTX4090", gpu_count=8)
+        for i in range(6)
+    ]
+
+    class FakeServiceClient:
+        def __init__(self, _config):
+            self.channel = object()
+            self.gateway = self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def list_machines(self, request):
+            requests.append(request)
+            return ListMachinesResponse(
+                ok=True, machines=machines[: request.limit] if request.limit else machines
+            )
+
+    monkeypatch.setattr(extraclick, "ServiceClient", FakeServiceClient)
+    monkeypatch.setattr(extraclick, "get_config_context", lambda _context: SimpleNamespace())
+
+    result = CliRunner().invoke(management, ["list", "--no-offers", "--format", "json", *args])
+
+    assert result.exit_code == 0, result.output
+    assert requests[0].limit == expected_limit
+    listed = json.loads(result.output)["machines"]
+    assert len(listed) == min(expected_limit or 26, 26)
+    if not expected_limit:
+        assert sum(bool(machine.get("gpu")) for machine in listed) == 6
 
 
 def test_machine_list_shows_inventory_and_machines():
@@ -69,6 +118,11 @@ def test_machine_list_shows_inventory_and_machines():
     assert "machine-one" in text
     assert "gpu-pool" in text
     assert "203.0.113.7" in text
+
+
+def test_machine_gpu_label_collapses_per_device_types():
+    assert format_gpu(",".join(["RTX4090"] * 8), 8) == "RTX4090 x 8"
+    assert format_gpu("RTX4090, RTX5090,RTX4090", 3) == "RTX4090, RTX5090 x 3"
 
 
 def test_gpu_inventory_collapses_empty_gpu_types():

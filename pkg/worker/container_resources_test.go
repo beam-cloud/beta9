@@ -7,6 +7,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCPUWeightFollowsReservedCPU(t *testing.T) {
+	resources := NewStandardResources()
+	cpu := resources.GetCPU(&types.ContainerRequest{Cpu: 2000, ReservedCpu: 5000})
+	require.Equal(t, uint64(5120), *cpu.Shares)
+	require.Equal(t, int64(200_000), *cpu.Quota)
+	require.Equal(t, maxCPUShares, *resources.GetCPU(&types.ContainerRequest{Cpu: 512_000}).Shares)
+}
+
 func TestGvisorMemoryIncludesRuntimeHeadroom(t *testing.T) {
 	request := &types.ContainerRequest{Memory: 1024}
 

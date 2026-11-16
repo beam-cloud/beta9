@@ -6,12 +6,10 @@ package main
 // an ordinary systemd service to retain the worker's vsock and filesystem
 // protocol. Transient boot configuration lives on /run, never on the disk.
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,6 +24,10 @@ import (
 
 const systemdProcessFile = "/run/beam-vm/process.json"
 const systemdAgentPIDFile = "/run/beam-vm/agent.pid"
+
+// lateDevicesFile exists in a systemd guest until the devices the host plugs
+// in after boot have arrived (microvm.Spec.LateDevices). /run is new at boot.
+const lateDevicesFile = "/run/beam-vm/late-devices"
 const sshKeysUnit = `[Unit]
 Description=Beam VM SSH host keys
 Before=ssh.service
@@ -84,7 +86,7 @@ func systemdBinary() (string, error) {
 	return "", fmt.Errorf("persistent VMs require systemd in the image; install systemd and dbus or use the Beam VM image")
 }
 
-func bootSystemd(spec *specs.Spec, workload *workloadMemory) error {
+func bootSystemd(spec *specs.Spec, workload *workloadMemory, lateDevices bool) error {
 	binary, err := systemdBinary()
 	if err != nil {
 		return err
@@ -112,6 +114,12 @@ func bootSystemd(spec *specs.Spec, workload *workloadMemory) error {
 		return err
 	}
 
+	if lateDevices {
+		if err := os.WriteFile(lateDevicesFile, nil, 0600); err != nil {
+			return err
+		}
+	}
+
 	agent := exec.Command("/.beam/init", "--systemd-agent")
 	agent.Stdin, agent.Stdout, agent.Stderr = os.Stdin, os.Stdout, os.Stderr
 	agent.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -125,7 +133,6 @@ func bootSystemd(spec *specs.Spec, workload *workloadMemory) error {
 	}
 
 	env := []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8"}
-	logf("boot phase: executing systemd")
 	return unix.Exec(binary, []string{binary, "--unit=multi-user.target"}, env)
 }
 
@@ -399,15 +406,12 @@ func runSystemdAgent() (int, error) {
 		return 1, err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go logExecReadiness(ctx)
 	workload, err := openWorkloadMemory()
 	if err != nil {
 		return 1, err
 	}
 	defer workload.close()
-	return runAgent(&process, true, workload)
+	return runAgent(&process, true, false, workload)
 }
 
 // The agent starts beside PID 1's exec of systemd. Once its ordinary service
@@ -436,11 +440,29 @@ func adoptSystemdAgent() error {
 
 	for _, line := range strings.Split(string(data), "\n") {
 		if group, ok := strings.CutPrefix(line, "0::"); ok {
-			return moveAgentProcessTree(pid, filepath.Join("/sys/fs/cgroup", group, "cgroup.procs"), map[int]bool{})
+			if err := moveAgentProcessTree(pid, filepath.Join("/sys/fs/cgroup", group, "cgroup.procs"), map[int]bool{}); err != nil {
+				return err
+			}
+			return awaitLateDevices(lateDevicesFile, func() bool { return unix.Kill(pid, 0) == nil })
 		}
 	}
 
 	return fmt.Errorf("guest agent requires a unified service cgroup")
+}
+
+// awaitLateDevices returns once the agent has removed marker. Ordinary units
+// are ordered after the service this holds up, so none starts before the GPU
+// it may look for is there. The agent has answered commands since it started.
+func awaitLateDevices(marker string, agentAlive func() bool) error {
+	for {
+		if _, err := os.Lstat(marker); os.IsNotExist(err) {
+			return nil
+		}
+		if !agentAlive() {
+			return fmt.Errorf("guest agent exited before its devices arrived")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func moveAgentProcessTree(pid int, group string, visited map[int]bool) error {
@@ -490,24 +512,4 @@ func moveAgentProcessTree(pid int, group string, visited map[int]bool) error {
 	}
 
 	return nil
-}
-
-// Record when the workload opens exec without adding a boot dependency.
-func logExecReadiness(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	for {
-		conn, err := (&net.Dialer{Timeout: 20 * time.Millisecond}).DialContext(ctx, "tcp", "127.0.0.1:7111")
-		if err == nil {
-			conn.Close()
-			logf("boot phase: exec TCP listening")
-			return
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(5 * time.Millisecond):
-		}
-	}
 }

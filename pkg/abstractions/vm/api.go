@@ -54,6 +54,11 @@ func apiError(err error) error {
 		return echo.NewHTTPError(http.StatusNotFound, "VM not found")
 	}
 
+	var refused errPauseRefused
+	if errors.As(err, &refused) {
+		return echo.NewHTTPError(http.StatusConflict, refused.Error())
+	}
+
 	var pg *pq.Error
 	if errors.As(err, &pg) && pg.Code == "23505" {
 		return echo.NewHTTPError(http.StatusConflict, "name already exists")
@@ -70,6 +75,8 @@ func apiError(err error) error {
 // values in management responses or template listings.
 func (s *Service) response(v *types.VM) types.VM {
 	copy := *v
+	eligible := s.cpuTierEligible(v.Spec)
+	copy.CPUTierEligible = &eligible
 	copy.Spec = redactedSpec(v.Spec)
 	copy.CreationDigest = ""
 	copy.TrafficAccessToken = ""
@@ -109,6 +116,25 @@ func (s *Service) launchResponse(c echo.Context, status int, v *types.VM) error 
 func artifactResponse(a types.VMArtifact) types.VMArtifact {
 	a.Spec = redactedSpec(a.Spec)
 	return a
+}
+
+func artifactKind(c echo.Context) (string, error) {
+	kind := c.Param("kind")
+	if kind != types.VMArtifactTemplate && kind != types.VMArtifactSnapshot {
+		return "", echo.NewHTTPError(http.StatusBadRequest, "invalid artifact kind")
+	}
+	return kind, nil
+}
+
+func (s *Service) lookupArtifact(ctx context.Context, workspace uint, kind, name string) (*types.VMArtifact, error) {
+	a, err := s.repo.GetVMArtifact(ctx, workspace, kind, name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, echo.NewHTTPError(http.StatusNotFound, kind+" not found")
+	}
+	if err != nil {
+		return nil, apiError(err)
+	}
+	return a, nil
 }
 
 func redactedSpec(spec types.VMSpec) types.VMSpec {
@@ -331,13 +357,11 @@ func (s *Service) create(c echo.Context) error {
 		seed, kind = req.Snapshot, "snapshot"
 	}
 
+	preserveDesktopTransport := false
 	if seed != "" {
-		a, err := s.repo.GetVMArtifact(ctx, info.Workspace.Id, kind, seed)
-		if errors.Is(err, sql.ErrNoRows) {
-			return echo.NewHTTPError(http.StatusNotFound, kind+" not found")
-		}
+		a, err := s.lookupArtifact(ctx, info.Workspace.Id, kind, seed)
 		if err != nil {
-			return apiError(err)
+			return err
 		}
 
 		base, _ := json.Marshal(a.Spec)
@@ -355,6 +379,8 @@ func (s *Service) create(c echo.Context) error {
 		for key, value := range overrides {
 			fields[key] = value
 		}
+		_, transportOverride := overrides["desktop_transport"]
+		preserveDesktopTransport = a.Spec.Desktop && a.Spec.Kiosk == nil && !transportOverride
 
 		fields["source_snapshot_id"], _ = json.Marshal(a.RootSnapshotID)
 		req.Spec, _ = json.Marshal(fields)
@@ -389,11 +415,12 @@ func (s *Service) create(c echo.Context) error {
 	}
 
 	v, err := s.createVM(ctx, info, types.VMCreateOptions{
-		Name:      req.Name,
-		Spec:      spec,
-		Metadata:  req.Metadata,
-		RequestID: req.RequestID,
-		Image:     image,
+		Name:                     req.Name,
+		Spec:                     spec,
+		Metadata:                 req.Metadata,
+		RequestID:                req.RequestID,
+		Image:                    image,
+		PreserveDesktopTransport: preserveDesktopTransport,
 	})
 	if err != nil {
 		return apiError(err)
@@ -404,8 +431,10 @@ func (s *Service) create(c echo.Context) error {
 
 func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.VMCreateOptions) (*types.VM, error) {
 	name, spec := opts.Name, opts.Spec
-	if err := s.configureKioskTransport(&spec); err != nil {
-		return nil, err
+	if !opts.PreserveDesktopTransport || spec.Kiosk != nil || spec.DesktopTransport != "" {
+		if err := s.configureDesktopTransport(&spec); err != nil {
+			return nil, err
+		}
 	}
 	if err := validate(&spec); err != nil {
 		return nil, err
@@ -423,16 +452,19 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 		}
 	}
 
-	if spec.Pool == "" && spec.GPU == "" {
-		spec.Pool = s.config.DefaultPool
-	}
-
 	now := time.Now().UTC()
 	id := vmID(info.Workspace.Id, opts.RequestID)
 	if name == "" {
 		name = defaultVMName(id)
 	}
 
+	// A replay must match the stored digest, which covers the request with the
+	// default pool applied but not the CPU tier, so a new tier default or a
+	// billing outage can't fail it.
+	requested := spec
+	if requested.Pool == "" && requested.GPU == "" {
+		requested.Pool = s.config.DefaultPool
+	}
 	var imageSpec []byte
 	if opts.Image != nil {
 		imageSpec, _ = (proto.MarshalOptions{Deterministic: true}).Marshal(opts.Image)
@@ -442,7 +474,7 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 		Spec     types.VMSpec
 		Metadata map[string]string
 		Image    []byte `json:",omitempty"`
-	}{name, spec, opts.Metadata, imageSpec})
+	}{name, requested, opts.Metadata, imageSpec})
 	digest := fmt.Sprintf("%x", sha256.Sum256(creation))
 	v := &types.VM{
 		ID:                  id,
@@ -489,6 +521,9 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 		}
 	}
 
+	if err := s.resolveCPUTier(ctx, info.Workspace, &v.Spec); err != nil {
+		return nil, err
+	}
 	if opts.Image != nil {
 		if s.images == nil {
 			return nil, echo.NewHTTPError(http.StatusPreconditionRequired, "VM image needs to be built")
@@ -504,7 +539,7 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 	}
 
 	// Hold the lifecycle lock before publishing the row to the reconciler.
-	if err := s.repo.CreateVM(ctx, v); err != nil {
+	if err := s.createVMRecord(ctx, v); err != nil {
 		return nil, err
 	}
 
@@ -517,14 +552,16 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 }
 
 type actionRequest struct {
-	Name         string `json:"name,omitempty"`
-	NoSnapshot   bool   `json:"no_snapshot,omitempty"`
-	Port         uint32 `json:"port,omitempty"`
-	SSHPublicKey string `json:"ssh_public_key,omitempty"`
-	Description  string `json:"description,omitempty"`
-	Protected    *bool  `json:"protected,omitempty"`
-	TTL          int64  `json:"ttl,omitempty"`
-	Cold         bool   `json:"cold,omitempty"`
+	Name         string        `json:"name,omitempty"`
+	NoSnapshot   bool          `json:"no_snapshot,omitempty"`
+	Port         uint32        `json:"port,omitempty"`
+	SSHPublicKey string        `json:"ssh_public_key,omitempty"`
+	CPUTier      types.CPUTier `json:"cpu_tier,omitempty"`
+	Description  string        `json:"description,omitempty"`
+	Protected    *bool         `json:"protected,omitempty"`
+	TTL          int64         `json:"ttl,omitempty"`
+	Cold         bool          `json:"cold,omitempty"`
+	Public       bool          `json:"public,omitempty"`
 }
 
 func (s *Service) action(c echo.Context) error {
@@ -532,6 +569,9 @@ func (s *Service) action(c echo.Context) error {
 	var req actionRequest
 	if err := decode(c, &req); err != nil {
 		return err
+	}
+	if req.Public && c.Param("action") != types.VMArtifactTemplate {
+		return echo.NewHTTPError(http.StatusBadRequest, "only templates can be published")
 	}
 
 	// Browser credentials and activity updates do not change lifecycle state.
@@ -605,6 +645,10 @@ func (s *Service) action(c echo.Context) error {
 
 	switch c.Param("action") {
 	case "start", "resume":
+		if v.StopReason == types.VMStopReasonPreempted && v.Status != types.VMStateStopped {
+			return echo.NewHTTPError(http.StatusConflict, "wait for Spot preemption to finish before restarting")
+		}
+		v.StopReason = ""
 		if req.Cold {
 			// Finish terminal checkpoint finalization before abandoning RAM.
 			if v.DesiredState == types.VMStatePaused && v.MemoryCheckpointID != "" {
@@ -628,6 +672,9 @@ func (s *Service) action(c echo.Context) error {
 		ctx = operationCtx
 		err = s.pause(ctx, v)
 	case "wake":
+		if v.StopReason == types.VMStopReasonPreempted {
+			return errVMPreempted
+		}
 		if !v.Spec.AutoResume && v.DesiredState != types.VMStateRunning {
 			return echo.NewHTTPError(http.StatusConflict, "VM is stopped; call start() or enable auto_resume")
 		}
@@ -647,7 +694,7 @@ func (s *Service) action(c echo.Context) error {
 		err = s.stop(ctx, v, !req.NoSnapshot)
 	case "snapshot", "template":
 		kind := c.Param("action")
-		a, err := s.capture(ctx, v, kind, req.Name, req.Description)
+		a, err := s.capture(ctx, v, kind, req.Name, req.Description, req.Public)
 		if err != nil {
 			return apiError(err)
 		}
@@ -663,9 +710,12 @@ func (s *Service) action(c echo.Context) error {
 		}
 
 		spec := v.Spec
+		if req.CPUTier != "" {
+			spec.CPUTier = req.CPUTier
+		}
 		spec.SourceSnapshotID = v.RootSnapshotID
 		spec.SSHPublicKey = req.SSHPublicKey
-		child, err := s.createVM(ctx, info, types.VMCreateOptions{Name: req.Name, Spec: spec})
+		child, err := s.createVM(ctx, info, types.VMCreateOptions{Name: req.Name, Spec: spec, PreserveDesktopTransport: true})
 		if err != nil {
 			return apiError(err)
 		}
@@ -722,9 +772,9 @@ func (s *Service) remove(c echo.Context) error {
 
 func (s *Service) artifacts(c echo.Context) error {
 	ctx, info := requestContext(c)
-	kind := c.Param("kind")
-	if kind != "snapshot" && kind != "template" {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid artifact kind")
+	kind, err := artifactKind(c)
+	if err != nil {
+		return err
 	}
 
 	var filter types.VMArtifactFilter
@@ -782,13 +832,27 @@ func (s *Service) artifactPage(c echo.Context, kind string, filter types.VMArtif
 
 func (s *Service) removeArtifact(c echo.Context) error {
 	ctx, info := requestContext(c)
-	if c.Param("kind") != "template" && c.Param("kind") != "snapshot" {
-		return echo.NewHTTPError(http.StatusBadRequest, "invalid artifact kind")
+	kind, err := artifactKind(c)
+	if err != nil {
+		return err
 	}
 
-	if err := s.repo.DeleteVMArtifact(ctx, info.Workspace.Id, c.Param("kind"), c.Param("artifact")); err != nil {
+	if err := s.repo.DeleteVMArtifact(ctx, info.Workspace.Id, kind, c.Param("artifact")); err != nil {
 		return apiError(err)
 	}
 
 	return c.NoContent(http.StatusNoContent)
+}
+
+func (s *Service) showArtifact(c echo.Context) error {
+	ctx, info := requestContext(c)
+	kind, err := artifactKind(c)
+	if err != nil {
+		return err
+	}
+	a, err := s.lookupArtifact(ctx, info.Workspace.Id, kind, c.Param("artifact"))
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, artifactResponse(*a))
 }

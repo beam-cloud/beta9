@@ -1,15 +1,15 @@
 package compute
 
 import (
+	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"math"
-	"net/http"
 	"strings"
 	"time"
 
 	model "github.com/beam-cloud/beta9/pkg/compute"
+	"github.com/beam-cloud/beta9/pkg/providers"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 )
@@ -22,9 +22,16 @@ const (
 	reconcileReasonBillingUnreachable   = "billing_unreachable"
 	reconcileReasonCreditExhausted      = "credit_exhausted"
 	reconcileReasonExternalAvailability = "external_availability"
+	reconcileReasonLaunchFailed         = "launch_failed"
 	reconcileReasonMachineDisconnected  = "machine_disconnected"
 	reconcileReasonMachineReleased      = "machine_released"
+	reconcileReasonProviderFailed       = "provider_failed"
 	reconcileReasonReservationExpired   = "expired"
+
+	instanceGoneMessage   = "the provider no longer has this machine"
+	instanceFailedMessage = "the provider failed to start this machine"
+
+	instanceInterruptedMessage = "the provider took this machine back"
 )
 
 func (s *Service) runReconciler(ctx context.Context) {
@@ -51,12 +58,6 @@ func (s *Service) ReconcileManagedCompute(ctx context.Context) error {
 	})
 }
 
-func (s *Service) reconcileManagedComputeAt(ctx context.Context, now time.Time) error {
-	return s.reconcileManagedComputeWithClock(ctx, func() time.Time {
-		return now
-	})
-}
-
 func (s *Service) reconcileManagedComputeWithClock(ctx context.Context, nowFunc func() time.Time) error {
 	if s == nil || s.computeRepo == nil {
 		return nil
@@ -69,11 +70,7 @@ func (s *Service) reconcileManagedComputeWithClock(ctx context.Context, nowFunc 
 		if state == nil || state.WorkspaceID == "" || state.Name == "" {
 			continue
 		}
-		now := time.Now().UTC()
-		if nowFunc != nil {
-			now = nowFunc().UTC()
-		}
-		if err := s.reconcilePoolLocked(ctx, state.WorkspaceID, state.Name, now); err != nil {
+		if err := s.lockAndReconcilePool(ctx, state.WorkspaceID, state.Name, nowFunc().UTC()); err != nil {
 			log.Warn().
 				Err(err).
 				Str("workspace_id", state.WorkspaceID).
@@ -84,11 +81,7 @@ func (s *Service) reconcileManagedComputeWithClock(ctx context.Context, nowFunc 
 	if s.managedPoolRepo == nil {
 		return nil
 	}
-	now := time.Now().UTC()
-	if nowFunc != nil {
-		now = nowFunc().UTC()
-	}
-	return errors.Join(s.reconcileManagedPoolMachines(ctx, now), s.reconcileOnDemandFailover(ctx, now))
+	return s.reconcileManagedPoolMachines(ctx, nowFunc().UTC())
 }
 
 func (s *Service) reconcileManagedPoolMachines(ctx context.Context, now time.Time) error {
@@ -118,9 +111,10 @@ func (s *Service) reconcileManagedPoolMachines(ctx context.Context, now time.Tim
 	return nil
 }
 
-// reconcilePoolLocked re-reads the pool state under the pool lock so a stale
-// snapshot cannot clobber concurrent launch/release updates.
-func (s *Service) reconcilePoolLocked(ctx context.Context, workspaceID, poolName string, now time.Time) error {
+// lockAndReconcilePool takes the pool lock and reads the pool's record again
+// under it, so that a stale snapshot cannot clobber what a launch or a release
+// wrote in the meantime.
+func (s *Service) lockAndReconcilePool(ctx context.Context, workspaceID, poolName string, now time.Time) error {
 	return s.withPoolStateLock(ctx, workspaceID, poolName, func(lockCtx context.Context) error {
 		state, err := s.getPrivatePoolState(lockCtx, workspaceID, poolName)
 		if err != nil || state == nil {
@@ -140,23 +134,22 @@ func (s *Service) reconcilePool(ctx context.Context, workspaceID string, state *
 		changed = s.reconcileBilling(ctx, workspaceID, state, billingNow) || changed
 	}
 
-	vendors := s.computeVendors()
 	for i := range state.Reservations {
 		reservation := &state.Reservations[i]
 		if !reservation.Managed() {
 			continue
 		}
-		if reservationClosed(reservation.Status) {
+		if reservation.Closed() {
 			changed = s.reconcileClosedReservationMachine(ctx, workspaceID, state, reservation) || changed
 			continue
 		}
 		if reservation.Status == model.ReservationTerminating {
-			changed = s.reconcileTerminatingReservation(ctx, workspaceID, state, reservation, vendors, now) || changed
+			changed = s.reconcileTerminatingReservation(ctx, workspaceID, state, reservation, now) || changed
 			continue
 		}
 		changed = advanceBillingRenewal(reservation, now) || changed
-		changed = s.reconcileReservationStatus(ctx, workspaceID, state, reservation, vendors, now) || changed
-		changed = s.reconcileReservationExpiry(ctx, workspaceID, state, reservation, vendors, now) || changed
+		changed = s.reconcileReservationStatus(ctx, workspaceID, state, reservation, now) || changed
+		changed = s.reconcileReservationExpiry(ctx, workspaceID, state, reservation, now) || changed
 	}
 
 	changed = s.reconcileStaleMachines(ctx, workspaceID, state, now) || changed
@@ -167,8 +160,10 @@ func (s *Service) reconcilePool(ctx context.Context, workspaceID string, state *
 	return s.savePrivatePoolState(ctx, workspaceID, state)
 }
 
-// advanceBillingRenewal keeps the solver's hourly renewal boundary in the
-// future; without advancement it goes stale one hour after creation.
+// advanceBillingRenewal keeps BillingRenewalAt, which the API reports, in the
+// future by moving it on an hour at a time. Nothing is paid or renewed at
+// that hour: usage is billed as it accrues, and a reservation is renewed as
+// its term runs out.
 func advanceBillingRenewal(reservation *model.Reservation, now time.Time) bool {
 	if reservation == nil || !reservation.Managed() || reservation.BillingRenewalAt.IsZero() {
 		return false
@@ -182,11 +177,17 @@ func advanceBillingRenewal(reservation *model.Reservation, now time.Time) bool {
 }
 
 func (s *Service) poolNeedsManagedBilling(state *model.PoolState, now time.Time) bool {
-	if state != nil && state.BYOC != nil {
+	if state.BYOC != nil {
 		return true
 	}
+	inGrace := !state.BillingDegradedSince.IsZero() || !state.CreditLowSince.IsZero()
 	for _, reservation := range state.Reservations {
 		if reservation.Managed() && reservation.ActiveAt(now) {
+			return true
+		}
+		// Keep checking a pool whose reservations are held past their TTL by a
+		// grace period, so recovery renews them and expiry releases them.
+		if inGrace && reservation.Managed() && reservation.Open() {
 			return true
 		}
 		if _, _, ok := reservationBillingWindow(&reservation, now); ok {
@@ -209,9 +210,25 @@ func (s *Service) reconcileBilling(ctx context.Context, workspaceID string, stat
 			state.BillingDegradedSince = now
 			changed = true
 		}
-		s.emitComputeEvent(types.EventComputePool, computePoolEvent(workspaceID, state, types.EventComputeActionPoolBillingDegraded, "degraded"))
-
 		grace := s.appConfig.ManagedCompute.Billing.FailureGracePeriodOrDefault()
+		event := computePoolEvent(workspaceID, state, types.EventComputeActionPoolBillingDegraded, "degraded")
+		// Customer-visible: class and status only. The raw error can carry
+		// the internal billing response body, so it goes to private logs.
+		errorClass, httpStatus := classifyBillingError(err)
+		event.Attrs["error_class"] = errorClass
+		if httpStatus > 0 {
+			event.Attrs["http_status"] = fmt.Sprintf("%d", httpStatus)
+		}
+		log.Warn().Err(err).
+			Str("workspace_id", workspaceID).
+			Str("pool_name", state.Name).
+			Str("error_class", errorClass).
+			Int("http_status", httpStatus).
+			Time("billing_degraded_since", state.BillingDegradedSince).
+			Msg("managed compute balance check failed")
+		event.Attrs["release_at"] = state.BillingDegradedSince.Add(grace).UTC().Format(time.RFC3339)
+		s.emitComputeEvent(types.EventComputePool, event)
+
 		if now.Sub(state.BillingDegradedSince) >= grace {
 			reason := fmt.Sprintf("managed compute billing unreachable for %s", grace)
 			return s.exhaustPoolCredit(ctx, workspaceID, state, billingDecision{}, reconcileReasonBillingUnreachable, reason, now) || changed
@@ -223,25 +240,36 @@ func (s *Service) reconcileBilling(ctx context.Context, workspaceID string, stat
 		changed = true
 	}
 
-	for i := range state.Reservations {
-		state.Reservations[i].LastBillingCheckAt = now
-	}
-
-	if !decision.OK {
-		reason := firstNonEmpty(decision.Message, "managed compute credits exhausted")
-		return s.exhaustPoolCredit(ctx, workspaceID, state, decision, reconcileReasonCreditExhausted, reason, now) || changed
-	}
-
 	// Usage is recorded in arrears; project accrued cost plus one interval of
 	// burn so termination happens before the balance hits zero.
 	accrued := s.accruedUnrecordedCents(state, now)
 	buffer := s.exhaustionBufferCents(state, now)
-	if accrued+buffer > 0 && float64(decision.AvailableCents) < accrued+buffer {
-		reason := fmt.Sprintf("managed compute credits nearly exhausted (available %d cents, accrued %.2f cents)", decision.AvailableCents, accrued)
+	reason := ""
+	if !decision.OK {
+		reason = firstNonEmpty(decision.Message, "managed compute credits exhausted")
+	} else if accrued+buffer > 0 && float64(decision.AvailableCents) < accrued+buffer {
+		reason = fmt.Sprintf("managed compute credits nearly exhausted (available %d cents, accrued %.2f cents)", decision.AvailableCents, accrued)
+	}
+	if reason != "" {
+		// Releasing reserved machines is not undoable, so give an auto
+		// top-up or a manual purchase time to land first.
+		grace := s.appConfig.ManagedCompute.Billing.CreditGracePeriodOrDefault()
+		if state.CreditLowSince.IsZero() {
+			state.CreditLowSince = now
+			changed = true
+		}
+		if now.Sub(state.CreditLowSince) < grace {
+			s.emitCreditLowEvent(workspaceID, state, decision, reason, state.CreditLowSince.Add(grace))
+			return changed
+		}
 		return s.exhaustPoolCredit(ctx, workspaceID, state, decision, reconcileReasonCreditExhausted, reason, now) || changed
 	}
+	if !state.CreditLowSince.IsZero() {
+		state.CreditLowSince = time.Time{}
+		changed = true
+	}
 
-	changed = s.renewManagedReservations(ctx, workspaceID, state, decision, accrued+buffer, now, s.computeVendors()) || changed
+	changed = s.renewManagedReservations(ctx, workspaceID, state, decision, accrued+buffer, now) || changed
 
 	return changed
 }
@@ -251,47 +279,73 @@ func (s *Service) reconcileBilling(ctx context.Context, workspaceID string, stat
 // released or credits run out - not until an arbitrary launch TTL. Renewal is
 // skipped (and the reservation expires and terminates normally) when the
 // balance cannot cover the accrued cost plus another hour.
-func (s *Service) renewManagedReservations(ctx context.Context, workspaceID string, state *model.PoolState, decision billingDecision, reservedCents float64, now time.Time, vendors map[string]model.Vendor) bool {
+//
+// A renewal is Beam's to give and stands whatever the machine's provider
+// answers. The provider is told of it afterwards, and a provider that cannot
+// be told is told again on the next pass.
+func (s *Service) renewManagedReservations(ctx context.Context, workspaceID string, state *model.PoolState, decision billingDecision, reservedCents float64, now time.Time) bool {
 	renewLead := 2 * s.appConfig.ManagedCompute.Billing.ReconcileIntervalOrDefault()
 	changed := false
 	for i := range state.Reservations {
 		reservation := &state.Reservations[i]
-		if !reservation.Managed() || !reservation.ActiveAt(now) || reservation.ExpiresAt.IsZero() {
-			continue
-		}
-		if reservation.ExpiresAt.Sub(now) > renewLead {
-			continue
-		}
-
-		hourlyCents := managedCostCents(s.billableMicros(reservation.HourlyCostMicros), time.Hour)
-		if float64(decision.AvailableCents) < reservedCents+hourlyCents {
+		// Not ActiveAt(now): a reservation held past its TTL by a billing
+		// grace period must still be renewable once billing recovers.
+		if !reservation.Managed() || !reservation.Open() || reservation.ExpiresAt.IsZero() {
 			continue
 		}
 
-		vendor := vendors[reservation.Provider]
-		if vendor == nil {
-			reservation.LastError = fmt.Sprintf("vendor %q is not configured", reservation.Provider)
+		// A reservation held past its expiry by a billing grace period renews
+		// from where it lapsed, committing the hours it ran in the meantime.
+		hours := int64(0)
+		newExpiry := reservation.ExpiresAt
+		for newExpiry.Sub(now) <= renewLead {
+			newExpiry = newExpiry.Add(time.Hour)
+			hours++
+		}
+		cents := float64(hours) * managedCostCents(s.billableMicros(reservation.HourlyCostMicros), time.Hour)
+		if hours > 0 && float64(decision.AvailableCents) >= reservedCents+cents {
+			reservation.ExpiresAt = newExpiry
+			reservation.CommittedMicros += reservation.HourlyCostMicros * hours
+			reservation.ExtendPending = true
+			state.CommittedSpendMicros += s.billableMicros(reservation.HourlyCostMicros) * hours
+			if state.ExpiresAt.Before(newExpiry) {
+				state.ExpiresAt = newExpiry
+			}
+			reservedCents += cents
+			s.emitComputeEvent(types.EventComputePool, computeReservationEvent(workspaceID, state, *reservation, types.EventComputeActionReservationRenewed, string(reservation.Status)))
 			changed = true
-			continue
 		}
-		newExpiry := reservation.ExpiresAt.Add(time.Hour)
-		if err := vendor.ExtendReservation(ctx, computeReservationInstanceID(*reservation), newExpiry); err != nil {
-			reservation.LastError = fmt.Sprintf("renewal failed: %v", err)
+		if reservation.ExtendPending {
+			s.extendAtProvider(ctx, workspaceID, state, reservation)
 			changed = true
-			continue
 		}
-		reservation.ExpiresAt = newExpiry
-		reservation.CommittedMicros += reservation.HourlyCostMicros
-		reservation.LastError = ""
-		state.CommittedSpendMicros += s.billableMicros(reservation.HourlyCostMicros)
-		if state.ExpiresAt.Before(newExpiry) {
-			state.ExpiresAt = newExpiry
-		}
-		reservedCents += hourlyCents
-		s.emitComputeEvent(types.EventComputePool, computeReservationEvent(workspaceID, state, *reservation, types.EventComputeActionReservationRenewed, string(reservation.Status)))
-		changed = true
 	}
 	return changed
+}
+
+// extendAtProvider tells a reservation's provider of a renewal. The
+// reservation stays marked until the provider has been told.
+func (s *Service) extendAtProvider(ctx context.Context, workspaceID string, state *model.PoolState, reservation *model.Reservation) {
+	if err := s.extendInstance(ctx, *reservation, reservation.ExpiresAt); err != nil {
+		reservationFailed(workspaceID, state.Name, reservation, "extend at provider", fmt.Errorf("the provider was not told of the renewal: %w", err))
+		return
+	}
+	// LastError is left as it is: usage that could not be recorded a moment
+	// ago is not put right by the provider answering.
+	reservation.ExtendPending = false
+}
+
+// reservationFailed logs that an operation on a reservation failed, and
+// records the error on the reservation for whoever reads the pool's record.
+func reservationFailed(workspaceID, poolName string, reservation *model.Reservation, operation string, err error) {
+	log.Warn().Err(err).
+		Str("workspace_id", workspaceID).
+		Str("pool_name", poolName).
+		Str("reservation_id", reservation.ID).
+		Str("machine_id", reservation.MachineID).
+		Str("operation", operation).
+		Msg("an operation on a reservation failed")
+	reservation.LastError = err.Error()
 }
 
 // exhaustPoolCredit closes billing windows, flushes the final usage records,
@@ -300,8 +354,8 @@ func (s *Service) exhaustPoolCredit(ctx context.Context, workspaceID string, sta
 	s.emitCreditExhaustedEvent(workspaceID, state, decision, message)
 	changed := closeManagedReservationBillingWindows(state, now)
 	changed = s.recordManagedUsage(ctx, workspaceID, state, now, true) || changed
-	s.disablePoolMachines(ctx, workspaceID, state.Name, reconcileReasonCreditExhausted)
-	return s.terminateManagedReservations(ctx, workspaceID, state, terminateReason, message) || changed
+	s.disablePoolMachines(ctx, workspaceID, state.Name, terminateReason)
+	return s.terminateManagedReservations(ctx, workspaceID, state, terminateReason, message, now) || changed
 }
 
 // accruedUnrecordedCents is the cost accrued since each billing cursor that
@@ -373,7 +427,7 @@ func (s *Service) recordManagedUsage(ctx context.Context, workspaceID string, st
 			EndAt:              end,
 		}
 		if err := s.billing.RecordManagedUsage(ctx, usage); err != nil {
-			reservation.LastError = err.Error()
+			reservationFailed(workspaceID, state.Name, reservation, "record usage", err)
 			changed = true
 			continue
 		}
@@ -381,7 +435,7 @@ func (s *Service) recordManagedUsage(ctx context.Context, workspaceID string, st
 		reservation.LastError = ""
 		s.emitComputeEvent(types.EventComputePool, managedUsageRecordedEvent(workspaceID, state, *reservation, usage))
 		if err := s.recordManagedUsageMetrics(usage); err != nil {
-			reservation.LastError = err.Error()
+			reservationFailed(workspaceID, state.Name, reservation, "record usage metrics", err)
 		}
 		changed = true
 	}
@@ -502,36 +556,18 @@ func managedBYOCUsageRecordable(force bool, costCents float64) bool {
 }
 
 func byocMachineHourlyCostMicros(machine *model.AgentTokenState, config types.ManagedComputeConfig) int64 {
-	if machine == nil {
-		return 0
-	}
 	cpuMillicores := firstNonZeroInt64(machine.CPUMillicores, int64(machine.CPUCount)*1000)
 	memoryMB := int64(firstNonZeroUint64(machine.MemoryMB, machine.Metrics.MemoryTotalMB))
 	return managedBYOCNodeHourlyCostMicros(cpuMillicores, memoryMB, config)
 }
 
 func byocManagedUsage(workspaceID string, state *model.PoolState, machine *model.AgentTokenState, hourlyCostMicros int64, duration time.Duration, costCents float64, start, end time.Time) managedUsage {
-	provider := "byoc"
-	cloud := ""
-	poolName := ""
-	if state != nil && state.BYOC != nil {
-		cloud = state.BYOC.Provider
-	}
-	if cloud == "" && state != nil {
-		cloud = string(state.Source.Canonical())
-	}
-	if state != nil {
-		poolName = state.Name
-	}
-	if machine == nil {
-		machine = &model.AgentTokenState{}
-	}
 	return managedUsage{
 		WorkspaceID:        workspaceID,
-		PoolName:           poolName,
+		PoolName:           state.Name,
 		ReservationID:      "byoc:" + machine.MachineID,
-		Provider:           provider,
-		Cloud:              cloud,
+		Provider:           "byoc",
+		Cloud:              firstNonEmpty(state.BYOC.Provider, string(state.Source.Canonical())),
 		ProviderInstanceID: firstNonEmpty(machine.MachineFingerprint, machine.Hostname, machine.MachineID),
 		MachineID:          machine.MachineID,
 		GPU:                strings.Join(machine.GPUs, ","),
@@ -565,9 +601,6 @@ func managedUsageRecordable(reservation *model.Reservation, now, end time.Time, 
 }
 
 func closeManagedReservationBillingWindows(state *model.PoolState, now time.Time) bool {
-	if state == nil {
-		return false
-	}
 	changed := false
 	for i := range state.Reservations {
 		changed = closeReservationBillingWindow(&state.Reservations[i], now) || changed
@@ -587,12 +620,7 @@ func closeReservationBillingWindow(reservation *model.Reservation, now time.Time
 }
 
 func reservationBillingWindow(reservation *model.Reservation, now time.Time) (time.Time, time.Time, bool) {
-	if reservation == nil || !reservation.Managed() {
-		return time.Time{}, time.Time{}, false
-	}
-	if reservation.Status == model.ReservationDeleted ||
-		reservation.Status == model.ReservationFailed ||
-		reservation.Status == model.ReservationTerminating {
+	if reservation == nil || !reservation.Managed() || !reservation.Open() {
 		return time.Time{}, time.Time{}, false
 	}
 
@@ -652,77 +680,89 @@ func (s *Service) recordManagedUsageMetrics(usage managedUsage) error {
 	return nil
 }
 
-func (s *Service) reconcileReservationStatus(ctx context.Context, workspaceID string, state *model.PoolState, reservation *model.Reservation, vendors map[string]model.Vendor, now time.Time) bool {
-	if reservation.Status == model.ReservationDeleted || reservation.Status == model.ReservationFailed || reservation.Provider == "" {
+// reconcileReservationStatus asks the provider how a reservation's machine is
+// doing, at most once a minute. It reports whether the record must be saved,
+// which is after every check: the time of the check is in the record, so the
+// minute holds for every gateway.
+func (s *Service) reconcileReservationStatus(ctx context.Context, workspaceID string, state *model.PoolState, reservation *model.Reservation, now time.Time) bool {
+	if reservation.Provider == "" {
 		return false
 	}
 	if !reservation.LastStatusCheckAt.IsZero() && now.Sub(reservation.LastStatusCheckAt) < reconcileStatusCheckInterval {
 		return false
 	}
-	vendor := vendors[reservation.Provider]
-	if vendor == nil {
-		reservation.LastStatusCheckAt = now
-		reservation.LastError = fmt.Sprintf("vendor %q is not configured", reservation.Provider)
-		return true
-	}
-	current, err := vendor.GetReservation(ctx, computeReservationInstanceID(*reservation))
 	reservation.LastStatusCheckAt = now
+	instance, err := s.instanceOf(ctx, *reservation, now)
 	if err != nil {
-		reservation.LastError = err.Error()
-		return true
-	}
-	if current == nil {
+		reservationFailed(workspaceID, state.Name, reservation, "check status", err)
 		return true
 	}
 
-	changed := reservation.Status != current.Status ||
-		reservation.LastStatusMessage != current.LastStatusMessage ||
-		reservation.MachineID != current.MachineID ||
-		(current.PublicIP != "" && reservation.PublicIP != current.PublicIP) ||
-		(current.SSHHost != "" && reservation.SSHHost != current.SSHHost) ||
-		(current.SSHPort != 0 && reservation.SSHPort != current.SSHPort) ||
-		(current.Cloud != "" && reservation.Cloud != current.Cloud) ||
-		(current.Region != "" && reservation.Region != current.Region) ||
-		reservation.ExpiresAt != current.ExpiresAt
-	reservation.Status = current.Status
-	if current.Cloud != "" {
-		reservation.Cloud = current.Cloud
-	}
-	if current.Region != "" {
-		reservation.Region = current.Region
-	}
-	reservation.LastStatusMessage = current.LastStatusMessage
-	if current.MachineID != "" {
-		reservation.MachineID = current.MachineID
-	}
-	if current.PublicIP != "" {
-		reservation.PublicIP = current.PublicIP
-	}
-	if current.SSHHost != "" {
-		reservation.SSHHost = current.SSHHost
-	}
-	if current.SSHPort != 0 {
-		reservation.SSHPort = current.SSHPort
-	}
-	if err := s.updateMachineSSHProviderEndpoint(ctx, workspaceID, state.Name, reservation.MachineID, current.PublicIP, current.SSHHost, current.SSHPort); err != nil {
-		reservation.LastError = fmt.Sprintf("update SSH endpoint: %v", err)
+	before := *reservation
+	switch instance.Status {
+	case providers.StatusPending:
+		reservation.Status = model.ReservationPending
+	case providers.StatusActive:
+		reservation.Status = model.ReservationActive
+	case providers.StatusFailed:
+		// The machine will never work, and the provider may go on charging
+		// for it until it is deleted.
+		s.terminateReservation(ctx, workspaceID, state, reservation, reconcileReasonProviderFailed, firstNonEmpty(instance.StatusDetail, instanceFailedMessage), now)
+		return true
+	case providers.StatusInterrupted:
+		// No reservation is bought as spot. Should a provider take a machine
+		// back all the same, what is left of it is deleted.
+		s.terminateReservation(ctx, workspaceID, state, reservation, reconcileReasonProviderFailed, firstNonEmpty(instance.StatusDetail, instanceInterruptedMessage), now)
+		return true
+	case providers.StatusDeleted:
+		// The machine went without Beam deleting it: the provider took it
+		// back, its own deletion timer fired, or someone removed it.
+		s.revokeReservationJoinToken(ctx, reservation)
+		reservation.Status = model.ReservationDeleted
+		reservation.LastStatusMessage = firstNonEmpty(instance.StatusDetail, instanceGoneMessage)
+		reservation.LastError = ""
+		s.emitComputeEvent(types.EventComputePool, computeReservationEvent(workspaceID, state, *reservation, types.EventComputeActionReservationStatusUpdated, string(reservation.Status)))
 		return true
 	}
-	if !current.ExpiresAt.IsZero() {
-		reservation.ExpiresAt = current.ExpiresAt
+	// Any other status is one the provider's client does not know, and says
+	// nothing about the machine: the reservation keeps the status it had.
+
+	// What the provider does not say of where the machine is stays as it
+	// was.
+	reservation.LastStatusMessage = instance.StatusDetail
+	reservation.PublicIP = cmp.Or(instance.PublicIP, reservation.PublicIP)
+	reservation.SSHHost = cmp.Or(instance.SSHHost, reservation.SSHHost)
+	reservation.SSHPort = cmp.Or(instance.SSHPort, reservation.SSHPort)
+	changed := *reservation != before
+	if err := s.updateMachineSSHProviderEndpoint(ctx, workspaceID, state.Name, reservation.MachineID, instance.PublicIP, instance.SSHHost, instance.SSHPort); err != nil {
+		reservationFailed(workspaceID, state.Name, reservation, "check status", fmt.Errorf("update SSH endpoint: %w", err))
+		return true
 	}
-	reservation.LastError = ""
+	// LastError is left as it is. What billing or a renewal recorded earlier
+	// in this pass is not put right by the provider answering.
 	if changed {
 		s.emitComputeEvent(types.EventComputePool, computeReservationEvent(workspaceID, state, *reservation, types.EventComputeActionReservationStatusUpdated, string(reservation.Status)))
 	}
-	return changed
+	return true
 }
 
-func (s *Service) reconcileReservationExpiry(ctx context.Context, workspaceID string, state *model.PoolState, reservation *model.Reservation, vendors map[string]model.Vendor, now time.Time) bool {
-	if !reservation.Managed() || reservation.ExpiresAt.IsZero() || reservation.ExpiresAt.After(now) {
+func (s *Service) reconcileReservationExpiry(ctx context.Context, workspaceID string, state *model.PoolState, reservation *model.Reservation, now time.Time) bool {
+	// The status check that ran just before may have closed the reservation.
+	if !reservation.Managed() || !reservation.Open() {
 		return false
 	}
-	return s.terminateReservation(ctx, workspaceID, state, reservation, vendors, reconcileReasonReservationExpired, "reservation ttl expired")
+	if reservation.ExpiresAt.IsZero() || reservation.ExpiresAt.After(now) {
+		return false
+	}
+	// Renewal cannot run while billing is degraded or credit is low, so a
+	// reservation can reach its TTL mid-grace. Hold it until the grace
+	// resolves: billing recovers (renewal catches up) or the grace runs out
+	// (the pool is released with the billing reason, at the advertised time).
+	if releaseAt, ok := s.billingGraceReleaseAt(state); ok && now.Before(releaseAt) {
+		return false
+	}
+	s.terminateReservation(ctx, workspaceID, state, reservation, reconcileReasonReservationExpired, "reservation ttl expired", now)
+	return true
 }
 
 func (s *Service) reconcileClosedReservationMachine(ctx context.Context, workspaceID string, state *model.PoolState, reservation *model.Reservation) bool {
@@ -731,84 +771,73 @@ func (s *Service) reconcileClosedReservationMachine(ctx context.Context, workspa
 	}
 	machine, err := s.computeRepo.GetAgentMachineState(ctx, workspaceID, state.Name, reservation.MachineID)
 	if err != nil {
-		reservation.LastError = err.Error()
+		reservationFailed(workspaceID, state.Name, reservation, "look up machine", err)
 		return true
 	}
 	if machine == nil {
 		if err := s.computeRepo.DeleteMachineSSHState(ctx, workspaceID, state.Name, reservation.MachineID); err != nil {
-			reservation.LastError = err.Error()
+			reservationFailed(workspaceID, state.Name, reservation, "delete SSH state", err)
 			return true
 		}
 		return false
 	}
 	if err := s.removePrivateMachine(ctx, machine); err != nil {
-		reservation.LastError = err.Error()
+		reservationFailed(workspaceID, state.Name, reservation, "remove machine", err)
 		return true
 	}
 	reservation.LastError = ""
 	return true
 }
 
-func (s *Service) reconcileTerminatingReservation(ctx context.Context, workspaceID string, state *model.PoolState, reservation *model.Reservation, vendors map[string]model.Vendor, now time.Time) bool {
-	if reservation.Status != model.ReservationTerminating {
-		return false
-	}
+func (s *Service) reconcileTerminatingReservation(ctx context.Context, workspaceID string, state *model.PoolState, reservation *model.Reservation, now time.Time) bool {
 	if !reservation.LastReconcileAt.IsZero() && now.Sub(reservation.LastReconcileAt) < reconcileStatusCheckInterval {
 		return false
 	}
 	reservation.LastReconcileAt = now
-	s.terminateReservation(ctx, workspaceID, state, reservation, vendors, firstNonEmpty(reservation.TerminatingReason, "terminating"), firstNonEmpty(reservation.LastStatusMessage, "reservation terminating"))
+	s.terminateReservation(ctx, workspaceID, state, reservation, firstNonEmpty(reservation.TerminatingReason, "terminating"), firstNonEmpty(reservation.LastStatusMessage, "reservation terminating"), now)
 	return true
 }
 
-func (s *Service) terminateManagedReservations(ctx context.Context, workspaceID string, state *model.PoolState, reason, message string) bool {
-	vendors := s.computeVendors()
+func (s *Service) terminateManagedReservations(ctx context.Context, workspaceID string, state *model.PoolState, reason, message string, now time.Time) bool {
 	changed := false
 	for i := range state.Reservations {
 		reservation := &state.Reservations[i]
-		if !reservation.Managed() || reservationClosed(reservation.Status) || reservation.Status == model.ReservationTerminating {
+		if !reservation.Managed() || !reservation.Open() {
 			continue
 		}
-		changed = s.terminateReservation(ctx, workspaceID, state, reservation, vendors, reason, message) || changed
+		s.terminateReservation(ctx, workspaceID, state, reservation, reason, message, now)
+		changed = true
 	}
 	return changed
 }
 
-func (s *Service) terminateReservation(ctx context.Context, workspaceID string, state *model.PoolState, reservation *model.Reservation, vendors map[string]model.Vendor, reason, message string) bool {
-	if reservation.Status == model.ReservationDeleted || reservation.Status == model.ReservationFailed {
-		return false
-	}
+// terminateReservation deletes a reservation's machine at its provider and
+// closes the reservation. While the delete fails the reservation stays
+// terminating, and the reconciler tries again. Callers pass a reservation
+// that is not closed already.
+func (s *Service) terminateReservation(ctx context.Context, workspaceID string, state *model.PoolState, reservation *model.Reservation, reason, message string, now time.Time) {
 	// Registration tokens are persistent; kill them whenever a reservation closes.
 	s.revokeReservationJoinToken(ctx, reservation)
-	vendor := vendors[reservation.Provider]
-	if vendor == nil {
-		reservation.Status = model.ReservationTerminating
-		reservation.TerminatingReason = reason
-		reservation.LastError = fmt.Sprintf("vendor %q is not configured", reservation.Provider)
-		return true
-	}
-	if err := vendor.DeleteReservation(ctx, computeReservationInstanceID(*reservation)); err != nil && !managedReservationDeleteAlreadyGone(err) {
-		reservation.Status = model.ReservationTerminating
-		reservation.TerminatingReason = reason
-		reservation.LastError = err.Error()
-		return true
-	}
-	reservation.Status = model.ReservationDeleted
 	reservation.TerminatingReason = reason
 	reservation.LastStatusMessage = message
+	if err := s.deleteInstance(ctx, reservation, now); err != nil {
+		reservation.Status = model.ReservationTerminating
+		reservationFailed(workspaceID, state.Name, reservation, "delete machine", err)
+		return
+	}
+	reservation.Status = model.ReservationDeleted
+	if reason == reconcileReasonProviderFailed {
+		// A machine that failed at its provider, or that the provider took
+		// back, stays listed as failed until the tenant dismisses it.
+		reservation.Status = model.ReservationFailed
+	}
 	reservation.LastError = ""
 	if reservation.MachineID != "" {
 		if err := s.computeRepo.DeleteMachineSSHState(ctx, workspaceID, state.Name, reservation.MachineID); err != nil {
-			reservation.LastError = fmt.Sprintf("delete SSH state: %v", err)
+			reservationFailed(workspaceID, state.Name, reservation, "delete SSH state", fmt.Errorf("delete SSH state: %w", err))
 		}
 	}
 	s.emitComputeEvent(types.EventComputePool, computeReservationEvent(workspaceID, state, *reservation, types.EventComputeActionReservationTerminating, reason))
-	return true
-}
-
-func managedReservationDeleteAlreadyGone(err error) bool {
-	var statusErr *model.HTTPStatusError
-	return errors.As(err, &statusErr) && statusErr.StatusCode == http.StatusNotFound
 }
 
 func (s *Service) reconcileStaleMachines(ctx context.Context, workspaceID string, state *model.PoolState, now time.Time) bool {
@@ -838,7 +867,7 @@ func (s *Service) reconcileStaleMachines(ctx context.Context, workspaceID string
 const staleMachineRetention = 7 * 24 * time.Hour
 
 // pruneDeadMachine deletes machines disconnected past the retention window
-// that have no open managed reservation.
+// whose managed reservation, if they had one, is closed.
 func (s *Service) pruneDeadMachine(ctx context.Context, state *model.PoolState, machine *model.AgentTokenState, now time.Time) bool {
 	if machine == nil {
 		return false
@@ -868,7 +897,7 @@ func (s *Service) disablePoolMachines(ctx context.Context, workspaceID, poolName
 		return
 	}
 	for _, machine := range machines {
-		if reason == reconcileReasonCreditExhausted && machine != nil && machine.Schedulable {
+		if (reason == reconcileReasonCreditExhausted || reason == reconcileReasonBillingUnreachable) && machine != nil && machine.Schedulable {
 			machine.Schedulable = false
 			_ = s.saveComputeAgentTokenState(ctx, machine)
 		}
@@ -954,19 +983,40 @@ func (s *Service) stopContainerForDisabledWorker(_ context.Context, containerID,
 func (s *Service) emitCreditExhaustedEvent(workspaceID string, state *model.PoolState, decision billingDecision, message string) {
 	event := computePoolEvent(workspaceID, state, types.EventComputeActionPoolCreditExhausted, "terminating")
 	event.Message = message
-	if event.Attrs == nil {
-		event.Attrs = map[string]string{}
-	}
 	event.Attrs["available_cents"] = fmt.Sprintf("%d", decision.AvailableCents)
 	event.Attrs["required_cents"] = fmt.Sprintf("%d", decision.RequiredCents)
 	s.emitComputeEvent(types.EventComputePool, event)
 }
 
+// billingGraceReleaseAt is when a pool in a billing grace period (balance
+// checks failing, or balance low) will be released if nothing changes.
+func (s *Service) billingGraceReleaseAt(state *model.PoolState) (time.Time, bool) {
+	cfg := s.appConfig.ManagedCompute.Billing
+	var releaseAt time.Time
+	if !state.BillingDegradedSince.IsZero() {
+		releaseAt = state.BillingDegradedSince.Add(cfg.FailureGracePeriodOrDefault())
+	}
+	if !state.CreditLowSince.IsZero() {
+		if at := state.CreditLowSince.Add(cfg.CreditGracePeriodOrDefault()); at.After(releaseAt) {
+			releaseAt = at
+		}
+	}
+	return releaseAt, !releaseAt.IsZero()
+}
+
+// emitCreditLowEvent warns that the pool will be released at releaseAt unless
+// credits are added. Emitted every reconcile while the pool is in grace.
+func (s *Service) emitCreditLowEvent(workspaceID string, state *model.PoolState, decision billingDecision, message string, releaseAt time.Time) {
+	event := computePoolEvent(workspaceID, state, types.EventComputeActionPoolCreditLow, "credit_low")
+	event.Message = message
+	event.Attrs["available_cents"] = fmt.Sprintf("%d", decision.AvailableCents)
+	event.Attrs["required_cents"] = fmt.Sprintf("%d", decision.RequiredCents)
+	event.Attrs["release_at"] = releaseAt.UTC().Format(time.RFC3339)
+	s.emitComputeEvent(types.EventComputePool, event)
+}
+
 func computeReservationEvent(workspaceID string, state *model.PoolState, reservation model.Reservation, action, status string) types.EventComputeSchema {
 	event := computePoolEvent(workspaceID, state, action, status)
-	if event.Attrs == nil {
-		event.Attrs = map[string]string{}
-	}
 	event.MachineID = reservation.MachineID
 	event.Source = string(reservation.Source)
 	event.GPUCount = reservation.GPUCount

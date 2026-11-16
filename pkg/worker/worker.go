@@ -172,10 +172,13 @@ type Worker struct {
 	draining         bool
 	drainStartedAt   time.Time
 	nextDrainAttempt time.Time
+	reclaiming       atomic.Bool // set while borrowed CPU tier containers are evicted to free capacity
 	routeTransport   string
 	ctx              context.Context
 	cancel           func()
 	config           types.AppConfig
+	// statusHeartbeats are the containers whose status this worker reports.
+	statusHeartbeats containerStatusHeartbeats
 }
 
 func (w *Worker) gpuVirtualizedForRequest(request *types.ContainerRequest) bool {
@@ -223,6 +226,7 @@ type ContainerInstance struct {
 	Runtime                    runtime.Runtime
 	terminalCheckpointCreated  atomic.Bool
 	StopEscalationStarted      atomic.Bool
+	resourcesReleased          atomic.Bool // exited and handed back its CPU set and GPUs, though still finalizing
 	StuckMountRecoveryStarted  atomic.Bool
 	statusHeartbeatMu          sync.Mutex
 	egressMu                   sync.Mutex
@@ -631,23 +635,14 @@ func NewWorker() (_ *Worker, err error) {
 			log.Info().Msg("enabled shmem transparent huge pages for gVisor")
 		}
 
-		// Get gVisor configuration from pool config
-		gvisorRoot := poolConfig.ContainerRuntimeConfig.GVisorRoot
-		if gvisorRoot == "" {
-			gvisorRoot = "/run/gvisor"
-		}
-
-		gvisorPlatform := poolConfig.ContainerRuntimeConfig.GVisorPlatform
-		if gvisorPlatform == "" {
-			gvisorPlatform = "systrap"
-		}
-
+		// A pool that sets no gVisor options runs with the shared defaults.
+		gvisorConfig := poolConfig.ContainerRuntimeConfig.WithDefaults(types.ContainerRuntimeGvisor.String())
 		gvisorRuntime, err = runtime.New(runtime.Config{
 			Type:           types.ContainerRuntimeGvisor.String(),
 			RunscPath:      "runsc",
-			RunscRoot:      gvisorRoot,
-			RunscPlatform:  gvisorPlatform,
-			RunscExtraArgs: poolConfig.ContainerRuntimeConfig.GVisorExtraArgs,
+			RunscRoot:      gvisorConfig.GVisorRoot,
+			RunscPlatform:  gvisorConfig.GVisorPlatform,
+			RunscExtraArgs: gvisorConfig.GVisorExtraArgs,
 			Debug:          config.DebugMode,
 		})
 		if err != nil {
@@ -656,8 +651,8 @@ func NewWorker() (_ *Worker, err error) {
 		} else {
 			defaultRuntime = gvisorRuntime
 			log.Info().
-				Str("platform", gvisorPlatform).
-				Str("root", gvisorRoot).
+				Str("platform", gvisorConfig.GVisorPlatform).
+				Str("root", gvisorConfig.GVisorRoot).
 				Msg("gVisor runtime initialized successfully")
 		}
 	case types.ContainerRuntimeMicroVM.String():
@@ -879,6 +874,7 @@ func (s *Worker) Run() error {
 	go s.listenForShutdown()
 	go s.manageWorkerCapacity()
 	go s.processStopContainerEvents()
+	go s.pruneIdleImageMounts(s.ctx)
 
 	lastContainerRequest := time.Now()
 	reconnectDelay := containerRequestStreamInterval
@@ -1003,6 +999,7 @@ func (s *Worker) reserveContainerInstance(request *types.ContainerRequest) bool 
 		return false
 	}
 
+	request.ReservedCpu = request.CPUTier().CPUReservation(s.poolConfig, request.Cpu)
 	instance := &ContainerInstance{
 		Id:        request.ContainerId,
 		StubId:    request.StubId,
@@ -1085,18 +1082,11 @@ func (s *Worker) runContainerRequestWithRunner(
 		return
 	}
 
-	heartbeatCtx, cancelHeartbeat := context.WithCancel(s.ctx)
-	heartbeatDone := make(chan struct{})
-	go func() {
-		defer close(heartbeatDone)
-		defer cancelHeartbeat()
-		s.updateContainerStatusLoop(heartbeatCtx, request)
-	}()
+	s.startContainerStatusHeartbeat(request)
 	heartbeatHandedOff := false
 	defer func() {
 		if !heartbeatHandedOff {
-			cancelHeartbeat()
-			<-heartbeatDone
+			s.stopContainerStatusHeartbeat(request)
 		}
 	}()
 
@@ -1284,6 +1274,7 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 	}
 	now := time.Now()
 	s.maybeStartDraining(now)
+	s.reclaimBorrowedCapacity(lastContainerRequest, now)
 	if !s.shouldExit(lastContainerRequest, now) {
 		return false
 	}
@@ -1401,31 +1392,9 @@ func jitteredWorkerAge(base time.Duration, workerId string) time.Duration {
 	return base + jitter
 }
 
-// updateContainerStatusLoop is the container's lifetime status heartbeat. It
-// renews the persisted lease, reconciles pending->running from the runtime
-// start signal, and stops containers whose state disappeared or turned
-// STOPPING. The claim already refreshed the lease, so the first update runs a
-// full interval later. It returns when the instance exits or ctx ends.
-func (s *Worker) updateContainerStatusLoop(ctx context.Context, request *types.ContainerRequest) {
-	ticker := time.NewTicker(containerStatusUpdateInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-		done, err := s.updateContainerStatusOnce(ctx, request)
-		if err != nil {
-			log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to update container state")
-		}
-		if done {
-			return
-		}
-	}
-}
-
+// updateContainerStatusOnce is the status heartbeat of one container, for a
+// container updateContainerStatuses does not renew together with the others.
+// It reports whether the container's heartbeat is over.
 func (s *Worker) updateContainerStatusOnce(ctx context.Context, request *types.ContainerRequest) (bool, error) {
 	instance, exists := s.containerInstances.Get(request.ContainerId)
 	if !exists {
@@ -1516,8 +1485,8 @@ func (s *Worker) updateContainerStatusOnce(ctx context.Context, request *types.C
 			// displacing request normally drives the stop, but if it was
 			// requeued elsewhere this path still reclaims the capacity, on
 			// the container's own drain window.
-			s.evictContainer(request.ContainerId, min(time.Duration(state.DrainSeconds)*time.Second, maxPreemptionDrain), "")
-			return false, nil
+			_, _, err := s.releaseVictim(ctx, request.ContainerId, min(time.Duration(state.DrainSeconds)*time.Second, maxPreemptionDrain), "")
+			return false, err
 		}
 		s.handleObservedStoppingContainer(request.ContainerId, types.EventSourceWorkerStatusHeartbeat)
 		return false, nil
@@ -1724,12 +1693,14 @@ func (s *Worker) setWorkerKeepAlive() error {
 	ctx, cancel := context.WithTimeout(s.ctx, workerShutdownRPCTimeout)
 	defer cancel()
 
-	idle := s.containerInstances == nil || s.containerInstances.Len() == 0
+	// Borrowed CPU tier work does not stop a worker from counting as idle.
+	_, idle := s.borrowedContainers()
 	resp, err := handleGRPCResponse(s.workerRepoClient.SetWorkerKeepAlive(ctx, &pb.SetWorkerKeepAliveRequest{
 		WorkerId:                   s.workerId,
 		MachineId:                  s.machineID,
 		CheckpointCompatibilityKey: s.checkpointCompatibilityKey,
 		Idle:                       idle,
+		CpuTierProtocol:            types.CPUTierProtocolVersion,
 	}))
 	if err != nil {
 		return err

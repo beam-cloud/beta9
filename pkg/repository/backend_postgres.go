@@ -102,6 +102,12 @@ type PostgresBackendRepository struct {
 	taskEvents            *taskEventPublisher
 	vmLocksOnce           sync.Once
 	vmLocks               []vmLockSession
+	vmStubBatchOnce       sync.Once
+	vmStubBatch           *vmStubBatcher
+	vmMutationBatchOnce   sync.Once
+	vmMutationBatch       *vmMutationBatcher
+	vmDiskBatchOnce       sync.Once
+	vmDiskBatch           *vmDiskBatcher
 }
 
 type adminWorkspaceLoad struct {
@@ -121,6 +127,15 @@ func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRe
 		db.SetMaxOpenConns(config.MaxOpenConns)
 		db.SetMaxIdleConns(config.MaxOpenConns)
 	}
+	if config.WarmConnections > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		err := warmPostgresConnections(ctx, db.DB, config.WarmConnections)
+		cancel()
+		if err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("warm postgres pool: %w", err)
+		}
+	}
 
 	repo := &PostgresBackendRepository{
 		client:    db,
@@ -132,6 +147,34 @@ func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRe
 	}
 
 	return repo, nil
+}
+
+func warmPostgresConnections(ctx context.Context, db *sql.DB, requested int) error {
+	target := min(max(requested, 0), 128)
+	if maximum := db.Stats().MaxOpenConnections; maximum > 0 {
+		target = min(target, maximum)
+	}
+	if target == 0 {
+		return nil
+	}
+	// Keep every connection checked out until all have opened. Returning one
+	// immediately would repeatedly warm a single connection. Bound retained
+	// idle connections even when the configured open-connection limit is zero.
+	db.SetMaxIdleConns(max(target, db.Stats().MaxOpenConnections))
+	held := make([]*sql.Conn, 0, target)
+	defer func() {
+		for _, conn := range held {
+			_ = conn.Close()
+		}
+	}()
+	for range target {
+		conn, err := db.Conn(ctx)
+		if err != nil {
+			return err
+		}
+		held = append(held, conn)
+	}
+	return nil
 }
 
 type GooseLogger struct {
@@ -333,8 +376,11 @@ const tokenLength = 64
 
 const tokenColumns = `id, external_id, key, created_at, updated_at, active, disabled_by_cluster_admin, token_type, reusable, workspace_id, worker_id`
 
-// Token types that workspace token management never lists, toggles or deletes.
+// Token types that workspace token management never toggles or deletes.
 const protectedTokenTypes = `('` + types.TokenTypeClusterAdmin + `', '` + types.TokenTypeWorker + `', '` + types.TokenTypeWorkerPrivate + `')`
+
+// Token types that workspace token management lists.
+const workspaceTokenTypes = `('` + types.TokenTypeWorkspacePrimary + `', '` + types.TokenTypeWorkspace + `', '` + types.TokenTypeWorkspaceRestricted + `', '` + types.TokenTypePlatformDeployer + `')`
 
 func (r *PostgresBackendRepository) CreateToken(ctx context.Context, workspaceId uint, tokenType string, reusable bool) (types.Token, error) {
 	return r.createToken(ctx, workspaceId, tokenType, reusable, "")
@@ -458,16 +504,17 @@ func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey
 	return &token, token.Workspace, nil
 }
 
-func (r *PostgresBackendRepository) RetrieveActiveToken(ctx context.Context, workspaceId uint) (*types.Token, error) {
+func (r *PostgresBackendRepository) RetrieveActiveToken(ctx context.Context, workspaceId uint, tokenType string) (*types.Token, error) {
 	query := `
 	SELECT ` + tokenColumns + `
 	FROM token
-	WHERE workspace_id = $1 AND active = TRUE AND token_type = 'workspace_primary' AND disabled_by_cluster_admin = FALSE
+	WHERE workspace_id = $1 AND active = TRUE AND token_type = $2 AND disabled_by_cluster_admin = FALSE
+	ORDER BY created_at DESC, id DESC
 	LIMIT 1;
 	`
 
 	var token types.Token
-	err := r.client.GetContext(ctx, &token, query, workspaceId)
+	err := r.client.GetContext(ctx, &token, query, workspaceId, tokenType)
 	if err != nil {
 		return nil, err
 	}
@@ -483,7 +530,7 @@ func (r *PostgresBackendRepository) ListTokens(ctx context.Context, workspaceId 
     SELECT ` + tokenColumns + `
     FROM token
     WHERE workspace_id = $1
-	AND token_type NOT IN ` + protectedTokenTypes + `
+	AND token_type IN ` + workspaceTokenTypes + `
     ORDER BY created_at DESC;
     `
 
@@ -1182,29 +1229,22 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 		return types.Stub{}, err
 	}
 
-	// Resolve, create/touch, and update app activity in one transaction and
-	// round trip. Concurrent VM starts otherwise queue for a connection three times.
-	const columns = `id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at, app_id`
-	query := `
-	WITH existing AS MATERIALIZED (
-		SELECT id FROM stub
-		WHERE name=$1 AND type=$2 AND object_id=$3 AND config::jsonb=$4::jsonb
-			AND workspace_id=$5 AND app_id=$6 AND NOT $7
-		LIMIT 1
-	), created AS (
-		INSERT INTO stub (name, type, config, object_id, workspace_id, app_id)
-		SELECT $1, $2, $4, $3, $5, $6 WHERE NOT EXISTS (SELECT 1 FROM existing)
-		RETURNING ` + columns + `
-	), touched AS (
-		UPDATE stub SET updated_at=CURRENT_TIMESTAMP WHERE id IN (SELECT id FROM existing)
-		RETURNING ` + columns + `
-	), activity AS (
-		UPDATE app SET updated_at=NOW() WHERE id=$6
-			AND ` + appActivityNeedsRefresh + `
-	)
-	SELECT * FROM created UNION ALL SELECT * FROM touched`
+	if stubType == string(types.StubTypeVM) && !forceCreate && r.config.VMBurstBatchSize > 1 {
+		return r.getOrCreateVMStubBatched(ctx, types.StubUpsertInput{
+			Name: name, Type: stubType, Config: configJSON,
+			ObjectID: objectId, WorkspaceID: workspaceId, AppID: appId,
+		})
+	}
+	return r.getOrCreateStub(ctx, name, stubType, string(configJSON), objectId, workspaceId, forceCreate, appId)
+}
+
+func (r *PostgresBackendRepository) getOrCreateStub(ctx context.Context, name, stubType, configJSON string, objectId, workspaceId uint, forceCreate bool, appId uint) (types.Stub, error) {
+	input, err := json.Marshal(types.StubUpsertInput{Name: name, Type: stubType, Config: json.RawMessage(configJSON), ObjectID: objectId, WorkspaceID: workspaceId, AppID: appId})
+	if err != nil {
+		return types.Stub{}, err
+	}
 	var stub types.Stub
-	err = r.client.GetContext(ctx, &stub, query, name, stubType, objectId, string(configJSON), workspaceId, appId, forceCreate)
+	err = r.client.GetContext(ctx, &stub, singleStubUpsertQuery, string(input), forceCreate)
 	return stub, err
 }
 

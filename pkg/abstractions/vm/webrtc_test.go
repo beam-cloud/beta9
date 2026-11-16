@@ -177,11 +177,51 @@ func TestWebRTCAuthenticatesBeforeDialAndFencesVMChanges(t *testing.T) {
 func TestWebRTCRequiresPrivateMediaAndConfiguredGateway(t *testing.T) {
 	s, _, _, _, _ := fixture()
 	spec := types.VMSpec{ImageID: "image", Kiosk: &types.VMKioskSpec{Command: []string{"app"}, Transport: "webrtc"}}
-	require.Error(t, s.configureKioskTransport(&spec))
+	require.Error(t, s.configureDesktopTransport(&spec))
 	require.NoError(t, validate(&spec))
 	require.Contains(t, spec.PrivatePorts, types.VMKioskMediaPort)
 	spec.Ports = append(spec.Ports, types.VMKioskMediaPort)
 	require.Error(t, validate(&spec))
+}
+
+func TestDesktopUsesSharedWebRTCRegistrationAndIdentityFence(t *testing.T) {
+	s, v, _ := iceTestFixture(t)
+	v.Spec.Kiosk = nil
+	v.Spec.Desktop = true
+	v.Spec.DesktopTransport = types.VMDesktopTransportWebRTC
+	require.Equal(t, http.StatusOK, registerTestICE(t, s, v, testSDP).Code)
+	route, err := s.stateRepo.GetICESession(s.ctx, "fragment")
+	require.NoError(t, err)
+	_, err = s.webrtc.activeVM(s.ctx, route)
+	require.NoError(t, err)
+	v.Spec.Desktop = false
+	_, err = s.webrtc.activeVM(s.ctx, route)
+	require.Error(t, err, "disabling the desktop revokes existing media")
+	require.Equal(t, http.StatusServiceUnavailable, registerTestICE(t, s, v, testSDP).Code)
+}
+
+func TestDesktopTransportDefaultsAndPrivateServices(t *testing.T) {
+	for _, available := range []bool{false, true} {
+		s, _, info, _, gateway := fixture()
+		want := types.VMDesktopTransportWebSockets
+		if available {
+			s.webrtc = &vmWebRTC{}
+			want = types.VMDesktopTransportWebRTC
+		}
+		v, err := s.createVM(context.Background(), info, types.VMCreateOptions{
+			Name: "desktop", Spec: types.VMSpec{ImageID: "image", Desktop: true},
+		})
+		require.NoError(t, err)
+		require.Nil(t, v.Spec.Kiosk, "full desktops keep their own API semantics")
+		require.Equal(t, want, v.Spec.DisplayTransport())
+		require.Contains(t, gateway.stub.Env, types.VMDesktopTransportEnv+"="+string(want))
+		require.Contains(t, v.Spec.PrivatePorts, types.VMKioskStatusPort)
+		for _, port := range v.Spec.DesktopPrivatePorts() {
+			require.NotContains(t, v.Spec.Ports, port)
+			require.Error(t, validateDesktopPort(v.Spec, port, false))
+		}
+		require.Error(t, validateDesktopPort(v.Spec, types.VMDesktopPort, true))
+	}
 }
 
 func TestWebRTCClosesConnectionsWhenGatewayCapacityIsFull(t *testing.T) {

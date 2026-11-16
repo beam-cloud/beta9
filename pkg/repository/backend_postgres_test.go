@@ -3,9 +3,10 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
@@ -21,6 +22,10 @@ import (
 
 const adminWorkspaceQueryPattern = `SELECT w\.id, w\.external_id.*WHERE w\.is_cluster_admin`
 
+type sqlArgumentMatcher func(driver.Value) bool
+
+func (match sqlArgumentMatcher) Match(value driver.Value) bool { return match(value) }
+
 func TestSetWorkspaceTokensDisabledSkipsClusterTokens(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
 	mock.ExpectQuery(`UPDATE token SET disabled_by_cluster_admin = \$2 WHERE workspace_id = \$1 AND token_type NOT IN \(\$3, \$4\)`).
@@ -33,9 +38,9 @@ func TestSetWorkspaceTokensDisabledSkipsClusterTokens(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestListTokensSkipsClusterTokens(t *testing.T) {
+func TestListTokensListsOnlyWorkspaceTokens(t *testing.T) {
 	repo, mock := NewBackendPostgresRepositoryForTest()
-	mock.ExpectQuery(`token_type NOT IN \('admin', 'worker', 'worker_private'\)`).
+	mock.ExpectQuery(`token_type IN \('workspace_primary', 'workspace', 'workspace_restricted', 'platform_deployer'\)`).
 		WithArgs(uint(1)).
 		WillReturnRows(sqlmock.NewRows([]string{"key", "token_type"}).AddRow("key-1", types.TokenTypeWorkspace))
 
@@ -43,6 +48,18 @@ func TestListTokensSkipsClusterTokens(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, tokens, 1)
 	require.Equal(t, "key-1", tokens[0].Key)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestRetrieveActiveTokenReturnsTheNewestTokenOfItsType(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	mock.ExpectQuery(`token_type = \$2 AND disabled_by_cluster_admin = FALSE ORDER BY created_at DESC, id DESC LIMIT 1`).
+		WithArgs(uint(1), types.TokenTypeWorkspaceRestricted).
+		WillReturnRows(sqlmock.NewRows([]string{"key", "token_type"}).AddRow("key-1", types.TokenTypeWorkspaceRestricted))
+
+	token, err := repo.RetrieveActiveToken(context.Background(), 1, types.TokenTypeWorkspaceRestricted)
+	require.NoError(t, err)
+	require.Equal(t, "key-1", token.Key)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -417,8 +434,14 @@ func TestGetOrCreateStubTouchesExistingAppScopedStub(t *testing.T) {
 	postgresRepo := repo.(*PostgresBackendRepository)
 
 	updatedAt := time.Now()
-	mock.ExpectQuery(`WITH existing AS MATERIALIZED`).
-		WithArgs("stub-name", string(types.StubTypeFunction), uint(7), sqlmock.AnyArg(), uint(11), uint(13), false).
+	mock.ExpectQuery(`WITH input AS MATERIALIZED`).
+		WithArgs(sqlArgumentMatcher(func(value driver.Value) bool {
+			encoded, ok := value.(string)
+			var input types.StubUpsertInput
+			return ok && json.Unmarshal([]byte(encoded), &input) == nil &&
+				input.Name == "stub-name" && input.Type == string(types.StubTypeFunction) &&
+				input.ObjectID == 7 && input.WorkspaceID == 11 && input.AppID == 13 && len(input.Config) > 0
+		}), false).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "workspace_id", "updated_at"}).AddRow(5, 11, updatedAt))
 	stub, err := postgresRepo.GetOrCreateStub(context.Background(), "stub-name", string(types.StubTypeFunction), types.StubConfigV1{}, 7, 11, false, 13)
 
@@ -430,13 +453,9 @@ func TestGetOrCreateStubTouchesExistingAppScopedStub(t *testing.T) {
 }
 
 func TestGetOrCreateStubIntegration(t *testing.T) {
-	dsn := os.Getenv("BETA9_VM_TEST_DSN")
-	if dsn == "" {
-		t.Skip("set BETA9_VM_TEST_DSN for a development database")
-	}
-	db, err := sqlx.Connect("postgres", dsn)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	repo := newVMIntegrationRepo(t)
+	db := repo.client
+	var err error
 	// Temporary tables on one session exercise the migrated column types
 	// without reading or modifying existing workspace records.
 	db.SetMaxOpenConns(1)
@@ -450,7 +469,6 @@ func TestGetOrCreateStubIntegration(t *testing.T) {
 		VALUES (1, 'stub-test', 1, '', NOW() - INTERVAL '1 hour'),
 		       (2, 'stub-test-other', 1, '', NOW() - INTERVAL '1 hour');`)
 	require.NoError(t, err)
-	repo := &PostgresBackendRepository{client: db}
 	ctx := context.Background()
 	create := func(app uint, force bool, image string) (types.Stub, error) {
 		config := types.StubConfigV1{Runtime: types.Runtime{ImageId: image}}

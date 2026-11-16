@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -23,6 +25,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
+	redis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
 )
@@ -71,6 +74,52 @@ func TestForwardedWebSocketHeadersKeepsOriginAndDropsHandshake(t *testing.T) {
 			t.Fatalf("%s = %q, want it dropped so the dialer can set it", header, got)
 		}
 	}
+}
+
+func TestForwardedWebSocketHeadersAddsClientAddressLikeHTTP(t *testing.T) {
+	cases := []struct {
+		name  string
+		prior []string
+	}{
+		{name: "no prior header"},
+		{name: "one prior hop", prior: []string{"198.51.100.7"}},
+		{name: "two prior headers", prior: []string{"198.51.100.7", "203.0.113.9"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/socket", nil)
+			request.RemoteAddr = "[2001:db8::1]:51234"
+			request.Header.Set("Upgrade", "websocket")
+			for _, value := range tc.prior {
+				request.Header.Add("X-Forwarded-For", value)
+			}
+
+			var backendSaw http.Header
+			backend := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+				backendSaw = req.Header.Clone()
+			}))
+			defer backend.Close()
+			proxy := httputil.NewSingleHostReverseProxy(mustParseURL(t, backend.URL))
+			proxied := httptest.NewRequest(http.MethodGet, "/socket", nil)
+			proxied.RemoteAddr = request.RemoteAddr
+			proxied.Header = request.Header.Clone()
+			proxied.Header.Del("Upgrade")
+			proxy.ServeHTTP(httptest.NewRecorder(), proxied)
+
+			forwarded := forwardedWebSocketHeaders(request)
+
+			want := backendSaw.Values("X-Forwarded-For")
+			require.Equal(t, want, forwarded.Values("X-Forwarded-For"))
+			require.Contains(t, want[0], "2001:db8::1")
+		})
+	}
+}
+
+func mustParseURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	parsed, err := url.Parse(raw)
+	require.NoError(t, err)
+	return parsed
 }
 
 func TestWaitForConnectionWaitsForActiveWriterAfterCancellation(t *testing.T) {
@@ -2340,5 +2389,132 @@ func TestDatabaseReadinessDoesNotAuthenticateToPooler(t *testing.T) {
 				t.Fatalf("port %d received %d probe bytes", port, n)
 			}
 		})
+	}
+}
+
+// podProxyRoundTrips counts what a client sends: a command on its own is one
+// round trip, and so is a pipeline, however many commands it holds.
+type podProxyRoundTrips struct{ calls atomic.Int64 }
+
+func (r *podProxyRoundTrips) DialHook(next redis.DialHook) redis.DialHook { return next }
+
+func (r *podProxyRoundTrips) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		r.calls.Add(1)
+		return next(ctx, cmd)
+	}
+}
+
+func (r *podProxyRoundTrips) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		r.calls.Add(1)
+		return next(ctx, cmds)
+	}
+}
+
+func TestStoppableContainersReadsAStubOfAnySizeInTheSameRoundTrips(t *testing.T) {
+	rdb := newPodProxyTestRedis(t)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	ctx := context.Background()
+
+	// A sandbox stub: most of its containers are kept warm, one has a request
+	// in flight through this gateway, one through another, a few are neither.
+	buffer := &PodProxyBuffer{}
+	want := []string{}
+	for n := range 200 {
+		containerID := fmt.Sprintf("sandbox-stub-%03d", n)
+		if err := repo.SetContainerState(containerID, &types.ContainerState{
+			ContainerId: containerID,
+			StubId:      "stub",
+			WorkspaceId: "workspace",
+			Status:      types.ContainerStatusRunning,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case n == 10:
+			buffer.incrementContainerConnections(containerID)
+		case n == 20:
+			buffer.pendingKeepWarmLocks.Store(containerID, struct{}{})
+		case n == 30:
+			if err := rdb.Set(ctx, Keys.podProxyConnections("workspace", "stub", "another-gateway", containerID), 2, connectionSnapshotTTL).Err(); err != nil {
+				t.Fatal(err)
+			}
+		case n%50 == 0:
+			want = append(want, containerID)
+		default:
+			if err := repo.SetPodKeepWarmLock(ctx, "workspace", "stub", containerID, 600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := rdb.SAdd(ctx, Keys.podProxyConnectionIndex("workspace", "stub"), "another-gateway", "an-idle-gateway").Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	instance := &podInstance{AutoscaledInstance: &abstractions.AutoscaledInstance{
+		Rdb:           rdb,
+		IsActive:      true,
+		ContainerRepo: repo,
+		Workspace:     &types.Workspace{Name: "workspace"},
+		Stub:          &types.StubWithRelated{Stub: types.Stub{ExternalId: "stub"}},
+		StubConfig:    &types.StubConfigV1{KeepWarmSeconds: 600},
+	}, buffer: buffer}
+
+	trips := &podProxyRoundTrips{}
+	rdb.AddHook(trips)
+	stoppable, err := instance.stoppableContainers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	require.ElementsMatch(t, want, stoppable)
+	// The stub's containers and their states, their keep-warm locks, the
+	// stub's proxies and their connection counts.
+	if got := trips.calls.Load(); got != 5 {
+		t.Fatalf("round trips for a stub of 200 containers = %d, want 5", got)
+	}
+}
+
+func TestDiscoverySlowsForAStubThatRoutesNoRequests(t *testing.T) {
+	signalled := func(pb *PodProxyBuffer) bool {
+		select {
+		case <-pb.discoverReady:
+			return true
+		default:
+			return false
+		}
+	}
+
+	// A new stub, or one whose sandboxes are only reached by container id.
+	pb := &PodProxyBuffer{
+		discoverReady: make(chan struct{}, 1),
+		buffer:        abstractions.NewRingBuffer[*connection](2),
+	}
+	if got := pb.discoveryInterval(); got != idleContainerDiscoveryInterval {
+		t.Fatalf("interval for a stub that has routed nothing = %s, want %s", got, idleContainerDiscoveryInterval)
+	}
+
+	// The first request it routes is choosing from containers found a while
+	// ago, so it starts a pass; the ones after it do not.
+	pb.markRoutedRequest()
+	if !signalled(pb) {
+		t.Fatal("the first routed request of an idle stub did not start a discovery pass")
+	}
+	if got := pb.discoveryInterval(); got != containerDiscoveryInterval {
+		t.Fatalf("interval for a stub routing requests = %s, want %s", got, containerDiscoveryInterval)
+	}
+	pb.markRoutedRequest()
+	if signalled(pb) {
+		t.Fatal("a routed request of a busy stub started a discovery pass")
+	}
+
+	// Without requests it goes idle again, unless one is still waiting for a container.
+	pb.lastRoutedRequest.Store(time.Now().Add(-idleContainerDiscoveryInterval).UnixNano())
+	if got := pb.discoveryInterval(); got != idleContainerDiscoveryInterval {
+		t.Fatalf("interval after the last routed request aged out = %s, want %s", got, idleContainerDiscoveryInterval)
+	}
+	pb.buffer.Push(&connection{}, false)
+	if got := pb.discoveryInterval(); got != queuedContainerDiscoveryInterval {
+		t.Fatalf("interval with a request queued = %s, want %s", got, queuedContainerDiscoveryInterval)
 	}
 }

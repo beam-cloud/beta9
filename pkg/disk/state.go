@@ -143,12 +143,17 @@ func loadVolumeState(dir string) (*volumeState, error) {
 	if err := json.Unmarshal(data, state); err != nil {
 		return nil, fmt.Errorf("parse volume state in %s: %w", dir, err)
 	}
+	applyDetachedVolumeMarker(dir, data, state)
 	return state, nil
 }
 
 func saveVolumeState(dir string, state *volumeState) error {
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
+		return err
+	}
+	// Clear the advisory hint before installing a new live payload manifest.
+	if err := os.Remove(filepath.Join(dir, detachedMarkerName)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return writeFileAtomic(filepath.Join(dir, stateFileName), data)

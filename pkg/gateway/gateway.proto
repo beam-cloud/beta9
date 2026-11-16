@@ -80,6 +80,13 @@ service GatewayService {
     };
   }
 
+  rpc GetCPUTierCatalog(GetCPUTierCatalogRequest)
+      returns (GetCPUTierCatalogResponse) {
+    option (google.api.http) = {
+      get : "/cpu-tiers"
+    };
+  }
+
   // Stubs
   rpc GetOrCreateStub(GetOrCreateStubRequest)
       returns (GetOrCreateStubResponse) {
@@ -768,6 +775,7 @@ message GetOrCreateStubRequest {
   string managed_endpoint = 49;
   // Run the sandbox in its own virtual machine (microvm pools only).
   bool use_vm = 50;
+  string cpu_tier = 51;
 }
 
 message GetOrCreateStubResponse {
@@ -1801,4 +1809,12 @@ message GetAgentPoolVirtualizationResponse {
   bool ok = 1;
   string err_msg = 2;
   bool gpu_virtualized = 3;
+}
+
+message GetCPUTierCatalogRequest {}
+message GetCPUTierCatalogResponse {
+  // JSON object with the workspace's tier policy (enabled, default_cpu_tier),
+  // the hosted CPU pools and the tier each sells (pools: {name: {cpu_class,
+  // ready, ready_runtimes}}) and the gateway's tier features (capabilities).
+  string catalog = 1;
 }

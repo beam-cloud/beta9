@@ -3,6 +3,7 @@ package repository_services
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"testing"
@@ -52,14 +53,32 @@ func (r *workerRuntimeCredentialsBackendRepo) GetSecretsByNameDecrypted(ctx cont
 	return r.secrets, nil
 }
 
-func (r *workerRuntimeCredentialsBackendRepo) ListTokens(ctx context.Context, workspaceID uint) ([]types.Token, error) {
-	return r.tokens, nil
+func (r *workerRuntimeCredentialsBackendRepo) RetrieveActiveToken(ctx context.Context, workspaceID uint, tokenType string) (*types.Token, error) {
+	var newest *types.Token
+	for i := range r.tokens {
+		token := &r.tokens[i]
+		if token.WorkspaceId == nil || *token.WorkspaceId != workspaceID || !token.Active || token.DisabledByClusterAdmin || token.TokenType != tokenType {
+			continue
+		}
+		if newest == nil || token.CreatedAt.After(newest.CreatedAt.Time) || (token.CreatedAt.Equal(newest.CreatedAt.Time) && token.Id > newest.Id) {
+			newest = token
+		}
+	}
+	if newest == nil {
+		return nil, sql.ErrNoRows
+	}
+	token := *newest
+	return &token, nil
 }
 
 func (r *workerRuntimeCredentialsBackendRepo) CreateToken(ctx context.Context, workspaceID uint, tokenType string, reusable bool) (types.Token, error) {
-	token := types.Token{Key: "created-runtime-token", Active: true, TokenType: tokenType, Reusable: reusable}
+	token := types.Token{Id: uint(len(r.tokens) + 1), Key: "created-runtime-token", Active: true, TokenType: tokenType, Reusable: reusable, WorkspaceId: &workspaceID}
 	r.tokens = append(r.tokens, token)
 	return token, nil
+}
+
+func runtimeToken(workspaceID uint, key string) types.Token {
+	return types.Token{Key: key, Active: true, TokenType: types.TokenTypeWorkspaceRestricted, WorkspaceId: &workspaceID}
 }
 
 func (r *workerRuntimeCredentialsBackendRepo) GetStubByExternalId(ctx context.Context, externalID string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error) {
@@ -136,11 +155,7 @@ func TestGetContainerRuntimeCredentialsVendsPrivateRuntimeBundle(t *testing.T) {
 			stub: &types.StubWithRelated{
 				Stub: types.Stub{ExternalId: "stub-id", Config: string(configJSON)},
 			},
-			tokens: []types.Token{{
-				Key:       "restricted-runtime-token",
-				Active:    true,
-				TokenType: types.TokenTypeWorkspaceRestricted,
-			}},
+			tokens:  []types.Token{runtimeToken(7, "restricted-runtime-token")},
 			secrets: []types.Secret{{Name: "SECRET", Value: "secret-value"}},
 		},
 		containerRepo: &workerRuntimeCredentialsContainerRepo{
@@ -331,11 +346,7 @@ func TestGetContainerRuntimeCredentialsRetriesContainerStateLockContention(t *te
 	service := &WorkerRepositoryService{
 		backendRepo: &workerRuntimeCredentialsBackendRepo{
 			workspace: &types.Workspace{Id: workspaceID, ExternalId: "workspace-id"},
-			tokens: []types.Token{{
-				Key:       "restricted-runtime-token",
-				Active:    true,
-				TokenType: types.TokenTypeWorkspaceRestricted,
-			}},
+			tokens:    []types.Token{runtimeToken(workspaceID, "restricted-runtime-token")},
 		},
 		containerRepo: containerRepo,
 	}
@@ -354,6 +365,29 @@ func TestGetContainerRuntimeCredentialsRetriesContainerStateLockContention(t *te
 	require.True(t, resp.Ok)
 	require.Equal(t, []string{"BETA9_TOKEN=restricted-runtime-token"}, resp.Env)
 	require.Equal(t, 3, containerRepo.attempts)
+}
+
+func TestGetContainerRuntimeCredentialsMintsOneRuntimeTokenPerWorkspace(t *testing.T) {
+	backendRepo := &workerRuntimeCredentialsBackendRepo{
+		workspace: &types.Workspace{Id: 7, ExternalId: "workspace-id"},
+		tokens:    []types.Token{runtimeToken(9, "other-workspace-token")},
+	}
+	service := &WorkerRepositoryService{
+		backendRepo: backendRepo,
+		containerRepo: &workerRuntimeCredentialsContainerRepo{
+			state: &types.ContainerState{ContainerId: "container-id", WorkspaceId: "workspace-id", StubId: "stub-id", WorkerId: "worker-1"},
+		},
+	}
+	request := &pb.GetContainerRuntimeCredentialsRequest{WorkspaceId: "workspace-id", StubId: "stub-id", ContainerId: "container-id", RuntimeToken: true}
+
+	for range 2 {
+		resp, err := service.GetContainerRuntimeCredentials(cacheRepositoryAuthContext(types.TokenTypeWorkerPrivate, "workspace-id"), request)
+		require.NoError(t, err)
+		require.True(t, resp.Ok, resp.ErrorMsg)
+		require.Equal(t, []string{"BETA9_TOKEN=created-runtime-token"}, resp.Env)
+	}
+	require.Len(t, backendRepo.tokens, 2)
+	require.Equal(t, uint(7), *backendRepo.tokens[1].WorkspaceId)
 }
 
 func TestGetContainerRuntimeCredentialsDoesNotRequireSigningKeyForStorageAndRuntimeToken(t *testing.T) {
@@ -377,11 +411,7 @@ func TestGetContainerRuntimeCredentialsDoesNotRequireSigningKeyForStorageAndRunt
 				Region:      &storageRegion,
 			},
 		},
-		tokens: []types.Token{{
-			Key:       "restricted-runtime-token",
-			Active:    true,
-			TokenType: types.TokenTypeWorkspaceRestricted,
-		}},
+		tokens: []types.Token{runtimeToken(7, "restricted-runtime-token")},
 	}
 	service := &WorkerRepositoryService{
 		backendRepo: backendRepo,
@@ -531,7 +561,7 @@ func TestVendRuntimeCredentialsLooksUpStateForAnotherContainer(t *testing.T) {
 	service := &WorkerRepositoryService{
 		backendRepo: &workerRuntimeCredentialsBackendRepo{
 			workspace: &types.Workspace{Id: 7, ExternalId: "workspace-id"},
-			tokens:    []types.Token{{Key: "runtime-token", Active: true, TokenType: types.TokenTypeWorkspaceRestricted}},
+			tokens:    []types.Token{runtimeToken(7, "runtime-token")},
 		},
 		containerRepo: containerRepo,
 	}
@@ -599,7 +629,7 @@ func TestGetContainerRuntimeCredentialsBoundsManagedEndpointReplicas(t *testing.
 			backendRepo: &workerRuntimeCredentialsBackendRepo{
 				workspace: workspace,
 				stub:      stub,
-				tokens:    []types.Token{{Key: "admin-runtime-token", Active: true, TokenType: types.TokenTypeWorkspaceRestricted}},
+				tokens:    []types.Token{runtimeToken(workspace.Id, "admin-runtime-token")},
 				secrets:   []types.Secret{{Name: "STRIPE_KEY", Value: "unrelated"}},
 			},
 			containerRepo: &workerRuntimeCredentialsContainerRepo{

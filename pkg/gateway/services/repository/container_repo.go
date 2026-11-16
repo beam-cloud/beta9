@@ -2,6 +2,7 @@ package repository_services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -36,6 +37,10 @@ func (s *ContainerRepositoryService) AuthorizeRequest(ctx context.Context, req i
 	if err != nil {
 		return err
 	}
+	if _, ok := req.(*pb.RenewContainerLeasesRequest); ok {
+		// The repository checks each container's assignment as it renews it.
+		return nil
+	}
 	request, ok := req.(containerRepositoryRequest)
 	if !ok {
 		return status.Error(codes.PermissionDenied, "container is required")
@@ -50,14 +55,44 @@ func (s *ContainerRepositoryService) AuthorizeRequest(ctx context.Context, req i
 	var routes []*pb.BackendRoute
 	switch req := req.(type) {
 	case *pb.SetContainerAddressRequest:
+		if req.Route == nil && req.Address == "" {
+			return nil
+		}
 		routes = []*pb.BackendRoute{req.Route}
 	case *pb.SetContainerAddressMapRequest:
 		routes = req.Routes
+		if !worker.Trusted {
+			covered := make(map[int32]bool, len(routes))
+			for _, route := range routes {
+				if route != nil {
+					covered[route.Port] = true
+				}
+			}
+			for port, address := range req.AddressMap {
+				if address != "" && !covered[port] {
+					id, ok := types.ParseBackendRouteAddress(address)
+					if !ok {
+						return status.Error(codes.PermissionDenied, "private workers require agent routes")
+					}
+					route, err := s.containerRepo.GetBackendRoute(ctx, id)
+					if err != nil || route == nil || route.RouteID != id || route.Port != port ||
+						route.Kind != types.BackendRouteKindContainer || route.Transport != types.BackendRouteTransportTSNet {
+						return status.Error(codes.PermissionDenied, "invalid retained container route")
+					}
+					if err := authorizeBackendRoute(state, *route); err != nil {
+						return err
+					}
+				}
+			}
+		}
 	case *pb.SetWorkerAddressRequest:
+		if req.Route == nil && req.Address == "" {
+			return nil
+		}
 		routes = []*pb.BackendRoute{req.Route}
 	}
 	for _, route := range routes {
-		if err := authorizeBackendRoute(state, route); err != nil {
+		if err := authorizeWorkerBackendRoute(state, route, worker.Trusted); err != nil {
 			return err
 		}
 	}
@@ -124,18 +159,83 @@ func (s *ContainerRepositoryService) UpdateContainerStatus(ctx context.Context, 
 		return &pb.UpdateContainerStatusResponse{Ok: false, ErrorMsg: fmt.Sprintf("expiry_seconds must be positive, got %d", req.ExpirySeconds)}, nil
 	}
 
-	err := s.containerRepo.UpdateContainerStatus(req.ContainerId, types.ContainerStatus(req.Status), req.ExpirySeconds)
-	if err != nil {
-		return &pb.UpdateContainerStatusResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-
-	// A refused transition (STOPPING is terminal) returns nil above; report the
+	// A refused transition (STOPPING is terminal) is not an error; report the
 	// persisted status so the worker can react without a second round trip.
-	state, err := s.containerRepo.GetContainerState(req.ContainerId)
+	state, err := updateContainerStatus(s.containerRepo, req.ContainerId, types.ContainerStatus(req.Status), req.ExpirySeconds)
 	if err != nil {
 		return &pb.UpdateContainerStatusResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 	return &pb.UpdateContainerStatusResponse{Ok: true, Status: string(state.Status)}, nil
+}
+
+// containerStatusStateUpdater is a repository whose status update returns
+// the state it left, which spares reading it.
+type containerStatusStateUpdater interface {
+	UpdateContainerStatusAndGetState(containerId string, status types.ContainerStatus, expirySeconds int64) (*types.ContainerState, error)
+}
+
+// updateContainerStatus updates a container's status and returns its state as
+// the update left it.
+func updateContainerStatus(repo repository.ContainerRepository, containerId string, status types.ContainerStatus, expirySeconds int64) (*types.ContainerState, error) {
+	if updater, ok := repo.(containerStatusStateUpdater); ok {
+		return updater.UpdateContainerStatusAndGetState(containerId, status, expirySeconds)
+	}
+	if err := repo.UpdateContainerStatus(containerId, status, expirySeconds); err != nil {
+		return nil, err
+	}
+	return repo.GetContainerState(containerId)
+}
+
+// maxContainerLeasesPerCall bounds the Redis pipeline one RenewContainerLeases
+// call sends. Workers send fewer containers than this in a call.
+const maxContainerLeasesPerCall = 1000
+
+// RenewContainerLeases is the routine status heartbeat for many of the calling
+// worker's containers. It does for each what GetContainerState followed by
+// UpdateContainerStatus does for one, without a call or a lock per container.
+func (s *ContainerRepositoryService) RenewContainerLeases(ctx context.Context, req *pb.RenewContainerLeasesRequest) (*pb.RenewContainerLeasesResponse, error) {
+	worker, err := auth.WorkerFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(req.Containers) > maxContainerLeasesPerCall {
+		return &pb.RenewContainerLeasesResponse{Ok: false, ErrorMsg: fmt.Sprintf("at most %d containers per call, got %d", maxContainerLeasesPerCall, len(req.Containers))}, nil
+	}
+
+	// A cluster worker serves every workspace. Any other worker renews only
+	// containers of its own workspace, which is never empty.
+	workspaceId := ""
+	if !worker.Trusted {
+		workspaceId = worker.Workspace.ExternalId
+	}
+	renewals := make([]types.ContainerLeaseRenewal, len(req.Containers))
+	for i, container := range req.Containers {
+		renewals[i] = types.ContainerLeaseRenewal{ContainerId: container.GetContainerId(), RuntimeStarted: container.GetRuntimeStarted()}
+	}
+
+	response := &pb.RenewContainerLeasesResponse{Ok: true, Leases: make([]*pb.ContainerLease, len(renewals))}
+	for i, lease := range s.containerRepo.RenewContainerLeases(ctx, worker.ID, workspaceId, renewals) {
+		err := lease.Err
+		var notFound *types.ErrContainerStateNotFound
+		if errors.As(err, &notFound) && !worker.Trusted {
+			// Only a cluster worker is told that a container's state is
+			// gone, as with GetContainerState.
+			err = &types.ErrContainerNotAssigned{}
+		}
+		if err != nil {
+			response.Leases[i] = &pb.ContainerLease{ContainerId: lease.ContainerId, ErrorMsg: err.Error()}
+			continue
+		}
+		response.Leases[i] = &pb.ContainerLease{
+			ContainerId:  lease.ContainerId,
+			Ok:           true,
+			Status:       string(lease.Status),
+			Started:      lease.Started,
+			Evicting:     lease.Evicting,
+			DrainSeconds: lease.DrainSeconds,
+		}
+	}
+	return response, nil
 }
 
 func (s *ContainerRepositoryService) SetContainerExitCode(ctx context.Context, req *pb.SetContainerExitCodeRequest) (*pb.SetContainerExitCodeResponse, error) {
@@ -193,17 +293,32 @@ func (s *ContainerRepositoryService) SetContainerAddressMap(ctx context.Context,
 		return &pb.SetContainerAddressMapResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	err := s.containerRepo.SetContainerAddressMap(req.ContainerId, addressMap)
-	if err != nil {
+	if err := setContainerAddresses(s.containerRepo, req.ContainerId, addressMap, primaryAddress); err != nil {
 		return &pb.SetContainerAddressMapResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-	if primaryAddress != "" {
-		if err := s.containerRepo.SetContainerAddress(req.ContainerId, primaryAddress); err != nil {
-			return &pb.SetContainerAddressMapResponse{Ok: false, ErrorMsg: err.Error()}, nil
-		}
 	}
 
 	return &pb.SetContainerAddressMapResponse{Ok: true}, nil
+}
+
+// containerAddressesSetter is a repository that writes a container's address
+// map and its address in one round trip.
+type containerAddressesSetter interface {
+	SetContainerAddresses(containerId string, addressMap map[int32]string, addr string) error
+}
+
+// setContainerAddresses writes a container's address map and then, when it
+// has one, its primary address.
+func setContainerAddresses(repo repository.ContainerRepository, containerId string, addressMap map[int32]string, primaryAddress string) error {
+	if primaryAddress == "" {
+		return repo.SetContainerAddressMap(containerId, addressMap)
+	}
+	if setter, ok := repo.(containerAddressesSetter); ok {
+		return setter.SetContainerAddresses(containerId, addressMap, primaryAddress)
+	}
+	if err := repo.SetContainerAddressMap(containerId, addressMap); err != nil {
+		return err
+	}
+	return repo.SetContainerAddress(containerId, primaryAddress)
 }
 
 func (s *ContainerRepositoryService) GetContainerAddressMap(ctx context.Context, req *pb.GetContainerAddressMapRequest) (*pb.GetContainerAddressMapResponse, error) {
@@ -257,11 +372,18 @@ func (s *ContainerRepositoryService) registerBackendRoute(ctx context.Context, c
 	return address, nil
 }
 
-func authorizeBackendRoute(state *types.ContainerState, route *pb.BackendRoute) error {
+func authorizeWorkerBackendRoute(state *types.ContainerState, route *pb.BackendRoute, trusted bool) error {
+	if !trusted && (route == nil || route.Transport != types.BackendRouteTransportTSNet) {
+		return status.Error(codes.PermissionDenied, "private workers require authenticated agent routing")
+	}
 	if route == nil {
 		return nil
 	}
-	if route.WorkspaceId != state.WorkspaceId || route.WorkerId != state.WorkerId || route.MachineId != state.MachineId {
+	return authorizeBackendRoute(state, backendRouteFromProto(route))
+}
+
+func authorizeBackendRoute(state *types.ContainerState, route types.BackendRoute) error {
+	if route.WorkspaceID != state.WorkspaceId || route.WorkerID != state.WorkerId || route.MachineID != state.MachineId {
 		return status.Error(codes.PermissionDenied, "route does not belong to container")
 	}
 	containerID := state.ContainerId
@@ -270,7 +392,7 @@ func authorizeBackendRoute(state *types.ContainerState, route *pb.BackendRoute) 
 	} else if route.Kind != types.BackendRouteKindContainer {
 		return status.Error(codes.PermissionDenied, "invalid route kind")
 	}
-	if route.ContainerId != containerID || route.RouteId != types.BackendRouteID(state.MachineId, state.WorkerId, containerID, route.Kind, route.Port) {
+	if route.ContainerID != containerID || route.RouteID != types.BackendRouteID(state.MachineId, state.WorkerId, containerID, route.Kind, route.Port) {
 		return status.Error(codes.PermissionDenied, "invalid route identity")
 	}
 	return nil

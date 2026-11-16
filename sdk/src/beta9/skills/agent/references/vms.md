@@ -13,7 +13,9 @@ feature.
 agents, verifies a command in the guest and starts a browser desktop. Add
 `--no-desktop` to skip the desktop. `{{cli}} vm new` also includes a desktop
 when building a fresh image; templates and prebuilt images retain their settings.
-Re-running resumes the same setup-owned VM. `--skip-agents` skips local
+`{{cli}} setup vm --template ID` starts the VM from a public template ID or a
+workspace template instead, keeping its size, desktop, Docker and ports, and
+prints its app port URLs. Re-running resumes the same setup-owned VM. `--skip-agents` skips local
 client configuration; `--yes` explicitly approves creation for an already
 authenticated and funded unattended context.
 

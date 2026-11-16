@@ -2,7 +2,7 @@
 
 import json
 
-from .kiosk_config import KioskRuntime, MCPServer
+from .kiosk_config import DesktopRuntime, MCPServer
 
 
 class VMMCP:
@@ -16,7 +16,7 @@ class VMMCP:
     @property
     def local_url(self):
         """Endpoint for agents running inside this VM (or an authenticated port-forward)."""
-        policy = KioskRuntime()
+        policy = DesktopRuntime()
         return f"http://127.0.0.1:{policy.mcp_port}{policy.mcp_path}"
 
     def client_config(self):

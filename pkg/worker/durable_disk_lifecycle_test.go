@@ -125,6 +125,7 @@ func TestDurableDiskSyncFailureExitCode(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		got  int
+		vm   bool
 		want int
 	}{
 		{name: "success", got: int(types.ContainerExitCodeSuccess), want: int(types.ContainerExitCodeUnknownError)},
@@ -133,12 +134,13 @@ func TestDurableDiskSyncFailureExitCode(t *testing.T) {
 		{name: "user stop", got: int(types.ContainerExitCodeUser), want: int(types.ContainerExitCodeUnknownError)},
 		{name: "admin stop", got: int(types.ContainerExitCodeAdmin), want: int(types.ContainerExitCodeUnknownError)},
 		{name: "eviction", got: int(types.ContainerExitCodeEvicted), want: int(types.ContainerExitCodeEvicted)},
+		{name: "VM eviction", got: int(types.ContainerExitCodeEvicted), vm: true, want: int(types.ContainerExitCodeUnknownError)},
 		{name: "oom", got: int(types.ContainerExitCodeOomKill), want: int(types.ContainerExitCodeOomKill)},
 		{name: "existing failure", got: 42, want: 42},
 		{name: "startup failure with failed final sync", got: int(types.ContainerExitCodeStartupFailed), want: int(types.ContainerExitCodeUnknownError)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			require.Equal(t, test.want, durableDiskSyncFailureExitCode(test.got))
+			require.Equal(t, test.want, durableDiskSyncFailureExitCode(test.got, test.vm))
 		})
 	}
 }
@@ -307,7 +309,7 @@ func TestClearContainerPublishesTheStoppingLease(t *testing.T) {
 	}{
 		{"journaled disk", "", journaledDiskStoppingLease},
 		// The scheduler counts an eviction victim's resources only while its
-		// state exists, and the victim holds them until finalization ends.
+		// state exists, which must outlast its finalization.
 		{"eviction victim with a journaled disk", types.StopContainerReasonEvicted, snapshotDiskStoppingLease},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -331,6 +333,50 @@ func TestClearContainerPublishesTheStoppingLease(t *testing.T) {
 			require.Equal(t, test.want.expirySeconds, updates[0].ExpirySeconds)
 		})
 	}
+}
+
+func TestEvictedContainerReleasesResourcesBeforeItsFinalSync(t *testing.T) {
+	fixture := newLockedDurableDiskFinalizationFixture(t, "container-evicted-sync")
+	request := fixture.request
+	worker := newContainerFinalizationTestWorker(request, &fakeContainerRepoClient{}, nil)
+	instance, _ := worker.containerInstances.Get(request.ContainerId)
+	instance.CPUSet = "2-3"
+	instance.setStopReason(types.StopContainerReasonEvicted)
+	clearDone := clearContainerAsync(worker, request, int(types.ContainerExitCodeEvicted))
+
+	// The request that evicted it may start while the sync waits on the disk lock.
+	require.Empty(t, worker.waitForContainersReleased(context.Background(), []string{request.ContainerId}, time.Second))
+	require.Empty(t, instance.CPUSet)
+	_, syncing := worker.containerInstances.Get(request.ContainerId)
+	require.True(t, syncing)
+	select {
+	case <-clearDone:
+		t.Fatal("finalization finished while the disk lock was held")
+	default:
+	}
+	fixture.releaseAndWaitForClear(t, clearDone)
+}
+
+func TestEvictedContainerIsReleasedOnceItsRuntimeIsSeenStopped(t *testing.T) {
+	fixture := newLockedDurableDiskFinalizationFixture(t, "container-evicted-stale-state")
+	request := fixture.request
+	// The runtime still reports the container running when clearContainer first checks.
+	stoppedAt := time.Now().Add(300 * time.Millisecond)
+	rt := &mockRuntime{state: func(context.Context, string) (runtime.State, error) {
+		if time.Now().Before(stoppedAt) {
+			return runtime.State{Status: types.RuncContainerStatusRunning}, nil
+		}
+		return runtime.State{Status: types.RuncContainerStatusStopped}, nil
+	}}
+	worker := newContainerFinalizationTestWorker(request, &fakeContainerRepoClient{}, rt)
+	instance, _ := worker.containerInstances.Get(request.ContainerId)
+	instance.setStopReason(types.StopContainerReasonEvicted)
+	clearDone := clearContainerAsync(worker, request, int(types.ContainerExitCodeEvicted))
+
+	require.Empty(t, worker.waitForContainersReleased(context.Background(), []string{request.ContainerId}, 5*time.Second))
+	_, syncing := worker.containerInstances.Get(request.ContainerId)
+	require.True(t, syncing)
+	fixture.releaseAndWaitForClear(t, clearDone)
 }
 
 func snapshotLeaseEvery(refresh time.Duration) stoppingLease {

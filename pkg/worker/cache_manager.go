@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -103,12 +104,18 @@ type WorkerCacheManager struct {
 	reconcileSuccessesMu sync.Mutex
 	reconcileSuccesses   map[string]time.Time
 	checkpointPruneMu    sync.Mutex
-	checkpointLocksMu    sync.Mutex
-	checkpointLocks      map[string]*checkpointMaterializationLock
-	ownerLastLiveMu      sync.Mutex
-	ownerLastLive        map[string]time.Time
-	reconcilePausedAt    time.Time
-	reconcileNow         chan struct{}
+	// The checkpoints recent stubs need, as of the last reconciliation: a
+	// restore that has to make room takes it from the others first.
+	warmCheckpoints atomic.Pointer[map[string]struct{}]
+	// When each checkpoint that no cache host has was first looked for.
+	checkpointAwaitedMu sync.Mutex
+	checkpointAwaited   map[string]time.Time
+	checkpointLocksMu   sync.Mutex
+	checkpointLocks     map[string]*checkpointMaterializationLock
+	ownerLastLiveMu     sync.Mutex
+	ownerLastLive       map[string]time.Time
+	reconcilePausedAt   time.Time
+	reconcileNow        chan struct{}
 	// Memoized per-stub required-content reads keyed on the stub's
 	// recent-index score, and the locality's recent-stub window as last
 	// listed. Reconcile loop goroutine only; no lock.

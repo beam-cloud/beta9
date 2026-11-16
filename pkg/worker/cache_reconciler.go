@@ -32,6 +32,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -42,7 +43,8 @@ const (
 	originCredentialsTTL     = 5 * time.Minute
 	// reconcileFailureBackoff throttles retries (and logs) for items that fail
 	// to materialize, e.g. an unresolvable origin source.
-	reconcileFailureBackoff = 15 * time.Minute
+	reconcileFailureBackoff        = 15 * time.Minute
+	requiredContentLoadConcurrency = 32
 )
 
 // originCredentials holds short-lived, gateway-brokered credentials used to
@@ -274,15 +276,40 @@ func (r *cacheContentReporter) reportBatches(workspaceID, stubID string, reports
 			r.pending[key] = bucket
 		}
 		for _, item := range report.items {
-			if item.Hash == "" {
+			if item.Kind == "" {
+				item.Kind = report.kind
+			}
+			pending, replaces := bucket[item.CoalescingKey()]
+			if item.Retired {
+				// What is retired is what was restored, never a
+				// checkpoint that waits to be published after it.
+				if replaces && !pending.Retired && pending.CheckpointID != item.CheckpointID {
+					continue
+				}
+			} else if item.Hash == "" {
 				continue
+			} else if replaces && pending.Retired && pending.CheckpointID == item.CheckpointID {
+				continue // Restored already.
 			}
 			if item.RoutingKey == "" {
 				item.RoutingKey = item.Hash
 			}
-			bucket[item.Hash+"\x00"+item.RoutingKey] = item
+			bucket[item.CoalescingKey()] = item
 		}
 	}
+}
+
+// retireCheckpoint withdraws a stub's checkpoint from what its locality keeps
+// warm, unless the stub has reported another since.
+func (r *cacheContentReporter) retireCheckpoint(workspaceID, stubID, checkpointID string) {
+	if checkpointID == "" {
+		return
+	}
+	r.reportItems(workspaceID, stubID, types.CacheContentKindCheckpoint, []types.CacheRequiredContentItem{{
+		Kind:         types.CacheContentKindCheckpoint,
+		CheckpointID: checkpointID,
+		Retired:      true,
+	}})
 }
 
 func (r *cacheContentReporter) flush() {
@@ -380,7 +407,11 @@ func (r *cacheContentReporter) requeue(items map[reporterKey]map[string]types.Ca
 			r.pending[key] = current
 		}
 		for itemKey, item := range bucket {
-			current[itemKey] = item
+			// Reports that arrived while the publish was in flight are newer
+			// than this retry, especially for checkpoints and mutable paths.
+			if _, newer := current[itemKey]; !newer {
+				current[itemKey] = item
+			}
 		}
 	}
 }
@@ -514,10 +545,15 @@ func (m *WorkerCacheManager) reconcileOnce(maintain bool) {
 
 	stubContent, requiredContentComplete := m.loadRecentRequiredContent(stubs)
 	if !requiredContentComplete {
+		if maintain {
+			log.Warn().Int("recent_stubs", len(stubs)).Msg("cache maintenance deferred: required-content protection set is incomplete")
+		}
 		return // Keep the existing protection set when required content cannot be read.
 	}
 	protectedContent, activeCheckpointIDs := protectedContentFromRecentStubs(stubContent, m.accelerator)
 	server.SetProtectedContent(protectedContent)
+	m.warmCheckpoints.Store(&activeCheckpointIDs)
+	m.forgetCheckpointsNotAwaited(activeCheckpointIDs)
 
 	if maintain {
 		m.pruneOwnerLocalCache(server, protectedContent, activeCheckpointIDs)
@@ -589,6 +625,9 @@ func (m *WorkerCacheManager) reconcileStubContent(server *cache.Server, localHos
 		}
 
 		if m.requiredContentComplete(server, item, routingKey) {
+			continue
+		}
+		if item.Kind == types.CacheContentKindCheckpoint && m.awaitCheckpointArchive(server, item, routingKey) {
 			continue
 		}
 		if reconcileSuccessBackoffApplies(item) && m.reconcileRecentlySucceeded(item.Hash, routingKey) {
@@ -791,17 +830,31 @@ type requiredContentCacheEntry struct {
 // before bumping the score, so an unchanged score means the cached items are
 // current. Only stubs with new activity cost an S2 read per cycle.
 func (m *WorkerCacheManager) loadRecentRequiredContent(stubs []cache.RecentStub) ([]recentStubContent, bool) {
+	type result struct {
+		items []types.CacheRequiredContentItem
+		err   error
+	}
+	results := make([]result, len(stubs))
+	var loads errgroup.Group
+	loads.SetLimit(requiredContentLoadConcurrency)
+	for i, stub := range stubs {
+		key := stub.WorkspaceID + "|" + stub.StubID
+		if entry, ok := m.requiredContentCache[key]; ok && entry.lastSeen.Equal(stub.LastSeen) {
+			results[i].items = entry.items
+			continue
+		}
+		loads.Go(func() error {
+			results[i].items, results[i].err = m.eventRepo.ReadStubCacheRequiredContent(m.ctx, stub.WorkspaceID, stub.StubID)
+			return nil // Resolve every stub; one failed read must not cancel others.
+		})
+	}
+	_ = loads.Wait()
 	content := make([]recentStubContent, 0, len(stubs))
 	complete := true
 	next := make(map[string]requiredContentCacheEntry, len(stubs))
-	for _, stub := range stubs {
+	for i, stub := range stubs {
 		key := stub.WorkspaceID + "|" + stub.StubID
-		if entry, ok := m.requiredContentCache[key]; ok && entry.lastSeen.Equal(stub.LastSeen) {
-			next[key] = entry
-			content = append(content, recentStubContent{stub: stub, items: entry.items})
-			continue
-		}
-		items, err := m.eventRepo.ReadStubCacheRequiredContent(m.ctx, stub.WorkspaceID, stub.StubID)
+		items, err := results[i].items, results[i].err
 		if err != nil {
 			log.Debug().Err(err).Str("workspace_id", stub.WorkspaceID).Str("stub_id", stub.StubID).Msg("cache reconciliation failed to read required content")
 			complete = false
@@ -877,7 +930,16 @@ func (m *WorkerCacheManager) pruneOwnerLocalCache(server *cache.Server, protecte
 			Msg("pruned stale embedded cache content")
 	}
 	usage, _ := fastDiskUsage(m.checkpointRoot)
-	m.pruneLocalCheckpoints(activeCheckpointIDs, reconcilePressureBytesToFree(usage, server.EvictWatermarkPct(), server.DiskMinFreeBytes()))
+	watermark, minFreeBytes := server.EvictWatermarkPct(), server.DiskMinFreeBytes()
+	bytesToFree := reconcilePressureBytesToFree(usage, watermark, minFreeBytes)
+	coldBytesToFree := bytesToFree
+	if bytesToFree > 0 || !m.reconcilePausedAt.IsZero() {
+		// Reconciliation waits for the disk to fall below the watermark it
+		// resumes at. Copies nothing needs are not worth that wait: while
+		// they stay, no new checkpoint reaches this host.
+		coldBytesToFree = reconcilePressureBytesToFree(usage, reconcileResumeDiskUsagePct(watermark), minFreeBytes)
+	}
+	m.pruneLocalCheckpoints(activeCheckpointIDs, bytesToFree, coldBytesToFree)
 	m.pruneStaleCacheCheckpoints()
 }
 
@@ -1675,9 +1737,17 @@ func (m *WorkerCacheManager) pruneReconcileFailures() {
 	}
 }
 
-// Warm checkpoint copies are evictable under pressure. Running restores and
-// checkpoint writers are protected by their instance references and file locks.
-func (m *WorkerCacheManager) pruneLocalCheckpoints(warm map[string]struct{}, bytesToFree int64) {
+// checkpointSettleTime is how long a copy is taken to be needed before the
+// stub that needs it is known to: a checkpoint is on its host before it is
+// reported, and reported before a reconciliation reads the report.
+const checkpointSettleTime = time.Minute
+
+// Checkpoint copies are evictable under pressure. Those no recent stub needs
+// go first, oldest first, until coldBytesToFree are free; the others follow
+// only while bytesToFree are not. Without pressure a copy goes once it is
+// neither needed nor recent. Running restores and checkpoint writers are
+// protected by their instance references and file locks.
+func (m *WorkerCacheManager) pruneLocalCheckpoints(warm map[string]struct{}, bytesToFree, coldBytesToFree int64) {
 	if m.checkpointRoot == "" {
 		return
 	}
@@ -1705,32 +1775,47 @@ func (m *WorkerCacheManager) pruneLocalCheckpoints(warm map[string]struct{}, byt
 	if os.MkdirAll(lockDir, 0755) != nil {
 		return
 	}
-	cutoff := time.Now().Add(-m.recentStubTTL())
-	for _, entry := range candidates {
-		id := strings.TrimSuffix(entry.name, checkpointArchiveExtension)
-		if bytesToFree <= 0 {
-			if _, ok := warm[id]; ok {
-				continue
-			}
-			if entry.modified.After(cutoff) {
-				continue
-			}
-		}
+	var freed int64
+	evict := func(entry candidate, id string) {
 		lock := NewFileLock(filepath.Join(lockDir, id+".lock"))
 		if lock.Acquire() != nil {
-			continue
+			return
 		}
+		defer lock.Release()
 		path := filepath.Join(m.checkpointRoot, entry.name)
 		info, err := os.Stat(path)
-		if err == nil && info.ModTime().Equal(entry.modified) && !m.checkpointInUse(id) {
-			size := allocatedCheckpointBytes(path)
-			if err := os.RemoveAll(path); err == nil {
-				bytesToFree -= size
-			} else {
-				log.Warn().Err(err).Str("checkpoint_id", id).Msg("checkpoint cache eviction failed")
-			}
+		if err != nil || !info.ModTime().Equal(entry.modified) || m.checkpointInUse(id) {
+			return
 		}
-		_ = lock.Release()
+		size := allocatedCheckpointBytes(path)
+		if err := os.RemoveAll(path); err != nil {
+			log.Warn().Err(err).Str("checkpoint_id", id).Msg("checkpoint cache eviction failed")
+			return
+		}
+		freed += size
+	}
+
+	now := time.Now()
+	cutoff, settling := now.Add(-m.recentStubTTL()), now.Add(-checkpointSettleTime)
+	needed := func(entry candidate, id string) bool {
+		_, ok := warm[id]
+		return ok || entry.modified.After(settling)
+	}
+	coldBytesToFree = max(coldBytesToFree, bytesToFree)
+	for _, entry := range candidates {
+		id := strings.TrimSuffix(entry.name, checkpointArchiveExtension)
+		if needed(entry, id) || (entry.modified.After(cutoff) && freed >= coldBytesToFree) {
+			continue
+		}
+		evict(entry, id)
+	}
+	for _, entry := range candidates {
+		if freed >= bytesToFree {
+			break
+		}
+		if id := strings.TrimSuffix(entry.name, checkpointArchiveExtension); needed(entry, id) {
+			evict(entry, id)
+		}
 	}
 }
 
@@ -1792,7 +1877,12 @@ func (m *WorkerCacheManager) reserveCheckpointSpace(server *cache.Server, size i
 	projected.UsedBytes += uint64(size)
 	projected.AvailableBytes -= min(uint64(size), projected.AvailableBytes)
 	projected.UsagePct = float64(projected.UsedBytes) / float64(projected.TotalBytes)
-	m.pruneLocalCheckpoints(nil, reconcilePressureBytesToFree(projected, server.EvictWatermarkPct(), server.DiskMinFreeBytes()))
+	bytesToFree := reconcilePressureBytesToFree(projected, server.EvictWatermarkPct(), server.DiskMinFreeBytes())
+	var warm map[string]struct{}
+	if known := m.warmCheckpoints.Load(); known != nil {
+		warm = *known
+	}
+	m.pruneLocalCheckpoints(warm, bytesToFree, bytesToFree)
 	return server.ReserveDiskSpace(size)
 }
 
@@ -2058,21 +2148,96 @@ func (m *WorkerCacheManager) materializeCheckpoint(ctx context.Context, server *
 		return types.CacheAuditStatusSkipped
 	}
 	defer releaseCache()
-	if ok, err := m.client.MaterializeFromReplica(ctx, server, item.Hash, routingKey, item.SizeBytes); err != nil {
-		log.Debug().Err(err).Str("hash", item.Hash).Msg("cache reconciliation checkpoint replica copy failed")
-	} else if !ok {
-		if item.Source == "" {
-			return types.CacheAuditStatusMiss
+
+	started := time.Now()
+	source := "archive" // Already here; only its files are not.
+	if !server.HasCompleteContent(item.Hash, item.SizeBytes) {
+		source = "peer"
+		copied, err := m.client.MaterializeFromReplica(ctx, server, item.Hash, routingKey, item.SizeBytes)
+		if err != nil {
+			log.Debug().Err(err).Str("hash", item.Hash).Msg("cache reconciliation checkpoint replica copy failed")
 		}
-		if status := m.materializeWorkspaceObject(ctx, server, stub, item); status != types.CacheAuditStatusMaterialized {
-			return status
+		// A copy that a peer did not finish is no copy: the origin has
+		// the archive whether or not a peer still does.
+		if !copied {
+			if item.Source == "" {
+				if err != nil {
+					return types.CacheAuditStatusReplicaFailure
+				}
+				return types.CacheAuditStatusMiss
+			}
+			source = "origin"
+			if status := m.materializeWorkspaceObject(ctx, server, stub, item); status != types.CacheAuditStatusMaterialized {
+				return status
+			}
 		}
 	}
 	if err := m.extractCheckpointArchive(ctx, server, item); err != nil {
 		log.Debug().Err(err).Str("checkpoint_id", item.CheckpointID).Msg("cache reconciliation checkpoint extract failed")
 		return types.CacheAuditStatusOriginFailure
 	}
+	m.checkpointArchiveArrived(item.CheckpointID)
+	log.Info().
+		Str("checkpoint_id", item.CheckpointID).
+		Str("source", source).
+		Int64("bytes", item.SizeBytes).
+		Dur("duration", time.Since(started)).
+		Msg("checkpoint reconciled")
 	return types.CacheAuditStatusMaterialized
+}
+
+// checkpointArchiveWait is how long a host looks to its locality for a
+// checkpoint that no cache host has before it downloads it from the origin.
+// A checkpoint is reported by the host that made it, or the first to restore
+// it, while that host is still storing its archive. Each host that went to
+// the origin meanwhile would download what is about to be a hop away.
+var checkpointArchiveWait = time.Minute
+
+// awaitCheckpointArchive reports whether a checkpoint's archive is on no
+// cache host yet and may still arrive on one. It asks the hosts, and costs a
+// cycle none of its budget.
+func (m *WorkerCacheManager) awaitCheckpointArchive(server *cache.Server, item types.CacheRequiredContentItem, routingKey string) bool {
+	if checkpointArchiveWait <= 0 || item.Source == "" || item.CheckpointID == "" || server.HasCompleteContent(item.Hash, item.SizeBytes) {
+		return false
+	}
+	m.checkpointAwaitedMu.Lock()
+	since, awaited := m.checkpointAwaited[item.CheckpointID]
+	m.checkpointAwaitedMu.Unlock()
+	if awaited && time.Since(since) >= checkpointArchiveWait {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(m.ctx, cacheReconcileSyncInterval)
+	defer cancel()
+	if cached, err := m.client.IsCachedReachableContext(ctx, item.Hash, routingKey); cached || err != nil {
+		return false
+	}
+	if !awaited {
+		m.checkpointAwaitedMu.Lock()
+		if m.checkpointAwaited == nil {
+			m.checkpointAwaited = make(map[string]time.Time)
+		}
+		m.checkpointAwaited[item.CheckpointID] = time.Now()
+		m.checkpointAwaitedMu.Unlock()
+	}
+	return true
+}
+
+func (m *WorkerCacheManager) checkpointArchiveArrived(checkpointID string) {
+	m.checkpointAwaitedMu.Lock()
+	delete(m.checkpointAwaited, checkpointID)
+	m.checkpointAwaitedMu.Unlock()
+}
+
+// forgetCheckpointsNotAwaited drops the checkpoints no recent stub needs any
+// longer from those this host is waiting for.
+func (m *WorkerCacheManager) forgetCheckpointsNotAwaited(warm map[string]struct{}) {
+	m.checkpointAwaitedMu.Lock()
+	defer m.checkpointAwaitedMu.Unlock()
+	for id := range m.checkpointAwaited {
+		if _, ok := warm[id]; !ok {
+			delete(m.checkpointAwaited, id)
+		}
+	}
 }
 
 func (m *WorkerCacheManager) extractCheckpointArchive(ctx context.Context, server *cache.Server, item types.CacheRequiredContentItem) error {

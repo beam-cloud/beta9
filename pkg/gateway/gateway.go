@@ -49,6 +49,8 @@ import (
 	repositoryservices "github.com/beam-cloud/beta9/pkg/gateway/services/repository"
 	thundersvc "github.com/beam-cloud/beta9/pkg/gateway/services/thunder"
 	"github.com/beam-cloud/beta9/pkg/network"
+	"github.com/beam-cloud/beta9/pkg/providers"
+	"github.com/beam-cloud/beta9/pkg/provisioner"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	usage "github.com/beam-cloud/beta9/pkg/repository/usage"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
@@ -113,6 +115,7 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 	config := configManager.GetConfig()
+	configManager.WarnUnknownKeys()
 
 	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Gateway"))
 	if err != nil {
@@ -187,6 +190,15 @@ func NewGateway() (*Gateway, error) {
 	gateway.DefaultStorageClient = storageClient
 	auth.EnsureWorkspaceStorage = gateway.ensureWorkspaceStorage
 
+	// Machines bought at a provider carry this control plane's name, so that
+	// it can tell its own from those of another deployment on the account.
+	providerOwner, err := computeRepo.ProviderOwner(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read the provider owner name: %w", err)
+	}
+
+	providerRegistry := providers.NewRegistry(config.Providers, providerOwner)
+
 	keyEventManager := common.NewKeyEventManager(redisClient)
 	gateway.ComputeService = computesvc.New(computesvc.Options{
 		Config:           config,
@@ -200,11 +212,32 @@ func NewGateway() (*Gateway, error) {
 		UsageMetricsRepo: usageMetricsRepo,
 		ComputeRepo:      computeRepo,
 		ManagedPoolRepo:  managedPoolRepo,
+		Providers:        providerRegistry,
 		KeyEventManager:  keyEventManager,
 		RedisClient:      redisClient,
 		Tailscale:        tailscale,
 	})
+
+	// Pools with a provisioning block buy their machines through this. The
+	// scheduler is given it before the compute service loads any pool.
+	machineProvisioner := provisioner.New(provisioner.Options{
+		Providers:    providerRegistry,
+		ControlPlane: gateway.ComputeService,
+		Workers:      workerRepo,
+		Store:        provisioner.NewStore(redisClient),
+		Limits: provisioner.Limits{
+			MaxHourlyCents: config.Providers.MaxHourlyCents,
+			MaxDailyCents:  config.Providers.MaxDailyCents,
+		},
+	})
+	scheduler.SetProvisioner(machineProvisioner)
+
 	gateway.ComputeService.Start(ctx)
+	machineProvisioner.Start(ctx)
+
+	// Removes Redis keys left behind by containers and workers that are gone.
+	// Every replica runs the loop; a Redis lock lets one sweep at a time.
+	go repository.NewOrphanSweeper(redisClient).Run(ctx)
 
 	return gateway, nil
 }
@@ -443,13 +476,13 @@ func gatewayOutgoingHeaderMatcher(key string) (string, bool) {
 
 // Register repository services
 func (g *Gateway) registerRepositoryServices() error {
-	wr := repositoryservices.NewWorkerRepositoryService(g.ctx, g.workerRepo, g.ContainerRepo, g.BackendRepo, g.ComputeRepo, g.ComputeService, g.EventRepo, g.RedisClient, g.Config, g.Config.Cache.Coordinator.Token)
+	wr := repositoryservices.NewWorkerRepositoryService(g.ctx, g.workerRepo, g.ContainerRepo, g.BackendRepo, g.ComputeRepo, g.ComputeService, g.EventRepo, g.RedisClient, g.Config, g.Config.Cache.Coordinator.Token, g.Scheduler.WorkerHoldsPoolHeadroom)
 	pb.RegisterWorkerRepositoryServiceServer(g.grpcServer, wr)
 
 	cr := repositoryservices.NewContainerRepositoryService(g.ctx, g.ContainerRepo)
 	pb.RegisterContainerRepositoryServiceServer(g.grpcServer, cr)
 
-	br := repositoryservices.NewBackendRepositoryService(g.ctx, g.BackendRepo)
+	br := repositoryservices.NewBackendRepositoryService(g.ctx, g.BackendRepo, g.ContainerRepo)
 	pb.RegisterBackendRepositoryServiceServer(g.grpcServer, br)
 
 	return nil

@@ -34,12 +34,12 @@ from ...clients.volume import VolumeServiceStub
 from ...config import ConfigContext, get_config_context, get_settings
 from ...exceptions import ImageBuildError, SandboxConnectionError, SandboxProcessError
 from ...terminal import cli_name
-from ...type import DurableDisk, GpuType, GpuTypeAlias, normalize_gpu_type
+from ...type import CpuTier, DurableDisk, GpuType, GpuTypeAlias, normalize_gpu_type
 from ...utils import local_process_kwargs
 from ..image import Image
 from ..sandbox import SandboxInstance
 from ..volume import Volume
-from .kiosk_config import Kiosk, MCPServer as MCPServer
+from .kiosk_config import DesktopRuntime, Kiosk, MCPServer as MCPServer
 
 
 # Keep the stock guest reproducible and avoid a registry tag lookup on launch.
@@ -47,7 +47,10 @@ from .kiosk_config import Kiosk, MCPServer as MCPServer
 DEFAULT_VM_BASE_IMAGE = (
     "ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55"
 )
-DEFAULT_VM_GPU_BASE_IMAGE = "public.ecr.aws/n4e0e1y0/beta9-microvm:b8689876417c-nvidia"
+DEFAULT_VM_GPU_BASE_IMAGE = "public.ecr.aws/n4e0e1y0/beta9-microvm:1bcfe3a671c9-nvidia"
+
+# How long wait() asks one container for exec before it reads the VM again.
+CONTAINER_WAIT = 5.0
 
 
 def default_base_image(gpu: Optional[GpuTypeAlias] = None) -> str:
@@ -134,7 +137,7 @@ def prepare_image(
         raise ValueError("VM images cannot be built with a GPU")
     prepared = _VMImage.__new__(_VMImage)
     prepared.__dict__ = copy.copy(image.__dict__)
-    if kiosk:
+    if desktop or kiosk:
         # GUI packages and the native streaming backend depend on the distro's
         # Python ABI. Serverless Python injection replaces /usr/bin/python3.
         prepared.ignore_python = True
@@ -151,7 +154,9 @@ def prepare_image(
     data = base64.b64encode(Path(__file__).with_name("assets.tar.gz").read_bytes()).decode("ascii")
     prepared.add_commands(
         [
-            "mkdir -p /tmp/beam-vm-assets && "
+            # This step adds apt sources. Keep that setup visible to the builder
+            # so temporary mirror mounts cannot leave indexes for different sources.
+            "mkdir -p /etc/apt/keyrings /tmp/beam-vm-assets && "
             f"printf '%s' '{data}' | base64 -d | tar -xz -C /tmp/beam-vm-assets && "
             f"bash /tmp/beam-vm-assets/install {'true' if desktop or kiosk else 'false'}"
             + (" true" if kiosk else "")
@@ -185,6 +190,10 @@ class VM:
     kernel, driver modules, userspace and GSP firmware. Host VFIO passthrough
     does not require matching host NVIDIA drivers. Custom GPU images should
     include /boot/beam/vmlinux built for their installed GPU modules.
+    A GPU VM pauses with what its CUDA programs keep on the GPU, given free
+    guest memory to hold it, and resumes on any GPU of the same model. Pause
+    is refused, and the VM keeps running, while another kind of program has
+    the GPU open.
     create() waits for exec readiness; wait(services=True) also waits for
     enabled SSH/terminal/desktop services. Docker helpers wait separately.
 
@@ -216,6 +225,7 @@ class VM:
         ttl: Optional[int] = None,
         idle_action: Optional[str] = None,
         pool: Optional[str] = None,
+        cpu_tier: Optional[CpuTier] = None,
         template: Optional[str] = None,
         snapshot: Optional[str] = None,
         metadata: Optional[Dict[str, str]] = None,
@@ -270,6 +280,7 @@ class VM:
             "idle_timeout": ttl,
             "idle_action": idle_action,
             "pool": pool,
+            "cpu_tier": cpu_tier,
             "auto_resume": auto_resume,
             "block_network": block_network,
             "allow_list": allow_list,
@@ -450,7 +461,10 @@ class VM:
                     raise RuntimeError(f"Unable to prepare volume {selected.name}")
                 spec["volumes"].append(selected.export().to_dict(casing=betterproto.Casing.SNAKE))
 
-        if not (self.template or self._snapshot_source):
+        # Forks keep their source's SSH setting. A template's belongs to its
+        # publisher, and public templates drop it, so VMs from one get SSH with
+        # this machine's key like any new VM.
+        if not self._snapshot_source:
             spec.setdefault("ssh", True)
         if spec.get("ssh", True):
             spec["ssh_public_key"] = public_key()
@@ -460,7 +474,12 @@ class VM:
     def _submit_creation(self, wait):
         kwargs = {"params": {"wait": "exec"}} if wait else {}
         self._set(self._api("POST", json=self._creation_body, **kwargs))
-        return self.wait() if wait else self
+        return self._wait_for_exec_ready(wait)
+
+    def _wait_for_exec_ready(self, wait):
+        # Server-confirmed readiness avoids a second idle-lease transaction;
+        # older gateways still use the ordinary client wait path.
+        return self.wait() if wait and not self.info.get("exec_ready") else self
 
     @classmethod
     def get(cls, name: str, *, context=None, _service=None) -> "VM":
@@ -504,12 +523,17 @@ class VM:
             if self.info["status"] in ("starting", "running"):
                 # SandboxConnect waits on the worker's readiness event, so
                 # neither lifecycle reconciliation nor fixed polling delays
-                # are part of the normal startup path.
+                # are part of the normal startup path. A VM whose worker is
+                # lost starts in another container: one that does not answer
+                # is asked for a while, and then the VM is read again.
                 try:
-                    with rpc_timeout(max(0.001, deadline - time.monotonic())):
+                    with rpc_timeout(min(CONTAINER_WAIT, max(0.001, deadline - time.monotonic()))):
                         sandbox = self._sandbox(refresh=False, allow_starting=True)
                 except SandboxConnectionError:
                     pass
+                except Exception as error:
+                    if not transient_error(error):
+                        raise
                 else:
                     self.info["status"] = "running"
                     if not services:
@@ -524,9 +548,15 @@ class VM:
             self.refresh()
         raise TimeoutError("VM did not become ready; inspect vm get/logs")
 
+    @property
+    def _streaming_desktop(self):
+        spec = self.info["spec"]
+        return spec.get("kiosk") is not None or bool(spec.get("desktop_transport"))
+
     def _services_ready(self, sandbox, deadline):
         spec = self.info["spec"]
         kiosk = spec.get("kiosk") is not None
+        streaming = self._streaming_desktop
         services = [("beam-terminal.service", 7681)]
         for feature, unit, port in (
             ("ssh", "ssh.service", 2222),
@@ -550,15 +580,15 @@ class VM:
                     # is-active with several units succeeds if any is active.
                     if run('systemctl', 'is-active', '--quiet', unit).returncode:
                         raise SystemExit(1)
-                if {kiosk!r}:
-                    check = run('/opt/beam-vm/kiosk', '--check')
+                if {streaming!r}:
+                    check = run({DesktopRuntime().session_path!r}, '--check')
                     if check.returncode:
                         print(check.stdout.decode())
                         raise SystemExit(check.returncode)
                 for _, port in {services!r}:
                     with socket.create_connection(('127.0.0.1', port), min(1, remaining())):
                         pass
-                if {bool(spec.get("desktop"))!r} and not {kiosk!r}:
+                if {bool(spec.get("desktop"))!r} and not {streaming!r}:
                     # Xvnc listens before xstartup has started the window manager.
                     window = run('xprop', '-root', '_NET_SUPPORTING_WM_CHECK')
                     if window.returncode or not re.search(
@@ -601,7 +631,7 @@ class VM:
                 **({"params": {"wait": "exec"}} if wait else {}),
             )
         )
-        return self.wait() if wait else self
+        return self._wait_for_exec_ready(wait)
 
     resume = start
 
@@ -615,8 +645,10 @@ class VM:
             vm.close()
             raise
 
-    def update(self, *, ttl=None, idle_action=None, auto_resume=None, metadata=None) -> "VM":
-        """Change idle stopping and metadata without replacing the VM or URLs.
+    def update(
+        self, *, ttl=None, idle_action=None, auto_resume=None, metadata=None, cpu_tier=None
+    ) -> "VM":
+        """Change idle stopping, metadata or a stopped VM's CPU tier without replacing the VM or URLs.
 
         Metadata replaces the complete map; pass {} to clear it. It is visible
         in management responses, so use workspace secrets for credentials.
@@ -626,6 +658,7 @@ class VM:
             "idle_action": idle_action,
             "auto_resume": auto_resume,
             "metadata": metadata,
+            "cpu_tier": cpu_tier,
         }
         return self._set(
             self._api(
@@ -694,11 +727,19 @@ class VM:
     def remove_snapshot(self, name: str):
         self._api("DELETE", "/artifacts/snapshot/" + quote(name, safe=""))
 
-    def create_template(self, name=None, description=""):
-        return self._action("template", name=name or self.name, description=description)
+    def create_template(self, name=None, description="", *, public=False):
+        """Save an immutable root; public=True lets other workspaces fork by ID.
 
-    def fork(self, name=None, wait=True) -> "VM":
-        info = self._action("fork", name=name or "", ssh_public_key=public_key())
+        Public templates include the complete root and its snapshot history.
+        Use a fresh VM that has never held personal data or signed-in accounts.
+        """
+        return self._action(
+            "template", name=name or self.name, description=description, public=public
+        )
+
+    def fork(self, name=None, wait=True, *, cpu_tier=None) -> "VM":
+        tier = {"cpu_tier": cpu_tier} if cpu_tier else {}
+        info = self._action("fork", name=name or "", ssh_public_key=public_key(), **tier)
         # SDK-owned children have independent connections; caller-owned
         # clients retain their explicit shared lifetime.
         child = (

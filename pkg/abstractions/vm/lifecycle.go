@@ -27,7 +27,11 @@ func rootDisk(v *types.VM) string {
 
 const vmFailureSaveTimeout = 10 * time.Second
 
+// failed records how an operation on a VM ended. One that ran out of time
+// still does, which also moves updated_at and so spaces out the next attempt.
 func (s *Service) failed(ctx context.Context, v *types.VM, err error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), vmFailureSaveTimeout)
+	defer cancel()
 	v.Error = err.Error()
 	v.Status = types.VMStateError
 	if v.ContainerID != "" {
@@ -55,6 +59,9 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 	)
 	if v.Spec.Desktop {
 		env = append(env, "DISPLAY=:1", "XAUTHORITY=/run/beam-desktop/.Xauthority")
+		if v.Spec.DesktopTransport != "" {
+			env = append(env, types.VMDesktopTransportEnv+"="+string(v.Spec.DesktopTransport))
+		}
 	}
 	if v.Spec.Kiosk != nil {
 		data, err := json.Marshal(v.Spec.Kiosk)
@@ -73,6 +80,7 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 	// limits, disk snapshot ownership and microvm-only pool selection.
 	req := &pb.GetOrCreateStubRequest{
 		ImageId:         v.Spec.ImageID,
+		CpuTier:         string(v.Spec.CPUTier),
 		Name:            types.StubTypeVM + "/" + v.ID,
 		AppName:         types.VMAppName,
 		StubType:        types.StubTypeVM,
@@ -130,8 +138,8 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 }
 
 func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) error {
-	if v.Spec.Kiosk != nil && v.Spec.Kiosk.Transport == types.VMKioskTransportWebRTC && s.webrtc == nil {
-		return fmt.Errorf("kiosk WebRTC requires the shared TCP gateway")
+	if v.Spec.DisplayTransport() == types.VMDesktopTransportWebRTC && s.webrtc == nil {
+		return fmt.Errorf("desktop WebRTC requires the shared TCP gateway")
 	}
 	if err := s.ensurePublicIPv6(ctx, v); err != nil {
 		return err
@@ -281,7 +289,16 @@ func (s *Service) snapshotRoot(ctx context.Context, v *types.VM) error {
 	return fmt.Errorf("snapshot response did not contain this VM's durable root")
 }
 
-func (s *Service) capture(ctx context.Context, v *types.VM, kind, name, description string) (*types.VMArtifact, error) {
+func (s *Service) capture(ctx context.Context, v *types.VM, kind, name, description string, public bool) (*types.VMArtifact, error) {
+	if public {
+		if _, snapshotImage := types.SnapshotImageStub(v.Spec.ImageID); snapshotImage {
+			return nil, fmt.Errorf("public templates require a built base image")
+		}
+		if kind != types.VMArtifactTemplate {
+			return nil, fmt.Errorf("only templates can be published")
+		}
+	}
+
 	id := uuid.NewString()
 	if name == "" {
 		name = id
@@ -297,6 +314,10 @@ func (s *Service) capture(ctx context.Context, v *types.VM, kind, name, descript
 	}
 
 	a := artifact(v, id, kind, name, description)
+	if public {
+		a.Public = true
+		a.Spec = a.Spec.PublicTemplate()
+	}
 	return a, s.repo.CreateVMArtifact(ctx, v.WorkspaceID, a)
 }
 
@@ -335,8 +356,12 @@ func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
 
 	if err == nil && state.Status != types.ContainerStatusStopping && (v.DesiredState != types.VMStatePaused || v.MemoryCheckpointID == "") {
 		// Commit the root before releasing compute. --no-snapshot skips only
-		// the named artifact, never filesystem durability.
-		if state.Status == types.ContainerStatusRunning {
+		// the named artifact, never filesystem durability. A preempted VM's
+		// worker is already stopping it, and its final sync commits the root
+		// once the VM has given its capacity back. A removed VM's root goes
+		// with it, and a guest that can no longer freeze its filesystem must
+		// not keep the compute of a VM that is gone.
+		if state.Status == types.ContainerStatusRunning && v.StopReason != types.VMStopReasonPreempted && v.DesiredState != types.VMStateDeleted {
 			if err := s.snapshotRoot(ctx, v); err != nil {
 				return err
 			}
@@ -477,6 +502,7 @@ func (s *Service) reconcile(ctx context.Context) {
 			continue
 		}
 
+		s.watch(vms)
 		var operations sync.WaitGroup
 		slots := make(chan struct{}, 4)
 		for _, record := range vms {
@@ -491,30 +517,90 @@ func (s *Service) reconcile(ctx context.Context) {
 			go func(record *types.VM) {
 				defer operations.Done()
 				defer func() { <-slots }()
-				op, cancel := context.WithTimeout(ctx, 3*time.Minute)
-				defer cancel()
-				unlock, err := s.repo.TryLockVM(op, record.ID)
-				if err != nil {
-					return
-				}
-
-				defer unlock()
-				v, err := s.repo.GetVM(op, record.WorkspaceID, record.ID)
-				if err == nil {
-					err = s.reconcileVM(op, v)
-				}
-
-				if err != nil && v != nil {
-					// A timed-out operation must still save its failure, which
-					// moves updated_at and so spaces out the next attempt.
-					save, cancel := context.WithTimeout(context.WithoutCancel(op), vmFailureSaveTimeout)
-					s.failed(save, v, err)
-					cancel()
-				}
+				s.reconcileUnlessBusy(ctx, record, "")
 			}(record)
 		}
 
 		operations.Wait()
+	}
+}
+
+// reconcileUnlessBusy reconciles a VM that no other operation holds. Given
+// the container that exited, it does so only for a VM that is still to run
+// in that one.
+func (s *Service) reconcileUnlessBusy(ctx context.Context, record *types.VM, exited string) {
+	op, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	unlock, err := s.repo.TryLockVM(op, record.ID)
+	if err != nil {
+		return
+	}
+
+	defer unlock()
+	v, err := s.repo.GetVM(op, record.WorkspaceID, record.ID)
+	if err == nil {
+		if exited != "" && (v.ContainerID != exited || v.DesiredState != types.VMStateRunning) {
+			return
+		}
+		err = s.reconcileVM(op, v)
+	}
+
+	if err != nil && v != nil {
+		s.failed(op, v, err)
+	}
+}
+
+// watch notes the container of each VM that is to be running, for
+// relaunchExited.
+func (s *Service) watch(vms []*types.VM) {
+	running := map[string]*types.VM{}
+	for _, v := range vms {
+		if v.DesiredState == types.VMStateRunning && v.ContainerID != "" {
+			running[v.ContainerID] = v
+		}
+	}
+
+	s.runningLock.Lock()
+	s.running = running
+	s.runningLock.Unlock()
+}
+
+// exitedVM is the VM the last pass found in a container, once.
+func (s *Service) exitedVM(containerID string) *types.VM {
+	s.runningLock.Lock()
+	defer s.runningLock.Unlock()
+	v := s.running[containerID]
+	delete(s.running, containerID)
+	return v
+}
+
+// relaunchExited reconciles a VM when its container is gone rather than at
+// the next pass, so a guest that reboots does not wait for one. The passes
+// find the exits missed here, and those of a container no pass has seen, so
+// a guest that keeps exiting is launched no more often than a pass allows.
+func (s *Service) relaunchExited(ctx context.Context, exits <-chan string) {
+	slots := make(chan struct{}, 4)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case containerID := <-exits:
+			record := s.exitedVM(containerID)
+			if record == nil {
+				continue
+			}
+
+			select {
+			case slots <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+
+			go func() {
+				defer func() { <-slots }()
+				s.reconcileUnlessBusy(ctx, record, containerID)
+			}()
+		}
 	}
 }
 
@@ -593,7 +679,13 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 
 				if claimed {
 					if v.Spec.IdleAction == "pause" {
-						return s.pause(ctx, v)
+						// An idle VM that cannot keep its memory still
+						// gives its compute back, and keeps its disks.
+						err := s.pause(ctx, v)
+						if !errors.As(err, &errPauseRefused{}) {
+							return err
+						}
+						log.Warn().Err(err).Str("vm_id", v.ID).Msg("stopping idle VM")
 					}
 
 					v.DesiredState = types.VMStateStopped

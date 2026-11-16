@@ -175,7 +175,7 @@ func (pbs *PetriBotService) getOrCreateBotInstance(stubId string) (*botInstance,
 		return nil, err
 	}
 
-	token, err := pbs.backendRepo.RetrieveActiveToken(pbs.ctx, stub.Workspace.Id)
+	token, err := pbs.backendRepo.RetrieveActiveToken(pbs.ctx, stub.Workspace.Id, types.TokenTypeWorkspacePrimary)
 	if err != nil {
 		return nil, err
 	}

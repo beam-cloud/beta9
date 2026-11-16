@@ -1002,13 +1002,13 @@ func TestCacheOCIMetadataUsesGatewayRegistryOnAgentHostedPools(t *testing.T) {
 		}},
 	}
 	for _, tc := range []struct {
-		pool, registry, wantRef string
+		pool, registry, wantRef, wantURL string
 	}{
-		{"private", "https://registry.example.com", "gateway.example.com/images:tag"},
-		{"provider", "registry.example.com", "gateway.example.com/images:tag"},
-		{"private", "https://docker.io", "docker.io/images:tag"},
-		{"external", "https://registry.example.com", "registry.example.com/images:tag"},
-		{"local", "https://registry.example.com", "registry.example.com/images:tag"},
+		{"private", "https://registry.example.com", "gateway.example.com/images:tag", "gateway.example.com"},
+		{"provider", "registry.example.com", "gateway.example.com/images:tag", "gateway.example.com"},
+		{"private", "https://docker.io", "docker.io/images:tag", "https://docker.io"},
+		{"external", "https://registry.example.com", "registry.example.com/images:tag", "https://registry.example.com"},
+		{"local", "https://registry.example.com", "registry.example.com/images:tag", "https://registry.example.com"},
 	} {
 		for _, pointer := range []bool{false, true} {
 			client := &ImageClient{config: config, workerPoolName: tc.pool, v2ImageRefs: common.NewSafeMap[string]()}
@@ -1024,7 +1024,54 @@ func TestCacheOCIMetadataUsesGatewayRegistryOnAgentHostedPools(t *testing.T) {
 			require.Equal(t, tc.wantRef, ref, "%s %s", tc.pool, tc.registry)
 			stored, ok := ociStorageInfo(meta)
 			require.True(t, ok)
-			require.Equal(t, "https://"+strings.Split(tc.wantRef, "/")[0], stored.RegistryURL, "%s %s pointer=%t", tc.pool, tc.registry, pointer)
+			require.Equal(t, tc.wantURL, stored.RegistryURL, "%s %s pointer=%t", tc.pool, tc.registry, pointer)
 		}
 	}
+}
+
+func TestVerifyImageSourceUsesGatewayCredentialsOnAgentHostedPools(t *testing.T) {
+	layer := "sha256:" + strings.Repeat("1", 64)
+	var authorized []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if user, password, ok := r.BasicAuth(); !ok || user != "beta9" || password != "worker-token" {
+			w.Header().Set("WWW-Authenticate", `Basic realm="beta9"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		authorized = append(authorized, r.Method+" "+r.URL.Path)
+	}))
+	defer server.Close()
+	gateway := server.Listener.Addr().(*net.TCPAddr)
+
+	repo := &fakeImageCredentialWorkerRepo{resp: &pb.GetCacheOriginCredentialsResponse{Ok: true, RegistryCredentials: "beta9:worker-token"}}
+	client := &ImageClient{
+		config: types.AppConfig{
+			ImageService:   types.ImageServiceConfig{BuildRegistry: "registry.example.com"},
+			GatewayService: types.GatewayServiceConfig{HTTP: types.HTTPConfig{ExternalHost: gateway.IP.String(), ExternalPort: gateway.Port}},
+			Worker:         types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{"private": {Mode: types.PoolModePrivate}}},
+		},
+		workerPoolName:   "private",
+		workerRepoClient: repo,
+		originCredsCache: make(map[string]*originCredentials),
+		v2ImageRefs:      common.NewSafeMap[string](),
+	}
+	meta := &clipCommon.ClipArchiveMetadata{StorageInfo: &clipCommon.OCIStorageInfo{
+		RegistryURL:             "registry.example.com",
+		Repository:              "org/app",
+		Reference:               "sha256:" + strings.Repeat("2", 64),
+		Layers:                  []string{layer},
+		DecompressedHashByLayer: map[string]string{layer: "hash-1"},
+	}}
+	client.cacheOCIMetadata("image", meta)
+	request := &types.ContainerRequest{WorkspaceId: "workspace-id", StubId: "stub-id", ImageId: "image"}
+	options := clip.MountOptions{
+		CachePath:            t.TempDir(),
+		Metadata:             meta,
+		RegistryCredProvider: client.getCredentialProviderForImage(context.Background(), "image", request),
+	}
+
+	require.NoError(t, client.verifyImageSource(context.Background(), options))
+	require.Contains(t, authorized, "GET /v2/org/app/blobs/"+layer)
+	require.Len(t, repo.requests, 1)
+	require.Equal(t, gateway.String(), repo.requests[0].Registry)
 }

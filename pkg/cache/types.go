@@ -45,6 +45,7 @@ type ReconciliationConfig struct {
 	MaxConcurrentFetches  int   `key:"maxConcurrentFetches" json:"max_concurrent_fetches"`
 	VolumeMinBytes        int64 `key:"volumeMinBytes" json:"volume_min_bytes"`
 	OriginFallbackEnabled bool  `key:"originFallbackEnabled" json:"origin_fallback_enabled"`
+	FilterRetiredVMStubs  bool  `key:"filterRetiredVMStubs" json:"filter_retired_vm_stubs"`
 }
 
 type DiskConfig struct {

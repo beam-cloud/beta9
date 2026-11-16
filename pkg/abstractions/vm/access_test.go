@@ -135,6 +135,56 @@ func TestSessionCookiesDoNotCollideOnSharedGatewayHost(t *testing.T) {
 	require.NotEqual(t, sessionCookie(v, 8080), sessionCookie(other, 8080))
 }
 
+func TestStreamingDesktopCrossSiteSession(t *testing.T) {
+	for _, mode := range []string{"desktop-webrtc", "desktop-websockets", "kiosk"} {
+		t.Run(mode, func(t *testing.T) {
+			s, v, _, runtime, _ := fixture()
+			v.Spec.DesktopTransport = types.VMDesktopTransportWebRTC
+			if mode == "desktop-websockets" {
+				v.Spec.DesktopTransport = types.VMDesktopTransportWebSockets
+			} else if mode == "kiosk" {
+				v.Spec.Kiosk = &types.VMKioskSpec{Command: []string{"application"}}
+			}
+			v.TrafficAccessToken = "private"
+			v.Spec.ProtectedPorts = []uint32{types.VMDesktopPort}
+			e := browserProxy(s)
+			session := accessSession(v, types.VMDesktopPort, time.Now().Add(time.Minute).Unix())
+			req := browserRequest(s, v, types.VMDesktopPort, "/?"+sessionParameter+"="+session)
+			req.Header.Set("Sec-Fetch-Dest", "iframe")
+			req.Header.Set("Sec-Fetch-Site", "cross-site")
+			req.Header.Set("Referer", "https://portal.example/")
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusSeeOther, rec.Code)
+			require.Equal(t, "/", rec.Header().Get("Location"))
+			cookies := rec.Result().Cookies()
+			require.Len(t, cookies, 1)
+			cookie := cookies[0]
+			require.Equal(t, http.SameSiteNoneMode, cookie.SameSite)
+			require.True(t, cookie.Partitioned)
+			require.True(t, cookie.Secure)
+			require.True(t, cookie.HttpOnly)
+			require.Empty(t, cookie.Domain, "sessions remain host-only")
+			require.Empty(t, runtime.forwarded, "the session credential never reaches the guest")
+			for _, path := range []string{"/", "/stream/", "/_beam/kiosk/status", "/stream/api/ws"} {
+				req = browserRequest(s, v, types.VMDesktopPort, path)
+				// Partitioned and old unpartitioned cookies can share a name.
+				req.AddCookie(&http.Cookie{Name: cookie.Name, Value: "stale-session"})
+				req.AddCookie(cookie)
+				if path == "/stream/api/ws" {
+					req.Header.Set("Upgrade", "websocket")
+					req.Header.Set("Origin", "https://"+req.Host)
+				}
+				rec = httptest.NewRecorder()
+				e.ServeHTTP(rec, req)
+				require.Equal(t, http.StatusOK, rec.Code, path+": "+rec.Body.String())
+				_, err := req.Cookie(cookie.Name)
+				require.Error(t, err, "gateway credentials are stripped before forwarding")
+			}
+		})
+	}
+}
+
 func TestDesktopServesViewerBeforeBackendReady(t *testing.T) {
 	for _, state := range []types.ContainerStatus{types.ContainerStatusPending, types.ContainerStatusRunning} {
 		t.Run(string(state), func(t *testing.T) {

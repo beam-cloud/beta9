@@ -182,7 +182,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated, tas
 		return err
 	}
 
-	token, err := t.fs.backendRepo.RetrieveActiveToken(ctx, stub.Workspace.Id)
+	token, err := t.fs.backendRepo.RetrieveActiveToken(ctx, stub.Workspace.Id, types.TokenTypeWorkspacePrimary)
 	if err != nil {
 		return err
 	}

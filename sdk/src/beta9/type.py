@@ -1,6 +1,10 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Literal, Optional, Type, Union
+from typing import Dict, List, Literal, Optional, Type, Union, get_args
+
+
+CpuTier = Literal["spot", "shared", "performance"]
+CPU_TIERS = get_args(CpuTier)
 
 
 class LifeCycleMethod(str, Enum):
