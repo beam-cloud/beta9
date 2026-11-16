@@ -1543,20 +1543,27 @@ type VMConfig struct {
 }
 
 // GitHubRunnerConfig runs GitHub Actions jobs on ordinary CPU VMs through a
-// GitHub App; an empty AppID disables it. The App needs Actions (read) and
-// Administration (write) on repositories, Members (read) on organizations, and
-// Workflow job events at the gateway's /api/v1/vm/github-runners/webhook. Its
-// setup URL, with redirect on update, and its callback URL are the dashboard's
-// /runners page, without OAuth during installation. ImageID is
-// docker/Dockerfile.github-runner, registered with beam vm image build.
+// GitHub App. An empty AppID disables it; with one, every other field is
+// required.
+//
+// The App needs Actions (read) and Administration (write) on repositories,
+// Members (read) on organizations, and Workflow job events sent to the
+// gateway's /api/v1/vm/github-runners/webhook. Its setup URL, with redirect on
+// update, and its callback URL are both the dashboard's /vms page; leave
+// "Request user authorization (OAuth) during installation" off.
 type GitHubRunnerConfig struct {
-	AppID         string `key:"appID" json:"app_id"`
-	AppSlug       string `key:"appSlug" json:"app_slug"`
-	ClientID      string `key:"clientID" json:"client_id"`
-	ClientSecret  string `key:"clientSecret" json:"client_secret"`
+	AppID   string `key:"appID" json:"app_id"`
+	AppSlug string `key:"appSlug" json:"app_slug"` // as in github.com/apps/<slug>
+	// OAuth credentials of the App, which prove that whoever connects an
+	// account owns it.
+	ClientID     string `key:"clientID" json:"client_id"`
+	ClientSecret string `key:"clientSecret" json:"client_secret"`
+	// PrivateKey is the PEM that GitHub generates for the App. Its newlines
+	// may be written as \n.
 	PrivateKey    string `key:"privateKey" json:"private_key"`
 	WebhookSecret string `key:"webhookSecret" json:"webhook_secret"`
-	ImageID       string `key:"imageID" json:"image_id"`
+	// ImageID is printed by `beam vm image build docker/github-runner`.
+	ImageID string `key:"imageID" json:"image_id"`
 }
 
 // VMWebRTCConfig bounds authenticated kiosk media on the shared TCP gateway.

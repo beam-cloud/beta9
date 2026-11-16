@@ -2,18 +2,21 @@ package vm
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,7 +27,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 )
@@ -56,12 +58,14 @@ func (r *runnerStore) GetGitHubRunnerInstallation(_ context.Context, ws uint) (*
 	}
 	return nil, nil
 }
-func (r *runnerStore) GetGitHubRunnerInstallationByID(_ context.Context, id int64) (*types.GitHubRunnerInstallation, error) {
+
+func (r *runnerStore) GetGitHubRunnerInstallationById(_ context.Context, id int64) (*types.GitHubRunnerInstallation, error) {
 	if r.connected(id) {
 		return r.installation, nil
 	}
 	return nil, nil
 }
+
 func (r *runnerStore) SaveGitHubRunnerInstallation(_ context.Context, i *types.GitHubRunnerInstallation) error {
 	if r.installation != nil && (r.installation.ID == i.ID) != (r.installation.WorkspaceID == i.WorkspaceID) {
 		return repository.ErrGitHubRunnerConflict
@@ -69,14 +73,16 @@ func (r *runnerStore) SaveGitHubRunnerInstallation(_ context.Context, i *types.G
 	r.installation = i
 	return nil
 }
+
 func (r *runnerStore) DeleteGitHubRunnerInstallation(_ context.Context, id int64) error {
 	if r.connected(id) {
 		r.installation = nil
 	}
 	return nil
 }
+
 func (r *runnerStore) SaveGitHubRunnerJob(_ context.Context, job *types.GitHubRunnerJob) error {
-	rank := map[string]int{"queued": 1, "in_progress": 2, "completed": 3}
+	rank := map[string]int{types.GitHubJobQueued: 1, types.GitHubJobInProgress: 2, types.GitHubJobCompleted: 3}
 	if old, ok := r.jobs[job.ID]; ok {
 		if rank[old.Status] <= rank[job.Status] {
 			old.Status, old.Conclusion, old.RunnerName = job.Status, job.Conclusion, job.RunnerName
@@ -84,22 +90,22 @@ func (r *runnerStore) SaveGitHubRunnerJob(_ context.Context, job *types.GitHubRu
 		return nil
 	}
 	saved := *job
-	if job.Status == "queued" {
-		saved.ProvisionAt = at(time.Now())
-	}
+	saved.ProvisionAt = at(time.Now())
 	r.jobs[job.ID] = &saved
 	return nil
 }
+
 func (r *runnerStore) ListGitHubRunnerJobs(_ context.Context, ws uint, limit, offset int) ([]types.GitHubRunnerJob, int, error) {
 	jobs := []types.GitHubRunnerJob{}
 	for _, job := range r.jobs {
-		if job.WorkspaceID == ws {
+		if job.WorkspaceID == ws && (job.Status == types.GitHubJobCompleted || r.connected(job.InstallationID)) {
 			jobs = append(jobs, *job)
 		}
 	}
 	slices.SortFunc(jobs, func(a, b types.GitHubRunnerJob) int { return int(b.ID - a.ID) })
 	return jobs[min(offset, len(jobs)):min(offset+limit, len(jobs))], len(jobs), nil
 }
+
 func (r *runnerStore) ListDueGitHubRunnerJobs(context.Context) ([]types.GitHubRunnerJob, error) {
 	due := []types.GitHubRunnerJob{}
 	for _, job := range r.jobs {
@@ -109,6 +115,7 @@ func (r *runnerStore) ListDueGitHubRunnerJobs(context.Context) ([]types.GitHubRu
 	}
 	return due, nil
 }
+
 func (r *runnerStore) ClaimGitHubRunnerJob(_ context.Context, job *types.GitHubRunnerJob, vm string) (bool, error) {
 	stored := r.jobs[job.ID]
 	if stored.Attempts != job.Attempts || stored.ProvisionAt == nil || stored.ProvisionAt.After(time.Now()) {
@@ -119,13 +126,17 @@ func (r *runnerStore) ClaimGitHubRunnerJob(_ context.Context, job *types.GitHubR
 	job.VM, job.Attempts = vm, stored.Attempts
 	return true, nil
 }
-func (r *runnerStore) FinishGitHubRunnerJob(_ context.Context, id int64, retry bool, message string) error {
-	if !retry {
-		r.jobs[id].ProvisionAt = nil
-	}
+
+func (r *runnerStore) FinishGitHubRunnerJob(_ context.Context, id int64, message string) error {
+	r.jobs[id].ProvisionAt, r.jobs[id].Error = nil, message
+	return nil
+}
+
+func (r *runnerStore) FailGitHubRunnerJob(_ context.Context, id int64, message string) error {
 	r.jobs[id].Error = message
 	return nil
 }
+
 func (r *runnerStore) GetGitHubRunner(_ context.Context, ws uint, vm string) (*types.GitHubRunner, error) {
 	for _, job := range r.jobs {
 		if job.WorkspaceID == ws && job.VM == vm {
@@ -140,7 +151,8 @@ func (r *runnerStore) GetGitHubRunner(_ context.Context, ws uint, vm string) (*t
 	}
 	return nil, nil
 }
-func (r *runnerStore) ReleaseGitHubRunner(_ context.Context, ws uint, vm, message string) error {
+
+func (r *runnerStore) ReplaceGitHubRunner(_ context.Context, ws uint, vm, message string) error {
 	for _, v := range r.vms.rows {
 		if v.WorkspaceID == ws && v.Name == vm {
 			v.DesiredState = types.VMStateDeleted
@@ -158,16 +170,21 @@ func (b *vmBackend) GetWorkspace(_ context.Context, id uint) (*types.Workspace, 
 	return &types.Workspace{Id: id, ExternalId: "workspace"}, nil
 }
 
+var runnerConfig = types.GitHubRunnerConfig{AppID: "1", AppSlug: "beam-runners", ClientID: "client", ClientSecret: "client-secret",
+	WebhookSecret: "webhook-secret", ImageID: "runner-image"}
+
+// runnerFixture is a workspace connected to the organization acme, through
+// installation 42 of an App whose token for it is cached.
 func runnerFixture(t *testing.T) (*githubRunners, *runnerStore, *auth.AuthInfo, *vmRuntime) {
 	t.Helper()
 	s, v, info, runtime, _ := fixture()
 	delete(s.repo.(*vmStore).rows, v.ID)
 	store := &runnerStore{jobs: map[int64]*types.GitHubRunnerJob{}, vms: s.repo.(*vmStore), installation: &types.GitHubRunnerInstallation{
 		ID: 42, WorkspaceID: 7, TokenID: info.Token.ExternalId, Account: "acme", AccountType: "Organization"}}
-	r := &githubRunners{s: s, repo: store, key: runnerKey(), client: http.DefaultClient, wake: make(chan struct{}, 1),
-		redelivered: map[string]int{}, tokens: map[int64]installationToken{42: {Token: "installation-token", ExpiresAt: time.Now().Add(time.Hour)}},
-		config: types.GitHubRunnerConfig{AppID: "1", AppSlug: "beam-runners", ClientID: "client", ClientSecret: "client-secret",
-			WebhookSecret: "webhook-secret", ImageID: "runner-image"}}
+	app := &githubApp{id: runnerConfig.AppID, slug: runnerConfig.AppSlug, clientID: runnerConfig.ClientID, clientSecret: runnerConfig.ClientSecret,
+		key: runnerKey(), client: http.DefaultClient, apiURL: "https://api.github.invalid", webURL: "https://github.invalid",
+		tokens: map[int64]githubToken{42: {Token: "installation-token", ExpiresAt: time.Now().Add(time.Hour)}}}
+	r := &githubRunners{s: s, repo: store, config: runnerConfig, github: app, wake: make(chan struct{}, 1), redelivered: map[string]int{}}
 	s.runners = r
 	return r, store, info, runtime
 }
@@ -195,7 +212,7 @@ func fakeGitHub(t *testing.T, r *githubRunners, routes map[string]string) func()
 		fmt.Fprint(w, payload)
 	}))
 	t.Cleanup(server.Close)
-	r.apiURL, r.webURL = server.URL, server.URL
+	r.github.apiURL, r.github.webURL = server.URL, server.URL
 	return func() []string {
 		mu.Lock()
 		defer mu.Unlock()
@@ -206,14 +223,24 @@ func fakeGitHub(t *testing.T, r *githubRunners, routes map[string]string) func()
 var beamLabels = []string{"beam-4vcpu-ubuntu-2404"}
 
 func queuedJob(id int64) *types.GitHubRunnerJob {
-	return &types.GitHubRunnerJob{ID: id, InstallationID: 42, WorkspaceID: 7, Repository: "acme/repo", Label: beamLabels[0], Status: "queued"}
+	return &types.GitHubRunnerJob{ID: id, InstallationID: 42, WorkspaceID: 7, Repository: "acme/repo", Label: beamLabels[0], Status: types.GitHubJobQueued}
 }
 
+// deliver sends a webhook the way GitHub does, and returns the response code.
 func deliver(t *testing.T, r *githubRunners, event, action string, labels []string, job *types.GitHubRunnerJob, signed bool) int {
 	t.Helper()
+	// GitHub sends null for what a job does not have yet.
+	nullable := func(value string) any {
+		if value == "" {
+			return nil
+		}
+		return value
+	}
 	body, err := json.Marshal(map[string]any{"action": action, "installation": map[string]any{"id": 42},
-		"repository":   map[string]any{"full_name": "acme/repo"},
-		"workflow_job": map[string]any{"id": job.ID, "name": "test", "labels": labels, "runner_name": job.RunnerName}})
+		"repository": map[string]any{"full_name": "acme/repo"},
+		"workflow_job": map[string]any{"id": job.ID, "name": "test", "workflow_name": "CI", "html_url": "https://github.com/acme/repo/actions/runs/1/job/1",
+			"labels": labels, "runner_name": nullable(job.RunnerName), "conclusion": nullable(job.Conclusion),
+			"created_at": "2026-11-16T09:00:00Z", "completed_at": nil}})
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/vm/github-runners/webhook", bytes.NewReader(body))
 	req.Header.Set("X-GitHub-Event", event)
@@ -232,11 +259,22 @@ func deliver(t *testing.T, r *githubRunners, event, action string, labels []stri
 }
 
 func TestGitHubRunnerLabels(t *testing.T) {
-	size, ok := runnerSizeFor([]string{"Beam-8vcpu-Ubuntu-2404"})
+	label, ok := runnerLabel([]string{"Beam-8vCPU-Ubuntu-2404"})
 	require.True(t, ok)
-	require.Equal(t, runnerSize{"beam-8vcpu-ubuntu-2404", 8000, 32768}, size)
-	for _, labels := range [][]string{nil, {"ubuntu-latest"}, {"beam-3vcpu-ubuntu-2404"}, {"self-hosted", "beam-4vcpu-ubuntu-2404"}} {
-		_, ok := runnerSizeFor(labels)
+	size, ok := runnerSizeFor(label)
+	require.True(t, ok)
+	require.Equal(t, runnerSize{"beam-8vcpu-ubuntu-2404", 8000, 32768, "50Gi"}, size)
+
+	for _, labels := range [][]string{nil, {"ubuntu-latest"}, {"self-hosted", "linux"}} {
+		_, ok := runnerLabel(labels)
+		require.False(t, ok, "%v does not ask for Beam", labels)
+	}
+
+	// These ask for Beam, but match no runner.
+	for _, labels := range [][]string{{"beam-3vcpu-ubuntu-2404"}, {"self-hosted", "beam-4vcpu-ubuntu-2404"}} {
+		label, ok := runnerLabel(labels)
+		require.True(t, ok, labels)
+		_, ok = runnerSizeFor(label)
 		require.False(t, ok, labels)
 	}
 }
@@ -245,27 +283,36 @@ func TestGitHubRunnerWebhookIntake(t *testing.T) {
 	r, store, _, _ := runnerFixture(t)
 	require.Equal(t, 401, deliver(t, r, "workflow_job", "queued", beamLabels, queuedJob(1), false))
 	require.Equal(t, 202, deliver(t, r, "workflow_job", "queued", []string{"ubuntu-latest"}, queuedJob(1), true))
+	require.Equal(t, 202, deliver(t, r, "workflow_job", "waiting", beamLabels, queuedJob(1), true))
 	require.Empty(t, store.jobs)
+	require.Empty(t, r.wake)
 
-	finished := queuedJob(1)
-	finished.RunnerName = "ghr-other"
-	require.Equal(t, 202, deliver(t, r, "workflow_job", "completed", beamLabels, finished, true))
-	require.Equal(t, 202, deliver(t, r, "workflow_job", "queued", beamLabels, queuedJob(1), true))
-	require.Equal(t, "completed", store.jobs[1].Status, "late deliveries cannot regress a job")
-	require.Equal(t, "ghr-other", store.jobs[1].RunnerName)
-	require.Nil(t, store.jobs[1].ProvisionAt)
-
-	<-r.wake
-	require.Equal(t, 202, deliver(t, r, "workflow_job", "queued", beamLabels, queuedJob(2), true))
-	require.Equal(t, uint(7), store.jobs[2].WorkspaceID)
-	require.NotNil(t, store.jobs[2].ProvisionAt)
+	require.Equal(t, 202, deliver(t, r, "workflow_job", "queued", []string{"Beam-4vCPU-Ubuntu-2404"}, queuedJob(1), true))
+	job := store.jobs[1]
+	require.NotNil(t, job.ProvisionAt, "a new job is due for a runner")
 	require.Len(t, r.wake, 1)
+	require.Equal(t, types.GitHubRunnerJob{ID: 1, InstallationID: 42, WorkspaceID: 7, Repository: "acme/repo", Workflow: "CI", Name: "test",
+		URL: "https://github.com/acme/repo/actions/runs/1/job/1", Label: "beam-4vcpu-ubuntu-2404", Status: "queued",
+		CreatedAt: time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC), ProvisionAt: job.ProvisionAt}, *job)
+
+	// Deliveries repeat and arrive out of order.
+	finished := queuedJob(1)
+	finished.RunnerName, finished.Conclusion = "ghr-other", "success"
+	require.Equal(t, 202, deliver(t, r, "workflow_job", "completed", beamLabels, finished, true))
+	require.Equal(t, 202, deliver(t, r, "workflow_job", "in_progress", beamLabels, queuedJob(1), true))
+	require.Equal(t, "completed", job.Status, "late deliveries cannot regress a job")
+	require.Equal(t, "ghr-other", job.RunnerName)
+	require.Equal(t, "success", job.Conclusion)
+
+	// A job that no runner will match is kept, to say so.
+	require.Equal(t, 202, deliver(t, r, "workflow_job", "queued", []string{"self-hosted", "beam-4vcpu-ubuntu-2404"}, queuedJob(2), true))
+	require.Equal(t, "self-hosted, beam-4vcpu-ubuntu-2404", store.jobs[2].Label)
 
 	require.Equal(t, 202, deliver(t, r, "installation", "suspend", nil, queuedJob(0), true))
 	require.Nil(t, store.installation)
-	require.Empty(t, r.tokens)
+	require.Empty(t, r.github.tokens)
 	require.Equal(t, 202, deliver(t, r, "workflow_job", "queued", beamLabels, queuedJob(3), true))
-	require.NotContains(t, store.jobs, int64(3))
+	require.NotContains(t, store.jobs, int64(3), "jobs of accounts that are not connected are ignored")
 }
 
 func TestGitHubRunnerProvisionsOnce(t *testing.T) {
@@ -289,41 +336,81 @@ func TestGitHubRunnerProvisionsOnce(t *testing.T) {
 	v, err := r.s.repo.GetVM(ctx, 7, job.VM)
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(v.Name, runnerPrefix))
+	require.True(t, validName.MatchString(v.Name))
 	require.Equal(t, info.Token.ExternalId, v.TokenID)
 	require.EqualValues(t, 4000, v.Spec.CPU)
 	require.EqualValues(t, 16384, v.Spec.Memory)
+	require.Equal(t, "53687091200", v.Spec.DiskSize, "50 GiB, as the VM stores it")
 	require.True(t, v.Spec.DockerEnabled)
+	require.Equal(t, "runner-image", v.Spec.ImageID)
+	require.Equal(t, map[string]string{"github.repository": "acme/repo"}, v.Metadata)
 	require.Contains(t, v.Spec.Env, "BEAM_GITHUB_JIT_CONFIG=jit-secret")
 	response, err := json.Marshal(r.s.response(v))
 	require.NoError(t, err)
 	require.NotContains(t, string(response), "jit-secret")
 
-	// A retry of an attempt which died after creating its runner reuses it.
+	// A retry of an attempt that died after it created its runner keeps it.
 	job.ProvisionAt = at(time.Now())
 	require.NoError(t, r.provision(ctx, *job))
 	require.Len(t, calls(), 1)
 	require.Nil(t, job.ProvisionAt)
 
-	// A runner which stops before taking a job is replaced.
+	// A runner that stops before it takes a job is replaced.
 	delete(runtime.containers.states, v.ContainerID)
 	require.NoError(t, r.s.reconcileVM(ctx, v))
 	require.Equal(t, types.VMStateDeleted, v.Status)
+	require.Contains(t, job.Error, "stopped before it took a job")
 	require.NoError(t, r.provision(ctx, *job))
 	require.Len(t, runtime.requests, 2)
 	require.NotEqual(t, v.Name, job.VM)
 	require.Nil(t, job.ProvisionAt)
+	require.Empty(t, job.Error)
+}
 
-	// A job cancelled before taking a runner needs none, but one that took
-	// another job's runner starts one for that job.
-	require.NoError(t, store.SaveGitHubRunnerJob(ctx, queuedJob(2)))
-	store.jobs[2].Status = "completed"
-	require.NoError(t, r.provision(ctx, *store.jobs[2]))
-	require.Len(t, runtime.requests, 2)
-	require.Nil(t, store.jobs[2].ProvisionAt)
-	require.NoError(t, store.SaveGitHubRunnerJob(ctx, queuedJob(3)))
-	store.jobs[3].Status, store.jobs[3].RunnerName = "in_progress", job.VM
-	require.NoError(t, r.provision(ctx, *store.jobs[3]))
-	require.Len(t, runtime.requests, 3)
+// Every job that waits for a runner, or took one of ours, starts one: a job
+// that runs on another job's runner leaves that job without.
+func TestGitHubRunnerProvisionsWhatJobsNeed(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status, runner, label string
+		launched              bool
+		err                   string
+	}{
+		"queued":                            {status: "queued", launched: true},
+		"cancelled before it took a runner": {status: "completed"},
+		"runs on another job's runner":      {status: "in_progress", runner: "ghr-0123456789ab", launched: true},
+		"ran on another job's runner":       {status: "completed", runner: "ghr-0123456789ab", launched: true},
+		"runs on a runner that is not ours": {status: "in_progress", runner: "self-hosted-1"},
+		"asks for a size there is not":      {status: "queued", label: "beam-3vcpu-ubuntu-2404", err: "runs-on must be exactly one of beam-2vcpu-ubuntu-2404, "},
+		"asks for more than a size":         {status: "queued", label: "self-hosted, beam-4vcpu-ubuntu-2404", err: "runs-on must be exactly one of "},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, store, _, runtime := runnerFixture(t)
+			ctx := context.Background()
+			fakeGitHub(t, r, map[string]string{
+				"POST /repos/acme/repo/actions/runners/generate-jitconfig": `201 {"encoded_jit_config":"jit-secret"}`,
+			})
+			job := queuedJob(1)
+			job.Status, job.RunnerName = tc.status, tc.runner
+			if tc.label != "" {
+				job.Label = tc.label
+			}
+
+			// The job is due however it is first seen.
+			require.NoError(t, store.SaveGitHubRunnerJob(ctx, job))
+			due, err := store.ListDueGitHubRunnerJobs(ctx)
+			require.NoError(t, err)
+			require.Len(t, due, 1)
+			require.NoError(t, r.provision(ctx, due[0]))
+
+			require.Nil(t, store.jobs[1].ProvisionAt)
+			require.Equal(t, tc.launched, len(runtime.requests) == 1)
+			if tc.err == "" {
+				require.Empty(t, store.jobs[1].Error)
+			} else {
+				require.Contains(t, store.jobs[1].Error, tc.err)
+			}
+		})
+	}
 }
 
 func TestGitHubRunnerProvisionRetriesThenGivesUp(t *testing.T) {
@@ -343,6 +430,17 @@ func TestGitHubRunnerProvisionRetriesThenGivesUp(t *testing.T) {
 	require.Nil(t, job.ProvisionAt)
 	require.Contains(t, job.Error, "no runner after 5 attempts")
 	require.Empty(t, runtime.requests)
+}
+
+func TestGitHubRunnerExplainsGitHubRefusals(t *testing.T) {
+	r, store, _, _ := runnerFixture(t)
+	ctx := context.Background()
+	fakeGitHub(t, r, map[string]string{
+		"POST /repos/acme/repo/actions/runners/generate-jitconfig": `403 {"message":"Resource not accessible by integration"}`,
+	})
+	require.NoError(t, store.SaveGitHubRunnerJob(ctx, queuedJob(1)))
+	require.Error(t, r.provision(ctx, *store.jobs[1]))
+	require.Equal(t, "register the runner with GitHub: GitHub returned HTTP 403: Resource not accessible by integration", store.jobs[1].Error)
 }
 
 func TestGitHubRunnerVMLifecycle(t *testing.T) {
@@ -376,7 +474,7 @@ func TestGitHubRunnerVMLifecycle(t *testing.T) {
 		"idle":                 {setup: idle, deregister: "204", deleted: true},
 		"idle but just busy":   {setup: idle, deregister: "422"},
 		"disconnected":         {setup: func(_ *types.VM, store *runnerStore, _ *githubRunners) { store.installation = nil }, deleted: true},
-		"disabled":             {setup: func(_ *types.VM, _ *runnerStore, r *githubRunners) { r.key = nil }, deleted: true},
+		"disabled":             {setup: func(_ *types.VM, _ *runnerStore, r *githubRunners) { r.github = nil }, deleted: true},
 		"stopped":              {setup: func(v *types.VM, _ *runnerStore, _ *githubRunners) { v.DesiredState = types.VMStateStopped }, deleted: true},
 		"past its lifetime":    {setup: func(v *types.VM, _ *runnerStore, _ *githubRunners) { v.CreatedAt = time.Now().Add(-runnerLifetime) }, deleted: true},
 		"named like a runner":  {setup: func(_ *types.VM, store *runnerStore, _ *githubRunners) { store.jobs[1].VM = "ghr-another" }},
@@ -430,6 +528,72 @@ func TestGitHubRunnerVMLifecycle(t *testing.T) {
 	}
 }
 
+// connect posts to the connect endpoint, and returns the response code with
+// the step it answered, or with the error message.
+func connect(t *testing.T, r *githubRunners, info *auth.AuthInfo, body string) (int, runnerConnection, string) {
+	t.Helper()
+	c, rec := actionContext(info, "", "", body)
+	if err := r.connect(c); err != nil {
+		c.Echo().HTTPErrorHandler(err, c)
+	}
+	var response struct {
+		runnerConnection
+		Message string `json:"message"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response), rec.Body.String())
+	return rec.Code, response.runnerConnection, response.Message
+}
+
+func connectState(t *testing.T, target string) string {
+	t.Helper()
+	parsed, err := url.Parse(target)
+	require.NoError(t, err)
+	require.NotEmpty(t, parsed.Query().Get("state"))
+	return parsed.Query().Get("state")
+}
+
+func TestGitHubRunnerConnect(t *testing.T) {
+	r, store, info, _ := runnerFixture(t)
+	store.installation = nil
+	calls := fakeGitHub(t, r, map[string]string{
+		"POST /login/oauth/access_token":   `200 {"access_token":"user-token"}`,
+		"GET /user":                        `200 {"login":"alice"}`,
+		"GET /app/installations/42":        `200 {"account":{"login":"acme","type":"Organization"}}`,
+		"GET /orgs/acme/memberships/alice": `200 {"state":"active","role":"admin"}`,
+	})
+
+	// To GitHub to install the App, and back with what was installed.
+	code, step, _ := connect(t, r, info, `{}`)
+	require.Equal(t, 200, code)
+	require.True(t, strings.HasPrefix(step.URL, r.github.webURL+"/apps/beam-runners/installations/new?state="), step.URL)
+	installed := connectState(t, step.URL)
+	for _, incomplete := range []string{`{"state":%q}`, `{"state":%q,"code":"code"}`} {
+		code, _, message := connect(t, r, info, fmt.Sprintf(incomplete, installed))
+		require.Equal(t, 400, code, "an installation is authorized only once it is known")
+		require.Contains(t, message, "connect again")
+	}
+
+	// To GitHub to authorize it, and back with a code for the user.
+	code, step, _ = connect(t, r, info, fmt.Sprintf(`{"state":%q,"installation_id":42}`, installed))
+	require.Equal(t, 200, code)
+	require.False(t, step.Connected)
+	require.True(t, strings.HasPrefix(step.URL, r.github.webURL+"/login/oauth/authorize?client_id=client&state="), step.URL)
+	authorized := connectState(t, step.URL)
+	require.Empty(t, calls(), "nothing is asked of GitHub before the user returns from it")
+
+	other := *info
+	other.Token = &types.Token{ExternalId: "another-token"}
+	code, _, _ = connect(t, r, &other, fmt.Sprintf(`{"state":%q,"code":"code"}`, authorized))
+	require.Equal(t, 400, code, "a state is only valid for the token that started connecting")
+	require.Nil(t, store.installation)
+
+	code, step, _ = connect(t, r, info, fmt.Sprintf(`{"state":%q,"code":"code"}`, authorized))
+	require.Equal(t, 200, code)
+	require.Equal(t, runnerConnection{Connected: true}, step)
+	require.Equal(t, &types.GitHubRunnerInstallation{ID: 42, WorkspaceID: 7, TokenID: info.Token.ExternalId, Account: "acme", AccountType: "Organization"}, store.installation)
+	require.Contains(t, calls(), `POST /login/oauth/access_token {"client_id":"client","client_secret":"client-secret","code":"code"}`)
+}
+
 func TestGitHubRunnerConnectState(t *testing.T) {
 	r, _, info, _ := runnerFixture(t)
 	state := r.state(info, 42, time.Now().Add(time.Minute).Unix())
@@ -453,16 +617,20 @@ func TestGitHubRunnerConnectState(t *testing.T) {
 
 func TestGitHubRunnerConnectRequiresAccountOwner(t *testing.T) {
 	for _, tc := range []struct {
-		name, account, membership string
-		installedIn               uint
-		code                      int
+		name, grant, installation, membership string
+		installedIn                           uint
+		code                                  int
 	}{
-		{"org owner", `{"login":"acme","type":"Organization"}`, `200 {"state":"active","role":"admin"}`, 0, 204},
-		{"org member", `{"login":"acme","type":"Organization"}`, `200 {"state":"active","role":"member"}`, 0, 403},
-		{"not in org", `{"login":"acme","type":"Organization"}`, `404 {}`, 0, 403},
-		{"user", `{"login":"Alice","type":"User"}`, "", 0, 204},
-		{"another user", `{"login":"bob","type":"User"}`, "", 0, 403},
-		{"other workspace", `{"login":"acme","type":"Organization"}`, `200 {"state":"active","role":"admin"}`, 9, 409},
+		{name: "org owner", membership: `200 {"state":"active","role":"admin"}`, code: 200},
+		{name: "org member", membership: `200 {"state":"active","role":"member"}`, code: 403},
+		{name: "invited owner", membership: `200 {"state":"pending","role":"admin"}`, code: 403},
+		{name: "not in org", membership: `404 {}`, code: 403},
+		{name: "user", installation: `200 {"account":{"login":"Alice","type":"User"}}`, code: 200},
+		{name: "another user", installation: `200 {"account":{"login":"bob","type":"User"}}`, code: 403},
+		{name: "suspended", installation: `200 {"account":{"login":"Alice","type":"User"},"suspended_at":"2026-11-16T09:00:00Z"}`, code: 403},
+		{name: "uninstalled", installation: `404 {"message":"Not Found"}`, code: 400},
+		{name: "rejected code", grant: `200 {"error":"bad_verification_code"}`, code: 400},
+		{name: "other workspace", membership: `200 {"state":"active","role":"admin"}`, installedIn: 9, code: 409},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r, store, info, _ := runnerFixture(t)
@@ -471,21 +639,19 @@ func TestGitHubRunnerConnectRequiresAccountOwner(t *testing.T) {
 				store.installation = &types.GitHubRunnerInstallation{ID: 42, WorkspaceID: tc.installedIn}
 			}
 			routes := map[string]string{
-				"POST /login/oauth/access_token": `200 {"access_token":"user-token"}`,
+				"POST /login/oauth/access_token": cmp.Or(tc.grant, `200 {"access_token":"user-token"}`),
 				"GET /user":                      `200 {"login":"alice"}`,
-				"GET /app/installations/42":      `200 {"account":` + tc.account + `}`,
+				"GET /app/installations/42":      cmp.Or(tc.installation, `200 {"account":{"login":"acme","type":"Organization"}}`),
 			}
 			if tc.membership != "" {
 				routes["GET /orgs/acme/memberships/alice"] = tc.membership
 			}
 			fakeGitHub(t, r, routes)
 			state := r.state(info, 42, time.Now().Add(time.Minute).Unix())
-			c, rec := actionContext(info, "", "", fmt.Sprintf(`{"code":"code","state":%q}`, state))
-			if err := r.complete(c); err != nil {
-				c.Echo().HTTPErrorHandler(err, c)
-			}
-			require.Equal(t, tc.code, rec.Code, rec.Body.String())
-			require.Equal(t, tc.code == 204, store.installation != nil && store.installation.WorkspaceID == 7)
+			code, step, message := connect(t, r, info, fmt.Sprintf(`{"code":"code","state":%q}`, state))
+			require.Equal(t, tc.code, code, message)
+			require.Equal(t, tc.code == 200, step.Connected)
+			require.Equal(t, tc.code == 200, store.installation != nil && store.installation.WorkspaceID == 7)
 		})
 	}
 }
@@ -514,89 +680,136 @@ func TestGitHubRunnerRedeliversFailedWebhooks(t *testing.T) {
 	require.Empty(t, nextPage(`<https://api.github.com/app/hook/deliveries?cursor=v1_1>; rel="prev"`))
 }
 
-// Set BETA9_GITHUB_RUNNER_TEST_DATABASE to the JSON PostgresConfig of a
-// disposable database to run the repository's SQL.
-func TestGitHubRunnerPostgres(t *testing.T) {
-	config := os.Getenv("BETA9_GITHUB_RUNNER_TEST_DATABASE")
-	if config == "" {
-		t.Skip("BETA9_GITHUB_RUNNER_TEST_DATABASE is not set")
+func TestGitHubRunnerRedeliveryReadsEveryPageInTheWindow(t *testing.T) {
+	r, _, _, _ := runnerFixture(t)
+	var mu sync.Mutex
+	var served []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		mu.Lock()
+		served = append(served, req.Method+" "+req.URL.RequestURI())
+		mu.Unlock()
+		recent := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+		switch {
+		case req.Method == http.MethodPost:
+			w.WriteHeader(http.StatusAccepted)
+		case req.URL.Query().Get("cursor") == "":
+			w.Header().Set("Link", fmt.Sprintf(`<http://%s/app/hook/deliveries?cursor=2>; rel="next"`, req.Host))
+			fmt.Fprintf(w, `[{"id":3,"guid":"a","delivered_at":%q,"status_code":202}]`, recent)
+		case req.URL.Query().Get("cursor") == "2":
+			w.Header().Set("Link", fmt.Sprintf(`<http://%s/app/hook/deliveries?cursor=3>; rel="next"`, req.Host))
+			fmt.Fprintf(w, `[{"id":2,"guid":"b","delivered_at":%q,"status_code":500},{"id":1,"guid":"c","delivered_at":"2020-01-01T00:00:00Z","status_code":500}]`, recent)
+		default:
+			t.Errorf("read past the window: %s", req.URL)
+		}
+	}))
+	t.Cleanup(server.Close)
+	r.github.apiURL = server.URL
+
+	require.NoError(t, r.redeliver(context.Background(), time.Now().Add(-time.Hour)))
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []string{"GET /app/hook/deliveries?per_page=100", "GET /app/hook/deliveries?cursor=2", "POST /app/hook/deliveries/2/attempts"}, served)
+}
+
+// runnerBackend is a backend that stores GitHub runners, as Postgres does.
+type runnerBackend struct {
+	*vmBackend
+	*runnerStore
+}
+
+func TestGitHubRunnerConfiguration(t *testing.T) {
+	key := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(runnerKey())}))
+	configured := runnerConfig
+	configured.PrivateKey = key
+	escaped, converted, incomplete, unreadable, public := configured, configured, configured, configured, configured
+	escaped.PrivateKey = strings.ReplaceAll(key, "\n", `\n`)
+	pkcs8, err := x509.MarshalPKCS8PrivateKey(runnerKey())
+	require.NoError(t, err)
+	converted.PrivateKey = string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8}))
+	incomplete.ClientSecret, incomplete.ImageID = "", ""
+	unreadable.PrivateKey = "secret"
+	public.PrivateKey = string(pem.EncodeToMemory(&pem.Block{Type: "RSA PUBLIC KEY", Bytes: x509.MarshalPKCS1PublicKey(&runnerKey().PublicKey)}))
+
+	for name, tc := range map[string]struct {
+		config  types.GitHubRunnerConfig
+		enabled bool
+		err     string
+	}{
+		"not configured":           {},
+		"configured":               {config: configured, enabled: true},
+		"key from the environment": {config: escaped, enabled: true},
+		"key converted to PKCS #8": {config: converted, enabled: true},
+		"missing settings":         {config: incomplete, err: "abstractions.vm.githubRunners has an appID but no clientSecret, imageID"},
+		"unreadable key":           {config: unreadable, err: "abstractions.vm.githubRunners.privateKey must be the App's private key"},
+		"not a private key":        {config: public, err: "abstractions.vm.githubRunners.privateKey must be the App's private key"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, _, info, _, _ := fixture()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			s.ctx, s.config.GitHubRunners = ctx, tc.config
+			s.backend = runnerBackend{s.backend.(*vmBackend), &runnerStore{}}
+			err := s.initGitHubRunners(echo.New().Group("/api/v1/vm"))
+			if tc.err != "" {
+				require.ErrorContains(t, err, tc.err)
+				return
+			}
+			require.NoError(t, err)
+
+			c, rec := actionContext(info, "", "", "")
+			require.NoError(t, s.runners.status(c))
+			var status struct {
+				Enabled      bool            `json:"enabled"`
+				Installation json.RawMessage `json:"installation"`
+				Sizes        []runnerSize    `json:"sizes"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &status))
+			require.Equal(t, tc.enabled, status.Enabled)
+			require.Equal(t, "null", string(status.Installation))
+			require.Equal(t, runnerSizes, status.Sizes)
+			require.Contains(t, rec.Body.String(), `{"label":"beam-2vcpu-ubuntu-2404","cpu":2000,"memory":8192,"disk_size":"50Gi"}`)
+
+			code, _, message := connect(t, s.runners, info, `{}`)
+			if tc.enabled {
+				require.Equal(t, 200, code)
+			} else {
+				require.Equal(t, 503, code)
+				require.Equal(t, "GitHub runners are not configured", message)
+			}
+		})
 	}
-	var postgres types.PostgresConfig
-	require.NoError(t, json.Unmarshal([]byte(config), &postgres))
-	repo, err := repository.NewBackendPostgresRepository(postgres, nil)
-	require.NoError(t, err)
-	require.NoError(t, repo.Migrate())
-	ctx := context.Background()
-	workspace, err := repo.CreateWorkspace(ctx)
-	require.NoError(t, err)
-	other, err := repo.CreateWorkspace(ctx)
-	require.NoError(t, err)
 
-	id := time.Now().UnixNano()
-	installation := types.GitHubRunnerInstallation{ID: id, WorkspaceID: workspace.Id, TokenID: "token", Account: "acme", AccountType: "Organization"}
-	require.NoError(t, repo.SaveGitHubRunnerInstallation(ctx, &installation))
-	installation.TokenID = "new-token"
-	require.NoError(t, repo.SaveGitHubRunnerInstallation(ctx, &installation))
-	moved, second := installation, installation
-	moved.WorkspaceID, second.ID = other.Id, id+1
-	require.ErrorIs(t, repo.SaveGitHubRunnerInstallation(ctx, &moved), repository.ErrGitHubRunnerConflict)
-	require.ErrorIs(t, repo.SaveGitHubRunnerInstallation(ctx, &second), repository.ErrGitHubRunnerConflict)
-	saved, err := repo.GetGitHubRunnerInstallation(ctx, workspace.Id)
-	require.NoError(t, err)
-	require.Equal(t, "new-token", saved.TokenID)
+	s, _, _, _, _ := fixture()
+	require.ErrorContains(t, s.initGitHubRunners(echo.New().Group("/api/v1/vm")), "backend does not support GitHub runners")
+}
 
-	isDue := func(id int64) bool {
-		due, err := repo.ListDueGitHubRunnerJobs(ctx)
-		require.NoError(t, err)
-		return slices.ContainsFunc(due, func(job types.GitHubRunnerJob) bool { return job.ID == id })
+// The dashboard reads these names.
+func TestGitHubRunnerJobsResponse(t *testing.T) {
+	r, store, info, _ := runnerFixture(t)
+	started := time.Date(2026, 11, 16, 9, 1, 0, 0, time.UTC)
+	store.jobs[1] = queuedJob(1)
+	store.jobs[2] = &types.GitHubRunnerJob{ID: 2, InstallationID: 42, WorkspaceID: 7, Repository: "acme/repo", Workflow: "CI", Name: "test",
+		URL: "https://github.com/acme/repo/actions/runs/1/job/2", Label: beamLabels[0], Status: "in_progress", RunnerName: "ghr-0123456789ab",
+		CreatedAt: started.Add(-time.Minute), StartedAt: &started, VM: "ghr-ba9876543210", Attempts: 2, ProvisionAt: &started, Error: "boom"}
+	c, rec := actionContext(info, "", "", "")
+	c.Request().URL.RawQuery = "limit=1"
+	require.NoError(t, r.jobs(c))
+	require.JSONEq(t, `{"total":2,"data":[{"id":2,"repository":"acme/repo","workflow":"CI","name":"test",
+		"url":"https://github.com/acme/repo/actions/runs/1/job/2","label":"beam-4vcpu-ubuntu-2404","status":"in_progress",
+		"runner_name":"ghr-0123456789ab","created_at":"2026-11-16T09:00:00Z","started_at":"2026-11-16T09:01:00Z"}]}`, rec.Body.String())
+
+	// A job's error says why it has no runner, which the job above has.
+	store.jobs[1].Error = "no runner after 5 attempts: boom"
+	c, rec = actionContext(info, "", "", "")
+	c.Request().URL.RawQuery = "limit=1&offset=1"
+	require.NoError(t, r.jobs(c))
+	require.Contains(t, rec.Body.String(), `"status":"queued","created_at":"0001-01-01T00:00:00Z","error":"no runner after 5 attempts: boom"`)
+
+	c, rec = actionContext(info, "", "", "")
+	require.NoError(t, r.status(c))
+	var status struct {
+		Installation map[string]any `json:"installation"`
 	}
-	job := types.GitHubRunnerJob{ID: id, InstallationID: id, WorkspaceID: workspace.Id, Repository: "acme/repo",
-		Label: beamLabels[0], Status: "queued", CreatedAt: time.Now()}
-	require.NoError(t, repo.SaveGitHubRunnerJob(ctx, &job))
-	require.True(t, isDue(id))
-	stale := job
-	claimed, err := repo.ClaimGitHubRunnerJob(ctx, &job, "ghr-a")
-	require.NoError(t, err)
-	require.True(t, claimed)
-	claimed, err = repo.ClaimGitHubRunnerJob(ctx, &stale, "ghr-b")
-	require.NoError(t, err)
-	require.False(t, claimed)
-	require.False(t, isDue(id), "a claim schedules its retry")
-	require.NoError(t, repo.FinishGitHubRunnerJob(ctx, id, false, ""))
-
-	// GitHub ran another job on this job's runner.
-	ran := types.GitHubRunnerJob{ID: id + 1, InstallationID: id, WorkspaceID: workspace.Id, Repository: "acme/repo",
-		Label: beamLabels[0], Status: "in_progress", RunnerName: "ghr-a", CreatedAt: time.Now()}
-	require.NoError(t, repo.SaveGitHubRunnerJob(ctx, &ran))
-	ran.Status, ran.RunnerName = "queued", ""
-	require.NoError(t, repo.SaveGitHubRunnerJob(ctx, &ran))
-	require.False(t, isDue(id+1))
-	runner, err := repo.GetGitHubRunner(ctx, workspace.Id, "ghr-a")
-	require.NoError(t, err)
-	require.Equal(t, &types.GitHubRunner{InstallationID: id, Repository: "acme/repo", Connected: true, JobStatus: "in_progress"}, runner)
-	runner, err = repo.GetGitHubRunner(ctx, other.Id, "ghr-a")
-	require.NoError(t, err)
-	require.Nil(t, runner)
-
-	vm := &types.VM{ID: uuid.NewString(), WorkspaceID: workspace.Id, WorkspaceExternalID: workspace.ExternalId, Name: "ghr-a",
-		Handle: uuid.NewString(), DesiredState: types.VMStateRunning, LastActiveAt: time.Now()}
-	require.NoError(t, repo.CreateVM(ctx, vm))
-	require.NoError(t, repo.ReleaseGitHubRunner(ctx, workspace.Id, "ghr-a", "boom"))
-	require.True(t, isDue(id))
-	vm, err = repo.GetVM(ctx, workspace.Id, "ghr-a")
-	require.NoError(t, err)
-	require.Equal(t, types.VMStateDeleted, vm.DesiredState)
-	jobs, total, err := repo.ListGitHubRunnerJobs(ctx, workspace.Id, 1, 0)
-	require.NoError(t, err)
-	require.Equal(t, 2, total)
-	require.Equal(t, id+1, jobs[0].ID)
-	jobs, _, err = repo.ListGitHubRunnerJobs(ctx, workspace.Id, 1, 1)
-	require.NoError(t, err)
-	require.Equal(t, "boom", jobs[0].Error)
-
-	require.NoError(t, repo.DeleteGitHubRunnerInstallation(ctx, id))
-	require.False(t, isDue(id))
-	runner, err = repo.GetGitHubRunner(ctx, workspace.Id, "ghr-a")
-	require.NoError(t, err)
-	require.False(t, runner.Connected)
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &status))
+	require.Equal(t, map[string]any{"id": float64(42), "account": "acme", "account_type": "Organization", "created_at": "0001-01-01T00:00:00Z"}, status.Installation)
 }

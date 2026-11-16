@@ -335,6 +335,24 @@ type BackendRepository interface {
 	ListDisksWithRelated(ctx context.Context, workspaceId uint) ([]types.DiskWithRelated, error)
 }
 
+// GitHubRunnerRepository stores the GitHub accounts that workspaces have
+// connected, and the workflow jobs that need a runner VM. Lookups return nil
+// when nothing matches.
+type GitHubRunnerRepository interface {
+	GetGitHubRunnerInstallation(ctx context.Context, workspaceId uint) (*types.GitHubRunnerInstallation, error)
+	GetGitHubRunnerInstallationById(ctx context.Context, installationId int64) (*types.GitHubRunnerInstallation, error)
+	SaveGitHubRunnerInstallation(ctx context.Context, installation *types.GitHubRunnerInstallation) error
+	DeleteGitHubRunnerInstallation(ctx context.Context, installationId int64) error
+	SaveGitHubRunnerJob(ctx context.Context, job *types.GitHubRunnerJob) error
+	ListGitHubRunnerJobs(ctx context.Context, workspaceId uint, limit, offset int) ([]types.GitHubRunnerJob, int, error)
+	ListDueGitHubRunnerJobs(ctx context.Context) ([]types.GitHubRunnerJob, error)
+	ClaimGitHubRunnerJob(ctx context.Context, job *types.GitHubRunnerJob, vmName string) (bool, error)
+	FinishGitHubRunnerJob(ctx context.Context, jobId int64, message string) error
+	FailGitHubRunnerJob(ctx context.Context, jobId int64, message string) error
+	GetGitHubRunner(ctx context.Context, workspaceId uint, vmName string) (*types.GitHubRunner, error)
+	ReplaceGitHubRunner(ctx context.Context, workspaceId uint, vmName, message string) error
+}
+
 type TaskRepository interface {
 	WithTaskMonitorLease(ctx context.Context, fn func(context.Context) error) error
 	GetTaskState(ctx context.Context, workspaceName, stubId, taskId string) (*types.TaskMessage, error)
