@@ -758,7 +758,7 @@ func (g *Gateway) registerServices() error {
 	if vmConfig.BaseURL == "" {
 		vmConfig.BaseURL = g.Config.GatewayService.HTTP.GetExternalURL()
 	}
-	mirrorConfig := g.Config.Abstractions.Mirror
+	mirrorConfig := vmConfig.Mirror
 	mirrors, err := mirror.New(g.ctx, mirror.ServiceOpts{
 		Config: mirror.Config{
 			KeepGenerations: mirrorConfig.KeepGenerations,
