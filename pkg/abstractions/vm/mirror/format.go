@@ -1,6 +1,8 @@
-// Package mirror reads and writes the mirror store format: content-addressed
-// objects and the per-generation manifest that maps a home-relative file tree
-// onto them. docs/mirror/format.md is the specification; the vectors under
+// Package mirror holds a laptop's files for VMs: the store format
+// (content-addressed objects and the per-generation manifest that maps a
+// home-relative file tree onto them), the gateway API that uploads and
+// retires generations, and the read-only filesystem a worker mounts under a
+// VM's home. docs/mirror/README.md is the specification; the vectors under
 // testdata are shared with the Rust client.
 package mirror
 
@@ -9,8 +11,13 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"path"
+	"regexp"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -556,4 +563,449 @@ func (m *Manifest) validateRecord(index uint32, entry Entry) error {
 		return invalid("entry %d has unknown kind %d", index, entry.Kind)
 	}
 	return nil
+}
+
+// homeName is a conservative account name. It cannot begin with a dot, so
+// it is never . or ..
+var homeName = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}$`)
+
+// ValidHome reports whether home is a home directory a tree may be presented
+// at: /Users/<name> or /home/<name>, clean and absolute. A manifest's home is
+// written by a client, so nothing else is taken.
+func ValidHome(home string) bool {
+	parent, name := path.Split(home)
+	return (parent == "/Users/" || parent == "/home/") && homeName.MatchString(name) && path.Clean(home) == home
+}
+
+// SourceHome is the home directory meta records the files came from, or
+// empty when meta records none that ValidHome accepts. Meta is the client's
+// to fill: malformed meta has no home rather than an error.
+func SourceHome(meta []byte) string {
+	var decoded struct {
+		Source struct {
+			Home string `json:"home"`
+		} `json:"source"`
+	}
+	if json.Unmarshal(meta, &decoded) != nil || !ValidHome(decoded.Source.Home) {
+		return ""
+	}
+	return decoded.Source.Home
+}
+
+// FileExtent is an Extent that names its object directly, for building.
+type FileExtent struct {
+	Object    Object
+	Offset    uint32
+	StoredLen uint32
+	RawLen    uint32
+}
+
+type buildNode struct {
+	name     string
+	kind     uint8
+	mode     uint32
+	mtimeNs  int64
+	size     uint64
+	target   string
+	extents  []FileExtent
+	children map[string]*buildNode
+	index    uint32
+}
+
+// Builder assembles a tree and encodes it as a manifest. The encoding is
+// canonical: the same tree always produces the same bytes, whichever writer
+// produced it.
+type Builder struct {
+	root    *buildNode
+	entries int
+}
+
+func NewBuilder() *Builder {
+	return &Builder{
+		root:    &buildNode{kind: KindDir, mode: 0o755, children: map[string]*buildNode{}},
+		entries: 1,
+	}
+}
+
+// SetRoot sets the mode and mtime of the root directory.
+func (b *Builder) SetRoot(mode uint32, mtimeNs int64) {
+	b.root.mode, b.root.mtimeNs = mode&0o777, mtimeNs
+}
+
+func (b *Builder) add(path string, node *buildNode) error {
+	parts := strings.Split(path, "/")
+	parent := b.root
+	for _, part := range parts[:len(parts)-1] {
+		next := parent.children[part]
+		if next == nil || next.kind != KindDir {
+			return fmt.Errorf("add %q: parent directory %q was not added", path, part)
+		}
+		parent = next
+	}
+	node.name = parts[len(parts)-1]
+	if !validName([]byte(node.name)) {
+		return fmt.Errorf("add %q: invalid name", path)
+	}
+	if _, exists := parent.children[node.name]; exists {
+		return fmt.Errorf("add %q: already added", path)
+	}
+	if b.entries >= MaxEntries {
+		return fmt.Errorf("add %q: manifest is full", path)
+	}
+	parent.children[node.name] = node
+	b.entries++
+	return nil
+}
+
+// AddDir adds a directory. Parents must be added before their children.
+func (b *Builder) AddDir(path string, mode uint32, mtimeNs int64) error {
+	return b.add(path, &buildNode{kind: KindDir, mode: mode & 0o777, mtimeNs: mtimeNs, children: map[string]*buildNode{}})
+}
+
+func (b *Builder) AddFile(path string, mode uint32, mtimeNs int64, extents []FileExtent) error {
+	node := &buildNode{kind: KindFile, mode: mode & 0o777, mtimeNs: mtimeNs, extents: extents}
+	for _, extent := range extents {
+		node.size += uint64(extent.RawLen)
+	}
+	return b.add(path, node)
+}
+
+func (b *Builder) AddSymlink(path, target string, mtimeNs int64) error {
+	return b.add(path, &buildNode{kind: KindSymlink, mode: 0o777, mtimeNs: mtimeNs, target: target, size: uint64(len(target))})
+}
+
+// Encode returns the stored manifest, compressed unless raw is set, and its
+// digest. meta is carried opaquely. The result is validated.
+func (b *Builder) Encode(meta []byte, raw bool) ([]byte, *Manifest, error) {
+	// Breadth first, children sorted by name: a directory's children are the
+	// next contiguous run of entries.
+	order := make([]*buildNode, 0, b.entries)
+	order = append(order, b.root)
+	sizes := map[Digest]uint64{}
+	var extentCount, namesLen, total uint64
+	for at := 0; at < len(order); at++ {
+		node := order[at]
+		node.index = uint32(at)
+		namesLen += uint64(len(node.name) + len(node.target))
+		for _, extent := range node.extents {
+			if known, ok := sizes[extent.Object.Digest]; ok && known != extent.Object.Size {
+				return nil, nil, fmt.Errorf("object %s has two sizes", extent.Object.Digest)
+			}
+			sizes[extent.Object.Digest] = extent.Object.Size
+			total += uint64(extent.RawLen)
+		}
+		extentCount += uint64(len(node.extents))
+		if node.kind != KindDir {
+			continue
+		}
+		names := make([]string, 0, len(node.children))
+		for name := range node.children {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			order = append(order, node.children[name])
+		}
+	}
+	if extentCount > 1<<32-1 || namesLen > 1<<32-1 {
+		return nil, nil, fmt.Errorf("manifest is too large")
+	}
+
+	digests := make([]Digest, 0, len(sizes))
+	for digest := range sizes {
+		digests = append(digests, digest)
+	}
+	sort.Slice(digests, func(i, j int) bool { return string(digests[i][:]) < string(digests[j][:]) })
+	objectIndex := make(map[Digest]uint32, len(digests))
+	for i, digest := range digests {
+		objectIndex[digest] = uint32(i)
+	}
+
+	bodyLen := headerSize + uint64(len(meta)) + uint64(len(digests))*objectSize + uint64(len(order))*entrySize + extentCount*extentSize + namesLen
+	out := make([]byte, envelopeSize, envelopeSize+bodyLen)
+	copy(out, Magic)
+	binary.LittleEndian.PutUint64(out[16:], bodyLen)
+
+	header := make([]byte, headerSize)
+	binary.LittleEndian.PutUint32(header[0:], Version)
+	binary.LittleEndian.PutUint32(header[4:], CodecZstd)
+	binary.LittleEndian.PutUint32(header[8:], uint32(len(order)))
+	binary.LittleEndian.PutUint32(header[12:], uint32(len(digests)))
+	binary.LittleEndian.PutUint32(header[16:], uint32(extentCount))
+	binary.LittleEndian.PutUint32(header[20:], uint32(len(meta)))
+	binary.LittleEndian.PutUint64(header[24:], namesLen)
+	binary.LittleEndian.PutUint64(header[32:], total)
+	out = append(out, header...)
+	out = append(out, meta...)
+	for _, digest := range digests {
+		out = append(out, digest[:]...)
+		out = binary.LittleEndian.AppendUint64(out, sizes[digest])
+	}
+
+	// Children indexes follow from the order: each directory claims the run
+	// after the previous directory's.
+	extents := make([]byte, 0, extentCount*extentSize)
+	names := make([]byte, 0, namesLen)
+	nextChild, nextExtent := uint32(1), uint32(0)
+	for _, node := range order {
+		var first, count uint32
+		nameOffset := uint32(len(names))
+		names = append(names, node.name...)
+		switch node.kind {
+		case KindDir:
+			first, count = nextChild, uint32(len(node.children))
+			nextChild += count
+		case KindFile:
+			if len(node.extents) > 0 {
+				first, count = nextExtent, uint32(len(node.extents))
+				nextExtent += count
+			}
+			for _, extent := range node.extents {
+				extents = binary.LittleEndian.AppendUint32(extents, objectIndex[extent.Object.Digest])
+				extents = binary.LittleEndian.AppendUint32(extents, extent.Offset)
+				extents = binary.LittleEndian.AppendUint32(extents, extent.StoredLen)
+				extents = binary.LittleEndian.AppendUint32(extents, extent.RawLen)
+			}
+		case KindSymlink:
+			first, count = uint32(len(names)), uint32(len(node.target))
+			names = append(names, node.target...)
+		}
+		out = binary.LittleEndian.AppendUint64(out, node.size)
+		out = binary.LittleEndian.AppendUint64(out, uint64(node.mtimeNs))
+		out = binary.LittleEndian.AppendUint32(out, first)
+		out = binary.LittleEndian.AppendUint32(out, count)
+		out = binary.LittleEndian.AppendUint32(out, nameOffset)
+		out = binary.LittleEndian.AppendUint16(out, uint16(len(node.name)))
+		out = append(out, node.kind, 0)
+		out = binary.LittleEndian.AppendUint32(out, node.mode)
+		out = binary.LittleEndian.AppendUint32(out, 0)
+	}
+	out = append(out, extents...)
+	out = append(out, names...)
+
+	if !raw {
+		compressed := zstdEncoder.EncodeAll(out[envelopeSize:], make([]byte, envelopeSize, envelopeSize+len(out)/4))
+		copy(compressed, out[:envelopeSize])
+		binary.LittleEndian.PutUint32(compressed[8:], CodecZstd)
+		out = compressed
+	}
+	manifest, err := Parse(out)
+	if err != nil {
+		return nil, nil, err
+	}
+	return out, manifest, nil
+}
+
+// ChunkParams are the content-defined chunking bounds. Avg must be a power
+// of two.
+type ChunkParams struct {
+	Min, Avg, Max int
+}
+
+const gearSeed = 0x9E3779B97F4A7C15
+
+var gearTable = func() (table [256]uint64) {
+	seed := uint64(gearSeed)
+	for i := range table {
+		seed = seed*6364136223846793005 + 1442695040888963407
+		table[i] = seed
+	}
+	return table
+}()
+
+// Cut returns the length of the first chunk of data, which must hold either
+// the rest of the input or at least Max bytes. The first Min bytes are never
+// hashed; the chunk ends after the first later byte at which the gear hash
+// has its low log2(Avg) bits clear, or at Max.
+func (p ChunkParams) Cut(data []byte) int {
+	if len(data) <= p.Min {
+		return len(data)
+	}
+	end := min(len(data), p.Max)
+	mask := uint64(p.Avg) - 1
+	var hash uint64
+	for i := p.Min; i < end; i++ {
+		hash = hash<<1 + gearTable[data[i]]
+		if hash&mask == 0 {
+			return i + 1
+		}
+	}
+	return end
+}
+
+// WriterOptions are writer policy. None of it is visible to readers.
+type WriterOptions struct {
+	Chunk ChunkParams
+	// Files up to PackLimit bytes are batched into pack objects of about
+	// PackTarget stored bytes; larger files are chunked into objects of
+	// their own.
+	PackLimit  int
+	PackTarget int
+	// Compress stores an extent zstd-compressed when that saves at least
+	// one part in eight.
+	Compress bool
+}
+
+// DefaultWriterOptions are the parameters fixed by the format spike. A
+// reader fetches whole objects, so reading one small file costs one pack:
+// the pack target is the smallest the spike measured, and nothing on the
+// write side improved with a larger one.
+func DefaultWriterOptions() WriterOptions {
+	return WriterOptions{
+		Chunk:      ChunkParams{Min: 256 << 10, Avg: 1 << 20, Max: 4 << 20},
+		PackLimit:  256 << 10,
+		PackTarget: 1 << 20,
+		Compress:   true,
+	}
+}
+
+type pendingExtent struct {
+	node   *buildNode
+	offset uint32
+	stored uint32
+	raw    uint32
+}
+
+// Writer is the reference writer: it turns file contents into objects and a
+// manifest. Objects reach put as they are completed. It holds one pack and
+// one file's read buffer in memory.
+type Writer struct {
+	*Builder
+	opts    WriterOptions
+	put     func(Object, []byte) error
+	pack    []byte
+	pending []pendingExtent
+	seen    map[Digest]FileExtent // raw chunk -> the object holding it
+	Objects int
+	Stored  uint64
+}
+
+func NewWriter(opts WriterOptions, put func(Object, []byte) error) (*Writer, error) {
+	chunk := opts.Chunk
+	if chunk.Avg <= 0 || chunk.Avg&(chunk.Avg-1) != 0 || chunk.Min < 0 || chunk.Min > chunk.Max || chunk.Max > MaxExtentLen {
+		return nil, fmt.Errorf("invalid chunk parameters %+v", chunk)
+	}
+	if opts.PackLimit > MaxExtentLen || opts.PackTarget+opts.PackLimit > MaxObjectSize {
+		return nil, fmt.Errorf("invalid pack parameters")
+	}
+	return &Writer{Builder: NewBuilder(), opts: opts, put: put, seen: map[Digest]FileExtent{}}, nil
+}
+
+func (w *Writer) encode(raw []byte) []byte {
+	if !w.opts.Compress {
+		return raw
+	}
+	compressed := zstdEncoder.EncodeAll(raw, make([]byte, 0, len(raw)/2))
+	// An extent as long stored as raw is raw to a reader, so a compressed
+	// one is shorter whatever the eighth rounds to.
+	if len(compressed) >= len(raw) || len(compressed) > len(raw)-len(raw)/8 {
+		return raw
+	}
+	return compressed
+}
+
+func (w *Writer) emit(data []byte) (Object, error) {
+	object := Object{Digest: DigestOf(data), Size: uint64(len(data))}
+	w.Objects++
+	w.Stored += object.Size
+	return object, w.put(object, data)
+}
+
+func (w *Writer) flushPack() error {
+	if len(w.pack) == 0 {
+		return nil
+	}
+	object, err := w.emit(w.pack)
+	if err != nil {
+		return err
+	}
+	for _, pending := range w.pending {
+		extent := FileExtent{Object: object, Offset: pending.offset, StoredLen: pending.stored, RawLen: pending.raw}
+		pending.node.extents = []FileExtent{extent}
+	}
+	w.pack, w.pending = nil, nil
+	return nil
+}
+
+// AddFile reads a file's content and adds it to the tree.
+func (w *Writer) AddFile(path string, mode uint32, mtimeNs int64, content io.Reader) error {
+	buffer := make([]byte, 0, w.opts.PackLimit+1)
+	buffer, err := readFull(content, buffer, w.opts.PackLimit+1)
+	if err != nil {
+		return err
+	}
+	if len(buffer) <= w.opts.PackLimit {
+		node := &buildNode{kind: KindFile, mode: mode & 0o777, mtimeNs: mtimeNs, size: uint64(len(buffer))}
+		if err := w.add(path, node); err != nil {
+			return err
+		}
+		if len(buffer) == 0 {
+			return nil
+		}
+		stored := w.encode(buffer)
+		w.pending = append(w.pending, pendingExtent{node: node, offset: uint32(len(w.pack)), stored: uint32(len(stored)), raw: uint32(len(buffer))})
+		w.pack = append(w.pack, stored...)
+		if len(w.pack) >= w.opts.PackTarget {
+			return w.flushPack()
+		}
+		return nil
+	}
+
+	var extents []FileExtent
+	for eof := false; ; {
+		if !eof && len(buffer) < w.opts.Chunk.Max {
+			if buffer, err = readFull(content, buffer, w.opts.Chunk.Max); err != nil {
+				return err
+			}
+			eof = len(buffer) < w.opts.Chunk.Max
+		}
+		if len(buffer) == 0 {
+			break
+		}
+		length := w.opts.Chunk.Cut(buffer)
+		chunk := buffer[:length]
+		key := DigestOf(chunk)
+		extent, ok := w.seen[key]
+		if !ok {
+			stored := w.encode(chunk)
+			object, err := w.emit(stored)
+			if err != nil {
+				return err
+			}
+			extent = FileExtent{Object: object, StoredLen: uint32(len(stored)), RawLen: uint32(length)}
+			w.seen[key] = extent
+		}
+		extents = append(extents, extent)
+		buffer = append(buffer[:0], buffer[length:]...)
+	}
+	return w.Builder.AddFile(path, mode, mtimeNs, extents)
+}
+
+// readFull appends to buffer until it holds limit bytes or content ends.
+func readFull(content io.Reader, buffer []byte, limit int) ([]byte, error) {
+	for len(buffer) < limit {
+		if cap(buffer) < limit {
+			grown := make([]byte, len(buffer), limit)
+			copy(grown, buffer)
+			buffer = grown
+		}
+		n, err := content.Read(buffer[len(buffer):limit])
+		buffer = buffer[:len(buffer)+n]
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return buffer, err
+		}
+	}
+	return buffer, nil
+}
+
+// Finish flushes the last pack and returns the stored manifest, which the
+// caller stores as an object under its digest like any other.
+func (w *Writer) Finish(meta []byte) ([]byte, *Manifest, error) {
+	if err := w.flushPack(); err != nil {
+		return nil, nil, err
+	}
+	return w.Encode(meta, false)
 }

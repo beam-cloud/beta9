@@ -1,9 +1,7 @@
-// Package mirror is the gateway side of Beam mirror: the REST API a client
-// uses to upload a generation of local files into the workspace bucket, and
-// the retention that keeps the store bounded.
 package mirror
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -11,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path"
 	"regexp"
 	"strconv"
 	"sync"
@@ -18,7 +17,6 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/clients"
-	store "github.com/beam-cloud/beta9/pkg/mirror"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
@@ -84,7 +82,7 @@ const (
 // It is about three million files.
 var maxManifestBody uint64 = 256 << 20
 
-var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+var validMirrorName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 type ServiceOpts struct {
 	Config      Config
@@ -220,7 +218,7 @@ func (s *Service) create(c echo.Context) error {
 	if err := decode(c, &req); err != nil {
 		return err
 	}
-	if !validName.MatchString(req.Name) {
+	if !validMirrorName.MatchString(req.Name) {
 		return echo.NewHTTPError(http.StatusBadRequest, "name must be at most 63 lowercase letters, digits or hyphens and not begin with a hyphen")
 	}
 	mirror, created, err := s.repo.EnsureMirror(ctx, info.Workspace.Id, req.Name)
@@ -272,7 +270,7 @@ func (s *Service) missingObjects(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "send between 1 and "+strconv.Itoa(maxObjectBatch)+" objects")
 	}
 	for _, object := range req.Objects {
-		if _, err := store.ParseDigest(object.Digest); err != nil || object.Size <= 0 || object.Size > maxManifestBytes {
+		if _, err := ParseDigest(object.Digest); err != nil || object.Size <= 0 || object.Size > maxManifestBytes {
 			return echo.NewHTTPError(http.StatusBadRequest, "each object needs a lowercase SHA-256 digest and its size")
 		}
 	}
@@ -353,7 +351,7 @@ func (s *Service) downloadObjects(c echo.Context) error {
 	}
 	urls := make([]objectURL, 0, len(req.Digests))
 	for _, digest := range req.Digests {
-		if _, err := store.ParseDigest(digest); err != nil {
+		if _, err := ParseDigest(digest); err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 		url, err := bucket.PresignGet(ctx, types.MirrorObjectKey(mirror.ID, digest), s.config.URLExpiry)
@@ -418,20 +416,20 @@ func (s *Service) generation(c echo.Context) error {
 }
 
 // loadManifest downloads a manifest object and checks it against its name.
-func loadManifest(ctx context.Context, bucket ObjectStore, mirrorID, digest string) (*store.Manifest, error) {
+func loadManifest(ctx context.Context, bucket ObjectStore, mirrorID, digest string) (*Manifest, error) {
 	stored, err := bucket.Download(ctx, types.MirrorObjectKey(mirrorID, digest), maxManifestBytes)
 	if err != nil {
 		return nil, err
 	}
-	if store.BodySize(stored) > maxManifestBody {
-		return nil, fmt.Errorf("%w: it describes more files than a generation can hold", store.ErrInvalidManifest)
+	if BodySize(stored) > maxManifestBody {
+		return nil, fmt.Errorf("%w: it describes more files than a generation can hold", ErrInvalidManifest)
 	}
-	manifest, err := store.Parse(stored)
+	manifest, err := Parse(stored)
 	if err != nil {
 		return nil, err
 	}
 	if manifest.Digest().String() != digest {
-		return nil, store.ErrObjectMismatch
+		return nil, ErrObjectMismatch
 	}
 	return manifest, nil
 }
@@ -450,7 +448,7 @@ func (s *Service) commit(c echo.Context) error {
 	if err := decode(c, &req); err != nil {
 		return err
 	}
-	if _, err := store.ParseDigest(req.ManifestDigest); err != nil || req.Parent < 0 {
+	if _, err := ParseDigest(req.ManifestDigest); err != nil || req.Parent < 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "send the parent generation and the manifest's SHA-256 digest")
 	}
 	mirror, err := s.repo.GetMirror(ctx, info.Workspace.Id, c.Param("name"))
@@ -490,7 +488,7 @@ func (s *Service) commit(c echo.Context) error {
 
 	manifest, err := loadManifest(ctx, bucket, mirror.ID, req.ManifestDigest)
 	if err != nil {
-		if errors.Is(err, store.ErrInvalidManifest) || errors.Is(err, store.ErrObjectMismatch) {
+		if errors.Is(err, ErrInvalidManifest) || errors.Is(err, ErrObjectMismatch) {
 			return echo.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
 		}
 		return echo.NewHTTPError(http.StatusUnprocessableEntity, "the manifest object is not in the store")
@@ -498,7 +496,7 @@ func (s *Service) commit(c echo.Context) error {
 
 	// The parent's objects were checked when it was committed and it has
 	// been retained since, so only what this generation adds is checked.
-	known := map[store.Digest]uint64{}
+	known := map[Digest]uint64{}
 	if latest != nil {
 		if parent, err := loadManifest(ctx, bucket, mirror.ID, latest.ManifestDigest); err == nil {
 			for i := range parent.Objects() {
@@ -549,7 +547,7 @@ func (s *Service) commit(c echo.Context) error {
 		Entries:        int64(manifest.Entries()),
 		Objects:        int64(manifest.Objects()),
 		TotalSize:      int64(manifest.TotalSize()),
-		Home:           store.SourceHome(manifest.Meta()),
+		Home:           SourceHome(manifest.Meta()),
 		TokenID:        info.Token.ExternalId,
 	}
 	if err := s.repo.CommitMirrorGeneration(ctx, generation); err != nil {
@@ -617,7 +615,7 @@ func (s *Service) Resolve(ctx context.Context, workspaceID uint, requested *type
 		return nil, nil
 	}
 	name := requested.Name
-	if !validName.MatchString(name) {
+	if !validMirrorName.MatchString(name) {
 		return nil, echo.NewHTTPError(http.StatusBadRequest, "invalid mirror name")
 	}
 	if requested.Generation < 0 {
@@ -625,7 +623,7 @@ func (s *Service) Resolve(ctx context.Context, workspaceID uint, requested *type
 	}
 	mirror, err := s.repo.GetMirror(ctx, workspaceID, name)
 	if errors.Is(err, sql.ErrNoRows) || err == nil && mirror.Latest == nil {
-		return nil, echo.NewHTTPError(http.StatusBadRequest, "mirror "+name+" has no generation yet; run `beam setup mirror` on the machine to mirror")
+		return nil, echo.NewHTTPError(http.StatusBadRequest, "mirror "+name+" has no generation yet; wait for its first sync from Beam Mirror")
 	}
 	if err != nil {
 		return nil, err
@@ -677,4 +675,238 @@ func (s *Service) Active(ctx context.Context, workspaceID uint, pin *types.VMMir
 		return false, err
 	}
 	return mirror.ID == pin.ID, nil
+}
+
+// expireGenerations marks the generations nothing needs: those older than
+// the newest KeepGenerations that no VM, snapshot or template is pinned to.
+// A generation something is pinned to after all is kept again. It returns
+// every generation the mirror still has.
+func (s *Service) expireGenerations(ctx context.Context, mirror *types.Mirror) ([]types.MirrorGeneration, error) {
+	generations, err := s.repo.ListMirrorGenerations(ctx, mirror.ID)
+	if err != nil {
+		return nil, err
+	}
+	references, err := s.repo.ListMirrorReferences(ctx, mirror.WorkspaceID, mirror.ID)
+	if err != nil {
+		return nil, err
+	}
+	pinned := map[int64]bool{}
+	for _, reference := range references {
+		pinned[reference.Generation] = true
+	}
+	now := s.now()
+	var expire, revive []int64
+	for i := range generations {
+		generation := &generations[i]
+		keep := i < s.config.KeepGenerations || pinned[generation.Number]
+		switch {
+		case keep && generation.ExpiredAt != nil:
+			revive = append(revive, generation.Number)
+			generation.ExpiredAt = nil
+		case !keep && generation.ExpiredAt == nil:
+			expire = append(expire, generation.Number)
+			generation.ExpiredAt = &now
+		}
+	}
+	if err := s.repo.SetMirrorGenerationsExpired(ctx, mirror.ID, revive, false); err != nil {
+		return nil, err
+	}
+	return generations, s.repo.SetMirrorGenerationsExpired(ctx, mirror.ID, expire, true)
+}
+
+// Sweep deletes the objects of a mirror that are older than the grace period
+// and that no generation references, counting generations that expired
+// within the grace period: a VM being created may have pinned one just
+// before it expired. It deletes nothing unless every such manifest could be
+// read, because an unreadable manifest would make its objects look
+// unreferenced.
+func (s *Service) Sweep(ctx context.Context, bucket ObjectStore, mirror *types.Mirror) (int, error) {
+	unlock, err := s.repo.LockVM(ctx, mirror.ID)
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
+
+	generations, err := s.expireGenerations(ctx, mirror)
+	if err != nil {
+		return 0, err
+	}
+	cutoff := s.now().Add(-s.config.SweepGrace)
+	live := map[string]bool{}
+	var dead []int64
+	for _, generation := range generations {
+		if generation.ExpiredAt != nil && generation.ExpiredAt.Before(cutoff) {
+			dead = append(dead, generation.Number)
+			continue
+		}
+		manifest, err := loadManifest(ctx, bucket, mirror.ID, generation.ManifestDigest)
+		if err != nil {
+			return 0, fmt.Errorf("read manifest of generation %d: %w", generation.Number, err)
+		}
+		live[generation.ManifestDigest] = true
+		for i := range manifest.Objects() {
+			live[manifest.Object(i).Digest.String()] = true
+		}
+	}
+	// Forget dead generations before their objects go, so that nothing can
+	// inherit a pin to a generation that no longer reads.
+	if err := s.repo.DeleteMirrorGenerations(ctx, mirror.ID, dead); err != nil {
+		return 0, err
+	}
+	objects, err := bucket.List(ctx, types.MirrorPrefix(mirror.ID))
+	if err != nil {
+		return 0, err
+	}
+	deleted := 0
+	for _, object := range objects {
+		if live[path.Base(object.Key)] || object.Modified.After(cutoff) {
+			continue
+		}
+		if err := bucket.Delete(ctx, object.Key); err != nil {
+			return deleted, err
+		}
+		deleted++
+	}
+	return deleted, nil
+}
+
+func (s *Service) deleteObjects(ctx context.Context, bucket ObjectStore, mirrorID string) error {
+	// An issued PUT URL can outlast a purge, and a transfer can finish
+	// after the URL expires. Only a listing started after both windows
+	// have passed can finish the cleanup. Use the same transfer allowance
+	// as the sweep uses to protect uncommitted uploads.
+	purgedBefore := s.now().Add(-s.config.URLExpiry).Add(-s.config.SweepGrace)
+	objects, err := bucket.List(ctx, types.MirrorPrefix(mirrorID))
+	if err != nil {
+		return err
+	}
+	for _, object := range objects {
+		if err := bucket.Delete(ctx, object.Key); err != nil {
+			return err
+		}
+	}
+	return s.repo.MarkMirrorObjectsDeleted(ctx, mirrorID, purgedBefore)
+}
+
+func (s *Service) bucketFor(ctx context.Context, workspaceID uint) (ObjectStore, error) {
+	workspace, err := s.workspaces.GetWorkspace(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	if workspace.Storage == nil && workspace.StorageId != nil {
+		if workspace.Storage, err = s.workspaces.GetWorkspaceStorage(ctx, *workspace.StorageId); err != nil {
+			return nil, err
+		}
+	}
+	return s.store(ctx, workspace)
+}
+
+// SweepAll finishes interrupted purges and sweeps every mirror once.
+func (s *Service) SweepAll(ctx context.Context) {
+	purged, err := s.repo.ListPurgedMirrors(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("could not list purged mirrors")
+	}
+	for _, mirror := range purged {
+		bucket, err := s.bucketFor(ctx, mirror.WorkspaceID)
+		if err == nil {
+			err = s.deleteObjects(ctx, bucket, mirror.ID)
+		}
+		if err != nil {
+			log.Warn().Err(err).Str("mirror_id", mirror.ID).Msg("could not delete purged mirror objects")
+		}
+	}
+	mirrors, err := s.repo.ListMirrorIDs(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("could not list mirrors to sweep")
+		return
+	}
+	for _, mirror := range mirrors {
+		if ctx.Err() != nil {
+			return
+		}
+		bucket, err := s.bucketFor(ctx, mirror.WorkspaceID)
+		if err != nil {
+			log.Warn().Err(err).Str("mirror_id", mirror.ID).Msg("could not open mirror bucket")
+			continue
+		}
+		deleted, err := s.Sweep(ctx, bucket, &mirror)
+		if err != nil {
+			log.Warn().Err(err).Str("mirror_id", mirror.ID).Msg("mirror sweep failed")
+		} else if deleted > 0 {
+			log.Info().Str("mirror_id", mirror.ID).Int("objects", deleted).Msg("swept unreferenced mirror objects")
+		}
+	}
+}
+
+func (s *Service) sweepLoop(ctx context.Context) {
+	ticker := time.NewTicker(s.config.SweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.SweepAll(ctx)
+		}
+	}
+}
+
+type bucketStore struct {
+	client *clients.WorkspaceStorageClient
+}
+
+func (b bucketStore) Head(ctx context.Context, key string) (int64, bool, error) {
+	exists, object, err := b.client.Head(ctx, key)
+	if err != nil || !exists || object == nil || object.ContentLength == nil {
+		return 0, false, err
+	}
+	return *object.ContentLength, true, nil
+}
+
+func (b bucketStore) Download(ctx context.Context, key string, limit int64) ([]byte, error) {
+	body, err := b.client.DownloadWithReader(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	defer body.Close()
+	var buffer bytes.Buffer
+	if _, err := io.Copy(&buffer, io.LimitReader(body, limit+1)); err != nil {
+		return nil, err
+	}
+	if int64(buffer.Len()) > limit {
+		return nil, errors.New("object is larger than the limit")
+	}
+	return buffer.Bytes(), nil
+}
+
+func (b bucketStore) PresignPut(ctx context.Context, key string, expires time.Duration) (string, error) {
+	return b.client.GeneratePresignedPutURL(ctx, key, int64(expires.Seconds()))
+}
+
+func (b bucketStore) PresignGet(ctx context.Context, key string, expires time.Duration) (string, error) {
+	return b.client.GeneratePresignedGetURL(ctx, key, int64(expires.Seconds()))
+}
+
+func (b bucketStore) List(ctx context.Context, prefix string) ([]StoredObject, error) {
+	listed, err := b.client.ListWithPrefix(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+	objects := make([]StoredObject, 0, len(listed))
+	for _, object := range listed {
+		if object.Key == nil || object.LastModified == nil {
+			continue
+		}
+		stored := StoredObject{Key: *object.Key, Modified: *object.LastModified}
+		if object.Size != nil {
+			stored.Size = *object.Size
+		}
+		objects = append(objects, stored)
+	}
+	return objects, nil
+}
+
+func (b bucketStore) Delete(ctx context.Context, key string) error {
+	return b.client.Delete(ctx, key)
 }

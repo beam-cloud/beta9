@@ -25,10 +25,10 @@ import (
 	bot "github.com/beam-cloud/beta9/pkg/abstractions/experimental/bot"
 	_signal "github.com/beam-cloud/beta9/pkg/abstractions/experimental/signal"
 	"github.com/beam-cloud/beta9/pkg/abstractions/managedendpoint"
-	"github.com/beam-cloud/beta9/pkg/abstractions/mirror"
 	pod "github.com/beam-cloud/beta9/pkg/abstractions/pod"
 	_shell "github.com/beam-cloud/beta9/pkg/abstractions/shell"
 	vm "github.com/beam-cloud/beta9/pkg/abstractions/vm"
+	"github.com/beam-cloud/beta9/pkg/abstractions/vm/mirror"
 	"github.com/beam-cloud/beta9/pkg/clients"
 
 	disk "github.com/beam-cloud/beta9/pkg/abstractions/disk"

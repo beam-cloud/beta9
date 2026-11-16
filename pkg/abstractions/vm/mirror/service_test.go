@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
-	store "github.com/beam-cloud/beta9/pkg/mirror"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
@@ -354,7 +353,7 @@ func (h *harness) push(name string, parent int64, files map[string]string) (int,
 	mirror, err := h.repo.GetMirror(context.Background(), 7, name)
 	require.NoError(h.t, err)
 	objects := map[string][]byte{}
-	writer, err := store.NewWriter(store.DefaultWriterOptions(), func(object store.Object, data []byte) error {
+	writer, err := NewWriter(DefaultWriterOptions(), func(object Object, data []byte) error {
 		objects[object.Digest.String()] = bytes.Clone(data)
 		return nil
 	})
@@ -449,8 +448,8 @@ func TestPushCommitsOnlyCompleteGenerations(t *testing.T) {
 
 	// A manifest whose objects are not all uploaded is not committed, and
 	// the reply says which are missing.
-	var objects []store.Object
-	writer, err := store.NewWriter(store.DefaultWriterOptions(), func(object store.Object, _ []byte) error {
+	var objects []Object
+	writer, err := NewWriter(DefaultWriterOptions(), func(object Object, _ []byte) error {
 		objects = append(objects, object)
 		return nil
 	})
@@ -477,7 +476,7 @@ func TestPushCommitsOnlyCompleteGenerations(t *testing.T) {
 	// Bytes that are not a valid manifest, or not the bytes the digest
 	// names, are not committed either.
 	junk := []byte("not a manifest")
-	junkDigest := store.DigestOf(junk).String()
+	junkDigest := DigestOf(junk).String()
 	h.bucket.put(types.MirrorObjectKey(mirror.ID, junkDigest), junk, h.now)
 	require.Equal(t, http.StatusUnprocessableEntity, h.call(http.MethodPost, "/laptop/generations", map[string]any{"parent": 2, "manifest_digest": junkDigest}, nil))
 	wrongName := strings.Repeat("ab", 32)
@@ -532,7 +531,7 @@ func TestPushCommitsOnlyCompleteGenerations(t *testing.T) {
 		require.Error(t, err, forged)
 	}
 	_, err = h.service.Resolve(context.Background(), 7, &types.VMMirror{Name: "absent"})
-	require.ErrorContains(t, err, "beam setup mirror")
+	require.ErrorContains(t, err, "has no generation yet")
 	_, err = h.service.Resolve(context.Background(), 8, &types.VMMirror{Name: "laptop"})
 	require.Error(t, err, "another workspace's mirror")
 	active, err := h.service.Active(context.Background(), 7, pin)
@@ -705,12 +704,12 @@ func TestCommitChecksChangedObjectSize(t *testing.T) {
 	require.Equal(t, http.StatusCreated, h.call(http.MethodPost, "", map[string]string{"name": "laptop"}, &mirror))
 
 	content := []byte("contents")
-	digest := store.DigestOf(content)
+	digest := DigestOf(content)
 	h.bucket.put(types.MirrorObjectKey(mirror.ID, digest.String()), content, h.now)
 	commit := func(parent int, size uint64, response any) int {
-		builder := store.NewBuilder()
-		require.NoError(t, builder.AddFile("file", 0o644, 0, []store.FileExtent{{
-			Object: store.Object{Digest: digest, Size: size}, StoredLen: 1, RawLen: 1,
+		builder := NewBuilder()
+		require.NoError(t, builder.AddFile("file", 0o644, 0, []FileExtent{{
+			Object: Object{Digest: digest, Size: size}, StoredLen: 1, RawLen: 1,
 		}}))
 		data, manifest, err := builder.Encode(nil, false)
 		require.NoError(t, err)
@@ -791,7 +790,7 @@ func TestPurgeSweepsLateUploads(t *testing.T) {
 	var mirror types.Mirror
 	require.Equal(t, http.StatusCreated, h.call(http.MethodPost, "", map[string]string{"name": "laptop"}, &mirror))
 	content := []byte("contents")
-	digest := store.DigestOf(content).String()
+	digest := DigestOf(content).String()
 	request := map[string]any{"objects": []objectRef{{Digest: digest, Size: int64(len(content))}}}
 	var signed struct {
 		Missing []objectURL `json:"missing"`

@@ -16,10 +16,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/abstractions/vm/mirror"
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/mirror"
 	"github.com/beam-cloud/beta9/pkg/types"
 	securejoin "github.com/cyphar/filepath-securejoin"
 	"github.com/google/uuid"

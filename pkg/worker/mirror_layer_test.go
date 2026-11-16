@@ -18,11 +18,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/abstractions/vm/mirror"
 	"github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/mirror"
+	betaruntime "github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 type fakeMirrorBucket struct {
@@ -814,4 +817,44 @@ func TestAttachMirrorLayer(t *testing.T) {
 	require.ErrorContains(t, err, "no longer in the store")
 	_, _, err = (&Worker{}).attachMirrorLayer(context.Background(), pinned, overlay)
 	require.Error(t, err)
+}
+
+type archiveStream struct {
+	grpc.ServerStream
+	responses []*pb.ContainerArchiveResponse
+}
+
+func (s *archiveStream) Context() context.Context { return context.Background() }
+
+func (s *archiveStream) Send(response *pb.ContainerArchiveResponse) error {
+	s.responses = append(s.responses, response)
+	return nil
+}
+
+// Both kinds of archive would copy mirrored files into the image: a v1 one
+// reads the merged root, and a layered one the writable layer, which holds
+// every mirrored file the VM changed.
+func TestMirroredVMsAreNotArchived(t *testing.T) {
+	pin := &types.VMMirror{Name: "laptop", ID: "8a0c1f6e-3d0e-4b39-9a55-0d1c2b3a4f5e", Generation: 1, ManifestDigest: strings.Repeat("ab", 32), ManifestSize: 100, Home: "/Users/luke"}
+	for _, layered := range []bool{false, true} {
+		config, err := json.Marshal(types.StubConfigV1{Mirror: pin})
+		require.NoError(t, err)
+		request := &types.ContainerRequest{ContainerId: "vm-mirrored", ImageId: "base"}
+		request.Stub.Config = string(config)
+		rt := NewMockRuntime(types.ContainerRuntimeMicroVM.String(), betaruntime.Capabilities{})
+		rt.state.Status = types.RuncContainerStatusRunning
+		images := &ImageClient{v2ImageRefs: common.NewSafeMap[string]()}
+		if layered {
+			images.v2ImageRefs.Set("base", "registry.example.com/team/base:latest")
+		}
+		server := &ContainerRuntimeServer{containerInstances: common.NewSafeMap[*ContainerInstance](), runtime: rt, imageClient: images}
+		server.containerInstances.Set(request.ContainerId, &ContainerInstance{Id: request.ContainerId, Request: request})
+
+		stream := &archiveStream{}
+		require.NoError(t, server.ContainerArchive(&pb.ContainerArchiveRequest{ContainerId: request.ContainerId, ImageId: "snapshot"}, stream))
+		require.Len(t, stream.responses, 1, "layered=%t", layered)
+		require.True(t, stream.responses[0].Done)
+		require.False(t, stream.responses[0].Success)
+		require.Contains(t, stream.responses[0].ErrorMsg, "A VM with a mirror cannot be archived")
+	}
 }

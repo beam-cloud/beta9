@@ -10,11 +10,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -886,4 +889,211 @@ func TestMountedFilesystem(t *testing.T) {
 	require.Equal(t, "app/src", target)
 	_, err = os.ReadFile(filepath.Join(mountPoint, "root/projects/data/model.bin"))
 	require.NoError(t, err, "other mounts are unaffected")
+}
+
+// The manifest vector is shared with the Rust client: a tree with explicit
+// extents and the canonical bytes every writer must encode it to. Run with
+// UPDATE_MIRROR_VECTORS=1 to regenerate it after a deliberate format change.
+type manifestVector struct {
+	Description string        `json:"description"`
+	Meta        string        `json:"meta"`
+	Root        vectorEntry   `json:"root"`
+	Entries     []vectorEntry `json:"entries"`
+	// The body, stored uncompressed (envelope codec 0).
+	RawManifest       string `json:"raw_manifest_hex"`
+	RawManifestSHA256 string `json:"raw_manifest_sha256"`
+}
+
+type vectorEntry struct {
+	Path    string         `json:"path,omitempty"`
+	Kind    string         `json:"kind"`
+	Mode    uint32         `json:"mode"`
+	MtimeNs int64          `json:"mtime_ns"`
+	Target  string         `json:"target,omitempty"`
+	Extents []vectorExtent `json:"extents,omitempty"`
+}
+
+type vectorExtent struct {
+	Object     string `json:"object"`
+	ObjectSize uint64 `json:"object_size"`
+	Offset     uint32 `json:"offset"`
+	StoredLen  uint32 `json:"stored_len"`
+	RawLen     uint32 `json:"raw_len"`
+}
+
+const manifestVectorPath = "testdata/manifest-vector.json"
+
+func TestManifestMatchesSharedVector(t *testing.T) {
+	data, err := os.ReadFile(manifestVectorPath)
+	require.NoError(t, err)
+	var vector manifestVector
+	require.NoError(t, json.Unmarshal(data, &vector))
+
+	builder := NewBuilder()
+	builder.SetRoot(vector.Root.Mode, vector.Root.MtimeNs)
+	// Entries are listed parents first but otherwise out of order: the
+	// encoding must not depend on the order they were added in.
+	for _, entry := range vector.Entries {
+		switch entry.Kind {
+		case "dir":
+			require.NoError(t, builder.AddDir(entry.Path, entry.Mode, entry.MtimeNs))
+		case "symlink":
+			require.NoError(t, builder.AddSymlink(entry.Path, entry.Target, entry.MtimeNs))
+		case "file":
+			extents := make([]FileExtent, 0, len(entry.Extents))
+			for _, extent := range entry.Extents {
+				digest, err := ParseDigest(extent.Object)
+				require.NoError(t, err)
+				extents = append(extents, FileExtent{Object: Object{Digest: digest, Size: extent.ObjectSize}, Offset: extent.Offset, StoredLen: extent.StoredLen, RawLen: extent.RawLen})
+			}
+			require.NoError(t, builder.AddFile(entry.Path, entry.Mode, entry.MtimeNs, extents))
+		default:
+			t.Fatalf("unknown kind %q", entry.Kind)
+		}
+	}
+	raw, manifest, err := builder.Encode([]byte(vector.Meta), true)
+	require.NoError(t, err)
+
+	if os.Getenv("UPDATE_MIRROR_VECTORS") != "" {
+		vector.RawManifest = hex.EncodeToString(raw)
+		vector.RawManifestSHA256 = manifest.Digest().String()
+		updated, err := json.MarshalIndent(vector, "", "  ")
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(manifestVectorPath, append(updated, '\n'), 0o644))
+	}
+	require.Equal(t, vector.RawManifest, hex.EncodeToString(raw))
+	require.Equal(t, vector.RawManifestSHA256, manifest.Digest().String())
+
+	// The compressed envelope holds the same body. Its bytes depend on the
+	// zstd implementation, so only the decoded form is comparable.
+	compressed, decoded, err := builder.Encode([]byte(vector.Meta), false)
+	require.NoError(t, err)
+	require.Less(t, len(compressed), len(raw))
+	require.Equal(t, raw[envelopeSize:], decoded.body)
+	reparsed, err := Parse(raw)
+	require.NoError(t, err)
+	require.Equal(t, decoded.body, reparsed.body)
+
+	index, ok := reparsed.Find("projects/app/src/main.rs")
+	require.True(t, ok)
+	require.Equal(t, uint64(5000), reparsed.Entry(index).Size)
+	index, ok = reparsed.Find("projects/current")
+	require.True(t, ok)
+	require.Equal(t, "app/src", string(reparsed.Target(index)))
+}
+
+type zeroSource struct{}
+
+func (zeroSource) ReadObject(_ context.Context, _ Object, _ int64, dest []byte) error {
+	clear(dest)
+	return nil
+}
+
+func heapMiB() float64 {
+	runtime.GC()
+	debug.FreeOSMemory()
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
+	return float64(stats.HeapAlloc) / (1 << 20)
+}
+
+// TestScale reports what a large generation costs the worker that mounts it:
+//
+//	sudo MIRROR_SCALE_FILES=1000000 go test ./pkg/abstractions/vm/mirror -run TestScale -v
+//
+// The tree is 24 files to a directory, four levels deep, packed 200 to an
+// object. Contents are not read; the numbers are the index alone.
+func TestScale(t *testing.T) {
+	files, _ := strconv.Atoi(os.Getenv("MIRROR_SCALE_FILES"))
+	if files == 0 {
+		t.Skip("set MIRROR_SCALE_FILES")
+	}
+
+	builder := NewBuilder()
+	made := map[string]bool{}
+	mkdir := func(path string) {
+		if !made[path] {
+			made[path] = true
+			require.NoError(t, builder.AddDir(path, 0o755, 1))
+		}
+	}
+	var object Object
+	for i := 0; i < files; i++ {
+		if i%200 == 0 {
+			var seed [8]byte
+			binary.LittleEndian.PutUint64(seed[:], uint64(i))
+			object = Object{Digest: sha256.Sum256(seed[:]), Size: 200 * 4096}
+		}
+		dir := i / 24
+		repo := fmt.Sprintf("projects/repo-%03d", dir/2000)
+		pkg := fmt.Sprintf("%s/pkg-%02d", repo, dir/100%20)
+		module := fmt.Sprintf("%s/module-%02d", pkg, dir%100)
+		for _, path := range []string{"projects", repo, pkg, module} {
+			mkdir(path)
+		}
+		extent := FileExtent{Object: object, Offset: uint32(i%200) * 4096, StoredLen: 4096, RawLen: 4096}
+		require.NoError(t, builder.AddFile(fmt.Sprintf("%s/source_file_%02d.go", module, i%24), 0o644, int64(i), []FileExtent{extent}))
+	}
+	started := time.Now()
+	stored, built, err := builder.Encode(nil, false)
+	require.NoError(t, err)
+	encode := time.Since(started)
+	entries, body := built.Entries(), built.IndexBytes()
+	builder, built = nil, nil
+
+	before := heapMiB()
+	started = time.Now()
+	manifest, err := Parse(stored)
+	require.NoError(t, err)
+	parse := time.Since(started)
+	stored = stored[:len(stored):len(stored)]
+	parsed := heapMiB() - before
+	t.Logf("%d files, %d entries: manifest %.1f MiB stored, %.1f MiB decoded (%.0f bytes per entry); encode %s, parse and validate %s, heap after parse %.1f MiB",
+		files, entries, float64(len(stored))/(1<<20), float64(body)/(1<<20), float64(body)/float64(entries), encode.Round(time.Millisecond), parse.Round(time.Millisecond), parsed)
+
+	if _, err := os.Stat("/dev/fuse"); err != nil || os.Geteuid() != 0 {
+		t.Log("not root or no /dev/fuse: skipping the mounted walk")
+		return
+	}
+	// A desktop VM: a purge visits every file once for each home.
+	fsys, err := NewFS(manifest, zeroSource{}, FSOptions{Placements: desktopPlacements})
+	require.NoError(t, err)
+	mountPoint := t.TempDir()
+	server, err := Mount(mountPoint, fsys)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = server.Unmount() })
+
+	started = time.Now()
+	walked := 0
+	require.NoError(t, filepath.WalkDir(filepath.Join(mountPoint, "root"), func(_ string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		_, err = entry.Info()
+		walked++
+		return err
+	}))
+	require.Equal(t, int(entries), walked)
+	t.Logf("walk and stat of every entry through the mount: %s; heap after the walk %.1f MiB", time.Since(started).Round(time.Millisecond), heapMiB()-before)
+
+	// A purge tells the kernel to drop the data of every file, here with
+	// every file known to the kernel and one page of each in its cache.
+	read := 0
+	page := make([]byte, 4096)
+	require.NoError(t, filepath.WalkDir(filepath.Join(mountPoint, "root"), func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || !entry.Type().IsRegular() || read >= 50_000 {
+			return err
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		read++
+		_, err = file.Read(page)
+		return err
+	}))
+	started = time.Now()
+	fsys.Revoke()
+	t.Logf("revoke with %d files cached: %s", read, time.Since(started).Round(time.Millisecond))
 }
