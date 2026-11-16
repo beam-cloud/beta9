@@ -408,7 +408,7 @@ type MirrorGeneration struct {
 	// period later, unless something pinned to it turns up first.
 	ExpiredAt *time.Time `json:"-"`
 	// Home is where the files were on the machine they came from, when the
-	// manifest says so and it is a home the tree can be presented at.
+	// commit says so and it is a home the tree can be presented at.
 	Home string `json:"home,omitempty"`
 }
 

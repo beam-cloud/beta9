@@ -11,7 +11,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -147,6 +146,20 @@ func BodySize(stored []byte) uint64 {
 		return 0
 	}
 	return binary.LittleEndian.Uint64(stored[16:])
+}
+
+// MaxManifestBody bounds a decoded manifest: what a worker holds for as long
+// as the generation is mounted, and what a sweep holds while it reads one.
+// It is about three million files.
+var MaxManifestBody uint64 = 256 << 20
+
+// ParseBounded is Parse for a manifest that is about to be held: one whose
+// decoded body is over MaxManifestBody is refused before it is decoded.
+func ParseBounded(stored []byte) (*Manifest, error) {
+	if BodySize(stored) > MaxManifestBody {
+		return nil, fmt.Errorf("%w: it describes more files than a generation can hold", ErrInvalidManifest)
+	}
+	return Parse(stored)
 }
 
 // Parse decodes and fully validates a stored manifest. A manifest that
@@ -575,21 +588,6 @@ var homeName = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}$`)
 func ValidHome(home string) bool {
 	parent, name := path.Split(home)
 	return (parent == "/Users/" || parent == "/home/") && homeName.MatchString(name) && path.Clean(home) == home
-}
-
-// SourceHome is the home directory meta records the files came from, or
-// empty when meta records none that ValidHome accepts. Meta is the client's
-// to fill: malformed meta has no home rather than an error.
-func SourceHome(meta []byte) string {
-	var decoded struct {
-		Source struct {
-			Home string `json:"home"`
-		} `json:"source"`
-	}
-	if json.Unmarshal(meta, &decoded) != nil || !ValidHome(decoded.Source.Home) {
-		return ""
-	}
-	return decoded.Source.Home
 }
 
 // FileExtent is an Extent that names its object directly, for building.

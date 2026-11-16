@@ -296,8 +296,32 @@ type harness struct {
 	server  *echo.Echo
 	token   *types.Token
 	now     time.Time
-	// meta is what push writes into the manifests it builds.
+	// meta is what push writes into the manifests it builds, and home what
+	// its commits declare.
 	meta []byte
+	home string
+}
+
+// commitBody is what a client sends to commit manifest, declaring added as
+// the objects it adds over its parent.
+func commitBody(parent int64, stored []byte, manifest *Manifest, home string, added []Object) map[string]any {
+	refs := []objectRef{}
+	for _, object := range added {
+		refs = append(refs, objectRef{Digest: object.Digest.String(), Size: int64(object.Size)})
+	}
+	return map[string]any{
+		"parent": parent, "manifest_digest": manifest.Digest().String(), "manifest_size": len(stored),
+		"added": refs, "entries": manifest.Entries(), "objects": manifest.Objects(), "total_size": manifest.TotalSize(), "home": home,
+	}
+}
+
+// manifestObjects lists the objects manifest names.
+func manifestObjects(manifest *Manifest) []Object {
+	objects := make([]Object, 0, manifest.Objects())
+	for i := range manifest.Objects() {
+		objects = append(objects, manifest.Object(i))
+	}
+	return objects
 }
 
 func newHarness(t *testing.T, config Config) *harness {
@@ -347,7 +371,8 @@ func (h *harness) call(method, path string, body any, out any) int {
 }
 
 // push plays the client: build a generation from files, upload what the
-// gateway says is missing, and commit on top of parent.
+// gateway says is missing, and commit on top of parent, declaring every
+// object the manifest names as added.
 func (h *harness) push(name string, parent int64, files map[string]string) (int, types.MirrorGeneration, map[string]any) {
 	h.t.Helper()
 	mirror, err := h.repo.GetMirror(context.Background(), 7, name)
@@ -383,7 +408,7 @@ func (h *harness) push(name string, parent int64, files map[string]string) (int,
 		h.bucket.put(types.MirrorObjectKey(mirror.ID, missing.Digest), objects[missing.Digest], h.now)
 	}
 	var raw json.RawMessage
-	status := h.call(http.MethodPost, "/"+name+"/generations", map[string]any{"parent": parent, "manifest_digest": manifest.Digest().String()}, &raw)
+	status := h.call(http.MethodPost, "/"+name+"/generations", commitBody(parent, stored, manifest, h.home, manifestObjects(manifest)), &raw)
 	var generation types.MirrorGeneration
 	var failure map[string]any
 	if status == http.StatusCreated {
@@ -461,7 +486,7 @@ func TestPushCommitsOnlyCompleteGenerations(t *testing.T) {
 	var incomplete struct {
 		Missing []string `json:"missing"`
 	}
-	commit := map[string]any{"parent": 2, "manifest_digest": manifest.Digest().String()}
+	commit := commitBody(2, stored, manifest, "", objects)
 	require.Equal(t, http.StatusUnprocessableEntity, h.call(http.MethodPost, "/laptop/generations", commit, &incomplete))
 	require.Equal(t, []string{objects[0].Digest.String()}, incomplete.Missing)
 	// Present at the wrong size is as good as absent.
@@ -473,26 +498,32 @@ func TestPushCommitsOnlyCompleteGenerations(t *testing.T) {
 	require.Equal(t, http.StatusOK, h.call(http.MethodPost, "/laptop/objects", map[string]any{"objects": []objectRef{{Digest: objects[0].Digest.String(), Size: int64(objects[0].Size)}}}, &check))
 	require.Len(t, check.Missing, 1)
 
-	// Bytes that are not a valid manifest, or not the bytes the digest
-	// names, are not committed either.
-	junk := []byte("not a manifest")
-	junkDigest := DigestOf(junk).String()
-	h.bucket.put(types.MirrorObjectKey(mirror.ID, junkDigest), junk, h.now)
-	require.Equal(t, http.StatusUnprocessableEntity, h.call(http.MethodPost, "/laptop/generations", map[string]any{"parent": 2, "manifest_digest": junkDigest}, nil))
-	wrongName := strings.Repeat("ab", 32)
-	h.bucket.put(types.MirrorObjectKey(mirror.ID, wrongName), stored, h.now)
-	require.Equal(t, http.StatusUnprocessableEntity, h.call(http.MethodPost, "/laptop/generations", map[string]any{"parent": 2, "manifest_digest": wrongName}, nil))
-	require.Equal(t, http.StatusUnprocessableEntity, h.call(http.MethodPost, "/laptop/generations", map[string]any{"parent": 2, "manifest_digest": strings.Repeat("cd", 32)}, nil), "manifest never uploaded")
-	require.Equal(t, http.StatusBadRequest, h.call(http.MethodPost, "/laptop/generations", map[string]any{"parent": 2, "manifest_digest": "../../etc"}, nil))
-
-	// Nor is a manifest that would cost a worker more memory than a
-	// generation may.
-	limit := maxManifestBody
-	maxManifestBody = 200
-	status, _, failure = h.push("laptop", 2, map[string]string{"a.txt": "one", "b.txt": "two", "c.txt": "three"})
-	maxManifestBody = limit
-	require.Equal(t, http.StatusUnprocessableEntity, status)
-	require.Contains(t, failure["message"], "more files than a generation can hold")
+	// The gateway reads no manifest, only what the bucket says about the
+	// declared objects; a worker parses a manifest before it mounts it. A
+	// manifest that is absent, or present at another size, is not committed.
+	declared := func(change map[string]any) map[string]any {
+		body := commitBody(2, stored, manifest, "", nil)
+		for key, value := range change {
+			body[key] = value
+		}
+		return body
+	}
+	require.Equal(t, http.StatusUnprocessableEntity, h.call(http.MethodPost, "/laptop/generations", declared(map[string]any{"manifest_digest": strings.Repeat("cd", 32)}), nil), "manifest never uploaded")
+	require.Equal(t, http.StatusUnprocessableEntity, h.call(http.MethodPost, "/laptop/generations", declared(map[string]any{"manifest_size": len(stored) + 1}), nil))
+	for _, change := range []map[string]any{
+		{"manifest_digest": "../../etc"},
+		{"manifest_size": 0},
+		{"manifest_size": maxManifestBytes + 1},
+		{"entries": 0},
+		{"entries": MaxEntries + 1},
+		{"objects": -1},
+		{"total_size": -1},
+		{"added": []objectRef{{Digest: "../../etc", Size: 1}}},
+		{"added": []objectRef{{Digest: objects[0].Digest.String(), Size: 0}}},
+		{"added": []objectRef{{Digest: objects[0].Digest.String(), Size: 1}}, "objects": 0},
+	} {
+		require.Equal(t, http.StatusBadRequest, h.call(http.MethodPost, "/laptop/generations", declared(change), nil), change)
+	}
 
 	var generations []types.MirrorGeneration
 	require.Equal(t, http.StatusOK, h.call(http.MethodGet, "/laptop/generations", nil, &generations))
@@ -541,26 +572,26 @@ func TestPushCommitsOnlyCompleteGenerations(t *testing.T) {
 	require.False(t, active)
 }
 
-// A generation records the home its files came from when its meta names one
-// the tree can be presented at. Meta is the client's: whatever it holds, the
-// commit does not fail because of it.
+// A generation records the home its files came from when the commit names
+// one the tree can be presented at. The home is the client's: whatever it
+// declares, the commit does not fail because of it.
 func TestCommitRecordsTheSourceHome(t *testing.T) {
 	h := newHarness(t, Config{KeepGenerations: 10})
 	require.Equal(t, http.StatusCreated, h.call(http.MethodPost, "", map[string]string{"name": "laptop"}, nil))
 	parent := int64(0)
-	for _, test := range []struct{ meta, home string }{
-		{`{"client":"beam-mirror 1.0","source":{"os":"macos","arch":"aarch64","host":"mbp","home":"/Users/luke","user":"luke"}}`, "/Users/luke"},
-		{`{"source":{"home":"/etc"}}`, ""},
-		{`{"source":{"home":"/Users/luke/../root"}}`, ""},
-		{`{"source":"/Users/luke"}`, ""},
-		{`not json`, ""},
-		{``, ""},
-		{`{"source":{"home":"/home/dev"}}`, "/home/dev"},
+	for _, test := range []struct{ declared, home string }{
+		{"/Users/luke", "/Users/luke"},
+		{"/etc", ""},
+		{"/Users/luke/../root", ""},
+		{"Users/luke", ""},
+		{"/home/a\nb", ""},
+		{"", ""},
+		{"/home/dev", "/home/dev"},
 	} {
-		h.meta = []byte(test.meta)
+		h.home = test.declared
 		status, generation, failure := h.push("laptop", parent, map[string]string{"a.txt": "one"})
-		require.Equal(t, http.StatusCreated, status, "%s: %v", test.meta, failure)
-		require.Equal(t, test.home, generation.Home, test.meta)
+		require.Equal(t, http.StatusCreated, status, "%q: %v", test.declared, failure)
+		require.Equal(t, test.home, generation.Home, test.declared)
 		parent = generation.Number
 	}
 	var generations []types.MirrorGeneration
@@ -714,9 +745,7 @@ func TestCommitChecksChangedObjectSize(t *testing.T) {
 		data, manifest, err := builder.Encode(nil, false)
 		require.NoError(t, err)
 		h.bucket.put(types.MirrorObjectKey(mirror.ID, manifest.Digest().String()), data, h.now)
-		return h.call(http.MethodPost, "/laptop/generations", map[string]any{
-			"parent": parent, "manifest_digest": manifest.Digest().String(),
-		}, response)
+		return h.call(http.MethodPost, "/laptop/generations", commitBody(int64(parent), data, manifest, "", manifestObjects(manifest)), response)
 	}
 
 	require.Equal(t, http.StatusCreated, commit(0, uint64(len(content)), nil))
@@ -755,7 +784,7 @@ func TestPurge(t *testing.T) {
 	require.Empty(t, objects)
 	require.Len(t, h.bucket.objects, 2)
 	require.Equal(t, http.StatusNotFound, h.call(http.MethodGet, "/laptop", nil, nil))
-	require.Equal(t, http.StatusNotFound, h.call(http.MethodPost, "/laptop/generations", map[string]any{"parent": 1, "manifest_digest": strings.Repeat("ab", 32)}, nil))
+	require.Equal(t, http.StatusNotFound, h.call(http.MethodPost, "/laptop/generations", map[string]any{"parent": 1, "manifest_digest": strings.Repeat("ab", 32), "manifest_size": 1, "entries": 1}, nil))
 	pin := &types.VMMirror{Name: "laptop", ID: mirror.ID, Generation: 1, ManifestDigest: strings.Repeat("ab", 32)}
 	_, err := h.service.Resolve(context.Background(), 7, pin)
 	require.Error(t, err)

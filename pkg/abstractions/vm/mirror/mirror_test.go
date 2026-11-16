@@ -737,29 +737,18 @@ func TestCachedSourcePrefetch(t *testing.T) {
 	require.NoError(t, <-read)
 }
 
-func TestSourceHome(t *testing.T) {
-	meta := func(home string) []byte {
-		data, err := json.Marshal(map[string]any{"client": "beam-mirror", "source": map[string]any{"os": "macos", "arch": "aarch64", "host": "mbp", "home": home, "user": "luke"}})
-		require.NoError(t, err)
-		return data
-	}
+func TestValidHome(t *testing.T) {
 	longest := strings.Repeat("a", 32)
 	for _, home := range []string{"/Users/luke", "/home/dev.user-1", "/home/_svc", "/home/" + longest} {
-		require.Equal(t, home, SourceHome(meta(home)), home)
+		require.True(t, ValidHome(home), home)
 	}
 	for _, home := range []string{
 		"", "/", "/root", "/Users", "/Users/", "/Users/luke/", "/Users/luke/code", "/Users//luke",
 		"//Users/luke", "/Users/./luke", "/Users/.", "/Users/..", "/home/.hidden", "/home/-x",
 		"/home/a b", "/home/a:b", "/home/a\nb", "/var/luke", "Users/luke", "/home/" + longest + "a",
 	} {
-		require.Empty(t, SourceHome(meta(home)), home)
+		require.False(t, ValidHome(home), home)
 	}
-
-	// Meta is the client's to fill: what it holds can only fail to name a home.
-	for _, malformed := range []string{`{"source":{"home":7}}`, `{"source":"/Users/luke"}`, `{"client":"beam-mirror"}`, `["/Users/luke"]`, `not json`, ``} {
-		require.Empty(t, SourceHome([]byte(malformed)), malformed)
-	}
-	require.Equal(t, "/Users/luke", SourceHome([]byte(`{"source":{"home":"/Users/luke","user":7},"chunker":"fast"}`)), "members it does not read are not checked")
 }
 
 func TestPlacements(t *testing.T) {

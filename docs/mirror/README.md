@@ -19,9 +19,10 @@ downloads the app from `downloads.beam.cloud` if it isn't installed.
    commits a **generation**: a manifest naming every file and the objects
    holding it.
 2. The gateway serves `/api/v1/mirror/<workspace>`. It hands out presigned
-   PUT URLs for missing objects, and commits a generation only after parsing
-   the manifest and finding in the bucket every object the generation adds
-   over its parent.
+   URLs, so files and manifests go between the app and the bucket directly.
+   It commits the generation the app describes once the manifest and every
+   object the app says it adds over the parent are in the bucket at their
+   stated sizes. It does not read the manifest.
 3. A VM created with `"mirror": {"name": NAME}` in its spec, or with
    `beam vm new --mirror NAME`, is pinned to the latest generation of that
    mirror. The pin is part of the VM's spec for its whole life. A fork, and a
@@ -30,7 +31,7 @@ downloads the app from `downloads.beam.cloud` if it isn't installed.
    review).
 4. The worker mounts the pinned generation as a FUSE filesystem and puts it
    above the image and below the VM's own disk: `lowerdir=<mirror>:<image>`.
-   A generation whose meta records the home its files came from,
+   A generation committed with the home its files came from,
    `/Users/<name>` or `/home/<name>`, appears at that path, so that absolute
    paths from the laptop work in the VM. It is owned by the desktop user, or
    by root in an image without one. The gateway checks the path when it
@@ -128,7 +129,7 @@ machine, one run each:
 Timings moved by about 20% between runs. The test's tree is generated, so its
 manifest compresses better than a real one: real checkouts stored 22 bytes
 per file, against 6 here. A decoded manifest costs 72 bytes per entry with
-the test's short names. The gateway refuses a manifest whose decoded body is
+the test's short names. A worker refuses a manifest whose decoded body is
 over 256 MiB, about three million files.
 
 ### Chunk and pack parameters
@@ -189,14 +190,14 @@ Everything a client uploads is untrusted, including the manifest.
 | Boundary | What holds |
 | --- | --- |
 | Manifest contents | `mirror.Parse` rejects anything but directories, regular files and relative symlinks that stay inside the tree. Every extent lies inside its object. There is no ownership, setuid, device or extended attribute to carry. |
-| Memory | Decompression stops at the size the manifest declares for the body and for each extent. The gateway refuses a decoded body over 256 MiB. |
+| Memory | The gateway never downloads a manifest to commit it, and a commit request is at most about 13 MB. Decompression stops at the size the manifest declares for the body and for each extent, and a worker, or the gateway's sweep, refuses a decoded body over 256 MiB. |
 | Bucket keys and paths | The gateway generates mirror ids and parses every digest as 64 hex characters before it becomes part of a key. The worker parses the pinned id as a UUID and the digest again before either becomes a key or a path. |
-| Commit | The gateway reads the manifest back from the bucket, checks it against its digest and finds every object the generation adds over its parent at the stated size. |
+| Commit | The gateway finds the manifest in the bucket at the size the client states, and every object the client says the generation adds over its parent at its stated size. It records the client's counts without checking them. A client that leaves out an object, or uploads a manifest that is not valid, commits a generation whose VMs fail to mount it or to read those files; the platform is protected by the worker's checks. |
 | Object contents | A worker checks every downloaded object against its SHA-256 before using or caching it. A cached manifest is checked against the pin before it is parsed. Cached file contents are trusted as the cache verified them when they were stored. |
 | Node cache | The cache is shared by every workspace on a node and a manifest can name any digest. Mirror objects are cached under a key that includes the workspace and the mirror, so a manifest finds only what its own mirror's mounts stored. |
 | Mount | `ro,nosuid,nodev` with `default_permissions`. Ownership comes from the placement, not from the client. |
 | Purge | The store decides whether a generation exists: a purged one is not mounted from the cache. Mounted layers are checked every minute, stop returning contents and have their kernel cache dropped. |
-| Home | A manifest's `source.home` becomes a path in the guest and in its `/etc/passwd`. The gateway records it only as `/Users/<name>` or `/home/<name>` for a conservative account name, and the worker checks it again before mounting. Callers cannot set it on a pin. |
+| Home | The home a commit states becomes a path in the guest and in its `/etc/passwd`. The gateway records it only as `/Users/<name>` or `/home/<name>` for a conservative account name, and the worker checks it again before mounting. Callers cannot set it on a pin. |
 | Export | A VM's disk holds a copy of every mirrored file it changed. A pinned VM cannot be published as a public template, which would share that disk with everyone. A VM running with its layer cannot be archived as an image, from its merged root or its writable layer. Private snapshots, templates and forks stay in the workspace and keep the pin. |
 
 What it does not cover:
@@ -261,9 +262,10 @@ store tells them apart:
 
 - **Content objects** hold file bytes. A manifest refers to byte ranges of
   them. They are at most 64 MiB.
-- **Manifests** describe one generation each. The gateway commits a manifest
-  whose stored bytes and decoded body are each at most 256 MiB, which is
-  about three million files.
+- **Manifests** describe one generation each. Their stored bytes and decoded
+  body are each at most 256 MiB, which is about three million files. The
+  gateway refuses to commit a manifest stored larger, and a worker refuses
+  to mount one whose body is larger.
 
 Objects are never modified. A generation is the set of objects its manifest
 names plus the manifest itself, so two generations share every object they
@@ -416,11 +418,11 @@ file from `~/Library/Application Support/X` on macOS and wants it at
 in `adapters`.
 
 A reader may present the tree at `source.home`, so that absolute paths the
-source machine wrote into its files resolve the same way. The gateway keeps
-`source.home` with a generation only when it is `/Users/<name>` or
-`/home/<name>`, where `<name>` is 1 to 32 letters, digits, `_`, `.` or `-`
-and does not begin with `.` or `-`. Meta that is not JSON, or names no such
-home, records none; it never fails a commit.
+source machine wrote into its files resolve the same way. A writer states
+that home when it commits. The gateway keeps it only when it is
+`/Users/<name>` or `/home/<name>`, where `<name>` is 1 to 32 letters,
+digits, `_`, `.` or `-` and does not begin with `.` or `-`. Any other home
+records none; it never fails a commit.
 
 ### Committing a generation
 
@@ -428,27 +430,35 @@ A generation exists once the gateway has committed it. Against
 `/api/v1/mirror/<workspace>/<name>`, where `<workspace>` may be `self`:
 
 1. `POST /objects` with `{"objects": [{"digest", "size"}, ...]}`, at most
-   1000 per request. The reply lists those that are missing, each with a
-   presigned PUT URL. An object present at another size is missing.
+   1000 per request, for the objects the generation adds and its manifest.
+   The reply lists those that are missing, each with a presigned PUT URL. An
+   object present at another size is missing.
 2. `PUT` each missing object to its URL.
-3. `POST /generations` with `{"parent": N, "manifest_digest": "..."}`, where
-   `parent` is the number of the generation this one replaces, or 0 for the
-   first.
+3. `POST /generations` with the generation:
 
-The gateway checks `parent` first. It then downloads the manifest, parses it
-as a reader would, and checks that every object it names which the parent
-generation did not is in the store at the stated size. It then records
-generation `parent + 1`, with the `home` its meta names (see [Meta](#meta)).
+| member | meaning |
+| --- | --- |
+| `parent` | the number of the generation this one replaces, or 0 for the first |
+| `manifest_digest`, `manifest_size` | the manifest's digest and stored size |
+| `added` | `[{"digest", "size"}, ...]`: every object the manifest names that the parent's does not, at most 100,000 |
+| `entries`, `objects`, `total_size` | the manifest's entries, the distinct objects it names and their total size |
+| `home` | `source.home` from the meta (see [Meta](#meta)), or empty |
+
+The gateway checks `parent` first. It then checks that the manifest and every
+object in `added` are in the store at their stated sizes, and records
+generation `parent + 1` with the stated counts and home. It does not read the
+manifest: a writer that leaves an object out of `added` commits a generation
+that lacks it, and one without the parent's manifest states every object.
 Replies:
 
 - `201` with the generation.
 - `409` with `latest`: another writer committed first. Start again from
   `latest`, which is null when the mirror has no generation.
-- `422` with `missing`: objects the manifest names that are not in the store
-  (they were swept, or never uploaded), at most 1000 of them. Upload them
-  and commit again.
-- `422` without `missing`: the manifest is not in the store, is not valid,
-  or is not the bytes its digest names.
+- `422` with `missing`: objects in `added` that are not in the store (they
+  were swept, or never uploaded), at most 1000 of them. Upload them and
+  commit again.
+- `422` without `missing`: the manifest is not in the store at
+  `manifest_size`.
 
 Committing the manifest of the latest generation again records a new
 generation with the same contents; a writer that has nothing new does not

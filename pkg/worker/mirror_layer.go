@@ -245,7 +245,7 @@ func (m *mirrorLayers) serve(ctx context.Context, layer *mirrorLayer, request *t
 	if mirror.DigestOf(stored) != manifest.Digest {
 		return mirror.ErrObjectMismatch
 	}
-	parsed, err := mirror.Parse(stored)
+	parsed, err := mirror.ParseBounded(stored)
 	if err != nil {
 		return err
 	}

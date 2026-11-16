@@ -483,6 +483,27 @@ func TestMirrorLayerReadsThroughTheNodeCacheAndVerifies(t *testing.T) {
 	}
 }
 
+// The gateway commits what a client declares without reading the manifest,
+// so a worker is the first to parse it.
+func TestMirrorLayerRefusesManifestsItCannotHold(t *testing.T) {
+	h := newMirrorLayerHarness(t)
+	ctx := context.Background()
+
+	junk := []byte("not a manifest")
+	digest := mirror.DigestOf(junk).String()
+	h.bucket.objects[types.MirrorObjectKey(h.mirrorID, digest)] = junk
+	_, _, err := h.layers.acquire(ctx, mirrorRequest(7), &types.VMMirror{Name: "laptop", ID: h.mirrorID, Generation: 1, ManifestDigest: digest, ManifestSize: int64(len(junk))}, nil)
+	require.ErrorIs(t, err, mirror.ErrInvalidManifest)
+
+	limit := mirror.MaxManifestBody
+	mirror.MaxManifestBody = 200
+	t.Cleanup(func() { mirror.MaxManifestBody = limit })
+	pin := h.generation(t, 2, map[string]string{"a.txt": "one", "b.txt": "two", "c.txt": "three"})
+	_, _, err = h.layers.acquire(ctx, mirrorRequest(7), pin, nil)
+	require.ErrorIs(t, err, mirror.ErrInvalidManifest)
+	require.ErrorContains(t, err, "more files than a generation can hold")
+}
+
 func TestMirrorLayersDoNotShareCachedObjects(t *testing.T) {
 	h := newMirrorLayerHarness(t)
 	ctx := context.Background()

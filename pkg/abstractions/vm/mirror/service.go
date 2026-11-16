@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"path"
 	"regexp"
@@ -75,12 +76,12 @@ const (
 	maxManifestBytes = 256 << 20
 	headConcurrency  = 32
 	maxMissingListed = 1000
+	// maxCommitObjects bounds the objects one commit adds, about 100 GiB of
+	// new files, and so the request body the gateway holds while it decodes
+	// one, about 13 MB.
+	maxCommitObjects = 100_000
+	maxCommitBody    = maxCommitObjects*128 + 1<<16
 )
-
-// maxManifestBody bounds a decoded manifest: what a commit holds in memory
-// here, and what a worker holds for as long as the generation is mounted.
-// It is about three million files.
-var maxManifestBody uint64 = 256 << 20
 
 var validMirrorName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
@@ -99,7 +100,8 @@ type Service struct {
 	workspaces repository.BackendRepository
 	config     Config
 	store      func(context.Context, *types.Workspace) (ObjectStore, error)
-	// Commits parse whole manifests; bound how many are in memory at once.
+	// Bounds the commits checking objects in the bucket at once, each with
+	// headConcurrency requests in flight.
 	commits chan struct{}
 	now     func() time.Time
 }
@@ -114,7 +116,7 @@ func New(ctx context.Context, opts ServiceOpts) (*Service, error) {
 		workspaces: opts.BackendRepo,
 		config:     opts.Config.withDefaults(),
 		store:      opts.Store,
-		commits:    make(chan struct{}, 2),
+		commits:    make(chan struct{}, 8),
 		now:        time.Now,
 	}
 	if s.store == nil {
@@ -168,7 +170,11 @@ func registerRoutes(api *echo.Group, s *Service) {
 }
 
 func decode(c echo.Context, dst any) error {
-	d := json.NewDecoder(io.LimitReader(c.Request().Body, 1<<20))
+	return decodeLimited(c, dst, 1<<20)
+}
+
+func decodeLimited(c echo.Context, dst any, limit int64) error {
+	d := json.NewDecoder(io.LimitReader(c.Request().Body, limit))
 	d.DisallowUnknownFields()
 	if err := d.Decode(dst); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
@@ -421,10 +427,7 @@ func loadManifest(ctx context.Context, bucket ObjectStore, mirrorID, digest stri
 	if err != nil {
 		return nil, err
 	}
-	if BodySize(stored) > maxManifestBody {
-		return nil, fmt.Errorf("%w: it describes more files than a generation can hold", ErrInvalidManifest)
-	}
-	manifest, err := Parse(stored)
+	manifest, err := ParseBounded(stored)
 	if err != nil {
 		return nil, err
 	}
@@ -435,21 +438,44 @@ func loadManifest(ctx context.Context, bucket ObjectStore, mirrorID, digest stri
 }
 
 // commit makes an uploaded manifest the mirror's next generation. The
-// manifest is read back from the bucket and validated, and every object it
-// adds over its parent must be in the bucket at the stated size. The mirror
-// lock keeps a sweep from deleting those objects between the check and the
-// insert.
+// gateway does not read manifests: the client declares the manifest's size
+// and totals and the objects it adds over its parent, and the manifest and
+// every added object must be in the bucket at the stated size. A worker
+// parses and validates a manifest before it mounts it. The mirror lock keeps
+// a sweep from deleting the added objects between the check and the insert.
 func (s *Service) commit(c echo.Context) error {
 	ctx, info := requestContext(c)
 	var req struct {
-		Parent         int64  `json:"parent"`
-		ManifestDigest string `json:"manifest_digest"`
+		Parent         int64       `json:"parent"`
+		ManifestDigest string      `json:"manifest_digest"`
+		ManifestSize   int64       `json:"manifest_size"`
+		Added          []objectRef `json:"added"`
+		Entries        int64       `json:"entries"`
+		Objects        int64       `json:"objects"`
+		TotalSize      int64       `json:"total_size"`
+		Home           string      `json:"home"`
 	}
-	if err := decode(c, &req); err != nil {
+	if err := decodeLimited(c, &req, maxCommitBody); err != nil {
 		return err
 	}
-	if _, err := ParseDigest(req.ManifestDigest); err != nil || req.Parent < 0 {
-		return echo.NewHTTPError(http.StatusBadRequest, "send the parent generation and the manifest's SHA-256 digest")
+	if _, err := ParseDigest(req.ManifestDigest); err != nil || req.Parent < 0 || req.ManifestSize <= 0 || req.ManifestSize > maxManifestBytes {
+		return echo.NewHTTPError(http.StatusBadRequest, "send the parent generation and the manifest's SHA-256 digest and size")
+	}
+	if req.Entries <= 0 || req.Entries > MaxEntries || req.Objects < 0 || req.Objects > math.MaxUint32 || req.TotalSize < 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "send the manifest's entry and object counts and its total size")
+	}
+	if len(req.Added) > maxCommitObjects {
+		return echo.NewHTTPError(http.StatusBadRequest, "a commit adds at most "+strconv.Itoa(maxCommitObjects)+" objects")
+	}
+	added := make(map[string]int64, len(req.Added))
+	for _, object := range req.Added {
+		if _, err := ParseDigest(object.Digest); err != nil || object.Size <= 0 || object.Size > maxManifestBytes {
+			return echo.NewHTTPError(http.StatusBadRequest, "each added object needs a lowercase SHA-256 digest and its size")
+		}
+		added[object.Digest] = object.Size
+	}
+	if int64(len(added)) > req.Objects {
+		return echo.NewHTTPError(http.StatusBadRequest, "a commit adds no more objects than its manifest names")
 	}
 	mirror, err := s.repo.GetMirror(ctx, info.Workspace.Id, c.Param("name"))
 	if err != nil {
@@ -486,43 +512,30 @@ func (s *Service) commit(c echo.Context) error {
 		return conflict(latest)
 	}
 
-	manifest, err := loadManifest(ctx, bucket, mirror.ID, req.ManifestDigest)
+	size, exists, err := bucket.Head(ctx, types.MirrorObjectKey(mirror.ID, req.ManifestDigest))
 	if err != nil {
-		if errors.Is(err, ErrInvalidManifest) || errors.Is(err, ErrObjectMismatch) {
-			return echo.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
-		}
+		return apiError(err)
+	}
+	if !exists || size != req.ManifestSize {
 		return echo.NewHTTPError(http.StatusUnprocessableEntity, "the manifest object is not in the store")
 	}
 
 	// The parent's objects were checked when it was committed and it has
 	// been retained since, so only what this generation adds is checked.
-	known := map[Digest]uint64{}
-	if latest != nil {
-		if parent, err := loadManifest(ctx, bucket, mirror.ID, latest.ManifestDigest); err == nil {
-			for i := range parent.Objects() {
-				object := parent.Object(i)
-				known[object.Digest] = object.Size
-			}
-		}
-	}
 	var mu sync.Mutex
 	missing := []string{}
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.SetLimit(headConcurrency)
-	for i := range manifest.Objects() {
-		object := manifest.Object(i)
-		if size, ok := known[object.Digest]; ok && size == object.Size {
-			continue
-		}
+	for digest, want := range added {
 		group.Go(func() error {
-			size, exists, err := bucket.Head(groupCtx, types.MirrorObjectKey(mirror.ID, object.Digest.String()))
+			size, exists, err := bucket.Head(groupCtx, types.MirrorObjectKey(mirror.ID, digest))
 			if err != nil {
 				return err
 			}
-			if !exists || uint64(size) != object.Size {
+			if !exists || size != want {
 				mu.Lock()
 				if len(missing) < maxMissingListed {
-					missing = append(missing, object.Digest.String())
+					missing = append(missing, digest)
 				}
 				mu.Unlock()
 			}
@@ -539,15 +552,20 @@ func (s *Service) commit(c echo.Context) error {
 		})
 	}
 
+	// A home ValidHome refuses records none; it never fails a commit.
+	home := ""
+	if ValidHome(req.Home) {
+		home = req.Home
+	}
 	generation := &types.MirrorGeneration{
 		MirrorID:       mirror.ID,
 		Parent:         req.Parent,
 		ManifestDigest: req.ManifestDigest,
-		ManifestSize:   int64(manifest.StoredSize()),
-		Entries:        int64(manifest.Entries()),
-		Objects:        int64(manifest.Objects()),
-		TotalSize:      int64(manifest.TotalSize()),
-		Home:           SourceHome(manifest.Meta()),
+		ManifestSize:   req.ManifestSize,
+		Entries:        req.Entries,
+		Objects:        req.Objects,
+		TotalSize:      req.TotalSize,
+		Home:           home,
 		TokenID:        info.Token.ExternalId,
 	}
 	if err := s.repo.CommitMirrorGeneration(ctx, generation); err != nil {
