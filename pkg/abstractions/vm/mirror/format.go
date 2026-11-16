@@ -2,8 +2,7 @@
 // (content-addressed objects and the per-generation manifest that maps a
 // home-relative file tree onto them), the gateway API that uploads and
 // retires generations, and the read-only filesystem a worker mounts under a
-// VM's home. docs/mirror/README.md is the specification; the vectors under
-// testdata are shared with the Rust client.
+// VM's home. The vectors under testdata are shared with the Rust client.
 package mirror
 
 import (
