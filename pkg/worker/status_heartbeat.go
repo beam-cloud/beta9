@@ -150,12 +150,14 @@ func (s *Worker) updateContainerStatusAlone(heartbeat *containerStatusHeartbeat,
 			log.Error().Str("container_id", heartbeat.request.ContainerId).Err(err).Msg("unable to update container state")
 		}
 
-		heartbeats.mu.Lock()
-		heartbeat.alone = false
-		heartbeats.mu.Unlock()
+		// A heartbeat that is over ends while it is still alone, so that
+		// the loop cannot take it up once more.
 		if done {
 			s.stopContainerStatusHeartbeat(heartbeat.request)
 		}
+		heartbeats.mu.Lock()
+		heartbeat.alone = false
+		heartbeats.mu.Unlock()
 	}()
 }
 
