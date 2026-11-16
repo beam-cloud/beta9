@@ -210,6 +210,20 @@ func TestAReservationIsOpenUntilItIsGivenBackAndClosedOnceItsMachineIsGone(t *te
 	}
 }
 
+func TestAReservationIsManagedUnlessItsSourceSaysOtherwise(t *testing.T) {
+	for source, managed := range map[CapacitySource]bool{
+		SourceCLIReservation: true,
+		"":                   true,
+		SourceAttached:       false,
+		SourceManual:         false,
+		SourceAWS:            false,
+		// What a reconciler that is gone recorded is still in stored pools.
+		"autosolver": false,
+	} {
+		require.Equal(t, managed, Reservation{Source: source}.Managed(), "source %q", source)
+	}
+}
+
 func TestAReservationIsActiveWhileItIsOpenAndHasNotRunOut(t *testing.T) {
 	now := time.Now()
 	for _, status := range []ReservationStatus{ReservationPending, ReservationActive} {

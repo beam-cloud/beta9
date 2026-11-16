@@ -323,16 +323,10 @@ func (s *Service) renewManagedReservations(ctx context.Context, workspaceID stri
 	return changed
 }
 
-// extendAtProvider tells a reservation's provider how long the machine is now
-// wanted, so that a provider that deletes machines by itself does not delete
-// this one. The reservation stays marked until the provider has been told.
+// extendAtProvider tells a reservation's provider of a renewal. The
+// reservation stays marked until the provider has been told.
 func (s *Service) extendAtProvider(ctx context.Context, workspaceID string, state *model.PoolState, reservation *model.Reservation) {
-	provider, err := s.provider(reservation.Provider)
-	if err != nil {
-		reservationFailed(workspaceID, state.Name, reservation, "extend at provider", err)
-		return
-	}
-	if err := provider.Extend(ctx, computeReservationInstanceID(*reservation), reservation.ExpiresAt.Add(reservationDeletionGrace)); err != nil {
+	if err := s.extendInstance(ctx, *reservation, reservation.ExpiresAt); err != nil {
 		reservationFailed(workspaceID, state.Name, reservation, "extend at provider", fmt.Errorf("the provider was not told of the renewal: %w", err))
 		return
 	}
@@ -698,7 +692,7 @@ func (s *Service) reconcileReservationStatus(ctx context.Context, workspaceID st
 		return false
 	}
 	reservation.LastStatusCheckAt = now
-	instance, err := s.instanceOf(ctx, *reservation)
+	instance, err := s.instanceOf(ctx, *reservation, now)
 	if err != nil {
 		reservationFailed(workspaceID, state.Name, reservation, "check status", err)
 		return true

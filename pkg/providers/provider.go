@@ -201,6 +201,11 @@ var (
 	ErrNotFound = errors.New("instance not found")
 )
 
+// LaunchGrace is how long after a purchase its provider may not yet know of
+// the machine it sold. An instance that is not found before then is asked
+// for again, not given up.
+const LaunchGrace = 2 * time.Minute
+
 // because wraps one of the errors above with the provider's own explanation.
 func because(kind error, cause error) error {
 	return fmt.Errorf("%w: %w", kind, cause)
@@ -236,8 +241,8 @@ func refusal[T any](err error, kind func(answer *StatusError, body T) error) err
 	}
 	var body T
 	answer.decode(&body)
-	if kind := kind(answer, body); kind != nil {
-		return because(kind, err)
+	if reason := kind(answer, body); reason != nil {
+		return because(reason, err)
 	}
 	return err
 }
@@ -535,22 +540,22 @@ func (a *api) do(ctx context.Context, c call) error {
 	wait := firstRetryWait
 	renewed := false
 	for attempt := 1; ; attempt++ {
-		retryAfter, err := a.send(ctx, c, payload)
+		asked, err := a.send(ctx, c, payload)
 		if statusOf(err) == http.StatusUnauthorized && a.authorize.renew != nil && !renewed {
 			// The provider did nothing with the call. Fetched credentials
 			// can stop being good before they said they would, so the call
 			// goes once more, with new ones, and that is not a retry.
 			a.authorize.renew()
 			renewed = true
-			retryAfter, err = a.send(ctx, c, payload)
+			asked, err = a.send(ctx, c, payload)
 		}
 		if err == nil {
 			return nil
 		}
-		if attempt == maxAttempts || ctx.Err() != nil || !retryable(c, err) || retryAfter > maxRetryWait {
+		if attempt == maxAttempts || ctx.Err() != nil || !retryable(c, err) || asked > maxRetryWait {
 			return err
 		}
-		if err := a.sleep(ctx, max(wait, retryAfter)); err != nil {
+		if err := a.sleep(ctx, max(wait, asked)); err != nil {
 			return err
 		}
 		wait *= 2
@@ -873,9 +878,10 @@ func unknownStatus(provider, status string) Status {
 	return StatusUnknown
 }
 
-// statusDetail is the provider's own wording, kept for a machine that
-// failed, was taken back or is in a status this client does not know: the
-// ones somebody has to look into.
+// statusDetail is the detail of a machine whose provider says no more of it
+// than its status: the provider's own word for the status, kept for a
+// machine that failed, was taken back or is in a status this client does
+// not know. Those are the ones somebody has to look into.
 func statusDetail(status Status, wording string) string {
 	switch status {
 	case StatusFailed, StatusInterrupted, StatusUnknown:
@@ -933,10 +939,10 @@ func offersByRegion(provider string, regions []string, filter OfferFilter, read 
 	return offers, nil
 }
 
-// sortOffers puts offers in the order a client lists them in: by region,
-// GPU and number of GPUs, and among those the cheapest first. A buyer
-// chooses by its own rules; the order is there so that the same stock is
-// listed the same way twice.
+// sortOffers puts offers in one order: by region, GPU and number of GPUs,
+// and among those the cheapest first. A buyer chooses by its own rules; the
+// order is there so that a client that gathers its offers from several
+// answers lists the same stock the same way twice.
 func sortOffers(offers []Offer) {
 	slices.SortFunc(offers, func(a, b Offer) int {
 		return cmp.Or(

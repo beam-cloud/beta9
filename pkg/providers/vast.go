@@ -60,7 +60,9 @@ type Vast struct {
 // NewVast makes a client that rents as owner: the name this control plane
 // puts on the instances it rents.
 func NewVast(config types.VastProviderConfig, owner string) *Vast {
-	config.BaseURL = cmp.Or(config.BaseURL, vastBaseURL)
+	// The address used to end in the version of the API, which each call
+	// now names. A config written that way is still read.
+	config.BaseURL = strings.TrimSuffix(strings.TrimRight(cmp.Or(config.BaseURL, vastBaseURL), "/"), "/api/v0")
 	config.Image = cmp.Or(config.Image, vastImage)
 	if config.DiskGB <= 0 {
 		config.DiskGB = defaultDiskGB

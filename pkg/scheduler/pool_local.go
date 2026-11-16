@@ -673,7 +673,7 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 }
 
 // monitorAndCleanupWorkers binds the tokens of workers that are already
-// running, then removes finished, stale and stuck worker Jobs on an interval.
+// running, and removes finished, stale and stuck worker Jobs on an interval.
 func (wpc *LocalKubernetesWorkerPoolController) monitorAndCleanupWorkers() {
 	cleaner := &WorkerResourceCleaner{
 		PoolName:    wpc.name,

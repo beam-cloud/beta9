@@ -160,16 +160,16 @@ func (c *Hetzner) offer(serverType hetznerServerType, location hetznerLocation, 
 // without one Hetzner's own.
 func (c *Hetzner) hourlyCostMicros(serverType hetznerServerType, location string) int64 {
 	for _, key := range []string{serverType.Name + ":" + location, serverType.Name} {
-		if dollars := c.config.ServerTypePrices[key]; dollars > 0 {
-			return DollarsToMicros(dollars)
+		if configured := c.config.ServerTypePrices[key]; configured > 0 {
+			return DollarsToMicros(configured)
 		}
 	}
 	for _, price := range serverType.Prices {
 		if price.Location != location {
 			continue
 		}
-		if dollars, err := strconv.ParseFloat(price.PriceHourly.Net, 64); err == nil {
-			return DollarsToMicros(dollars)
+		if listed, err := strconv.ParseFloat(price.PriceHourly.Net, 64); err == nil {
+			return DollarsToMicros(listed)
 		}
 	}
 	return 0
@@ -228,9 +228,7 @@ func (c *Hetzner) Create(ctx context.Context, req CreateRequest) (Instance, erro
 		body.UserData = bootScript(req.StartupScript)
 	}
 
-	var created struct {
-		Server hetznerServer `json:"server"`
-	}
+	var created hetznerServerAnswer
 	if err := c.api.do(ctx, call{method: http.MethodPost, path: "/servers", body: body, out: &created}); err != nil {
 		return Instance{}, hetznerRefusal(err)
 	}
@@ -238,6 +236,11 @@ func (c *Hetzner) Create(ctx context.Context, req CreateRequest) (Instance, erro
 		return Instance{}, fmt.Errorf("Hetzner accepted the create without returning a server id")
 	}
 	return c.instance(created.Server), nil
+}
+
+// hetznerServerAnswer is the answer of a call about one server.
+type hetznerServerAnswer struct {
+	Server hetznerServer `json:"server"`
 }
 
 func (c *Hetzner) instance(server hetznerServer) Instance {
@@ -259,7 +262,8 @@ func (s hetznerServer) status() Status {
 	case "running":
 		return StatusActive
 	case "off":
-		// Nothing here stops a server, and one that stopped does not come back.
+		// Nothing here stops a server or starts one again, so one that is
+		// off stays off.
 		return StatusFailed
 	case "deleting":
 		return StatusDeleted
@@ -269,9 +273,7 @@ func (s hetznerServer) status() Status {
 }
 
 func (c *Hetzner) Get(ctx context.Context, id string) (Instance, error) {
-	var found struct {
-		Server hetznerServer `json:"server"`
-	}
+	var found hetznerServerAnswer
 	if err := c.api.do(ctx, call{method: http.MethodGet, path: "/servers/" + url.PathEscape(id), out: &found}); err != nil {
 		return Instance{}, notFound(err)
 	}
@@ -334,8 +336,8 @@ func (c *Hetzner) knownLocations(ctx context.Context) (map[string]hetznerLocatio
 	})
 }
 
-// hetznerNetworkName is how the config names a network: by ID, or else by
-// name.
+// hetznerNetworkName is how the config names a network: by ID, by name, or
+// by both.
 type hetznerNetworkName struct {
 	id   int64
 	name string
@@ -360,12 +362,10 @@ func (n hetznerNetworkName) String() string {
 	return n.name
 }
 
-// names reports whether the network is the one named.
+// names reports whether the network is the one named: the one with the ID,
+// or else the one with the name.
 func (n hetznerNetworkName) names(network hetznerNetwork) bool {
-	if n.id > 0 {
-		return network.ID == n.id
-	}
-	return network.Name == n.name
+	return n.id > 0 && network.ID == n.id || n.name != "" && network.Name == n.name
 }
 
 // privateNetworkID returns the network a new server in the region joins. A

@@ -560,7 +560,7 @@ func (s *Service) CreateManagedPool(ctx context.Context, authInfo *auth.AuthInfo
 	}
 	config, err = normalizeManagedPoolConfig(config)
 	if err == nil {
-		err = s.validateProvisioning(config)
+		err = s.validateProvider(config)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", model.ErrInvalidManagedPoolConfig, err)
@@ -624,7 +624,7 @@ func (s *Service) UpdateManagedPool(ctx context.Context, authInfo *auth.AuthInfo
 	}
 	config, err = normalizeManagedPoolConfig(config)
 	if err == nil {
-		err = s.validateProvisioning(config)
+		err = s.validateProvider(config)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", model.ErrInvalidManagedPoolConfig, err)
@@ -736,7 +736,7 @@ func (s *Service) CreateManagedMachine(ctx context.Context, authInfo *auth.AuthI
 			return nil, model.ErrManagedPoolNotFound
 		}
 	}
-	if state.WorkerConfig != nil && state.WorkerConfig.Buys() {
+	if state.WorkerConfig.Buys() {
 		return nil, fmt.Errorf("%w: %q gets its machines from %s; raise provisioning.maxNodes for more",
 			model.ErrManagedPoolBuysMachines, state.Name, state.WorkerConfig.Provisioning.Provider)
 	}
@@ -809,7 +809,7 @@ func (s *Service) DeleteManagedMachine(ctx context.Context, authInfo *auth.AuthI
 	// A machine the pool bought is the provisioner's to give back. Removed
 	// here it would be paid for until the provisioner missed its worker, and
 	// could join again in the meantime.
-	if state.WorkerConfig != nil && state.WorkerConfig.Buys() {
+	if s.buysMachines(state) {
 		return fmt.Errorf("%w: %q gives its machines back itself, once they are idle", model.ErrManagedPoolBuysMachines, state.Name)
 	}
 	if s.containerRepo != nil {
@@ -822,6 +822,16 @@ func (s *Service) DeleteManagedMachine(ctx context.Context, authInfo *auth.AuthI
 		}
 	}
 	return s.removePrivateMachine(ctx, machine)
+}
+
+// buysMachines reports whether the pool of a stored record buys its machines.
+// A pool of the config file is what this replica's config says it is: its
+// record keeps the config the pool was first stored with.
+func (s *Service) buysMachines(stored *model.PoolState) bool {
+	if stored.ManagementSource == types.WorkerPoolManagementSourceConfig {
+		return s.appConfig.Worker.Pools[stored.Name].Buys()
+	}
+	return stored.WorkerConfig.Buys()
 }
 
 // SetAgentWorkerCordon persists operator intent on every agent-managed machine
@@ -1000,9 +1010,9 @@ func (s *Service) createManagedMachineJoinToken(ctx context.Context, state *mode
 	return token, tokenState, nil
 }
 
-// validateProvisioning reports a pool that is to buy from a provider this
+// validateProvider reports a pool that is to buy from a provider this
 // gateway has no credentials for.
-func (s *Service) validateProvisioning(config types.WorkerPoolConfig) error {
+func (s *Service) validateProvider(config types.WorkerPoolConfig) error {
 	if !config.Buys() {
 		return nil
 	}

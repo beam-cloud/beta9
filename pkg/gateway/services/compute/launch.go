@@ -346,17 +346,29 @@ func (s *Service) deleteInstance(ctx context.Context, reservation model.Reservat
 }
 
 // instanceOf asks a reservation's provider how its machine is doing. A machine
-// the provider no longer has is reported as deleted.
-func (s *Service) instanceOf(ctx context.Context, reservation model.Reservation) (providers.Instance, error) {
+// the provider no longer has is reported as deleted, unless it has only just
+// been bought: its provider may yet come to know of it, and is asked again.
+func (s *Service) instanceOf(ctx context.Context, reservation model.Reservation, now time.Time) (providers.Instance, error) {
 	provider, err := s.provider(reservation.Provider)
 	if err != nil {
 		return providers.Instance{}, err
 	}
 	instance, err := provider.Get(ctx, computeReservationInstanceID(reservation))
-	if errors.Is(err, providers.ErrNotFound) {
+	if errors.Is(err, providers.ErrNotFound) && now.Sub(reservation.CreatedAt) >= providers.LaunchGrace {
 		return providers.Instance{Status: providers.StatusDeleted}, nil
 	}
 	return instance, err
+}
+
+// extendInstance tells a reservation's provider that the machine is wanted
+// until the reservation ends at expiresAt, so that a provider that deletes
+// machines by itself does not delete this one first.
+func (s *Service) extendInstance(ctx context.Context, reservation model.Reservation, expiresAt time.Time) error {
+	provider, err := s.provider(reservation.Provider)
+	if err != nil {
+		return err
+	}
+	return provider.Extend(ctx, computeReservationInstanceID(reservation), expiresAt.Add(reservationDeletionGrace))
 }
 
 // deleteLaunchedInstances deletes the machines of a launch that failed at
@@ -394,8 +406,8 @@ func (s *Service) unansweredInstance(ctx context.Context, workspaceID, poolName 
 		Str("provider", reservation.Provider).
 		Str("machine_id", reservation.MachineID).
 		Logger()
-	provider, ok := s.providers.Get(reservation.Provider)
-	if !ok {
+	provider, err := s.provider(reservation.Provider)
+	if err != nil {
 		return "", false
 	}
 	instances, err := provider.List(ctx)
@@ -610,19 +622,31 @@ func computeReservationInstanceID(reservation model.Reservation) string {
 	return firstNonEmpty(reservation.InstanceID, reservation.ID)
 }
 
-// collectPoolOffers asks the pool's providers, or every provider when it
-// names none, what they sell that the pool can use. A reservation is for a
-// term, so it is never a spot machine, which its provider can take back.
+// reservationProviders are the providers a reservation's machine is bought
+// from. A provider that is configured for pools to buy their own machines
+// from sells nothing to a tenant until it is named here.
+var reservationProviders = []string{"hetzner", "shadeform"}
+
+// collectPoolOffers asks the pool's providers, or every provider that sells
+// reservations when it names none, what they sell that the pool can use. A
+// reservation is for a term, so it is never a spot machine, which its
+// provider can take back.
 //
 // A provider that cannot be asked is passed over, so that it does not hide
 // what the others sell. It is an error only when none of them answered.
 func (s *Service) collectPoolOffers(ctx context.Context, pool model.Pool) ([]providers.Offer, error) {
-	if len(s.providers.Names()) == 0 {
+	sellers := map[string]providers.Provider{}
+	for _, name := range reservationProviders {
+		if provider, ok := s.providers.Get(name); ok {
+			sellers[name] = provider
+		}
+	}
+	if len(sellers) == 0 {
 		return nil, fmt.Errorf("no compute providers are configured")
 	}
 	names := pool.Providers
 	if len(names) == 0 {
-		names = s.providers.Names()
+		names = reservationProviders
 	}
 
 	filter := providers.OfferFilter{GPUs: pool.GPUs, Regions: pool.Regions}
@@ -630,7 +654,7 @@ func (s *Service) collectPoolOffers(ctx context.Context, pool model.Pool) ([]pro
 	answered := 0
 	failures := []string{}
 	for _, name := range names {
-		provider, ok := s.providers.Get(name)
+		provider, ok := sellers[name]
 		if !ok {
 			continue
 		}

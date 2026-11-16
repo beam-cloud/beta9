@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -71,15 +73,23 @@ type shadeformInstanceType struct {
 }
 
 func (c *Shadeform) Offers(ctx context.Context, filter OfferFilter) ([]Offer, error) {
+	// Each type is read by itself, so that one this client cannot read does
+	// not hide what the others sell.
 	var catalogue struct {
-		InstanceTypes []shadeformInstanceType `json:"instance_types"`
+		InstanceTypes []json.RawMessage `json:"instance_types"`
 	}
 	if err := c.api.do(ctx, call{method: http.MethodGet, path: "/instances/types", out: &catalogue}); err != nil {
 		return nil, err
 	}
 
 	offers := []Offer{}
-	for _, instanceType := range catalogue.InstanceTypes {
+	unread := []string{}
+	for _, written := range catalogue.InstanceTypes {
+		var instanceType shadeformInstanceType
+		if err := json.Unmarshal(written, &instanceType); err != nil {
+			unread = append(unread, fmt.Sprintf("%s: %v", instanceType.ShadeInstanceType, err))
+			continue
+		}
 		// Only virtual machines launch on request; bare metal is ordered.
 		if instanceType.DeploymentType != "vm" || instanceType.Configuration.NumGPUs == 0 {
 			continue
@@ -104,6 +114,13 @@ func (c *Shadeform) Offers(ctx context.Context, filter OfferFilter) ([]Offer, er
 				Spot:             stock.RentalType == shadeformSpot,
 			})
 		}
+	}
+	switch {
+	case len(unread) == 0:
+	case len(unread) == len(catalogue.InstanceTypes):
+		return nil, fmt.Errorf("Shadeform's instance types could not be read: %s", unread[0])
+	default:
+		log.Warn().Str("provider", shadeformName).Strs("unread", unread).Msg("could not read some instance types; their offers are left out")
 	}
 	return filter.matching(offers), nil
 }
@@ -253,9 +270,7 @@ func (c *Shadeform) Get(ctx context.Context, id string) (Instance, error) {
 	if err := c.api.do(ctx, call{method: http.MethodGet, path: "/instances/" + url.PathEscape(id) + "/info", out: &raw}); err != nil {
 		return Instance{}, notFound(err)
 	}
-	if raw.ID == "" {
-		raw.ID = id
-	}
+	raw.ID = cmp.Or(raw.ID, id)
 	return c.instance(raw), nil
 }
 

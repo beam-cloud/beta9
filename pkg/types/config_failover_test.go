@@ -88,6 +88,9 @@ func TestValidateAlsoServes(t *testing.T) {
 		{name: "empty entry", pool: WorkerPoolConfig{GPUType: "L40S", AlsoServes: []string{" "}}, wantErr: "empty GPU type"},
 		{name: "any", pool: WorkerPoolConfig{GPUType: "L40S", AlsoServes: []string{"any"}}, wantErr: "already reach every GPU pool"},
 		{name: "its own type", pool: WorkerPoolConfig{GPUType: "L40S", AlsoServes: []string{"l40s"}}, wantErr: "the pool's own gpuType"},
+		// A pool that requires a selector gets no requests for its own type
+		// that name no pool, unless it lists the type.
+		{name: "its own type behind a selector", pool: WorkerPoolConfig{GPUType: "L40S", RequiresPoolSelector: true, AlsoServes: []string{"L40S", "A10G"}}},
 		{name: "listed twice", pool: WorkerPoolConfig{GPUType: "L40S", AlsoServes: []string{"A10G", "a10g"}}, wantErr: "twice"},
 		{name: "a name with a hyphen", pool: WorkerPoolConfig{GPUType: "L40S", AlsoServes: []string{"A100-80", "RTX4000Ada"}}},
 		{name: "not a GPU type", pool: WorkerPoolConfig{GPUType: "L40S", AlsoServes: []string{"L50S"}}, wantErr: `"L50S", which is not a GPU type that requests ask for`},

@@ -1070,6 +1070,32 @@ func TestShadeformDoesNotOfferWhatItCannotPrice(t *testing.T) {
 	}}, offers)
 }
 
+func TestShadeformOffersWhatItCanReadOfACatalogue(t *testing.T) {
+	api := newShadeformAPI(t)
+	// Shadeform describes sizes in whole numbers. One type here does not.
+	api.catalogue = `{"instance_types": [{
+		"cloud": "scaleway", "shade_instance_type": "L4", "deployment_type": "vm", "hourly_price": 95,
+		"configuration": {"gpu_type": "L4", "num_gpus": 1, "vcpus": 8, "memory_in_gb": 47.5, "storage_in_gb": 500},
+		"availability": [{"region": "paris-france-5", "available": true, "rental_type": "on_demand"}]
+	}, {
+		"cloud": "scaleway", "shade_instance_type": "H100", "deployment_type": "vm", "hourly_price": 330,
+		"configuration": {"gpu_type": "H100", "num_gpus": 1, "vcpus": 24, "memory_in_gb": 240, "storage_in_gb": 1000},
+		"availability": [{"region": "paris-france-1", "available": true, "rental_type": "on_demand"}]
+	}]}`
+
+	offers, err := api.client(testOwner).Offers(context.Background(), OfferFilter{})
+	require.NoError(t, err)
+	require.Equal(t, []Offer{{
+		ID: "H100", Provider: "shadeform", Cloud: "scaleway", InstanceType: "H100", Region: "paris-france-1",
+		GPU: "H100", GPUCount: 1, CPUMillicores: 24000, MemoryMB: 240 * 1024, StorageMB: 1000 * 1024, HourlyCostMicros: 3_300_000,
+	}}, offers, "the type that cannot be read is left out, and hides nothing")
+
+	// A catalogue of which nothing can be read is not one that sells nothing.
+	api.catalogue = `{"instance_types": [{"shade_instance_type": "L4", "configuration": {"num_gpus": "one"}}]}`
+	_, err = api.client(testOwner).Offers(context.Background(), OfferFilter{})
+	require.ErrorContains(t, err, "Shadeform's instance types could not be read: L4: ")
+}
+
 func TestVastDoesNotOfferWhatItCannotPrice(t *testing.T) {
 	api := newVastAPI(t)
 	// A host that asks nothing for its machine or for its disk.
@@ -4652,6 +4678,7 @@ func TestHetznerCreateFindsThePrivateNetwork(t *testing.T) {
 	}{
 		"by name":                       {network: types.HetznerPrivateNetworkConfig{Name: "beam-workers"}, region: "ash", wantID: 4711},
 		"by id":                         {network: types.HetznerPrivateNetworkConfig{ID: 4711}, region: "hil", wantID: 4711},
+		"by name, when the id is wrong": {network: types.HetznerPrivateNetworkConfig{ID: 9, Name: "beam-workers"}, region: "ash", wantID: 4711},
 		"by the region's name":          {network: types.HetznerPrivateNetworkConfig{Name: "elsewhere", RegionNames: map[string]string{"ash": "beam-workers"}}, region: "ash", wantID: 4711},
 		"by the region's id":            {network: types.HetznerPrivateNetworkConfig{Name: "elsewhere", RegionIDs: map[string]int64{"ash": 4711}}, region: "ash", wantID: 4711},
 		"none configured":               {network: types.HetznerPrivateNetworkConfig{}, region: "ash", wantErr: `privateNetwork has no id or name for location "ash"`},
@@ -7053,6 +7080,20 @@ func TestVastUsesTheImageAndDiskItIsGiven(t *testing.T) {
 	require.Equal(t, "docker.io/vastai/kvm:ubuntu_desktop", create["image"])
 	require.Equal(t, 500.0, create["disk"])
 	require.NotContains(t, create, "onstart", "no script, none sent")
+}
+
+func TestVastReadsAnAddressThatEndsInTheVersionOfTheAPI(t *testing.T) {
+	api := newVastAPI(t)
+	for _, written := range []string{api.server.URL + "/api/v0", api.server.URL + "/api/v0/"} {
+		client := api.client(testOwner, func(config *types.VastProviderConfig) { config.BaseURL = written })
+
+		offers, err := client.Offers(context.Background(), OfferFilter{})
+		require.NoError(t, err, written)
+		require.Len(t, offers, 11, written)
+		instances, err := client.List(context.Background())
+		require.NoError(t, err, "the list is of another version: %s", written)
+		require.Empty(t, instances)
+	}
 }
 
 func TestVastCreateSendsWhatVastNeeds(t *testing.T) {

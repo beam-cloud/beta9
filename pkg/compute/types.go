@@ -94,6 +94,9 @@ const (
 	// records.
 	SourceManual CapacitySource = "manual"
 	SourceAWS    CapacitySource = "aws"
+	// sourceAutosolver is found only in stored records, on the reservations
+	// of a reconciler that is gone. Nothing looks after their machines.
+	sourceAutosolver CapacitySource = "autosolver"
 )
 
 func (s CapacitySource) Canonical() CapacitySource {
@@ -180,11 +183,12 @@ func (r Reservation) ActiveAt(now time.Time) bool {
 	return r.Open() && (r.ExpiresAt.IsZero() || r.ExpiresAt.After(now))
 }
 
-// Managed reports whether Beam bought the machine for the tenant. It did for
-// every reservation that is made now; the answer is no only for a stored
-// record whose Source says the machine is the tenant's own.
+// Managed reports whether Beam bought the machine for the tenant, and so
+// bills, renews and deletes it. It did for every reservation that is made
+// now; the answer is no only for a stored record whose Source says the
+// machine is the tenant's own, or that nothing looks after it.
 func (r Reservation) Managed() bool {
-	return !r.Source.IsAttached()
+	return !r.Source.IsAttached() && r.Source != sourceAutosolver
 }
 
 // WholeHours rounds a duration up to the hours a provider bills for it.

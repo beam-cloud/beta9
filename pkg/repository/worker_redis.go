@@ -1477,20 +1477,6 @@ func (r *WorkerRedisRepository) removeWorkerIndexEntries(ctx context.Context, st
 // getWorkers returns every worker on the index, as each is on record at the
 // moment it is read. A worker that is on the index and has no record is
 // forgotten on the way (see forgetLostWorker).
-func (r *WorkerRedisRepository) getWorkers() ([]*types.Worker, error) {
-	keys, err := r.rdb.SMembers(context.TODO(), common.RedisKeys.SchedulerWorkerIndex()).Result()
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve worker state keys: %v", err)
-	}
-
-	workers, err := r.getWorkersFromKeys(keys, common.RedisKeys.SchedulerWorkerIndex())
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve worker state keys: %v", err)
-	}
-
-	return workers, nil
-}
-
 func (r *WorkerRedisRepository) GetWorkerById(workerId string) (*types.Worker, error) {
 	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), schedulerWorkerLockOptions)
 	if err != nil {
@@ -1701,7 +1687,7 @@ func (r *WorkerRedisRepository) GetGpuCounts() (map[string]int, error) {
 		gpuCounts[gpuType.String()] = 0
 	}
 
-	workers, err := r.getWorkers()
+	workers, err := r.GetAllWorkers()
 	if err != nil {
 		return nil, err
 	}
@@ -1722,7 +1708,7 @@ func (r *WorkerRedisRepository) GetFreeGpuCounts() (map[string]int, error) {
 		gpuCounts[gpuType.String()] = 0
 	}
 
-	workers, err := r.getWorkers()
+	workers, err := r.GetAllWorkers()
 	if err != nil {
 		return nil, err
 	}
@@ -1799,9 +1785,14 @@ func (r *WorkerRedisRepository) GetGpuAvailability() (map[string]bool, error) {
 }
 
 func (r *WorkerRedisRepository) GetAllWorkers() ([]*types.Worker, error) {
-	workers, err := r.getWorkers()
+	keys, err := r.rdb.SMembers(context.TODO(), common.RedisKeys.SchedulerWorkerIndex()).Result()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to retrieve worker state keys: %v", err)
+	}
+
+	workers, err := r.getWorkersFromKeys(keys, common.RedisKeys.SchedulerWorkerIndex())
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve worker state keys: %v", err)
 	}
 
 	return workers, nil

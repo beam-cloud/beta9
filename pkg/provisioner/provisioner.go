@@ -873,7 +873,7 @@ const (
 	// does not have is waited for before it is given up. The provider may
 	// still be acting on a request it never answered, and may take a moment
 	// to know of a machine it has just sold.
-	launchGrace = 2 * time.Minute
+	launchGrace = providers.LaunchGrace
 	// poolGoneGrace is how long no replica may have had a machine's pool
 	// before the machine is drained. It covers a rolling deployment, during
 	// which replicas disagree about which pools exist.

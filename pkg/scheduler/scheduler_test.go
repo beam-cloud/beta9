@@ -4112,8 +4112,12 @@ func TestRoute(t *testing.T) {
 		{"gpu whose only pool must be named", gpu("L40S"), []string{}},
 		{"gpu no pool has or serves", gpu("B200"), []string{}},
 		{"several gpu types use the fallbacks of each", gpu("H100", "T4", "A10G"),
-			[]string{"a10g", "a10g-reserve", "t4", "rtx4090 (1)", "l40s (2)"}},
-		{"gpu preference weighs against priority", gpu("RTX4090", "A10G"), []string{"a10g", "rtx4090", "a10g-reserve", "l40s (1)"}},
+			[]string{"t4", "a10g", "a10g-reserve", "rtx4090 (1)", "l40s (2)"}},
+		// The order a request lists GPU types in comes before priority.
+		{"gpu types in the order the request lists them", gpu("RTX4090", "A10G"),
+			[]string{"rtx4090", "a10g", "a10g-reserve", "l40s (1)"}},
+		{"any stands for every gpu type not listed before it", gpu("T4", string(types.GPU_ANY)),
+			[]string{"t4", "a10g", "a10g-reserve", "rtx4090"}},
 
 		// What the request brings decides which of those pools it may use.
 		{"agent pools need workspace storage", withStorage(gpu("A10G")),
@@ -4155,14 +4159,7 @@ func TestRoute(t *testing.T) {
 					return pool.Name != test.request.PoolSelector
 				})
 			}
-			got := newRoute(test.request, candidates, routeFleetBuildPool)
-			require.Equal(t, test.want, describeRoute(got))
-
-			for _, pool := range candidates {
-				_, accepted := poolAccepts(pool, newRouteQuery(test.request, routeFleetBuildPool))
-				require.Equal(t, accepted, got.considered[pool.Name] != notInRoute,
-					"pool %s: the route and poolAccepts disagree", pool.Name)
-			}
+			require.Equal(t, test.want, describeRoute(newRoute(test.request, candidates, routeFleetBuildPool)))
 		})
 	}
 }
@@ -4196,11 +4193,10 @@ func TestAnyGPURunsOnEveryGPUPoolThatNeedsNoNaming(t *testing.T) {
 	request := &types.ContainerRequest{Gpu: string(types.GPU_ANY), GpuCount: 1}
 	got := newRoute(request, routeTestPools(routeFleet), routeFleetBuildPool)
 
-	names := describeRoute(got)
-	slices.Sort(names)
 	// No CPU pool, no pool behind a selector, nothing preemptable, and no
-	// fallback rank: "any" asks for every type directly.
-	require.Equal(t, []string{"a10g", "a10g-reserve", "rtx4090", "t4"}, names)
+	// fallback rank: "any" asks for every type directly, so the pools are
+	// tried by priority alone.
+	require.Equal(t, []string{"a10g", "a10g-reserve", "rtx4090", "t4"}, describeRoute(got))
 }
 
 func TestCheckpointRestoresOnlyOnItsAccelerator(t *testing.T) {
@@ -4318,15 +4314,23 @@ func TestRouteEligibleWorkers(t *testing.T) {
 	}
 
 	// A pool that also serves the request takes it on whatever GPU it has.
-	// The agent pool has no gpuType, so it is in no GPU route.
-	require.Equal(t, []string{"a10g", "rtx4090"}, filter(&types.ContainerRequest{Gpu: "A10G", GpuCount: 1}))
+	// The agent pool has no gpuType, so it is in no GPU route, and each of
+	// its machines takes the requests for the GPU it has.
+	require.Equal(t, []string{"a10g", "agent-a10g", "rtx4090"}, filter(&types.ContainerRequest{Gpu: "A10G", GpuCount: 1}))
 	require.Equal(t, []string{"rtx4090"}, filter(&types.ContainerRequest{Gpu: "RTX4090", GpuCount: 1}))
+	require.Equal(t, []string{"agent-h100"}, filter(&types.ContainerRequest{Gpu: "H100", GpuCount: 1}))
+
+	// A pool that cannot run the request rules its machines out. Agent
+	// machines need workspace storage, which this request does not bring.
+	require.Equal(t, []string{"a10g", "rtx4090"},
+		ids(newRoute(&types.ContainerRequest{Gpu: "A10G", GpuCount: 1}, pools, "").eligible(workers)))
 
 	// Inside a named pool, the worker still needs a GPU the request can use.
 	require.Equal(t, []string{"agent-a10g"}, filter(&types.ContainerRequest{Gpu: "A10G", GpuCount: 1, PoolSelector: "agent"}))
 
 	// "any" means any GPU in the catalog, or whatever a named pool has.
-	require.Equal(t, []string{"a10g", "rtx4090", "t4"}, filter(&types.ContainerRequest{Gpu: string(types.GPU_ANY), GpuCount: 1}))
+	require.Equal(t, []string{"a10g", "agent-a10g", "agent-h100", "rtx4090", "t4"},
+		filter(&types.ContainerRequest{Gpu: string(types.GPU_ANY), GpuCount: 1}))
 	require.Equal(t, []string{"custom"}, filter(&types.ContainerRequest{Gpu: string(types.GPU_ANY), GpuCount: 1, PoolSelector: "custom"}))
 
 	// A machine pin has already chosen the worker; its GPU still has to fit.
@@ -4710,6 +4714,19 @@ func TestChainNamingAPoolOutsideTheConfigFile(t *testing.T) {
 	require.Empty(t, migration.reordered)
 }
 
+// A chain could name a pool with no gpuType, which alsoServes cannot.
+func TestChainNamingAPoolWithNoGPUType(t *testing.T) {
+	pools := map[string]types.WorkerPoolConfig{"fleet": {Mode: types.PoolModeExternal}}
+
+	migration := migrateFailoverChains(chainsForTest(map[string][]string{"A10G": {"fleet"}}), pools)
+
+	require.Equal(t, []string{
+		"worker.pools.fleet.alsoServes: [A10G]  (a pool with no gpuType cannot list alsoServes: set its gpuType)",
+	}, migration.write)
+	// Until the section goes, the pool keeps taking the chain's requests.
+	require.Equal(t, []string{"A10G"}, migration.apply("fleet", pools["fleet"]).AlsoServes)
+}
+
 func TestSeveralChainsAreNotedBecauseRequestsNowUseAllOfThem(t *testing.T) {
 	pools := map[string]types.WorkerPoolConfig{"l40s": {GPUType: "L40S"}, "rtx4090": {GPUType: "RTX4090"}}
 
@@ -4748,6 +4765,62 @@ func TestChainsAreAddedToWhatAPoolAlreadyServes(t *testing.T) {
 
 	untouched := migration.apply("a10g", types.WorkerPoolConfig{GPUType: "A10G"})
 	require.Empty(t, untouched.AlsoServes)
+}
+
+// A chain could name a pool of its own GPU type. That changed nothing for a
+// pool requests of the type reach anyway. For one that requires a selector,
+// the chain was what let in the requests that name no pool, after the pools
+// that need no naming.
+func TestChainNamingAPoolOfItsOwnGPUTypeBehindASelector(t *testing.T) {
+	pools := map[string]types.WorkerPoolConfig{
+		"a10g":          {GPUType: "A10G"},
+		"a10g-reserved": {GPUType: "A10G", Priority: 50, RequiresPoolSelector: true},
+		"l40s":          {GPUType: "L40S", Priority: 5},
+	}
+	migration := migrateFailoverChains(chainsForTest(map[string][]string{"A10G": {"a10g", "a10g-reserved", "l40s"}}), pools)
+
+	require.Equal(t, []string{
+		"worker.pools.a10g-reserved.alsoServes: [A10G]",
+		"worker.pools.l40s.alsoServes: [A10G]",
+	}, migration.write, "the open pool of the chain's type has nothing to write")
+	require.Empty(t, migration.reordered)
+
+	for name, config := range pools {
+		config = migration.apply(name, config)
+		require.NoError(t, config.Validate(), name)
+		pools[name] = config
+	}
+	require.Empty(t, pools["a10g"].AlsoServes)
+	require.Equal(t, []string{"A10G"}, pools["a10g-reserved"].AlsoServes)
+
+	request := func(selector string, gpus ...string) *types.ContainerRequest {
+		return &types.ContainerRequest{GpuRequest: gpus, GpuCount: 1, PoolSelector: selector}
+	}
+	routed := func(request *types.ContainerRequest) []string {
+		candidates := routeTestPools(pools)
+		if request.PoolSelector != "" {
+			candidates = slices.DeleteFunc(candidates, func(pool *WorkerPool) bool { return pool.Name != request.PoolSelector })
+		}
+		return describeRoute(newRoute(request, candidates, ""))
+	}
+
+	// The open pool first, whatever the priorities, then the chain's pools.
+	require.Equal(t, []string{"a10g", "a10g-reserved (1)", "l40s (2)"}, routed(request("", "A10G")))
+	require.Equal(t, []string{"a10g-reserved"}, routed(request("a10g-reserved", "A10G")))
+	// Chains never applied to requests for any GPU.
+	require.Equal(t, []string{"l40s", "a10g"}, routed(request("", string(types.GPU_ANY))))
+
+	// Its workers take the request, and are no overflow: they have the GPU
+	// that was asked for. The L40S pool's are.
+	reserved := &types.Worker{Id: "reserved", PoolName: "a10g-reserved", Gpu: "A10G", RequiresPoolSelector: true}
+	spare := &types.Worker{Id: "spare", PoolName: "l40s", Gpu: "L40S"}
+	route := newRoute(request("", "A10G"), routeTestPools(pools), "")
+	require.Equal(t, []*types.Worker{reserved, spare}, route.eligible([]*types.Worker{reserved, spare}))
+	for worker, want := range map[*types.Worker]int{reserved: 0, spare: 2} {
+		rank, ok := route.rankOf(worker)
+		require.True(t, ok, worker.Id)
+		require.Equal(t, want, rank, worker.Id)
+	}
 }
 
 // A config written for the previous release may still hold what that release

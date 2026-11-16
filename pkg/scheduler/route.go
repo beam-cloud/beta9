@@ -18,14 +18,16 @@ import (
 //
 // A request that names a pool runs there. Any other request runs on the pools
 // of the GPU type it asked for (CPU pools for CPU work), then on the pools
-// that list its GPU type in alsoServes. Within each group a higher priority
-// goes first, then the name.
+// that list its GPU type in alsoServes. A request that asks for several GPU
+// types gets the pools of the type it lists first, then those of the next.
+// Among pools that are otherwise equal a higher priority goes first, then
+// the name.
 type route struct {
 	pools []routedPool
-	// considered is every pool that was weighed for the request, with its
-	// rank, or notInRoute if the request may not run there.
-	considered map[string]int
-	query      routeQuery
+	// ranks is the rank of each pool in the route, and cannotRun for each
+	// pool that was weighed and is not able or allowed to run the request.
+	ranks map[string]int
+	query routeQuery
 }
 
 // routeQuery is what routing reads from a request. It is worked out once per
@@ -62,12 +64,12 @@ type routedPool struct {
 	// overflow is set for a Shared CPU pool taking work that does not share
 	// CPU. Such pools come last (see types.CPUTier.Overflows).
 	overflow bool
-	// preference orders pools within a group, highest first: the pool's
-	// priority, less its GPU type's position in the request's list.
-	preference int32
+	// asked is where the pool's GPU type comes among those the request
+	// asked for. It is 0 for a pool that only also serves the request.
+	asked int
 }
 
-const notInRoute = -1
+const cannotRun = -1
 
 var errNoPoolForRequest = errors.New("no pool accepts the request")
 
@@ -76,30 +78,32 @@ var errNoPoolForRequest = errors.New("no pool accepts the request")
 func newRoute(request *types.ContainerRequest, candidates []*WorkerPool, buildPool string) route {
 	query := newRouteQuery(request, buildPool)
 	r := route{
-		considered: make(map[string]int, len(candidates)),
-		query:      query,
+		ranks: make(map[string]int, len(candidates)),
+		query: query,
 	}
 
 	for _, pool := range candidates {
-		r.considered[pool.Name] = notInRoute
-
-		fallback, ok := poolAccepts(pool, query)
-		if !ok {
+		if !poolCanRun(pool, query) {
+			r.ranks[pool.Name] = cannotRun
 			continue
 		}
-		r.pools = append(r.pools, routedPool{
-			WorkerPool: pool,
-			fallback:   fallback,
-			overflow:   query.tier.Overflows(pool.Config),
-			preference: pool.Config.Priority - int32(gpuPriorityModifier(request, pool.Config.GPUType)),
-		})
+		fallback, serves := poolServes(pool, query)
+		if !serves {
+			continue
+		}
+		routed := routedPool{WorkerPool: pool, fallback: fallback, overflow: query.tier.Overflows(pool.Config)}
+		if !fallback {
+			routed.asked = query.askedFor(pool.Config.GPUType)
+		}
+		r.pools = append(r.pools, routed)
 	}
 
 	slices.SortFunc(r.pools, func(a, b routedPool) int {
 		return cmp.Or(
 			compareBool(a.overflow, b.overflow),
 			compareBool(a.fallback, b.fallback),
-			cmp.Compare(b.preference, a.preference),
+			cmp.Compare(a.asked, b.asked),
+			cmp.Compare(b.Config.Priority, a.Config.Priority),
 			strings.Compare(a.Name, b.Name),
 		)
 	})
@@ -110,9 +114,18 @@ func newRoute(request *types.ContainerRequest, candidates []*WorkerPool, buildPo
 			fallbacks++
 			r.pools[i].rank = fallbacks
 		}
-		r.considered[r.pools[i].Name] = r.pools[i].rank
+		r.ranks[r.pools[i].Name] = r.pools[i].rank
 	}
 	return r
+}
+
+// askedFor is where a GPU type comes among those the request asked for, in
+// the order it listed them. "any" stands for every type the request did not
+// list before it.
+func (q routeQuery) askedFor(gpu string) int {
+	return max(0, slices.IndexFunc(q.gpus, func(asked string) bool {
+		return asked == gpu || asked == string(types.GPU_ANY)
+	}))
 }
 
 // compareBool orders false before true.
@@ -124,13 +137,6 @@ func compareBool(a, b bool) int {
 		return -1
 	}
 	return 1
-}
-
-// poolAccepts reports whether the request may run on the pool. fallback is
-// set when the pool serves the request only through alsoServes.
-func poolAccepts(pool *WorkerPool, query routeQuery) (fallback, ok bool) {
-	fallback, ok = poolServes(pool, query)
-	return fallback, ok && poolCanRun(pool, query)
 }
 
 // poolServes applies the routing rule: does the pool serve what the request
@@ -202,26 +208,38 @@ func isManagedRequest(request *types.ContainerRequest) bool {
 	return request != nil && request.Stub.Type.IsManagedEndpoint()
 }
 
-// rankOf reports whether a worker's pool is in the route, and its rank there.
+// rankOf reports whether a worker's pool lets it take the request, and how
+// far down the route that puts it: 0 for a worker with a GPU the request
+// asked for, otherwise the rank of its pool.
 //
-// A worker records, when it starts, whether its pool takes only requests that
-// name it. That record stands for the pool in two cases. A replica can see a
+// A pool that cannot run the request rules its workers out, and a pool that
+// only also serves the request lets them in. Every other worker speaks for
+// itself: it records, when it starts, whether its pool takes only requests
+// that name it, and eligible checks the GPU it has. That is all there is to
+// ask of a pool the request asked for, and it answers where the route
+// cannot. An agent pool with no gpuType is in no GPU route, yet a machine of
+// it has the GPU it has, and takes the requests for it. A replica can see a
 // worker before it has loaded the worker's pool: a workspace's private pool
 // loads on first use, and a pool created through the API reaches the other
 // replicas a moment later. And a workspace's private pool may share its name
 // with a shared pool, whose place in the route is not the private worker's.
 func (r route) rankOf(worker *types.Worker) (rank int, ok bool) {
 	name := workerPoolSelector(worker)
-	rank, loaded := r.considered[name]
+	rank = r.ranks[name]
 	switch {
-	case loaded && rank == notInRoute:
+	case rank == cannotRun:
 		return 0, false
 	case r.query.request.PoolSelector != "":
 		return 0, name == r.query.request.PoolSelector
-	case rank > 0 && !workspaceOwned(worker):
-		return rank, true
+	case rank == 0 || workspaceOwned(worker):
+		return 0, !worker.RequiresPoolSelector
+	case slices.Contains(r.query.gpus, worker.Gpu):
+		// Overflow is running on another GPU than the one asked for. A pool
+		// behind a selector that lists its own gpuType, or an agent pool
+		// with a machine of the type, gives the request what it asked for.
+		return 0, true
 	}
-	return 0, !worker.RequiresPoolSelector
+	return rank, true
 }
 
 // workspaceOwned reports whether the worker is a workspace's own capacity:
@@ -370,9 +388,20 @@ func migrateFailoverChains(failover types.FailoverConfig, pools map[string]types
 	}
 
 	for _, pool := range slices.Sorted(maps.Keys(migration.alsoServes)) {
-		line := fmt.Sprintf("worker.pools.%s.alsoServes: [%s]", pool, strings.Join(migration.alsoServes[pool], ", "))
-		if _, configured := pools[pool]; !configured {
+		config, configured := pools[pool]
+		gpus := migration.alsoServes[pool]
+		if configured {
+			gpus = slices.DeleteFunc(slices.Clone(gpus), func(gpu string) bool { return !chainAdds(config, gpu) })
+		}
+		if len(gpus) == 0 {
+			continue
+		}
+		line := fmt.Sprintf("worker.pools.%s.alsoServes: [%s]", pool, strings.Join(gpus, ", "))
+		switch {
+		case !configured:
 			line += "  (not in this config: set also_serves on it through the pools API)"
+		case strings.TrimSpace(config.GPUType) == "":
+			line += "  (a pool with no gpuType cannot list alsoServes: set its gpuType)"
 		}
 		migration.write = append(migration.write, line)
 	}
@@ -382,7 +411,7 @@ func migrateFailoverChains(failover types.FailoverConfig, pools map[string]types
 		// serve a GPU type are tried by priority, then name.
 		var was []string
 		for _, pool := range failover.Chains[gpu].Pools {
-			if _, configured := pools[pool]; configured {
+			if config, configured := pools[pool]; configured && chainAdds(config, strings.TrimSpace(gpu)) {
 				was = append(was, pool)
 			}
 		}
@@ -406,7 +435,7 @@ func migrateFailoverChains(failover types.FailoverConfig, pools map[string]types
 
 // warn logs what replaces the chains, once, at startup.
 func (m chainMigration) warn() {
-	if len(m.write) > 0 {
+	if len(m.alsoServes) > 0 {
 		log.Warn().Strs("write_instead", m.write).
 			Msg("scheduling.failover.chains is deprecated and stops being read in the next release; it was converted to alsoServes on each pool")
 	}
@@ -422,9 +451,17 @@ func (m chainMigration) warn() {
 // alsoServes.
 func (m chainMigration) apply(name string, config types.WorkerPoolConfig) types.WorkerPoolConfig {
 	for _, gpu := range m.alsoServes[name] {
-		if !config.Serves(gpu) && !strings.EqualFold(config.GPUType, gpu) {
+		if chainAdds(config, gpu) && !config.Serves(gpu) {
 			config.AlsoServes = append(slices.Clone(config.AlsoServes), gpu)
 		}
 	}
 	return config
+}
+
+// chainAdds reports whether a chain for the GPU type brings the pool requests
+// it would not get otherwise. A pool of that type gets them already, unless
+// it takes only requests that name it: the chain is then what lets the
+// others in.
+func chainAdds(config types.WorkerPoolConfig, gpu string) bool {
+	return config.RequiresPoolSelector || !strings.EqualFold(config.GPUType, gpu)
 }

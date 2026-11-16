@@ -712,7 +712,9 @@ type WorkerPoolConfig struct {
 	// AlsoServes lists other GPU types whose requests may overflow into this
 	// pool once the pools of that type have no room. It is the whole of
 	// fallback configuration: a request for A10G runs on pools whose gpuType
-	// is A10G, then on pools that list A10G here.
+	// is A10G, then on pools that list A10G here. A pool that requires a
+	// selector may list its own gpuType, to take the requests for it that
+	// name no pool the same way.
 	AlsoServes                []string                          `key:"alsoServes" json:"also_serves,omitempty"`
 	Runtime                   string                            `key:"runtime" json:"runtime"`                                 // Kubernetes RuntimeClass for pod (e.g., "nvidia")
 	ContainerRuntime          string                            `key:"containerRuntime" json:"container_runtime"`              // Pool-specific container runtime: "runc", "gvisor", or "microvm"
@@ -939,7 +941,8 @@ func (c WorkerPoolConfig) validateProvisioning() error {
 
 // validateAlsoServes reports alsoServes entries that cannot mean what was
 // intended: a CPU pool serving GPU requests, a name no request asks for, the
-// "any" wildcard, the pool's own GPU type, or a GPU type listed twice.
+// "any" wildcard, the GPU type of a pool that takes its requests anyway, or
+// a GPU type listed twice.
 func (c WorkerPoolConfig) validateAlsoServes() error {
 	if len(c.AlsoServes) == 0 {
 		return nil
@@ -960,8 +963,8 @@ func (c WorkerPoolConfig) validateAlsoServes() error {
 			return fmt.Errorf("alsoServes lists %q, which is not a GPU type that requests ask for", entry)
 		case !strings.EqualFold(string(gpu), written):
 			return fmt.Errorf("alsoServes lists %q: requests ask for that GPU as %s", entry, gpu)
-		case gpu == NormalizeGPUType(c.GPUType):
-			return fmt.Errorf("alsoServes lists %s, which is the pool's own gpuType", entry)
+		case gpu == NormalizeGPUType(c.GPUType) && !c.RequiresPoolSelector:
+			return fmt.Errorf("alsoServes lists %s, which is the pool's own gpuType: requests for it already run here", entry)
 		case seen[gpu]:
 			return fmt.Errorf("alsoServes lists %s twice", entry)
 		}

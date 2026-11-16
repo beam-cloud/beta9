@@ -6091,10 +6091,11 @@ func (r *faultyPools) SaveJoinTokenState(ctx context.Context, state *model.JoinT
 type faultyProvider struct {
 	*providers.Fake
 	offersErr, getErr, extendErr error
-	extends                      int
+	asked, extends               int
 }
 
 func (p *faultyProvider) Offers(ctx context.Context, filter providers.OfferFilter) ([]providers.Offer, error) {
+	p.asked++
 	if p.offersErr != nil {
 		return nil, p.offersErr
 	}
@@ -6705,8 +6706,8 @@ func TestLaunchPoolCapacityAnswersWithThePoolItLaunchedInto(t *testing.T) {
 }
 
 func TestListPoolOffersSkipsAProviderThatCannotBeAsked(t *testing.T) {
-	nebius := &faultyProvider{Fake: fakeProvider("nebius"), offersErr: errors.New("nebius token expired")}
-	service := &Service{providers: providers.RegistryOf(nebius, fakeProvider("hetzner", cpx31Offer))}
+	shadeform := &faultyProvider{Fake: fakeProvider("shadeform"), offersErr: errors.New("shadeform is down")}
+	service := &Service{providers: providers.RegistryOf(shadeform, fakeProvider("hetzner", cpx31Offer))}
 
 	res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{}})
 	require.NoError(t, err)
@@ -6716,10 +6717,10 @@ func TestListPoolOffersSkipsAProviderThatCannotBeAsked(t *testing.T) {
 }
 
 func TestLaunchPoolCapacityBuysFromAProviderThatAnswersWhenAnotherDoesNot(t *testing.T) {
-	nebius := &faultyProvider{Fake: fakeProvider("nebius"), offersErr: errors.New("nebius token expired")}
+	shadeform := &faultyProvider{Fake: fakeProvider("shadeform"), offersErr: errors.New("shadeform is down")}
 	hetzner := fakeProvider("hetzner", cpx31Offer)
 	repo := &fakeComputeRepo{}
-	service := launchService(repo, nebius, hetzner)
+	service := launchService(repo, shadeform, hetzner)
 
 	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
 		Nodes: 1,
@@ -6731,20 +6732,67 @@ func TestLaunchPoolCapacityBuysFromAProviderThatAnswersWhenAnotherDoesNot(t *tes
 }
 
 func TestListPoolOffersFailsWhenNoProviderAnswers(t *testing.T) {
+	hetzner := &faultyProvider{Fake: fakeProvider("hetzner", cpx31Offer)}
 	service := &Service{providers: providers.RegistryOf(
-		&faultyProvider{Fake: fakeProvider("nebius"), offersErr: errors.New("nebius token expired")},
+		hetzner,
 		&faultyProvider{Fake: fakeProvider("shadeform"), offersErr: errors.New("shadeform is down")},
-		fakeProvider("hetzner", cpx31Offer),
 	)}
 
-	// The pool names the two that are down, so nobody is left to answer.
+	// The pool names the one that is down, so nobody is left to answer.
 	res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{
-		Pool: &pb.PoolConfig{Providers: []string{"nebius", "shadeform"}},
+		Pool: &pb.PoolConfig{Providers: []string{"shadeform"}},
 	})
 	require.NoError(t, err)
 	require.False(t, res.Ok)
-	require.Contains(t, res.ErrMsg, "nebius: nebius token expired", "every failure is named")
 	require.Contains(t, res.ErrMsg, "shadeform: shadeform is down")
+	require.Zero(t, hetzner.asked)
+
+	hetzner.offersErr = errors.New("hetzner token expired")
+	res, err = service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{}})
+	require.NoError(t, err)
+	require.False(t, res.Ok)
+	require.Contains(t, res.ErrMsg, "hetzner: hetzner token expired", "every failure is named")
+	require.Contains(t, res.ErrMsg, "shadeform: shadeform is down")
+}
+
+// The providers that pools buy their own machines from are configured in the
+// same place. What one of them sells on demand is not for a tenant to
+// reserve, however little it costs, and it is not asked.
+func TestOnlyProvidersThatSellReservationsAreAskedWhatTheySell(t *testing.T) {
+	cheaper := a10gOffer
+	cheaper.HourlyCostMicros = a10gOffer.HourlyCostMicros / 2
+	verda := &faultyProvider{Fake: fakeProvider("verda", cheaper)}
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, verda, shadeform)
+
+	for _, named := range [][]string{nil, {"verda", "shadeform"}} {
+		res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{Providers: named}})
+		require.NoError(t, err)
+		require.True(t, res.Ok, res.ErrMsg)
+		require.Len(t, res.Offers, 1)
+		require.Equal(t, "shadeform", res.Offers[0].Provider)
+	}
+	res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{Providers: []string{"verda"}}})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Empty(t, res.Offers)
+
+	launched, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		Pool: &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: 1, Ttl: "1h", MaxSpend: 2},
+	})
+	require.NoError(t, err)
+	require.True(t, launched.Ok, launched.ErrMsg)
+	require.Len(t, shadeform.Creates(), 1)
+	require.Empty(t, verda.Creates())
+	require.Zero(t, verda.asked)
+
+	// With nobody to sell a reservation there is nothing to list.
+	service.providers = providers.RegistryOf(verda)
+	res, err = service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{}})
+	require.NoError(t, err)
+	require.False(t, res.Ok)
+	require.Equal(t, "no compute providers are configured", res.ErrMsg)
 }
 
 func TestAnOfferWithoutAPriceIsNeitherListedNorBought(t *testing.T) {
@@ -7056,6 +7104,25 @@ func TestStatusCheckClosesAReservationWhoseMachineIsGone(t *testing.T) {
 			require.Empty(t, reported(m.events, types.EventComputeActionReservationStatusUpdated))
 		})
 	}
+}
+
+func TestStatusCheckWaitsForAProviderToKnowOfAMachineItHasJustSold(t *testing.T) {
+	m := newBoughtMachine(t)
+	m.state.Reservations[0].CreatedAt = m.now
+	m.provider.Forget(m.instance)
+
+	reservation := m.check(t, 0)
+	require.Equal(t, model.ReservationPending, reservation.Status, "the machine may yet be there")
+	require.Contains(t, reservation.LastError, "instance not found")
+	require.False(t, m.tokenRevoked())
+
+	reservation = m.check(t, providers.LaunchGrace-time.Second)
+	require.Equal(t, model.ReservationPending, reservation.Status)
+
+	reservation = m.check(t, reconcileStatusCheckInterval)
+	require.Equal(t, model.ReservationDeleted, reservation.Status, "a provider that still has no such machine never made it")
+	require.Empty(t, reservation.LastError)
+	require.True(t, m.tokenRevoked())
 }
 
 func TestStatusCheckKeepsAReservationWhenTheProviderCannotBeAsked(t *testing.T) {
@@ -8528,6 +8595,37 @@ func TestForgetMachineLeavesOtherMachinesAlone(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, machine)
 	require.Same(t, other, service.workerRepo.(*fakeWorkerRepo).worker)
+}
+
+// A pool of the config file is stored once, as it was then. Whether it buys
+// its machines is for the config to say.
+func TestAPoolOfTheConfigFileBuysWhenItsConfigSaysSo(t *testing.T) {
+	ctx := context.Background()
+	older, _ := buyingTestService(types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+		"l40s": {Mode: types.PoolModeExternal, GPUType: "L40S"},
+	}}})
+	require.NoError(t, older.ReconcileManagedPools(ctx))
+
+	service, repo := buyingTestService(types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+		"l40s": spotPool(),
+	}}})
+	service.managedPoolRepo = older.managedPoolRepo
+	require.NoError(t, service.ReconcileManagedPools(ctx))
+	stored, err := service.managedPoolRepo.GetManagedPoolState(ctx, "admin-workspace", "l40s")
+	require.NoError(t, err)
+	require.False(t, stored.WorkerConfig.Buys(), "the record is as it was first stored")
+
+	script, _, err := service.JoinScript(ctx, "l40s", "machine-1")
+	require.NoError(t, err)
+	require.True(t, joinAs(t, service, script, "verda-1").Ok)
+
+	_, err = service.CreateManagedMachine(ctx, clusterAdminAuth(), "l40s")
+	require.ErrorIs(t, err, model.ErrManagedPoolBuysMachines)
+	err = service.DeleteManagedMachine(ctx, clusterAdminAuth(), "l40s", "machine-1")
+	require.ErrorIs(t, err, model.ErrManagedPoolBuysMachines)
+	machine, err := repo.GetAgentMachineState(ctx, "admin-workspace", "l40s", "machine-1")
+	require.NoError(t, err)
+	require.NotNil(t, machine)
 }
 
 // A pool either buys its machines or has them joined by hand. Machines the

@@ -70,13 +70,7 @@ func (s *Service) poolMachines(ctx context.Context, workspaceID string, state *m
 	if err != nil {
 		return nil, false, err
 	}
-	now := time.Now().UTC()
-	deleted, err := s.cleanupDeletedBYOCPoolIfNeeded(ctx, workspaceID, state, machines, now)
-	if err != nil || deleted {
-		return nil, deleted, err
-	}
-	machines, err = s.pruneBYOCPoolMachinesAboveDesired(ctx, workspaceID, state, machines, now)
-	return machines, false, err
+	return s.reconcileBYOCPoolMachinesForRead(ctx, workspaceID, state, machines, time.Now().UTC())
 }
 
 // nextPoolState is the record a call saves for a pool. It starts from the
@@ -306,7 +300,8 @@ func (s *Service) ExtendPoolCapacity(ctx context.Context, in *pb.ExtendPoolCapac
 				return err
 			}
 			// The pool is to end this long from now. A time that is not
-			// ahead would end it, and its machines, at once.
+			// ahead keeps no machine for longer, and would only show the
+			// pool as having ended.
 			if ttl <= 0 {
 				return errors.New("ttl must be positive")
 			}
@@ -343,12 +338,7 @@ func (s *Service) extendManagedReservations(ctx context.Context, workspaceID str
 		if !reservation.ExpiresAt.IsZero() && !expiresAt.After(reservation.ExpiresAt) {
 			continue
 		}
-		provider, err := s.provider(reservation.Provider)
-		if err != nil {
-			reservationFailed(workspaceID, state.Name, reservation, "extend", err)
-			continue
-		}
-		if err := provider.Extend(ctx, computeReservationInstanceID(*reservation), expiresAt.Add(reservationDeletionGrace)); err != nil {
+		if err := s.extendInstance(ctx, *reservation, expiresAt); err != nil {
 			reservationFailed(workspaceID, state.Name, reservation, "extend", fmt.Errorf("extension failed: %w", err))
 			continue
 		}
