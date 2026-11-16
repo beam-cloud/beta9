@@ -270,7 +270,7 @@ MIRROR_IMAGE_LIMIT = 1 << 30
 
 @setup.command(
     name="mirror",
-    help="Install Beam Mirror and open it with this sign-in, ready to choose what syncs. "
+    help="Install Beam Mirror and open it with this sign-in, ready to set up your profile. "
     "macOS only.",
 )
 @click.option(
