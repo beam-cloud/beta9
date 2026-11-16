@@ -7,6 +7,11 @@ them, pins VMs to them and serves them to the guest, in
 records how the pieces fit, what was measured, what the security review
 found, and the store format both sides implement.
 
+`beam setup mirror --from DMG|URL` installs the app on a Mac and opens it
+with the Beam CLI's sign-in, offered first in its onboarding;
+`beam --context NAME setup mirror` offers another one. Without `--from`, it
+opens the app already installed.
+
 ## How it fits together
 
 1. The app scans the paths the user selected, cuts files into
