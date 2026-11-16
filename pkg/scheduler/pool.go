@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/clock"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
@@ -104,7 +104,7 @@ type WorkerPoolControllerOptions struct {
 	EventRepo       repository.EventRepository
 	PushPoolMetrics func(types.EventComputeSchema)
 	// Clock drives the controller's loops. Nil means the wall clock.
-	Clock clock.Clock
+	Clock common.Clock
 	// KubeClient creates worker Jobs. Nil means the in-cluster client.
 	KubeClient kubernetes.Interface
 }
@@ -187,12 +187,12 @@ func MonitorPoolSize(wpc WorkerPoolController,
 	config types.AppConfig,
 	workerPoolConfig *types.WorkerPoolConfig,
 	workerPoolRepo repository.WorkerPoolRepository,
-	c clock.Clock) {
+	c common.Clock) {
 	poolSizer := NewWorkerPoolSizer(wpc, config, workerPoolConfig, workerPoolRepo)
 	if !hasFloor(poolSizer.sizing) {
 		return
 	}
-	clock.OrReal(c).Every(wpc.Context(), poolMonitoringInterval, poolSizer.tick)
+	common.ClockOrReal(c).Every(wpc.Context(), poolMonitoringInterval, poolSizer.tick)
 }
 
 // MonitorPoolHealth publishes the pool's state for as long as the

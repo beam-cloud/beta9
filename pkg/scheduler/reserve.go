@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/clock"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -333,7 +332,7 @@ func (p *provisioningTracker) releaseLocked(reservationID string) []string {
 // expireAfterTTL ends a reservation that has lasted as long as a worker may
 // take to start.
 func (p *provisioningTracker) expireAfterTTL(s *Scheduler, reservationID string) {
-	clock.OrReal(s.clock).AfterFunc(pendingWorkerReservationTTL, func() { p.release(s, reservationID) })
+	common.ClockOrReal(s.clock).AfterFunc(pendingWorkerReservationTTL, func() { p.release(s, reservationID) })
 }
 
 // handoff gives a reservation to the worker its pool added. A pool of

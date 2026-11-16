@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/beam-cloud/beta9/pkg/clock"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -26,7 +26,7 @@ type AgentWorkerPoolController struct {
 	workerRepo       repository.WorkerRepository
 	computeRepo      repository.ComputeRepository
 	provisioner      Provisioner
-	clock            clock.Clock
+	clock            common.Clock
 }
 
 type AgentWorkerPoolControllerOptions struct {
@@ -46,7 +46,7 @@ type AgentWorkerPoolControllerOptions struct {
 	Provisioner Provisioner
 	// Clock decides whether a machine's heartbeat is fresh and drives the
 	// controller's loops. Nil means the wall clock.
-	Clock clock.Clock
+	Clock common.Clock
 }
 
 type agentMachineWorker struct {
@@ -126,7 +126,7 @@ func NewAgentWorkerPoolController(opts AgentWorkerPoolControllerOptions) (*Agent
 		workerRepo:       opts.WorkerRepo,
 		computeRepo:      opts.ComputeRepo,
 		provisioner:      opts.Provisioner,
-		clock:            clock.OrReal(opts.Clock),
+		clock:            common.ClockOrReal(opts.Clock),
 	}
 	// A pool that buys its machines can grow, so it can keep a floor free.
 	// A pool of machines that joined by hand cannot add one.

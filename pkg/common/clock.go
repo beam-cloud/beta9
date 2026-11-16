@@ -1,8 +1,4 @@
-// Package clock is the source of time for code that must be testable without
-// sleeping: the scheduler's capacity path and the provisioner. Production
-// code takes a Clock and uses Real; tests and the scheduler simulator use
-// Fake and move time themselves.
-package clock
+package common
 
 import (
 	"context"
@@ -11,36 +7,39 @@ import (
 	"time"
 )
 
+// Clock is the source of time for code that must be testable without
+// sleeping: the scheduler's capacity path and the provisioner. Production
+// code takes a Clock and runs on the wall clock; tests and the scheduler
+// simulator use a FakeClock and move time themselves.
 type Clock interface {
 	Now() time.Time
 	// AfterFunc calls f once, d from now.
-	AfterFunc(d time.Duration, f func()) Timer
+	AfterFunc(d time.Duration, f func()) ClockTimer
 	// Every calls tick once per interval until ctx is done. It returns at
 	// once; ticks never overlap.
 	Every(ctx context.Context, interval time.Duration, tick func())
 }
 
-type Timer interface {
+// ClockTimer is a call that AfterFunc has yet to make.
+type ClockTimer interface {
 	// Stop prevents the timer from firing. It reports whether it did.
 	Stop() bool
 }
 
-// OrReal returns c, or the real clock when c is nil.
-func OrReal(c Clock) Clock {
+// ClockOrReal returns c, or the wall clock when c is nil.
+func ClockOrReal(c Clock) Clock {
 	if c == nil {
-		return Real()
+		return realClock{}
 	}
 	return c
 }
 
-// Real is the wall clock.
-func Real() Clock { return realClock{} }
-
+// realClock is the wall clock.
 type realClock struct{}
 
 func (realClock) Now() time.Time { return time.Now() }
 
-func (realClock) AfterFunc(d time.Duration, f func()) Timer {
+func (realClock) AfterFunc(d time.Duration, f func()) ClockTimer {
 	return time.AfterFunc(d, f)
 }
 
@@ -64,19 +63,20 @@ func (realClock) Every(ctx context.Context, interval time.Duration, tick func())
 	}()
 }
 
-// Fake is a clock that only moves when Advance is called. Timers and ticks
-// that come due run on the goroutine that called Advance, in time order, so
-// a test that advances the clock sees every loop body run deterministically.
-type Fake struct {
+// FakeClock is a clock that only moves when Advance is called. Timers and
+// ticks that come due run on the goroutine that called Advance, in time
+// order, so a test that advances the clock sees every loop body run
+// deterministically.
+type FakeClock struct {
 	mu     sync.Mutex
 	now    time.Time
 	seq    uint64
-	timers []*fakeTimer
+	timers []*fakeClockTimer
 	onStep []func(time.Duration)
 }
 
-type fakeTimer struct {
-	clock    *Fake
+type fakeClockTimer struct {
+	clock    *FakeClock
 	at       time.Time
 	seq      uint64
 	fn       func()
@@ -85,35 +85,35 @@ type fakeTimer struct {
 	stopped  bool
 }
 
-func NewFake(start time.Time) *Fake {
-	return &Fake{now: start}
+func NewFakeClock(start time.Time) *FakeClock {
+	return &FakeClock{now: start}
 }
 
-func (f *Fake) Now() time.Time {
+func (f *FakeClock) Now() time.Time {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.now
 }
 
-func (f *Fake) AfterFunc(d time.Duration, fn func()) Timer {
+func (f *FakeClock) AfterFunc(d time.Duration, fn func()) ClockTimer {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.addLocked(&fakeTimer{at: f.now.Add(d), fn: fn})
+	return f.addLocked(&fakeClockTimer{at: f.now.Add(d), fn: fn})
 }
 
-func (f *Fake) Every(ctx context.Context, interval time.Duration, tick func()) {
+func (f *FakeClock) Every(ctx context.Context, interval time.Duration, tick func()) {
 	if interval <= 0 {
 		panic("clock: non-positive interval")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.addLocked(&fakeTimer{at: f.now.Add(interval), fn: tick, interval: interval, ctx: ctx})
+	f.addLocked(&fakeClockTimer{at: f.now.Add(interval), fn: tick, interval: interval, ctx: ctx})
 }
 
 // OnStep registers fn to run each time the clock moves, with the distance
 // moved, before any timer due at the new time fires. The simulator uses it to
 // keep Redis key expiry in step with the clock.
-func (f *Fake) OnStep(fn func(time.Duration)) {
+func (f *FakeClock) OnStep(fn func(time.Duration)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.onStep = append(f.onStep, fn)
@@ -121,7 +121,7 @@ func (f *Fake) OnStep(fn func(time.Duration)) {
 
 // Advance moves the clock forward by d, running everything that comes due on
 // the way. A timer added by a callback runs in the same call if it is due.
-func (f *Fake) Advance(d time.Duration) {
+func (f *FakeClock) Advance(d time.Duration) {
 	f.mu.Lock()
 	target := f.now.Add(d)
 	f.mu.Unlock()
@@ -148,7 +148,7 @@ func (f *Fake) Advance(d time.Duration) {
 	f.moveTo(target)
 }
 
-func (f *Fake) moveTo(t time.Time) {
+func (f *FakeClock) moveTo(t time.Time) {
 	f.mu.Lock()
 	step := t.Sub(f.now)
 	if step <= 0 {
@@ -164,7 +164,7 @@ func (f *Fake) moveTo(t time.Time) {
 }
 
 // popDue removes and returns the earliest live timer due at or before target.
-func (f *Fake) popDue(target time.Time) *fakeTimer {
+func (f *FakeClock) popDue(target time.Time) *fakeClockTimer {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for len(f.timers) > 0 {
@@ -181,7 +181,7 @@ func (f *Fake) popDue(target time.Time) *fakeTimer {
 	return nil
 }
 
-func (f *Fake) addLocked(timer *fakeTimer) *fakeTimer {
+func (f *FakeClock) addLocked(timer *fakeClockTimer) *fakeClockTimer {
 	f.seq++
 	timer.clock = f
 	timer.seq = f.seq
@@ -198,7 +198,7 @@ func (f *Fake) addLocked(timer *fakeTimer) *fakeTimer {
 	return timer
 }
 
-func (t *fakeTimer) Stop() bool {
+func (t *fakeClockTimer) Stop() bool {
 	t.clock.mu.Lock()
 	defer t.clock.mu.Unlock()
 	if t.stopped {

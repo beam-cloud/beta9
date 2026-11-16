@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/clock"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/compute"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
@@ -77,7 +76,7 @@ type Scheduler struct {
 	backlogErrorAt time.Time
 
 	// clock is the scheduler's only source of time. Nil means the wall clock.
-	clock clock.Clock
+	clock common.Clock
 	// spawn runs work that must not hold up the scheduling loop, such as
 	// adding a worker. Nil means a new goroutine.
 	spawn func(func())
@@ -1663,7 +1662,7 @@ func (s *Scheduler) cpuReservation(worker *types.Worker, request *types.Containe
 type Option func(*seams)
 
 type seams struct {
-	clock         clock.Clock
+	clock         common.Clock
 	kube          kubernetes.Interface
 	spawn         func(func())
 	computeEvents func(types.EventComputeSchema)
@@ -1674,13 +1673,13 @@ func newSeams(opts []Option) seams {
 	for _, opt := range opts {
 		opt(&s)
 	}
-	s.clock = clock.OrReal(s.clock)
+	s.clock = common.ClockOrReal(s.clock)
 	return s
 }
 
 // WithClock sets the scheduler's source of time, including the time its pool
 // controllers and their loops see.
-func WithClock(c clock.Clock) Option {
+func WithClock(c common.Clock) Option {
 	return func(s *seams) { s.clock = c }
 }
 

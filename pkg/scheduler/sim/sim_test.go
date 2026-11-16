@@ -33,7 +33,6 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/beam-cloud/beta9/pkg/clock"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/providers"
@@ -78,7 +77,7 @@ type Sim struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	Clock  *clock.Fake
+	Clock  *common.FakeClock
 	Config types.AppConfig
 
 	redis         *miniredis.Miniredis
@@ -158,7 +157,7 @@ func New(t testing.TB, configYAML string) *Sim {
 	ctx, cancel := context.WithCancel(context.Background())
 	// Start on the wall clock so the few timestamps that still come from it
 	// (container state) are not in this clock's future.
-	fakeClock := clock.NewFake(time.Now().Truncate(time.Second))
+	fakeClock := common.NewFakeClock(time.Now().Truncate(time.Second))
 	fakeClock.OnStep(func(d time.Duration) {
 		server.FastForward(d)
 		server.SetTime(fakeClock.Now())
@@ -4030,7 +4029,7 @@ func (r *randomRun) step() {
 var clockStart = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 func TestFakeClockRunsTimersInTimeOrder(t *testing.T) {
-	c := clock.NewFake(clockStart)
+	c := common.NewFakeClock(clockStart)
 	var fired []string
 	c.AfterFunc(3*time.Second, func() { fired = append(fired, "c") })
 	c.AfterFunc(time.Second, func() { fired = append(fired, "a") })
@@ -4045,7 +4044,7 @@ func TestFakeClockRunsTimersInTimeOrder(t *testing.T) {
 }
 
 func TestFakeClockTimerSeesItsOwnDueTime(t *testing.T) {
-	c := clock.NewFake(clockStart)
+	c := common.NewFakeClock(clockStart)
 	var at time.Time
 	c.AfterFunc(time.Second, func() { at = c.Now() })
 	c.Advance(time.Minute)
@@ -4053,7 +4052,7 @@ func TestFakeClockTimerSeesItsOwnDueTime(t *testing.T) {
 }
 
 func TestFakeClockEveryTicksUntilCancelled(t *testing.T) {
-	c := clock.NewFake(clockStart)
+	c := common.NewFakeClock(clockStart)
 	ctx, cancel := context.WithCancel(context.Background())
 	ticks := 0
 	c.Every(ctx, time.Second, func() { ticks++ })
@@ -4067,7 +4066,7 @@ func TestFakeClockEveryTicksUntilCancelled(t *testing.T) {
 }
 
 func TestFakeClockStop(t *testing.T) {
-	c := clock.NewFake(clockStart)
+	c := common.NewFakeClock(clockStart)
 	fired := false
 	timer := c.AfterFunc(time.Second, func() { fired = true })
 	require.True(t, timer.Stop())
@@ -4077,7 +4076,7 @@ func TestFakeClockStop(t *testing.T) {
 }
 
 func TestFakeClockRunsTimersAddedByCallbacks(t *testing.T) {
-	c := clock.NewFake(clockStart)
+	c := common.NewFakeClock(clockStart)
 	var fired []time.Duration
 	c.AfterFunc(time.Second, func() {
 		fired = append(fired, c.Now().Sub(clockStart))
@@ -4088,7 +4087,7 @@ func TestFakeClockRunsTimersAddedByCallbacks(t *testing.T) {
 }
 
 func TestFakeClockOnStepSeesEveryMove(t *testing.T) {
-	c := clock.NewFake(clockStart)
+	c := common.NewFakeClock(clockStart)
 	var total time.Duration
 	c.OnStep(func(d time.Duration) { total += d })
 	c.AfterFunc(time.Second, func() {})

@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/beam-cloud/beta9/pkg/clock"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/compute"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
@@ -4827,7 +4826,7 @@ const (
 type fallbackFixture struct {
 	*Scheduler
 	t        *testing.T
-	clock    *clock.Fake
+	clock    *common.FakeClock
 	request  *types.ContainerRequest
 	regular  *types.Worker
 	failures <-chan *redis.Message
@@ -4838,7 +4837,7 @@ func newFallbackFixture(t *testing.T) *fallbackFixture {
 	s, err := NewSchedulerForTest()
 	require.NoError(t, err)
 
-	f := &fallbackFixture{Scheduler: s, t: t, clock: clock.NewFake(time.Now())}
+	f := &fallbackFixture{Scheduler: s, t: t, clock: common.NewFakeClock(time.Now())}
 	s.clock, s.requestBacklog.now, s.spawn = f.clock, f.clock.Now, inline
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -5211,7 +5210,7 @@ func growthForTest(t *testing.T, s *Scheduler, request *types.ContainerRequest) 
 // the pools a, b and c, in that order.
 type growFixture struct {
 	*Scheduler
-	clock *clock.Fake
+	clock *common.FakeClock
 	pools map[string]*LocalWorkerPoolControllerForTest
 }
 
@@ -5220,7 +5219,7 @@ func newGrowFixture(t *testing.T) *growFixture {
 	s, err := NewSchedulerForTest()
 	require.NoError(t, err)
 
-	fixture := &growFixture{Scheduler: s, clock: clock.NewFake(time.Now()), pools: map[string]*LocalWorkerPoolControllerForTest{}}
+	fixture := &growFixture{Scheduler: s, clock: common.NewFakeClock(time.Now()), pools: map[string]*LocalWorkerPoolControllerForTest{}}
 	s.clock = fixture.clock
 	s.workerPoolManager = NewWorkerPoolManager()
 	for i, name := range []string{"a", "b", "c"} {

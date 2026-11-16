@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
-	"github.com/beam-cloud/beta9/pkg/clock"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -42,7 +41,7 @@ type LocalKubernetesWorkerPoolController struct {
 	name             string
 	config           types.AppConfig
 	kubeClient       kubernetes.Interface
-	clock            clock.Clock
+	clock            common.Clock
 	workerPoolConfig types.WorkerPoolConfig
 	workerRepo       repository.WorkerRepository
 	workerPoolRepo   repository.WorkerPoolRepository
@@ -73,7 +72,7 @@ func NewLocalKubernetesWorkerPoolController(opts WorkerPoolControllerOptions) (W
 		name:             opts.Name,
 		config:           opts.Config,
 		kubeClient:       kubeClient,
-		clock:            clock.OrReal(opts.Clock),
+		clock:            common.ClockOrReal(opts.Clock),
 		workerPoolConfig: workerPoolConfig,
 		workerRepo:       opts.WorkerRepo,
 		backendRepo:      opts.BackendRepo,

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/clock"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/redislock"
@@ -24,7 +24,7 @@ type PoolHealthMonitorOptions struct {
 	ContainerRepo    repository.ContainerRepository
 	PushMetrics      func(types.EventComputeSchema)
 	// Clock drives the monitor. Nil means the wall clock.
-	Clock clock.Clock
+	Clock common.Clock
 }
 
 // PoolHealthMonitor measures a pool on an interval. What it finds it stores
@@ -33,14 +33,14 @@ type PoolHealthMonitorOptions struct {
 type PoolHealthMonitor struct {
 	opts  PoolHealthMonitorOptions
 	ctx   context.Context
-	clock clock.Clock
+	clock common.Clock
 }
 
 func NewPoolHealthMonitor(opts PoolHealthMonitorOptions) *PoolHealthMonitor {
 	return &PoolHealthMonitor{
 		opts:  opts,
 		ctx:   opts.Controller.Context(),
-		clock: clock.OrReal(opts.Clock),
+		clock: common.ClockOrReal(opts.Clock),
 	}
 }
 
@@ -217,7 +217,7 @@ func poolMetricsEvent(poolName string, config types.WorkerPoolConfig, state *typ
 	}
 }
 
-func newPoolMetricsPusher(ctx context.Context, backendRepo repository.BackendRepository, eventRepo repository.EventRepository, c clock.Clock) func(types.EventComputeSchema) {
+func newPoolMetricsPusher(ctx context.Context, backendRepo repository.BackendRepository, eventRepo repository.EventRepository, c common.Clock) func(types.EventComputeSchema) {
 	if backendRepo == nil || eventRepo == nil {
 		return func(types.EventComputeSchema) {}
 	}
@@ -226,7 +226,7 @@ func newPoolMetricsPusher(ctx context.Context, backendRepo repository.BackendRep
 	var nextLookup time.Time
 
 	return func(event types.EventComputeSchema) {
-		now := clock.OrReal(c).Now().UTC()
+		now := common.ClockOrReal(c).Now().UTC()
 		mu.Lock()
 		if workspaceID == "" {
 			if now.Before(nextLookup) {

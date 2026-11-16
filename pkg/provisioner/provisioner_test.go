@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/beam-cloud/beta9/pkg/clock"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/providers"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
@@ -33,7 +32,7 @@ import (
 type world struct {
 	t     *testing.T
 	ctx   context.Context
-	clock *clock.Fake
+	clock *common.FakeClock
 	rdb   *common.RedisClient
 	store *Store
 
@@ -56,7 +55,7 @@ func newWorld(t *testing.T, change ...func(*Options)) *world {
 	w := &world{
 		t:       t,
 		ctx:     context.Background(),
-		clock:   clock.NewFake(bought),
+		clock:   common.NewFakeClock(bought),
 		rdb:     rdb,
 		store:   NewStore(rdb),
 		verda:   providers.NewFake("verda", testOwner),

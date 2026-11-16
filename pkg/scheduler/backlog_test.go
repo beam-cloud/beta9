@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/beam-cloud/beta9/pkg/clock"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/redis/go-redis/v9"
@@ -402,7 +401,7 @@ func TestAPassThatCannotTakeFromTheBacklogReportsIt(t *testing.T) {
 	require.Equal(t, 1, reported())
 
 	// The loop comes back twenty times a second. It says so once in a while.
-	fake := clock.NewFake(time.Now())
+	fake := common.NewFakeClock(time.Now())
 	s.clock = fake
 	for range 20 {
 		require.Zero(t, s.ProcessBacklog())

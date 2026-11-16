@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/beam-cloud/beta9/pkg/clock"
 	"github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -340,7 +339,7 @@ func TestOnlyAPoolWithAFloorIsSized(t *testing.T) {
 			defer cancel()
 			controller := &LocalWorkerPoolControllerForTest{ctx: ctx, name: "pool", workerRepo: s.workerRepo}
 			locks := &sizerLocks{WorkerPoolRepository: s.workerPoolRepo}
-			fake := clock.NewFake(time.Now())
+			fake := common.NewFakeClock(time.Now())
 
 			MonitorPoolSize(controller, types.AppConfig{}, &types.WorkerPoolConfig{GPUType: "T4", PoolSizing: test.sizing}, locks, fake)
 			fake.Advance(3 * poolMonitoringInterval)

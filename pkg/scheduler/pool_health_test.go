@@ -7,7 +7,6 @@ import (
 	"time"
 
 	vmetrics "github.com/VictoriaMetrics/metrics"
-	"github.com/beam-cloud/beta9/pkg/clock"
 	"github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -149,7 +148,7 @@ func newPoolHealthFixtureFor(t *testing.T, config types.WorkerPoolConfig) *poolH
 		WorkerPoolRepo:   repo.NewWorkerPoolRedisRepositoryForTest(rdb),
 		ContainerRepo:    containers,
 		PushMetrics:      func(event types.EventComputeSchema) { f.heartbeats = append(f.heartbeats, event) },
-		Clock:            clock.NewFake(now),
+		Clock:            common.NewFakeClock(now),
 	})
 	return f
 }

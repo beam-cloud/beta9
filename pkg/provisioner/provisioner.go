@@ -32,7 +32,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/clock"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/providers"
@@ -108,7 +107,7 @@ type Options struct {
 	Store        *Store
 	Limits       Limits
 	// Clock is the provisioner's source of time. Nil means the wall clock.
-	Clock clock.Clock
+	Clock common.Clock
 	// NewID returns the ID of the next machine. Nil means a random one.
 	NewID func() string
 }
@@ -119,7 +118,7 @@ type Provisioner struct {
 	workers      Workers
 	store        *Store
 	limits       Limits
-	clock        clock.Clock
+	clock        common.Clock
 	newID        func() string
 
 	// What this replica knows. The tick keeps it fresh, and CanProvision
@@ -182,7 +181,7 @@ func New(opts Options) *Provisioner {
 		workers:      opts.Workers,
 		store:        opts.Store,
 		limits:       opts.Limits,
-		clock:        clock.OrReal(opts.Clock),
+		clock:        common.ClockOrReal(opts.Clock),
 		newID:        newID,
 		offers:       map[string]offerList{},
 		soldOut:      map[offerKey]time.Time{},
