@@ -83,7 +83,6 @@ func runnerLabel(labels []string) (string, bool) {
 
 type githubRunners struct {
 	s      *Service
-	repo   repository.GitHubRunnerRepository
 	config types.GitHubRunnerConfig
 	// Nil unless the gateway is configured with a GitHub App.
 	github *githubApp
@@ -93,12 +92,7 @@ type githubRunners struct {
 }
 
 func (s *Service) initGitHubRunners(api *echo.Group) error {
-	repo, ok := s.backend.(repository.GitHubRunnerRepository)
-	if !ok {
-		return errors.New("backend does not support GitHub runners")
-	}
-
-	r := &githubRunners{s: s, repo: repo, config: s.config.GitHubRunners, wake: make(chan struct{}, 1), redelivered: map[string]int{}}
+	r := &githubRunners{s: s, config: s.config.GitHubRunners, wake: make(chan struct{}, 1), redelivered: map[string]int{}}
 	s.runners = r
 
 	group := api.Group("/github-runners")
@@ -152,7 +146,7 @@ type runnerStatus struct {
 
 func (r *githubRunners) status(c echo.Context) error {
 	ctx, info := requestContext(c)
-	installation, err := r.repo.GetGitHubRunnerInstallation(ctx, info.Workspace.Id)
+	installation, err := r.s.repo.GetGitHubRunnerInstallation(ctx, info.Workspace.Id)
 	if err != nil {
 		return err
 	}
@@ -172,7 +166,7 @@ func (r *githubRunners) jobs(c echo.Context) error {
 		return err
 	}
 
-	jobs, total, err := r.repo.ListGitHubRunnerJobs(ctx, info.Workspace.Id, limit, offset)
+	jobs, total, err := r.s.repo.ListGitHubRunnerJobs(ctx, info.Workspace.Id, limit, offset)
 	if err != nil {
 		return err
 	}
@@ -192,13 +186,13 @@ func (r *githubRunners) jobs(c echo.Context) error {
 // they are next reconciled; the App stays installed on GitHub.
 func (r *githubRunners) disconnect(c echo.Context) error {
 	ctx, info := requestContext(c)
-	installation, err := r.repo.GetGitHubRunnerInstallation(ctx, info.Workspace.Id)
+	installation, err := r.s.repo.GetGitHubRunnerInstallation(ctx, info.Workspace.Id)
 	if err != nil {
 		return err
 	}
 
 	if installation != nil {
-		if err := r.repo.DeleteGitHubRunnerInstallation(ctx, installation.ID); err != nil {
+		if err := r.s.repo.DeleteGitHubRunnerInstallation(ctx, installation.ID); err != nil {
 			return err
 		}
 	}
@@ -264,7 +258,7 @@ func (r *githubRunners) connect(c echo.Context) error {
 		return err
 	}
 
-	err = r.repo.SaveGitHubRunnerInstallation(ctx, &types.GitHubRunnerInstallation{
+	err = r.s.repo.SaveGitHubRunnerInstallation(ctx, &types.GitHubRunnerInstallation{
 		ID: installation, WorkspaceID: info.Workspace.Id, TokenID: info.Token.ExternalId,
 		Account: account.Login, AccountType: account.Type,
 	})
@@ -399,7 +393,7 @@ func (r *githubRunners) installationChanged(ctx context.Context, event runnerEve
 		return nil
 	}
 
-	if err := r.repo.DeleteGitHubRunnerInstallation(ctx, event.Installation.ID); err != nil {
+	if err := r.s.repo.DeleteGitHubRunnerInstallation(ctx, event.Installation.ID); err != nil {
 		return err
 	}
 
@@ -416,12 +410,12 @@ func (r *githubRunners) jobChanged(ctx context.Context, event runnerEvent) error
 		return nil
 	}
 
-	installation, err := r.repo.GetGitHubRunnerInstallationById(ctx, event.Installation.ID)
+	installation, err := r.s.repo.GetGitHubRunnerInstallationById(ctx, event.Installation.ID)
 	if err != nil || installation == nil {
 		return err
 	}
 
-	err = r.repo.SaveGitHubRunnerJob(ctx, &types.GitHubRunnerJob{
+	err = r.s.repo.SaveGitHubRunnerJob(ctx, &types.GitHubRunnerJob{
 		ID:             event.Job.ID,
 		InstallationID: installation.ID,
 		WorkspaceID:    installation.WorkspaceID,
@@ -483,7 +477,7 @@ func (r *githubRunners) run(ctx context.Context) {
 }
 
 func (r *githubRunners) provisionDue(ctx context.Context) {
-	jobs, err := r.repo.ListDueGitHubRunnerJobs(ctx)
+	jobs, err := r.s.repo.ListDueGitHubRunnerJobs(ctx)
 	if err != nil {
 		log.Warn().Err(err).Msg("list GitHub runner jobs")
 		return
@@ -519,7 +513,7 @@ func (r *githubRunners) provision(ctx context.Context, job types.GitHubRunnerJob
 		}
 
 		if err == nil && v.DesiredState != types.VMStateDeleted {
-			return r.repo.FinishGitHubRunnerJob(ctx, job.ID, "")
+			return r.s.repo.FinishGitHubRunnerJob(ctx, job.ID, "")
 		}
 	}
 
@@ -531,31 +525,31 @@ func (r *githubRunners) provision(ctx context.Context, job types.GitHubRunnerJob
 			labels[i] = size.Label
 		}
 
-		return r.repo.FinishGitHubRunnerJob(ctx, job.ID, "runs-on must be exactly one of "+strings.Join(labels, ", "))
+		return r.s.repo.FinishGitHubRunnerJob(ctx, job.ID, "runs-on must be exactly one of "+strings.Join(labels, ", "))
 	case job.Status != types.GitHubJobQueued && !strings.HasPrefix(job.RunnerName, runnerPrefix):
 		// A job that is not waiting for a runner needs one only if it took
 		// one, which another job is then left without.
-		return r.repo.FinishGitHubRunnerJob(ctx, job.ID, "")
+		return r.s.repo.FinishGitHubRunnerJob(ctx, job.ID, "")
 	case job.Attempts >= runnerAttempts:
-		return r.repo.FinishGitHubRunnerJob(ctx, job.ID, fmt.Sprintf("no runner after %d attempts: %s", job.Attempts, job.Error))
+		return r.s.repo.FinishGitHubRunnerJob(ctx, job.ID, fmt.Sprintf("no runner after %d attempts: %s", job.Attempts, job.Error))
 	}
 
-	claimed, err := r.repo.ClaimGitHubRunnerJob(ctx, &job, runnerPrefix+randomHexID()[:12])
+	claimed, err := r.s.repo.ClaimGitHubRunnerJob(ctx, &job, runnerPrefix+randomHexID()[:12])
 	if err != nil || !claimed {
 		return err
 	}
 
 	if err := r.launch(ctx, job, size); err != nil {
-		return errors.Join(err, r.repo.FailGitHubRunnerJob(ctx, job.ID, err.Error()))
+		return errors.Join(err, r.s.repo.FailGitHubRunnerJob(ctx, job.ID, err.Error()))
 	}
 
-	return r.repo.FinishGitHubRunnerJob(ctx, job.ID, "")
+	return r.s.repo.FinishGitHubRunnerJob(ctx, job.ID, "")
 }
 
 // launch registers the runner a job has claimed with GitHub, and creates its
 // VM, which runs as the Beam token that connected the account.
 func (r *githubRunners) launch(ctx context.Context, job types.GitHubRunnerJob, size runnerSize) error {
-	installation, err := r.repo.GetGitHubRunnerInstallationById(ctx, job.InstallationID)
+	installation, err := r.s.repo.GetGitHubRunnerInstallationById(ctx, job.InstallationID)
 	if err != nil {
 		return err
 	}
@@ -608,7 +602,7 @@ func (s *Service) reconcileRunner(ctx context.Context, v *types.VM) (bool, error
 		return false, nil
 	}
 
-	runner, err := r.repo.GetGitHubRunner(ctx, v.WorkspaceID, v.Name)
+	runner, err := r.s.repo.GetGitHubRunner(ctx, v.WorkspaceID, v.Name)
 	if err != nil || runner == nil {
 		return false, err
 	}
@@ -623,7 +617,7 @@ func (s *Service) reconcileRunner(ctx context.Context, v *types.VM) (bool, error
 	if exited && waiting {
 		// Some queued job still counts on this runner.
 		reason := cmp.Or(v.Error, "the runner stopped before it took a job")
-		if err := r.repo.ReplaceGitHubRunner(ctx, v.WorkspaceID, v.Name, reason); err != nil {
+		if err := r.s.repo.ReplaceGitHubRunner(ctx, v.WorkspaceID, v.Name, reason); err != nil {
 			return true, err
 		}
 

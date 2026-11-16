@@ -41,11 +41,11 @@ var runnerKey = sync.OnceValue(func() *rsa.PrivateKey {
 
 func at(t time.Time) *time.Time { return &t }
 
-// runnerStore is an in-memory GitHubRunnerRepository with one installation.
+// runnerStore adds GitHub runners to the VMs in memory, with one installation.
 type runnerStore struct {
+	*vmStore
 	installation *types.GitHubRunnerInstallation
 	jobs         map[int64]*types.GitHubRunnerJob
-	vms          *vmStore
 }
 
 func (r *runnerStore) connected(id int64) bool {
@@ -153,7 +153,7 @@ func (r *runnerStore) GetGitHubRunner(_ context.Context, ws uint, vm string) (*t
 }
 
 func (r *runnerStore) ReplaceGitHubRunner(_ context.Context, ws uint, vm, message string) error {
-	for _, v := range r.vms.rows {
+	for _, v := range r.rows {
 		if v.WorkspaceID == ws && v.Name == vm {
 			v.DesiredState = types.VMStateDeleted
 		}
@@ -178,13 +178,14 @@ var runnerConfig = types.GitHubRunnerConfig{AppID: "1", AppSlug: "beam-runners",
 func runnerFixture(t *testing.T) (*githubRunners, *runnerStore, *auth.AuthInfo, *vmRuntime) {
 	t.Helper()
 	s, v, info, runtime, _ := fixture()
-	delete(s.repo.(*vmStore).rows, v.ID)
-	store := &runnerStore{jobs: map[int64]*types.GitHubRunnerJob{}, vms: s.repo.(*vmStore), installation: &types.GitHubRunnerInstallation{
+	store := &runnerStore{vmStore: s.repo.(*vmStore), jobs: map[int64]*types.GitHubRunnerJob{}, installation: &types.GitHubRunnerInstallation{
 		ID: 42, WorkspaceID: 7, TokenID: info.Token.ExternalId, Account: "acme", AccountType: "Organization"}}
+	delete(store.rows, v.ID)
+	s.repo = store
 	app := &githubApp{id: runnerConfig.AppID, slug: runnerConfig.AppSlug, clientID: runnerConfig.ClientID, clientSecret: runnerConfig.ClientSecret,
 		key: runnerKey(), client: http.DefaultClient, apiURL: "https://api.github.invalid", webURL: "https://github.invalid",
 		tokens: map[int64]githubToken{42: {Token: "installation-token", ExpiresAt: time.Now().Add(time.Hour)}}}
-	r := &githubRunners{s: s, repo: store, config: runnerConfig, github: app, wake: make(chan struct{}, 1), redelivered: map[string]int{}}
+	r := &githubRunners{s: s, config: runnerConfig, github: app, wake: make(chan struct{}, 1), redelivered: map[string]int{}}
 	s.runners = r
 	return r, store, info, runtime
 }
@@ -501,7 +502,7 @@ func TestGitHubRunnerVMLifecycle(t *testing.T) {
 				CreatedAt: time.Now(), UpdatedAt: time.Now().Add(-2 * time.Minute), LastActiveAt: time.Now()}
 			runtime.containers.states[v.ContainerID] = &types.ContainerState{ContainerId: v.ContainerID, Status: types.ContainerStatusRunning}
 			runtime.diskName = rootDisk(v)
-			r.s.repo.(*vmStore).rows[v.ID] = v
+			store.rows[v.ID] = v
 			if tc.setup != nil {
 				tc.setup(v, store, r)
 			}
@@ -517,7 +518,7 @@ func TestGitHubRunnerVMLifecycle(t *testing.T) {
 			require.Empty(t, runtime.requests, "runners never restart")
 			require.Equal(t, tc.deregister != "", slices.Contains(calls(), "GET /repos/acme/repo/actions/runners"), "deregistered")
 			if tc.deregister == "422" {
-				require.WithinDuration(t, time.Now(), r.s.repo.(*vmStore).rows[v.ID].UpdatedAt, time.Second, "a busy runner gets more time")
+				require.WithinDuration(t, time.Now(), store.rows[v.ID].UpdatedAt, time.Second, "a busy runner gets more time")
 			}
 			if name == "named like a runner" {
 				require.Equal(t, 1, runtime.snapshots, "ordinary VMs keep periodic snapshots")
@@ -711,12 +712,6 @@ func TestGitHubRunnerRedeliveryReadsEveryPageInTheWindow(t *testing.T) {
 	require.Equal(t, []string{"GET /app/hook/deliveries?per_page=100", "GET /app/hook/deliveries?cursor=2", "POST /app/hook/deliveries/2/attempts"}, served)
 }
 
-// runnerBackend is a backend that stores GitHub runners, as Postgres does.
-type runnerBackend struct {
-	*vmBackend
-	*runnerStore
-}
-
 func TestGitHubRunnerConfiguration(t *testing.T) {
 	key := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(runnerKey())}))
 	configured := runnerConfig
@@ -748,7 +743,7 @@ func TestGitHubRunnerConfiguration(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			s.ctx, s.config.GitHubRunners = ctx, tc.config
-			s.backend = runnerBackend{s.backend.(*vmBackend), &runnerStore{}}
+			s.repo = &runnerStore{vmStore: s.repo.(*vmStore)}
 			err := s.initGitHubRunners(echo.New().Group("/api/v1/vm"))
 			if tc.err != "" {
 				require.ErrorContains(t, err, tc.err)
@@ -778,9 +773,6 @@ func TestGitHubRunnerConfiguration(t *testing.T) {
 			}
 		})
 	}
-
-	s, _, _, _, _ := fixture()
-	require.ErrorContains(t, s.initGitHubRunners(echo.New().Group("/api/v1/vm")), "backend does not support GitHub runners")
 }
 
 // The dashboard reads these names.
