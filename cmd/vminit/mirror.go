@@ -37,6 +37,8 @@ func prepareMirroredHome(root string, process *specs.Process) error {
 	}
 	// sshd reads authorized_keys, a public key, as the user logging in, who
 	// must be able to reach it. Every other file beside it stays root's alone.
+	// The mode holds: the worker runs its process manager in place of the
+	// VM's entrypoint, so /opt/beam-vm/boot never rewrites the key.
 	keys := filepath.Join(root, "run/beam-vm/authorized_keys")
 	if err := os.Chmod(filepath.Dir(keys), 0711); err != nil {
 		return err
