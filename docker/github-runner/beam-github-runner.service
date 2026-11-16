@@ -1,0 +1,17 @@
+[Unit]
+Description=GitHub Actions runner for one job
+
+[Service]
+User=runner
+WorkingDirectory=/home/runner/actions-runner
+# Beam starts Docker once the VM has booted. Jobs expect it in their first step.
+ExecStartPre=-/usr/bin/timeout 60 sh -c 'until docker info >/dev/null 2>&1; do sleep 1; done'
+# The gateway passes the runner's registration in the VM's environment.
+ExecStart=/home/runner/actions-runner/run.sh --jitconfig ${BEAM_GITHUB_JIT_CONFIG}
+# The runner exits after its job. The gateway deletes a runner VM that stopped.
+ExecStopPost=+/usr/bin/systemctl --no-block poweroff
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
