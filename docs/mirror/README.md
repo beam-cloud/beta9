@@ -494,3 +494,7 @@ The first `min` bytes of a chunk are not hashed. It is the chunker of
 - `manifest-vector.json`: a tree with explicit extents and the stored bytes
   (codec 0) of its manifest. Entries are listed parents first and otherwise
   out of order; the encoding must not depend on the order.
+
+`hack/mirrorstore` writes a directory as a generation with the reference
+writer and checks a generation in a local directory against a directory, for
+testing another implementation end to end.
