@@ -8,6 +8,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
+	"github.com/beam-cloud/beta9/pkg/providers"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -32,6 +33,7 @@ type Service struct {
 	usageMetricsRepo     repository.UsageMetricsRepository
 	computeRepo          repository.ComputeRepository
 	managedPoolRepo      repository.ManagedPoolRepository
+	providers            *providers.Registry
 	keyEventManager      *common.KeyEventManager
 	redisClient          *common.RedisClient
 	telemetryCredentials telemetryCredentialIssuer
@@ -55,9 +57,11 @@ type Options struct {
 	UsageMetricsRepo repository.UsageMetricsRepository
 	ComputeRepo      repository.ComputeRepository
 	ManagedPoolRepo  repository.ManagedPoolRepository
-	KeyEventManager  *common.KeyEventManager
-	RedisClient      *common.RedisClient
-	Tailscale        *network.Tailscale
+	// Providers are the clouds machines can be bought from. Nil means none.
+	Providers       *providers.Registry
+	KeyEventManager *common.KeyEventManager
+	RedisClient     *common.RedisClient
+	Tailscale       *network.Tailscale
 }
 
 func New(opts Options) *Service {
@@ -73,6 +77,7 @@ func New(opts Options) *Service {
 		usageMetricsRepo:     opts.UsageMetricsRepo,
 		computeRepo:          opts.ComputeRepo,
 		managedPoolRepo:      opts.ManagedPoolRepo,
+		providers:            opts.Providers,
 		keyEventManager:      opts.KeyEventManager,
 		redisClient:          opts.RedisClient,
 		billing:              newRoutedManagedComputeBillingClient(opts.Config.ManagedCompute.Billing),
@@ -119,7 +124,7 @@ func (s *Service) runManagedPoolReconciler(ctx context.Context) {
 				messages = nil
 				continue
 			}
-			resetManagedPoolTimer(timer, 0)
+			timer.Reset(0)
 		case err, ok := <-subscriptionErrors:
 			if !ok {
 				subscriptionErrors = nil
@@ -130,21 +135,11 @@ func (s *Service) runManagedPoolReconciler(ctx context.Context) {
 			started := time.Now()
 			if err := s.ReconcileManagedPools(ctx); err != nil {
 				log.Warn().Err(err).Msg("managed pool reconciliation failed")
-				resetManagedPoolTimer(timer, managedPoolReconcileRetryInterval)
+				timer.Reset(managedPoolReconcileRetryInterval)
 				continue
 			}
 			log.Debug().Dur("duration", time.Since(started)).Msg("managed pools reconciled")
-			resetManagedPoolTimer(timer, managedPoolReconcileInterval)
+			timer.Reset(managedPoolReconcileInterval)
 		}
 	}
-}
-
-func resetManagedPoolTimer(timer *time.Timer, delay time.Duration) {
-	if !timer.Stop() {
-		select {
-		case <-timer.C:
-		default:
-		}
-	}
-	timer.Reset(delay)
 }

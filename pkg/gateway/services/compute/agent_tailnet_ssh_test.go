@@ -22,6 +22,12 @@ func TestAgentTailnetSSHOwnershipBoundary(t *testing.T) {
 		{name: "API-managed serverless", change: func(_ *Service, pool *model.PoolState, _ *model.AgentTokenState) {
 			pool.ManagementSource = types.WorkerPoolManagementSourceAPI
 		}, allow: true, key: "serverless-agent-key"},
+		// A pool that buys its machines needs no mode in the config file.
+		{name: "serverless that buys its machines", change: func(s *Service, pool *model.PoolState, _ *model.AgentTokenState) {
+			s.appConfig.Worker.Pools[pool.Name] = types.WorkerPoolConfig{
+				Provisioning: types.WorkerPoolProvisioningConfig{Provider: "verda", Spot: true, MaxNodes: 2},
+			}
+		}, allow: true, key: "serverless-agent-key"},
 		{name: "private", change: func(_ *Service, _ *model.PoolState, agent *model.AgentTokenState) {
 			agent.ManagedPoolInstanceID = ""
 			agent.Mode = string(types.PoolModePrivate)
@@ -59,8 +65,15 @@ func TestAgentTailnetSSHOwnershipBoundary(t *testing.T) {
 			config.Mode = types.PoolModeProvider
 			s.appConfig.Worker.Pools[pool.Name] = config
 		}},
-		{name: "failover reservation", change: func(_ *Service, pool *model.PoolState, _ *model.AgentTokenState) {
-			pool.CreatedByTokenID = types.FailoverOnDemandPoolCreator
+		{name: "Kubernetes definition", change: func(s *Service, pool *model.PoolState, _ *model.AgentTokenState) {
+			s.appConfig.Worker.Pools[pool.Name] = types.WorkerPoolConfig{Mode: types.PoolModeLocal}
+		}},
+		{name: "definition with no mode that buys nothing", change: func(s *Service, pool *model.PoolState, _ *model.AgentTokenState) {
+			s.appConfig.Worker.Pools[pool.Name] = types.WorkerPoolConfig{}
+		}},
+		{name: "API definition of another mode", change: func(_ *Service, pool *model.PoolState, _ *model.AgentTokenState) {
+			pool.ManagementSource = types.WorkerPoolManagementSourceAPI
+			pool.WorkerConfig.Mode = types.PoolModePrivate
 		}},
 		{name: "reserved nodes", change: func(_ *Service, pool *model.PoolState, _ *model.AgentTokenState) {
 			pool.ReservedNodes = 1

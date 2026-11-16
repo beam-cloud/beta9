@@ -3305,7 +3305,7 @@ func (m *ContainerNetworkManager) removeNetworkRestrictionRules(ip string, ipt *
 				continue
 			}
 			target := iptablesRuleTarget(rule)
-			if (target != "DROP" && target != "ACCEPT" && target != "REDIRECT") || !iptablesRuleMatchesSourceIP(rule, ip) {
+			if (target != "DROP" && target != "ACCEPT" && target != "REDIRECT" && target != "REJECT") || !iptablesRuleMatchesSourceIP(rule, ip) {
 				continue
 			}
 			parts := iptablesRuleFields(rule)

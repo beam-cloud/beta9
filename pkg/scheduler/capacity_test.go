@@ -22,63 +22,16 @@ func TestNormalizeManagedAgentPoolDoesNotRequireSelector(t *testing.T) {
 	assert.False(t, config.RequiresPoolSelector)
 }
 
-func TestNormalizeFailoverManagedAgentPoolRequiresSelector(t *testing.T) {
-	config := normalizeAgentWorkerPoolConfig(&compute.PoolState{
-		ManagementSource: types.WorkerPoolManagementSourceAPI,
-		CreatedByTokenID: types.FailoverOnDemandPoolCreator,
-		WorkerConfig: &types.WorkerPoolConfig{
-			Mode:    types.PoolModeExternal,
-			GPUType: "A10G",
-		},
-	})
-
-	assert.True(t, config.RequiresPoolSelector)
-}
-
-func TestHasManagedPoolForGPU(t *testing.T) {
-	manager := NewWorkerPoolManager()
-	manager.SetPool("beta9-t4", types.WorkerPoolConfig{GPUType: "T4"}, &LocalWorkerPoolControllerForTest{name: "beta9-t4"})
-	manager.SetPool("private-h100", types.WorkerPoolConfig{GPUType: "H100", Mode: types.PoolModePrivate}, &LocalWorkerPoolControllerForTest{
-		name:             "private-h100",
-		mode:             types.PoolModePrivate,
-		requiresSelector: true,
-	})
-	// Provider pools only host managed endpoint replicas, even when a
-	// misconfigured controller does not require a selector.
-	manager.SetPool("provider-a6000", types.WorkerPoolConfig{GPUType: "A6000", Mode: types.PoolModeProvider}, &LocalWorkerPoolControllerForTest{
-		name: "provider-a6000",
-		mode: types.PoolModeProvider,
-	})
-	scheduler := &Scheduler{workerPoolManager: manager}
-
-	// Pool-config-based: a pool with zero live workers still counts.
-	assert.True(t, scheduler.HasManagedPoolForGPU("T4"))
-
-	// Pools requiring a pool selector can't serve selector-less workloads.
-	assert.False(t, scheduler.HasManagedPoolForGPU("H100"))
-
-	// Provider pools never count for ordinary workloads.
-	assert.False(t, scheduler.HasManagedPoolForGPU("A6000"))
-
-	// GPU_ANY matches any GPU pool usable without a selector.
-	assert.True(t, scheduler.HasManagedPoolForGPU(string(types.GPU_ANY)))
-
-	// Unknown GPU type: guaranteed blackhole.
-	assert.False(t, scheduler.HasManagedPoolForGPU("B200"))
-}
-
 func TestServerlessGPUAvailabilityExcludesPrivateAndProviderWorkers(t *testing.T) {
 	manager := NewWorkerPoolManager()
 	manager.SetPool("serverless-t4", types.WorkerPoolConfig{GPUType: "T4"}, &LocalWorkerPoolControllerForTest{name: "serverless-t4"})
 	manager.SetPool("managed-rtx5090", types.WorkerPoolConfig{GPUType: "RTX5090", Mode: types.PoolModeExternal}, &LocalWorkerPoolControllerForTest{name: "managed-rtx5090"})
 	manager.SetPool("private-h100", types.WorkerPoolConfig{GPUType: "H100", Mode: types.PoolModePrivate}, &LocalWorkerPoolControllerForTest{
 		name:             "private-h100",
-		mode:             types.PoolModePrivate,
 		requiresSelector: true,
 	})
 	manager.SetPool("provider-a6000", types.WorkerPoolConfig{GPUType: "A6000", Mode: types.PoolModeProvider}, &LocalWorkerPoolControllerForTest{
 		name: "provider-a6000",
-		mode: types.PoolModeProvider,
 	})
 	scheduler := &Scheduler{workerPoolManager: manager}
 
@@ -162,6 +115,24 @@ func TestCheckCapacityRestoresDefaultSingleGPUForReplacement(t *testing.T) {
 	)
 
 	assert.True(t, result.CanSchedule)
+}
+
+// A GPU that an evictable container holds is room for one replica, not for
+// every replica after the first.
+func TestCheckCapacityCountsReclaimableRoomOnce(t *testing.T) {
+	s := &Scheduler{workerPoolManager: NewWorkerPoolManager()}
+	s.workerPoolManager.SetPool("beta9-a10g", types.WorkerPoolConfig{GPUType: "A10G"}, nil)
+	request := &types.ContainerRequest{Cpu: 1000, Memory: 1000, GpuRequest: []string{"A10G"}, GpuCount: 1}
+
+	fits := func(replicas uint) bool {
+		check := capacityCheck{
+			scheduler: s, request: request, replicas: replicas,
+			workers: []*types.Worker{evictableWorker("worker", "beta9-a10g", 0, 1)},
+		}
+		return check.placeReplicas().CanSchedule
+	}
+	assert.True(t, fits(1))
+	assert.False(t, fits(2))
 }
 
 func TestServerlessAvailabilityIncludesOnlyReclaimableHostedGPUs(t *testing.T) {

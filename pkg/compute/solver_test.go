@@ -4,167 +4,236 @@ import (
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/providers"
 	"github.com/stretchr/testify/require"
 )
 
-func TestSolveGPUNodeCount(t *testing.T) {
-	plan := NewSolver().Solve(SolveInput{
-		Demand: Demand{
-			PoolName:       "training",
-			GPUs:           []string{"H100"},
-			Nodes:          2,
-			TTL:            6 * time.Hour,
-			MaxSpendMicros: DollarsToMicros(100),
-		},
-		Offers: []Offer{
-			{ID: "8xh100", Provider: "vast", GPU: "H100", GPUCount: 8, HourlyCostMicros: DollarsToMicros(8), Available: 1},
-			{ID: "1xh100", Provider: "vast", GPU: "H100", GPUCount: 1, HourlyCostMicros: DollarsToMicros(2), Available: 10},
-		},
-	})
-
-	require.True(t, plan.Feasible, plan.Reason)
-	require.Equal(t, uint32(2), plan.TotalCapacity)
-	require.Equal(t, DollarsToMicros(24), plan.IncrementalCostMicros)
-	require.Len(t, plan.Actions, 1)
-	require.Equal(t, "1xh100", plan.Actions[0].Offer.ID)
-	require.Equal(t, uint32(2), plan.Actions[0].Count)
+func bought(plan Plan) map[string]uint32 {
+	counts := map[string]uint32{}
+	for _, purchase := range plan.Purchases {
+		counts[purchase.Offer.ID] += purchase.Count
+	}
+	return counts
 }
 
-func TestSolveSpecificMultiGPUNodeOffer(t *testing.T) {
-	plan := NewSolver().Solve(SolveInput{
-		Demand: Demand{
-			PoolName:       "single-node",
-			GPUs:           []string{"H100"},
-			Nodes:          1,
-			OfferID:        "8xh100",
-			TTL:            time.Hour,
-			MaxSpendMicros: DollarsToMicros(20),
+func TestPlanBuysTheCheapestMachines(t *testing.T) {
+	plan, err := Solve(
+		Pool{Name: "training", GPUs: []string{"H100"}, Nodes: 2, TTL: 6 * time.Hour, MaxSpendMicros: providers.DollarsToMicros(100)},
+		[]providers.Offer{
+			{ID: "8xh100", Provider: "vast", GPU: "H100", GPUCount: 8, HourlyCostMicros: providers.DollarsToMicros(8), Available: 1},
+			{ID: "1xh100", Provider: "vast", GPU: "H100", GPUCount: 1, HourlyCostMicros: providers.DollarsToMicros(2), Available: 10},
 		},
-		Offers: []Offer{
-			{ID: "1xh100", Provider: "vast", GPU: "H100", GPUCount: 1, HourlyCostMicros: DollarsToMicros(2), Available: 8},
-			{ID: "8xh100", Provider: "vast", GPU: "H100", GPUCount: 8, HourlyCostMicros: DollarsToMicros(10), Available: 1},
-		},
-	})
+	)
 
-	require.True(t, plan.Feasible, plan.Reason)
-	require.Equal(t, uint32(1), plan.TotalCapacity)
-	require.Equal(t, DollarsToMicros(10), plan.IncrementalCostMicros)
-	require.Equal(t, "8xh100", plan.Actions[0].Offer.ID)
+	require.NoError(t, err)
+	require.Equal(t, map[string]uint32{"1xh100": 2}, bought(plan))
+	require.Equal(t, uint32(2), plan.Machines())
+	require.Equal(t, providers.DollarsToMicros(4), plan.HourlyCostMicros())
+	require.Equal(t, providers.DollarsToMicros(24), plan.CostMicros, "two machines for six hours")
 }
 
-func TestAttachedCapacityIsFreeAndPreferred(t *testing.T) {
-	plan := NewSolver().Solve(SolveInput{
-		Demand: Demand{
-			PoolName:       "attached",
-			GPUs:           []string{"A100-80"},
-			Nodes:          1,
-			TTL:            time.Hour,
-			MaxSpendMicros: DollarsToMicros(1),
+func TestPlanBuysTheOfferThePoolNames(t *testing.T) {
+	plan, err := Solve(
+		Pool{Name: "single-node", GPUs: []string{"H100"}, Nodes: 1, OfferID: "8xh100", TTL: time.Hour, MaxSpendMicros: providers.DollarsToMicros(20)},
+		[]providers.Offer{
+			{ID: "1xh100", Provider: "vast", GPU: "H100", GPUCount: 1, HourlyCostMicros: providers.DollarsToMicros(2), Available: 8},
+			{ID: "8xh100", Provider: "vast", GPU: "H100", GPUCount: 8, HourlyCostMicros: providers.DollarsToMicros(10), Available: 1},
 		},
-		Reservations: []Reservation{
-			{ID: "attached-1", PoolName: "attached", GPU: "A100-80", GPUCount: 4, Source: SourceAttached, Status: ReservationActive},
-		},
-		Offers: []Offer{
-			{ID: "paid", Provider: "shadeform", GPU: "A100-80", GPUCount: 4, HourlyCostMicros: DollarsToMicros(20), Available: 1},
-		},
-	})
+	)
 
-	require.True(t, plan.Feasible, plan.Reason)
-	require.Equal(t, uint32(1), plan.ExistingCapacity)
-	require.Zero(t, plan.IncrementalCostMicros)
-	require.Equal(t, ActionKeep, plan.Actions[0].Type)
+	require.NoError(t, err)
+	require.Equal(t, map[string]uint32{"8xh100": 1}, bought(plan))
+	require.Equal(t, providers.DollarsToMicros(10), plan.CostMicros)
 }
 
-func TestSolveCPUUsesNodeCount(t *testing.T) {
+func TestPlanBuysCPUMachinesForAPoolThatNamesNoGPU(t *testing.T) {
+	plan, err := Solve(
+		Pool{Name: "cpu-pool", Nodes: 2, TTL: 2 * time.Hour, MaxSpendMicros: providers.DollarsToMicros(10), Providers: []string{"hetzner"}},
+		[]providers.Offer{
+			{ID: "cpx31", Provider: "hetzner", CPUMillicores: 4000, MemoryMB: 8192, HourlyCostMicros: providers.DollarsToMicros(1.5), Available: 5},
+			{ID: "gpu", Provider: "hetzner", GPU: "A10G", GPUCount: 1, HourlyCostMicros: providers.DollarsToMicros(1), Available: 5},
+		},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, map[string]uint32{"cpx31": 2}, bought(plan))
+	require.Equal(t, providers.DollarsToMicros(6), plan.CostMicros)
+}
+
+func TestPlanBuysTheMoreReliableOfTwoOffersAtOnePrice(t *testing.T) {
+	plan, err := Solve(
+		Pool{Name: "training", GPUs: []string{"H100"}, Nodes: 1, TTL: time.Hour, MaxSpendMicros: providers.DollarsToMicros(10)},
+		[]providers.Offer{
+			{ID: "shaky", Provider: "vast", GPU: "H100", GPUCount: 1, HourlyCostMicros: providers.DollarsToMicros(2), Reliability: 0.90},
+			{ID: "steady", Provider: "vast", GPU: "H100", GPUCount: 1, HourlyCostMicros: providers.DollarsToMicros(2), Reliability: 0.99},
+		},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, map[string]uint32{"steady": 1}, bought(plan))
+}
+
+func TestPlanPaysForAStartedHour(t *testing.T) {
+	_, err := Solve(
+		Pool{Name: "hourly", GPUs: []string{"L40S"}, Nodes: 1, TTL: 61 * time.Minute, MaxSpendMicros: providers.DollarsToMicros(5)},
+		[]providers.Offer{
+			{ID: "l40s", Provider: "vast", GPU: "L40S", GPUCount: 1, HourlyCostMicros: providers.DollarsToMicros(3), Available: 1},
+		},
+	)
+
+	require.ErrorIs(t, err, ErrOverBudget, "61 minutes at $3 an hour is $6")
+}
+
+func TestPlanSpendsUpToWhatThePoolMaySpend(t *testing.T) {
+	plan, err := Solve(
+		Pool{Name: "exact", GPUs: []string{"L40S"}, Nodes: 2, TTL: time.Hour, MaxSpendMicros: providers.DollarsToMicros(6)},
+		[]providers.Offer{
+			{ID: "l40s", Provider: "vast", GPU: "L40S", GPUCount: 1, HourlyCostMicros: providers.DollarsToMicros(3)},
+		},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, providers.DollarsToMicros(6), plan.CostMicros)
+}
+
+func TestPlanBuysAsManyAsNeededOfAnOfferTheProviderDoesNotCount(t *testing.T) {
+	plan, err := Solve(
+		Pool{Name: "cpu-pool", Nodes: 3, TTL: time.Hour, MaxSpendMicros: providers.DollarsToMicros(10)},
+		[]providers.Offer{
+			{ID: "cpx31", Provider: "hetzner", CPUMillicores: 4000, HourlyCostMicros: providers.DollarsToMicros(1)},
+		},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, map[string]uint32{"cpx31": 3}, bought(plan))
+	require.Equal(t, providers.DollarsToMicros(3), plan.CostMicros)
+}
+
+func TestPlanBuysNoMoreOfAnOfferThanTheProviderHas(t *testing.T) {
+	pool := Pool{Name: "training", GPUs: []string{"H100"}, Nodes: 3, TTL: time.Hour, MaxSpendMicros: providers.DollarsToMicros(100)}
+	cheap := providers.Offer{ID: "cheap", Provider: "fake", GPU: "H100", GPUCount: 1, HourlyCostMicros: providers.DollarsToMicros(1), Available: 2}
+	dear := providers.Offer{ID: "dear", Provider: "fake", GPU: "H100", GPUCount: 1, HourlyCostMicros: providers.DollarsToMicros(5), Available: 4}
+
+	plan, err := Solve(pool, []providers.Offer{dear, cheap})
+	require.NoError(t, err)
+	require.Equal(t, map[string]uint32{"cheap": 2, "dear": 1}, bought(plan))
+	require.Equal(t, providers.DollarsToMicros(7), plan.CostMicros)
+
+	_, err = Solve(pool, []providers.Offer{cheap})
+	require.ErrorIs(t, err, ErrNoCapacity)
+}
+
+func TestPlanBuysNothingForAPoolThatAsksForNoMachines(t *testing.T) {
+	plan, err := Solve(Pool{Name: "attached"}, []providers.Offer{
+		{ID: "cpx31", Provider: "hetzner", CPUMillicores: 4000, HourlyCostMicros: providers.DollarsToMicros(1)},
+	})
+
+	require.NoError(t, err)
+	require.Empty(t, plan.Purchases)
+	require.Zero(t, plan.CostMicros)
+}
+
+func TestPlanRefusesAPoolThatIsNotValid(t *testing.T) {
+	_, err := Solve(Pool{Name: "no-lifetime", Nodes: 1, MaxSpendMicros: providers.DollarsToMicros(5)}, nil)
+	require.ErrorContains(t, err, "ttl")
+}
+
+func TestPoolMatchesOffersOfItsKind(t *testing.T) {
+	gpu := providers.Offer{ID: "h100", Provider: "shadeform", Region: "us-east", GPU: "H100", GPUCount: 1, CPUMillicores: 8000, HourlyCostMicros: providers.DollarsToMicros(2)}
+	cpu := providers.Offer{ID: "cpx31", Provider: "hetzner", Region: "ash", CPUMillicores: 4000, HourlyCostMicros: providers.DollarsToMicros(1)}
+
+	for name, tc := range map[string]struct {
+		pool Pool
+		want []string
+	}{
+		"a GPU pool takes machines with that GPU": {pool: Pool{GPUs: []string{"H100"}, Nodes: 1}, want: []string{"h100"}},
+		"another GPU": {pool: Pool{GPUs: []string{"A10G"}, Nodes: 1}, want: []string{}},
+		"a pool that names no GPU takes CPU only":  {pool: Pool{Nodes: 1}, want: []string{"cpx31"}},
+		"a pool that asks for nothing takes both":  {pool: Pool{}, want: []string{"h100", "cpx31"}},
+		"one offer by id":                          {pool: Pool{OfferID: "cpx31"}, want: []string{"cpx31"}},
+		"one provider":                             {pool: Pool{Providers: []string{"shadeform"}}, want: []string{"h100"}},
+		"one region":                               {pool: Pool{Regions: []string{"ash"}}, want: []string{"cpx31"}},
+		"an offer with no stock count still fits":  {pool: Pool{GPUs: []string{"H100"}, Nodes: 4}, want: []string{"h100"}},
+		"reliability is not held against no score": {pool: Pool{MinReliability: 0.9}, want: []string{"h100", "cpx31"}},
+	} {
+		got := []string{}
+		for _, offer := range []providers.Offer{gpu, cpu} {
+			if tc.pool.MatchesOffer(offer) {
+				got = append(got, offer.ID)
+			}
+		}
+		require.Equal(t, tc.want, got, name)
+	}
+
+	unreliable := gpu
+	unreliable.Reliability = 0.5
+	require.False(t, Pool{MinReliability: 0.9}.MatchesOffer(unreliable))
+}
+
+func TestPoolTakesNoOfferWithoutAPrice(t *testing.T) {
+	offer := providers.Offer{ID: "h100", Provider: "shadeform", Region: "us-east", GPU: "H100", GPUCount: 1, CPUMillicores: 8000}
+	for _, pool := range []Pool{{}, {GPUs: []string{"H100"}, Nodes: 1}, {OfferID: "h100"}} {
+		require.False(t, pool.MatchesOffer(offer), "a machine that cannot be budgeted or billed")
+	}
+
+	offer.HourlyCostMicros = providers.DollarsToMicros(2)
+	require.True(t, Pool{GPUs: []string{"H100"}, Nodes: 1}.MatchesOffer(offer))
+}
+
+func TestPlanNeverBuysAnOfferWithoutAPrice(t *testing.T) {
+	pool := Pool{Name: "training", GPUs: []string{"H100"}, Nodes: 1, TTL: time.Hour, MaxSpendMicros: providers.DollarsToMicros(10)}
+	unpriced := providers.Offer{ID: "unpriced", Provider: "shadeform", GPU: "H100", GPUCount: 1}
+	priced := providers.Offer{ID: "priced", Provider: "shadeform", GPU: "H100", GPUCount: 1, HourlyCostMicros: providers.DollarsToMicros(2)}
+
+	plan, err := Solve(pool, []providers.Offer{unpriced, priced})
+	require.NoError(t, err)
+	require.Equal(t, map[string]uint32{"priced": 1}, bought(plan), "no price is not the lowest price")
+
+	_, err = Solve(pool, []providers.Offer{unpriced})
+	require.ErrorIs(t, err, ErrNoCapacity)
+}
+
+func TestAReservationIsOpenUntilItIsGivenBackAndClosedOnceItsMachineIsGone(t *testing.T) {
+	for _, tt := range []struct {
+		status       ReservationStatus
+		open, closed bool
+	}{
+		{ReservationPending, true, false},
+		{ReservationActive, true, false},
+		{ReservationTerminating, false, false},
+		{ReservationDeleted, false, true},
+		{ReservationFailed, false, true},
+	} {
+		reservation := Reservation{Status: tt.status}
+		require.Equal(t, tt.open, reservation.Open(), "%s open", tt.status)
+		require.Equal(t, tt.closed, reservation.Closed(), "%s closed", tt.status)
+	}
+}
+
+func TestAReservationIsManagedUnlessItsSourceSaysOtherwise(t *testing.T) {
+	for source, managed := range map[CapacitySource]bool{
+		SourceCLIReservation: true,
+		"":                   true,
+		SourceAttached:       false,
+		SourceManual:         false,
+		SourceAWS:            false,
+		// What a reconciler that is gone recorded is still in stored pools.
+		"autosolver": false,
+	} {
+		require.Equal(t, managed, Reservation{Source: source}.Managed(), "source %q", source)
+	}
+}
+
+func TestAReservationIsActiveWhileItIsOpenAndHasNotRunOut(t *testing.T) {
 	now := time.Now()
-	plan := NewSolver().Solve(SolveInput{
-		Now: now,
-		Demand: Demand{
-			PoolName:       "cpu-pool",
-			Nodes:          3,
-			TTL:            2 * time.Hour,
-			MaxSpendMicros: DollarsToMicros(10),
-			Providers:      []string{"hetzner"},
-		},
-		Reservations: []Reservation{
-			{
-				ID:               "existing-node",
-				PoolName:         "cpu-pool",
-				Provider:         "hetzner",
-				NodeCount:        1,
-				HourlyCostMicros: DollarsToMicros(1),
-				Source:           SourceCLIReservation,
-				Status:           ReservationActive,
-				ExpiresAt:        now.Add(time.Hour),
-			},
-		},
-		Offers: []Offer{
-			{ID: "cpx31", Provider: "hetzner", NodeCount: 1, CPUMillicores: 4000, MemoryMB: 8192, HourlyCostMicros: DollarsToMicros(1.5), Available: 5},
-			{ID: "gpu", Provider: "hetzner", GPU: "A10G", GPUCount: 1, HourlyCostMicros: DollarsToMicros(1), Available: 5},
-		},
-	})
-
-	require.True(t, plan.Feasible, plan.Reason)
-	require.Equal(t, uint32(3), plan.TotalCapacity)
-	require.Equal(t, uint32(1), plan.ExistingCapacity)
-	require.Equal(t, uint32(2), plan.NewCapacity)
-	require.Equal(t, DollarsToMicros(6), plan.IncrementalCostMicros)
-	require.Len(t, plan.Actions, 2)
-	require.Equal(t, ActionKeep, plan.Actions[0].Type)
-	require.Equal(t, ActionCreate, plan.Actions[1].Type)
-	require.Equal(t, "cpx31", plan.Actions[1].Offer.ID)
-	require.Equal(t, uint32(2), plan.Actions[1].Count)
-}
-
-func TestWholeHourSpendCap(t *testing.T) {
-	plan := NewSolver().Solve(SolveInput{
-		Demand: Demand{
-			PoolName:       "hourly",
-			GPUs:           []string{"L40S"},
-			Nodes:          1,
-			TTL:            61 * time.Minute,
-			MaxSpendMicros: DollarsToMicros(5),
-		},
-		Offers: []Offer{
-			{ID: "l40s", Provider: "vast", GPU: "L40S", GPUCount: 1, HourlyCostMicros: DollarsToMicros(3), Available: 1},
-		},
-	})
-
-	require.False(t, plan.Feasible)
-	require.Equal(t, "max spend would be exceeded", plan.Reason)
-}
-
-func TestExistingReservationIsSunkUntilRenewal(t *testing.T) {
-	now := time.Now()
-	plan := NewSolver().Solve(SolveInput{
-		Now: now,
-		Demand: Demand{
-			PoolName:       "renewal",
-			GPUs:           []string{"H100"},
-			Nodes:          2,
-			TTL:            time.Hour,
-			MaxSpendMicros: DollarsToMicros(4),
-		},
-		Reservations: []Reservation{
-			{
-				ID:               "existing",
-				PoolName:         "renewal",
-				GPU:              "H100",
-				GPUCount:         1,
-				Provider:         "vast",
-				HourlyCostMicros: DollarsToMicros(100),
-				Source:           SourceCLIReservation,
-				Status:           ReservationActive,
-				BillingRenewalAt: now.Add(2 * time.Hour),
-				ExpiresAt:        now.Add(time.Hour),
-			},
-		},
-		Offers: []Offer{
-			{ID: "new", Provider: "vast", GPU: "H100", GPUCount: 1, HourlyCostMicros: DollarsToMicros(4), Available: 1},
-		},
-	})
-
-	require.True(t, plan.Feasible, plan.Reason)
-	require.Equal(t, uint32(1), plan.ExistingCapacity)
-	require.Equal(t, DollarsToMicros(4), plan.IncrementalCostMicros)
+	for _, status := range []ReservationStatus{ReservationPending, ReservationActive} {
+		require.True(t, Reservation{Status: status}.ActiveAt(now), "%s without an end", status)
+		require.True(t, Reservation{Status: status, ExpiresAt: now.Add(time.Minute)}.ActiveAt(now), "%s before its end", status)
+		require.False(t, Reservation{Status: status, ExpiresAt: now}.ActiveAt(now), "%s at its end", status)
+		require.False(t, Reservation{Status: status, ExpiresAt: now.Add(-time.Minute)}.ActiveAt(now), "%s past its end", status)
+	}
+	for _, status := range []ReservationStatus{ReservationTerminating, ReservationDeleted, ReservationFailed} {
+		require.False(t, Reservation{Status: status}.ActiveAt(now), "%s", status)
+		require.False(t, Reservation{Status: status, ExpiresAt: now.Add(time.Minute)}.ActiveAt(now), "%s", status)
+	}
 }

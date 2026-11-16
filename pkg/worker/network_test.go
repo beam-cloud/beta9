@@ -1188,7 +1188,7 @@ func TestNetworkSlotPoolLockIsReleasedAfterShutdownCancelsTheWorker(t *testing.T
 func TestEgressRulesRedirectTCPAndOnlyAllowResolverUDP(t *testing.T) {
 	config := types.EgressConfig{TLSPort: 18043, HTTPPort: 18080, OtherPort: 18081}
 	for _, ip := range []string{"192.168.0.2", "fd00:abcd::2"} {
-		rules := egressRules(ip, "box", config, true, []string{"8.8.8.8", "2001:4860:4860::8888"})
+		rules := egressRules(ip, "box", config, true, []string{"8.8.8.8", "2001:4860:4860::8888"}, "")
 		require.Len(t, rules, 10)
 		for i, listener := range []string{"18043", "18080", "18081"} {
 			require.Equal(t, "nat", rules[i].table)
@@ -1200,6 +1200,28 @@ func TestEgressRulesRedirectTCPAndOnlyAllowResolverUDP(t *testing.T) {
 			}
 			require.Contains(t, strings.Join(rule.args, " "), "--comment box")
 		}
+	}
+}
+
+func TestEgressRulesResetUnreachableIPv6BeforeTheListenersAcceptIt(t *testing.T) {
+	config := types.EgressConfig{TLSPort: 18043, HTTPPort: 18080, OtherPort: 18081}
+	for _, restricted := range []bool{false, true} {
+		rules := egressRules("fd00:abcd::2", "box", config, restricted, []string{"2001:4860:4860::8888"}, publicIPv6)
+		// Inserted last at the head of INPUT, so it runs before any ACCEPT.
+		reset := rules[len(rules)-1]
+		require.Equal(t, "filter", reset.table)
+		require.Equal(t, "INPUT", reset.chain)
+		require.Equal(t, "-i "+containerBridgeLinkName+" -s fd00:abcd::2 -p tcp -m conntrack --ctorigdst 2000::/3 -j REJECT --reject-with tcp-reset -m comment --comment box", strings.Join(reset.args, " "))
+		redirects := 0
+		for _, rule := range rules {
+			if slices.Contains(rule.args, "REDIRECT") {
+				redirects++
+			}
+		}
+		require.Equal(t, 3, redirects, "nothing bypasses the listeners")
+	}
+	for _, rule := range egressRules("fd00:abcd::2", "box", config, true, nil, "") {
+		require.NotContains(t, rule.args, "REJECT")
 	}
 }
 

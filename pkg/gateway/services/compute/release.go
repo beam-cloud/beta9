@@ -132,9 +132,6 @@ func (s *Service) removePrivateMachine(ctx context.Context, machine *model.Agent
 // machine, rather than a worker process. This runs while the agent record is
 // still present so a transient Redis failure remains retryable by reconciliation.
 func (s *Service) removePrivateMachineRuntimeState(ctx context.Context, machine *model.AgentTokenState) error {
-	if machine == nil {
-		return nil
-	}
 	if s.workerRepo != nil {
 		networkPrefix := common.WorkerNetworkPrefix(s.appConfig.ClusterName, machine.MachineID)
 		if err := s.workerRepo.RemoveWorkerNetworkState(ctx, networkPrefix); err != nil {
@@ -211,11 +208,9 @@ func (s *Service) releaseManagedReservation(ctx context.Context, workspaceID str
 		}
 	}
 
-	if s.terminateReservation(ctx, workspaceID, state, reservation, s.computeVendors(), reconcileReasonMachineReleased, machineReleasedMessage) {
-		state.UpdatedAt = time.Now().UTC()
-		return s.savePrivatePoolState(ctx, workspaceID, state)
-	}
-	return nil
+	s.terminateReservation(ctx, workspaceID, state, reservation, reconcileReasonMachineReleased, machineReleasedMessage, now)
+	state.UpdatedAt = time.Now().UTC()
+	return s.savePrivatePoolState(ctx, workspaceID, state)
 }
 
 func (s *Service) revokeReservationJoinToken(ctx context.Context, reservation *model.Reservation) {
@@ -245,25 +240,6 @@ func (s *Service) removePrivateMachineWorker(machine *model.AgentTokenState) err
 	return nil
 }
 
-func (s *Service) assignManagedReservationToMachine(ctx context.Context, state *model.PoolState, token *model.JoinTokenState, machine *model.AgentTokenState) error {
-	if machine == nil {
-		return nil
-	}
-	if token != nil && token.ManagedPoolInstanceID != "" {
-		return nil
-	}
-	return s.withPoolStateLock(ctx, machine.WorkspaceID, machine.PoolName, func(lockCtx context.Context) error {
-		fresh, err := s.getPrivatePoolState(lockCtx, machine.WorkspaceID, machine.PoolName)
-		if err != nil {
-			return err
-		}
-		if fresh == nil {
-			return errors.New("pool no longer exists")
-		}
-		return s.assignManagedReservationToMachineLocked(lockCtx, fresh, token, machine)
-	})
-}
-
 func (s *Service) assignManagedReservationToMachineLocked(ctx context.Context, state *model.PoolState, token *model.JoinTokenState, machine *model.AgentTokenState) error {
 	reservation := managedReservationForToken(state, token)
 	if reservation == nil {
@@ -288,10 +264,7 @@ func managedReservationForToken(state *model.PoolState, token *model.JoinTokenSt
 	}
 	for i := range state.Reservations {
 		reservation := &state.Reservations[i]
-		if !reservation.Managed() || reservation.RegistrationTokenHash != token.TokenHash {
-			continue
-		}
-		if reservationClosed(reservation.Status) || reservation.Status == model.ReservationTerminating {
+		if !reservation.Managed() || reservation.RegistrationTokenHash != token.TokenHash || !reservation.Open() {
 			continue
 		}
 		return reservation
@@ -305,10 +278,7 @@ func managedReservationForMachine(state *model.PoolState, machineID string) *mod
 	}
 	for i := range state.Reservations {
 		reservation := &state.Reservations[i]
-		if !reservation.Managed() || reservation.MachineID != machineID {
-			continue
-		}
-		if reservationClosed(reservation.Status) {
+		if !reservation.Managed() || reservation.MachineID != machineID || reservation.Closed() {
 			continue
 		}
 		return reservation
@@ -324,7 +294,7 @@ func managedReservationForMachineRelease(state *model.PoolState, machineID strin
 	var unlinked *model.Reservation
 	for i := range state.Reservations {
 		reservation := &state.Reservations[i]
-		if !reservation.Managed() || reservation.MachineID != "" || reservationClosed(reservation.Status) {
+		if !reservation.Managed() || reservation.MachineID != "" || reservation.Closed() {
 			continue
 		}
 		if unlinked != nil {
@@ -337,7 +307,7 @@ func managedReservationForMachineRelease(state *model.PoolState, machineID strin
 		return unlinked, nil
 	}
 
-	if hasOpenManagedReservations(state) {
+	if hasUnclosedManagedReservation(state) {
 		return nil, fmt.Errorf("managed reservation for machine %q is not linked", machineID)
 	}
 	return nil, nil
@@ -362,19 +332,11 @@ func managedReservationIndexForDeleteTarget(state *model.PoolState, targetID str
 	return -1
 }
 
-func hasOpenManagedReservations(state *model.PoolState) bool {
-	if state == nil {
-		return false
-	}
-	for i := range state.Reservations {
-		reservation := state.Reservations[i]
-		if !reservation.Managed() {
-			continue
+func hasUnclosedManagedReservation(state *model.PoolState) bool {
+	for _, reservation := range state.Reservations {
+		if reservation.Managed() && !reservation.Closed() {
+			return true
 		}
-		if reservationClosed(reservation.Status) {
-			continue
-		}
-		return true
 	}
 	return false
 }
@@ -388,7 +350,7 @@ func attachReservationToMachine(reservation *model.Reservation, machineID string
 }
 
 func markReservationTerminating(reservation *model.Reservation, reason, message string) bool {
-	if reservation == nil || reservationClosed(reservation.Status) {
+	if reservation == nil || reservation.Closed() {
 		return false
 	}
 	changed := reservation.Status != model.ReservationTerminating ||
@@ -398,8 +360,4 @@ func markReservationTerminating(reservation *model.Reservation, reason, message 
 	reservation.TerminatingReason = reason
 	reservation.LastStatusMessage = message
 	return changed
-}
-
-func reservationClosed(status model.ReservationStatus) bool {
-	return status == model.ReservationDeleted || status == model.ReservationFailed
 }

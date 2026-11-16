@@ -357,7 +357,7 @@ func nodeUsageSeconds(previousSeen, currentSeen time.Time) float64 {
 }
 
 func agentNodeUsageMetadata(agentState *model.AgentTokenState, poolState *model.PoolState, metrics *pb.MachineMetrics, seconds float64) map[string]interface{} {
-	source := types.ComputeSourceAttached
+	source := model.SourceAttached
 	poolMode := string(types.PoolModePrivate)
 	transport := ""
 	if poolState != nil {
