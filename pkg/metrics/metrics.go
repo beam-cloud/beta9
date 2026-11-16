@@ -40,6 +40,7 @@ const (
 	metricS3PutSpeed                = "s3_put_speed_mbps"
 	metricS3GetSpeed                = "s3_get_speed_mbps"
 	metricDialTime                  = "dial_time_ms"
+	metricContainerStartLatency     = "container_start_latency_ms"
 	metricWorkerStartupLatency      = "worker_startup_latency_ms"
 	metricWorkerStartupPhase        = "worker_startup_phase_duration_ms"
 	metricSchedulerBacklogDepth     = "scheduler_backlog_depth"
@@ -273,6 +274,21 @@ func RecordDialTime(duration time.Duration, host string) {
 			vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
 		}
 	}
+}
+
+func RecordContainerStartLatency(container *types.ContainerState, duration time.Duration) {
+	gpu := container.Gpu
+	if gpu == "" {
+		gpu = "none"
+	}
+	metricName := fmt.Sprintf("%s{gpu=\"%s\",gpu_count=\"%d\",cpu=\"%d\",memory=\"%d\"}",
+		metricContainerStartLatency,
+		gpu,
+		container.GpuCount,
+		container.Cpu,
+		container.Memory,
+	)
+	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
 }
 
 func RecordWorkerStartupLatency(duration time.Duration, request *types.ContainerRequest) {

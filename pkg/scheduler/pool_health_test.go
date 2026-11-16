@@ -1,8 +1,11 @@
 package scheduler
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -168,6 +171,43 @@ func TestThePoolHealthTickKeepsNoMetricPerContainer(t *testing.T) {
 			require.NotContains(t, name, container)
 		}
 	}
+}
+
+// How long containers take to start is charted from this metric: its sum over
+// its count, for containers of one size. A container is counted on every
+// tick for as long as it is there, so the chart shows what the pool holds.
+func TestThePoolHealthTickRecordsHowLongContainersTookToStart(t *testing.T) {
+	f := newPoolHealthFixture(t)
+	starts, tookMs := startLatency(t)
+
+	f.monitor.tick()
+	f.monitor.tick()
+
+	// One container took four seconds to start and one took six. The third
+	// has not started.
+	nowStarts, nowTookMs := startLatency(t)
+	require.EqualValues(t, 4, nowStarts-starts)
+	require.EqualValues(t, 20_000, nowTookMs-tookMs)
+}
+
+// startLatency reads the start latency metric as it is scraped, for
+// containers the size of the fixture's: how many starts it has counted, and
+// how many milliseconds they took in all.
+func startLatency(t *testing.T) (count, sumMs float64) {
+	t.Helper()
+	const size = `{gpu="A10G",gpu_count="1",cpu="1000",memory="2000"} `
+	var scraped bytes.Buffer
+	vmetrics.GetDefaultSet().WritePrometheus(&scraped)
+	for _, line := range strings.Split(scraped.String(), "\n") {
+		for name, value := range map[string]*float64{"container_start_latency_ms_count": &count, "container_start_latency_ms_sum": &sumMs} {
+			if written, ok := strings.CutPrefix(line, name+size); ok {
+				read, err := strconv.ParseFloat(written, 64)
+				require.NoError(t, err)
+				*value = read
+			}
+		}
+	}
+	return count, sumMs
 }
 
 // published returns the pool's state as it is stored for the rest of the

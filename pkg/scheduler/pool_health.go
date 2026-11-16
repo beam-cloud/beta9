@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/redislock"
@@ -128,6 +129,7 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, []*types.Wor
 			}
 
 			latency := time.Unix(container.StartedAt, 0).Sub(time.Unix(container.ScheduledAt, 0))
+			metrics.RecordContainerStartLatency(&container, latency)
 			schedulingLatencies = append(schedulingLatencies, latency)
 		}
 	}
