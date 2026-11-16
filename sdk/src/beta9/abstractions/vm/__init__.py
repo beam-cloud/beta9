@@ -185,7 +185,7 @@ class VM:
     (1–100 GiB; default 50 GiB).
 
     mirror names a mirror of this workspace: local files uploaded by the
-    mirror utility (`setup mirror`). The VM starts with the mirror's latest
+    Beam Mirror app. The VM starts with the mirror's latest
     generation, read on demand, at the home directory the files came from
     (such as /Users/NAME), which becomes the desktop user's home; a
     generation that does not record one is in /root and the desktop user's

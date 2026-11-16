@@ -24,7 +24,6 @@ from rich import box
 from rich.table import Column, Table
 from rich.text import Text
 
-from .. import mirror as mirror_utility
 from .. import terminal
 from ..abstractions.image import Image
 from ..abstractions.vm import VM, default_base_image, identity, prepare_image
@@ -139,25 +138,17 @@ def _open_browser(vm, port, url):
 
 
 def _launch_browser(url):
-    hint = "Could not open a browser. Check your default browser or open the URL printed above."
     if sys.platform == "darwin":
         # The stdlib macOS opener forks osascript; isolate it from gRPC.
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "import sys, webbrowser; sys.exit(not webbrowser.open(sys.stdin.read()))",
-            ],
+        subprocess.run(
+            [sys.executable, "-c", "import sys, webbrowser; webbrowser.open(sys.stdin.read())"],
             input=url,
             text=True,
-            check=False,
+            check=True,
             **local_process_kwargs(sys.executable),
         )
-        if result.returncode:
-            raise click.ClickException(hint)
-    elif not webbrowser.open(url):
-        # A headless Linux client can still use the stable URL printed to stdout.
-        terminal.warn(hint)
+    else:
+        webbrowser.open(url)
 
 
 def _show(info, as_json):
@@ -295,12 +286,7 @@ def _show(info, as_json):
     type=click.Path(exists=True, file_okay=False),
     help="Upload a local directory after creation.",
 )
-@click.option("--mirror", is_flag=True, help="Start with this machine's mirrored files.")
-@click.option(
-    "--mirror-name",
-    metavar="NAME",
-    help="Start with the mirrored files of mirror NAME instead; implies --mirror.",
-)
+@click.option("--mirror", metavar="NAME", help="Start with the files of mirror NAME.")
 @click.option(
     "--ttl",
     type=click.IntRange(0, 31536000),
@@ -393,14 +379,10 @@ def new(
     idle_action=None,
     kiosk_config=None,
     gpu=None,
-    mirror=False,
-    mirror_name=None,
-    open_desktop=False,
+    mirror=None,
 ):
     """Create a VM with a durable root. NAME defaults to a friendly generated name."""
     as_json = as_json or terminal.json_output()
-    if mirror and not mirror_name:
-        mirror_name = _local_mirror()
     if sum(bool(v) for v in (image_uri, image_id, dockerfile, template)) > 1:
         raise click.UsageError("Choose one of --image, --image-id, --dockerfile or --template")
     if build_context and not dockerfile:
@@ -458,7 +440,7 @@ def new(
         request_id=str(request_id) if request_id else None,
         disks=list(disk) if disk else None,
         volumes=_volumes(volume) if volume else None,
-        mirror=mirror_name,
+        mirror=mirror,
         _service=service,
     )
     with StoredStdoutInterceptor(capture_logs=as_json):
@@ -469,23 +451,6 @@ def new(
             with _progress("Syncing files", "Files synced", as_json):
                 _sync(vm, sync_dir, False)
     _show(vm.info, as_json)
-    if open_desktop and not as_json:
-        _open_browser(vm, 8080, _port_url(vm, 8080))
-
-
-def _local_mirror():
-    """The mirror this machine's utility pushes to."""
-    context = extraclick.selected_context()
-    hint = f"Run: {extraclick.command_hint(context)} setup mirror"
-    if mirror_utility.installed() is None:
-        raise click.ClickException(f"The mirror utility is not installed on this machine. {hint}")
-    try:
-        name = mirror_utility.local_name(context)
-    except mirror_utility.MirrorError as exc:
-        raise click.ClickException(f"{exc} {hint}") from exc
-    if not name:
-        raise click.ClickException(f"This machine has no mirror yet. {hint}")
-    return name
 
 
 def _ready(vm):
@@ -1033,7 +998,8 @@ def metrics_vm(service, name):
     terminal.print_json(_vm(service, name).metrics())
 
 
-def _url(vm, field, open_url):
+def _url(service, name, field, open_url):
+    vm = _vm(service, name)
     url = vm.info.get(field)
     port = 8080 if field in ("desktop_url", "kiosk_url") else 7681
     if not url:
@@ -1048,7 +1014,6 @@ def _url_command(feature):
     @management.command(feature, help=f"Print or open the browser {feature} URL.")
     @click.argument("name")
     @click.option("--open/--no-open", "open_url", default=True)
-    @click.option("--resume", is_flag=True, help="Start this same VM if it is stopped or paused.")
     @click.option(
         "--url",
         "url_only",
@@ -1056,21 +1021,8 @@ def _url_command(feature):
         help="Print the URL without opening a browser.",
     )
     @extraclick.pass_service_client
-    def command(service, name, open_url, url_only, resume):
-        if resume and (url_only or not open_url):
-            raise click.UsageError("--resume requires opening the browser")
-        vm = _vm(service, name)
-        if (
-            resume
-            and vm.info.get(feature + "_url")
-            and vm.info.get("status")
-            in (
-                "stopped",
-                "paused",
-            )
-        ):
-            vm.start()
-        _url(vm, feature + "_url", open_url and not url_only)
+    def command(service, name, open_url, url_only):
+        _url(service, name, feature + "_url", open_url and not url_only)
 
     return command
 
@@ -1078,22 +1030,6 @@ def _url_command(feature):
 desktop_vm = _url_command("desktop")
 kiosk_vm = _url_command("kiosk")
 terminal_vm = _url_command("terminal")
-
-
-@management.command("github")
-@click.argument("name")
-@extraclick.pass_service_client
-def github_vm(service, name):
-    """Open GitHub sign-in and set up HTTPS Git in a private desktop VM."""
-    from ..abstractions.vm.github import connect
-
-    vm = _vm(service, name)
-    connect(vm)
-    _url(vm, "desktop_url", True)
-    terminal.detail(
-        "Enter the code shown in the VM at https://github.com/login/device "
-        "in the browser where you already use GitHub."
-    )
 
 
 @management.command("kiosk-status")
@@ -1253,63 +1189,21 @@ def _ssh_options(vm):
     ]
 
 
-def _ssh_agent_socket(agent_socket):
-    path = os.environ.get("SSH_AUTH_SOCK") if agent_socket is None else agent_socket
-    if not path:
-        raise click.UsageError("Set SSH_AUTH_SOCK or pass --agent-socket for agent forwarding")
-    try:
-        path = Path(path).expanduser().absolute()
-        if path.is_socket():
-            return str(path)
-    except (OSError, RuntimeError, ValueError):
-        pass
-    source = "SSH_AUTH_SOCK" if agent_socket is None else "--agent-socket"
-    raise click.UsageError(f"{source} must point to a local Unix socket")
-
-
 @management.command(
     "ssh",
     context_settings={"ignore_unknown_options": True, "allow_interspersed_args": False},
 )
-@click.option(
-    "--forward-agent",
-    is_flag=True,
-    help="Give root on the VM access to your local SSH agent for this SSH session.",
-)
-@click.option(
-    "--agent-socket",
-    metavar="PATH",
-    help="Use a specific local agent socket with --forward-agent. Defaults to SSH_AUTH_SOCK.",
-)
 @click.argument("name")
 @click.argument("command", nargs=-1, type=click.UNPROCESSED)
 @extraclick.pass_service_client
-def ssh_vm(service, name, command, forward_agent, agent_socket):
+def ssh_vm(service, name, command):
     """Open an SSH shell or run a remote command."""
-    if agent_socket is not None and not forward_agent:
-        raise click.UsageError("--agent-socket requires --forward-agent")
-    socket_path = _ssh_agent_socket(agent_socket) if forward_agent else None
-
     command = _command(command)
     vm = _vm(service, name)
-    argv = ["ssh", *_ssh_options(vm)]
-    if socket_path is not None:
-        # Keep this connection in the foreground and out of SSH multiplexing.
-        argv += ["-S", "none", "-o", "ForkAfterAuthentication=no"]
-        argv += ["-o", "ForwardAgent=${BEAM_VM_SSH_AGENT_SOCKET}"]
-    argv += ["-p", "2222", "--", "root@" + vm.name]
+    argv = ["ssh", *_ssh_options(vm), "-p", "2222", "--", "root@" + vm.name]
     if command:
         argv += [shlex.join(command)]
-    process_kwargs = local_process_kwargs(argv[0])
-    if socket_path is not None:
-        # OpenSSH checks SSH_AUTH_SOCK before requesting forwarding, even with
-        # an explicit ForwardAgent path. Keep the caller's environment intact.
-        process_kwargs["env"] = {
-            **os.environ,
-            "SSH_AUTH_SOCK": socket_path,
-            "BEAM_VM_SSH_AGENT_SOCKET": socket_path,
-        }
-    raise click.exceptions.Exit(subprocess.call(argv, **process_kwargs))
+    raise click.exceptions.Exit(subprocess.call(argv, **local_process_kwargs(argv[0])))
 
 
 @management.command("scp")

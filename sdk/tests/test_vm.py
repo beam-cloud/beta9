@@ -15,14 +15,12 @@ import socket
 import subprocess
 import sys
 import tarfile
-import tempfile
 import textwrap
 import threading
 import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import click
 import grpc
 import pytest
 from click.testing import CliRunner
@@ -928,6 +926,36 @@ def test_cli_preserves_env_values_and_template_defaults(cli_service, monkeypatch
     fake.wait.assert_not_called()
 
 
+def test_cli_new_names_a_mirror(cli_service, monkeypatch):
+    fake = MagicMock()
+    fake.info = {"name": "dev", "id": "resource", "status": "running", "spec": {}}
+    factory = MagicMock(return_value=fake)
+    monkeypatch.setattr(vm_cli, "VM", factory)
+    for args, expected in ((["--mirror", "laptop"], "laptop"), ([], None)):
+        result = CliRunner().invoke(vm_cli.management, ["new", "dev", *args, "--json"])
+        assert result.exit_code == 0, result.output
+        assert factory.call_args.kwargs["mirror"] == expected
+
+
+def test_vm_requests_a_mirror_by_name_only():
+    service = SimpleNamespace(channel=MagicMock(), http=MagicMock())
+    assert VM("dev", mirror="laptop", _service=service)._spec["mirror"] == {"name": "laptop"}
+    assert "mirror" not in VM("dev", _service=service)._spec
+
+
+def test_vm_details_show_the_pinned_generation(capsys):
+    vm_cli._show(
+        {
+            "name": "dev",
+            "id": "vm-id",
+            "status": "running",
+            "spec": {"mirror": {"name": "laptop", "id": "m", "generation": 4}},
+        },
+        False,
+    )
+    assert "laptop, generation 4" in capsys.readouterr().out
+
+
 def test_cli_forwards_gpu_with_typed_resources(cli_service):
     cli_service.http.json.return_value = {
         "name": "dev",
@@ -1640,14 +1668,10 @@ def test_ssh_preserves_child_flags_that_match_cli_options(cli_service, monkeypat
     call = MagicMock(return_value=0)
     monkeypatch.setattr(vm_cli.subprocess, "call", call)
     result = CliRunner().invoke(
-        vm_cli.management,
-        ["ssh", "dev", "tool", "--context", "literal", "--forward-agent", "--agent-socket", "fake"],
+        vm_cli.management, ["ssh", "dev", "sh", "-c", "echo --context literal"]
     )
     assert result.exit_code == 0, result.output
-    assert (
-        call.call_args.args[0][-1] == "tool --context literal --forward-agent --agent-socket fake"
-    )
-    assert "env" not in call.call_args.kwargs
+    assert call.call_args.args[0][-1] == "sh -c 'echo --context literal'"
 
 
 def test_cli_reports_api_failures_without_tracebacks(cli_service, monkeypatch):
@@ -1692,90 +1716,6 @@ def test_ssh_preserves_remote_arguments_and_exit_status(cli_service, monkeypatch
         "root@dev",
         "echo 'a b;$USER'",
     ]
-
-
-@pytest.mark.parametrize("mode", ["default", "explicit", "explicit_only"])
-@pytest.mark.skipif(sys.platform not in ("darwin", "linux"), reason="Unix agent socket")
-def test_ssh_forwards_only_the_selected_agent(cli_service, monkeypatch, mode):
-    vm = SimpleNamespace(name="dev")
-    monkeypatch.setattr(vm_cli, "_vm", lambda *args: vm)
-    monkeypatch.setattr(vm_cli, "_ssh_options", lambda vm: ["-i", "/beam/identity"])
-    call = MagicMock(return_value=7)
-    monkeypatch.setattr(vm_cli.subprocess, "call", call)
-    monkeypatch.delenv("BEAM_VM_SSH_AGENT_SOCKET", raising=False)
-
-    # macOS has a short limit for Unix socket paths, independent of pytest's temp directory.
-    with tempfile.TemporaryDirectory(prefix="beam-ssh-", dir="/tmp") as directory:
-        with socket.socket(socket.AF_UNIX) as agent:
-            path = str(Path(directory) / 'agent %h ${USER} "socket"')
-            agent.bind(path)
-            agent.listen()
-            inherited = {"default": path, "explicit": "/unused/default-agent"}.get(mode)
-            if inherited is None:
-                monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
-            else:
-                monkeypatch.setenv("SSH_AUTH_SOCK", inherited)
-            args = ["ssh", "--forward-agent"]
-            if mode != "default":
-                args += ["--agent-socket", path]
-            args += ["dev", "--", "echo", "a b;$USER"]
-            result = CliRunner().invoke(vm_cli.management, args)
-
-    assert result.exit_code == 7, result.output
-    assert call.call_args.args[0] == [
-        "ssh",
-        "-i",
-        "/beam/identity",
-        "-S",
-        "none",
-        "-o",
-        "ForkAfterAuthentication=no",
-        "-o",
-        "ForwardAgent=${BEAM_VM_SSH_AGENT_SOCKET}",
-        "-p",
-        "2222",
-        "--",
-        "root@dev",
-        "echo 'a b;$USER'",
-    ]
-    assert call.call_args.kwargs["env"]["BEAM_VM_SSH_AGENT_SOCKET"] == path
-    assert call.call_args.kwargs["env"]["SSH_AUTH_SOCK"] == path
-    assert os.environ.get("SSH_AUTH_SOCK") == inherited
-    assert "BEAM_VM_SSH_AGENT_SOCKET" not in os.environ
-
-
-@pytest.mark.parametrize(
-    "options, configured, message",
-    [
-        (["--forward-agent"], None, "Set SSH_AUTH_SOCK or pass --agent-socket"),
-        (["--forward-agent"], "", "Set SSH_AUTH_SOCK or pass --agent-socket"),
-        (["--forward-agent"], "missing", "SSH_AUTH_SOCK must point to a local Unix socket"),
-        (["--forward-agent"], "regular", "SSH_AUTH_SOCK must point to a local Unix socket"),
-        (
-            ["--forward-agent", "--agent-socket", "regular"],
-            None,
-            "--agent-socket must point to a local Unix socket",
-        ),
-        (["--agent-socket", "regular"], None, "--agent-socket requires --forward-agent"),
-    ],
-)
-def test_ssh_rejects_invalid_agent_options(
-    cli_service, monkeypatch, tmp_path, options, configured, message
-):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "regular").touch()
-    if configured is None:
-        monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
-    else:
-        monkeypatch.setenv("SSH_AUTH_SOCK", configured)
-    lookup = MagicMock()
-    monkeypatch.setattr(vm_cli, "_vm", lookup)
-
-    result = CliRunner().invoke(vm_cli.management, ["ssh", *options, "dev"])
-
-    assert result.exit_code == 2, result.output
-    assert message in result.output
-    lookup.assert_not_called()
 
 
 @pytest.mark.parametrize("vm_id", ["vm-12ab34cd56ef7890", "12ab34cd56ef7890"])
@@ -2379,29 +2319,6 @@ def test_terminal_and_desktop_open_the_direct_vm_not_a_dashboard(
     cli_service.http.json.assert_called_once()
 
 
-def test_desktop_can_reopen_the_same_vm_after_stop(cli_service, monkeypatch):
-    vm = MagicMock()
-    vm.info = {
-        "name": "dev",
-        "status": "stopped",
-        "desktop_url": "https://vm.example/",
-    }
-    monkeypatch.setattr(vm_cli, "_vm", lambda service, name: vm)
-    monkeypatch.setattr(vm_cli, "_port_url", lambda vm, port: "https://vm.example/")
-    opened = MagicMock()
-    monkeypatch.setattr(vm_cli, "_open_browser", opened)
-
-    result = CliRunner().invoke(vm_cli.management, ["desktop", "dev", "--resume"])
-    assert result.exit_code == 0, result.output
-    vm.start.assert_called_once_with()
-    opened.assert_called_once_with(vm, 8080, "https://vm.example/")
-
-    vm.start.reset_mock()
-    result = CliRunner().invoke(vm_cli.management, ["desktop", "dev", "--resume", "--url"])
-    assert result.exit_code == 2
-    vm.start.assert_not_called()
-
-
 @pytest.mark.parametrize(
     "args,expected",
     [
@@ -2450,12 +2367,10 @@ def test_image_build_json_is_clean(cli_service, monkeypatch, tmp_path, mode, kio
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS browser fork regression")
-@pytest.mark.parametrize("opened", [True, False])
-def test_browser_opener_does_not_fork_and_preserves_url(monkeypatch, tmp_path, opened):
+def test_browser_opener_does_not_fork_and_preserves_url(monkeypatch, tmp_path):
     (tmp_path / "webbrowser.py").write_text(
         "import os\nfrom pathlib import Path\n"
-        "def open(url):\n Path(os.environ['BROWSER_RESULT']).write_text(url)\n"
-        f" return {opened}\n"
+        "def open(url):\n Path(os.environ['BROWSER_RESULT']).write_text(url)\n return True\n"
     )
     output = tmp_path / "opened-url"
     monkeypatch.setenv("PYTHONPATH", str(tmp_path))
@@ -2466,43 +2381,8 @@ def test_browser_opener_does_not_fork_and_preserves_url(monkeypatch, tmp_path, o
 
     monkeypatch.setattr(subprocess, "_fork_exec", forbidden)
     url = "https://vm.example/?beam_vm_session=literal&x=$VALUE"
-    if opened:
-        vm_cli._launch_browser(url)
-    else:
-        with pytest.raises(click.ClickException, match="Could not open a browser") as error:
-            vm_cli._launch_browser(url)
-        assert "beam_vm_session" not in str(error.value)
+    vm_cli._launch_browser(url)
     assert output.read_text() == url
-
-
-@pytest.mark.parametrize("url_only", [False, True])
-def test_linux_without_browser_keeps_stable_desktop_url(cli_service, monkeypatch, url_only):
-    url = "https://vm.example/"
-    cli_service.http.json.return_value = {
-        "id": "vm-id",
-        "name": "dev",
-        "desktop_url": url,
-        "browser_auth": True,
-        "spec": {"protected_ports": [8080]},
-    }
-    monkeypatch.setattr(vm_cli.sys, "platform", "linux")
-    opened = MagicMock(return_value=False)
-    monkeypatch.setattr(vm_cli.webbrowser, "open", opened)
-    warned = MagicMock()
-    monkeypatch.setattr(vm_cli.terminal, "warn", warned)
-    args = ["desktop", "dev", *(["--url"] if url_only else [])]
-
-    result = CliRunner().invoke(vm_cli.management, args)
-
-    assert result.exit_code == 0, result.output
-    assert result.output == f"{url}\n"
-    if url_only:
-        opened.assert_not_called()
-        warned.assert_not_called()
-    else:
-        opened.assert_called_once_with(url)
-        warned.assert_called_once()
-        assert "URL printed above" in warned.call_args.args[0]
 
 
 @pytest.mark.parametrize("background", [False, True])

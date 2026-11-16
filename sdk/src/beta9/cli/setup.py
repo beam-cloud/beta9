@@ -260,65 +260,6 @@ def setup_vm(name, template, desktop, clients, skip_agents, yes, context):
         raise click.ClickException(str(exc)) from exc
 
 
-@setup.command(
-    name="mirror",
-    help="""Install the mirror utility, which keeps the files you choose on this machine
-    in your workspace so a VM can start with them (vm new --mirror). Signs in first if
-    needed. Run again to update.""",
-)
-@extraclick.config_context_option
-def setup_mirror(context: Optional[str]):
-    from .. import mirror
-
-    selected = context or extraclick.selected_context()
-    steps = terminal.StepTracker()
-    try:
-        with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
-            connect_workspace(selected)
-            with steps.step("Installing the mirror utility", "Mirror utility installed"):
-                path, updated = mirror.install()
-            with steps.step("Configuring the mirror utility", "Mirror utility configured"):
-                status = mirror.start(selected)
-    except (LoginError, mirror.MirrorError, OSError) as exc:
-        raise click.ClickException(str(exc)) from exc
-
-    if terminal.json_output():
-        terminal.print_json({"path": str(path), "updated": updated, **status})
-        return
-    command = extraclick.command_hint(selected)
-    roots = status.get("roots") or []
-    terminal.print("")
-    terminal.resource(
-        "Mirror " + str(status.get("mirror") or ""),
-        {
-            "Selected paths": ", ".join(roots) or "none yet",
-            "Uploads": "paused" if status.get("paused") else "",
-        },
-    )
-    terminal.print("")
-    next_steps = []
-    if not roots:
-        next_steps.extend(
-            (
-                f"{command} mirror suggest    review local settings",
-                f"{command} mirror suggest --add RELATIVE_PATH    select one of those settings",
-                f"{command} mirror add PATH    select a file or folder under your home",
-            )
-        )
-    next_steps.extend(
-        (
-            f"{command} mirror launch    upload selected files and open a new VM",
-            f"{command} mirror open NAME    return to the same VM and its browser session",
-        )
-    )
-    if mirror.platform.system() == "Darwin":
-        next_steps.append(f"{command} mirror tray    manage sync from the menu bar")
-    else:
-        next_steps.append(f"{command} mirror run    keep selected paths syncing while this runs")
-    for line in next_steps:
-        terminal.print("  " + line, markup=False, soft_wrap=True)
-
-
 def app_urls(info: Dict[str, Any]) -> Dict[int, str]:
     """Published HTTP ports other than the terminal and desktop, in port order."""
     urls = {int(port): url for port, url in (info.get("urls") or {}).items() if url}
