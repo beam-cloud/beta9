@@ -184,31 +184,8 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 	}
 
 	processFile := filepath.Join(root, systemdProcessFile)
-	// sshd reads authorized_keys here as the user logging in, who must be
-	// able to reach it; every other file in it is root's alone.
-	if err := os.MkdirAll(filepath.Dir(processFile), 0711); err != nil {
+	if err := os.MkdirAll(filepath.Dir(processFile), 0700); err != nil {
 		return err
-	}
-	if err := os.Chmod(filepath.Dir(processFile), 0711); err != nil {
-		return err
-	}
-	if processEnv(process, "BEAM_VM_MIRRORED_HOME") == "true" {
-		// Login shells use a boot-time flag even if SSH clears the
-		// environment. It holds the mirror's path when the worker placed
-		// the tree where it was on its source machine.
-		home := mirrorHome(process)
-		var flag []byte
-		if home != "" {
-			flag = []byte(home + "\n")
-		}
-		if err := os.WriteFile(filepath.Join(root, "run/beam-mirrored-home"), flag, 0644); err != nil {
-			return err
-		}
-		if home != "" {
-			if err := setDesktopHome(root, home); err != nil {
-				return err
-			}
-		}
 	}
 
 	data, err := json.Marshal(process)
@@ -277,8 +254,7 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 			return err
 		}
 
-		// A public key, readable by the desktop user as well as root.
-		if err := os.WriteFile(filepath.Join(root, "run/beam-vm/authorized_keys"), []byte(processEnv(process, "BEAM_VM_SSH_PUBLIC_KEY")+"\n"), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(root, "run/beam-vm/authorized_keys"), []byte(processEnv(process, "BEAM_VM_SSH_PUBLIC_KEY")+"\n"), 0600); err != nil {
 			return err
 		}
 
@@ -316,7 +292,7 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 		}
 	}
 
-	return nil
+	return prepareMirroredHome(root, process)
 }
 
 func vmMachineID(id string) (string, error) {
@@ -382,56 +358,8 @@ func prepareVMIdentity(root string, process *specs.Process) error {
 	return os.WriteFile(identityPath, []byte(id+"\n"), 0644)
 }
 
-// mirrorHome is where the worker placed the mirror for this launch when it
-// placed it at a home of its own. It goes into passwd, so it must be a clean
-// absolute path without a field or line separator.
-func mirrorHome(process *specs.Process) string {
-	home := processEnv(process, "BEAM_VM_MIRROR_HOME")
-	if !filepath.IsAbs(home) || filepath.Clean(home) != home || home == "/" || strings.ContainsAny(home, ":\n") {
-		return ""
-	}
-	return home
-}
-
-// setDesktopHome points the desktop user's home at the mirror, which the
-// worker gave that user. Root keeps /root, so that root's processes leave
-// nothing of theirs in the user's home. It is checked on every boot: the
-// root disk may come from a snapshot of a VM without the mirror.
-func setDesktopHome(root, home string) error {
-	named, err := os.ReadFile(filepath.Join(root, "opt/beam-vm/desktop-user"))
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	user := strings.TrimSpace(string(named))
-	if user == "" || user == "root" {
-		return nil
-	}
-	passwd := filepath.Join(root, "etc/passwd")
-	data, err := os.ReadFile(passwd)
-	if err != nil {
-		return err
-	}
-	lines := strings.Split(string(data), "\n")
-	for i, line := range lines {
-		fields := strings.Split(line, ":")
-		if len(fields) != 7 || fields[0] != user {
-			continue
-		}
-		if fields[5] == home {
-			return nil
-		}
-		fields[5] = home
-		lines[i] = strings.Join(fields, ":")
-		return replaceFile(passwd, []byte(strings.Join(lines, "\n")))
-	}
-	return nil
-}
-
 // replaceFile swaps in a file's new contents whole, with its mode: a boot
-// cut short must not leave a partial passwd on the durable root.
+// cut short must not leave a partial file on the durable root.
 func replaceFile(name string, data []byte) error {
 	info, err := os.Stat(name)
 	if err != nil {
