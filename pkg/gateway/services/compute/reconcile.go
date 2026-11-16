@@ -355,7 +355,7 @@ func (s *Service) exhaustPoolCredit(ctx context.Context, workspaceID string, sta
 	changed := closeManagedReservationBillingWindows(state, now)
 	changed = s.recordManagedUsage(ctx, workspaceID, state, now, true) || changed
 	s.disablePoolMachines(ctx, workspaceID, state.Name, terminateReason)
-	return s.terminateManagedReservations(ctx, workspaceID, state, terminateReason, message) || changed
+	return s.terminateManagedReservations(ctx, workspaceID, state, terminateReason, message, now) || changed
 }
 
 // accruedUnrecordedCents is the cost accrued since each billing cursor that
@@ -707,12 +707,12 @@ func (s *Service) reconcileReservationStatus(ctx context.Context, workspaceID st
 	case providers.StatusFailed:
 		// The machine will never work, and the provider may go on charging
 		// for it until it is deleted.
-		s.terminateReservation(ctx, workspaceID, state, reservation, reconcileReasonProviderFailed, firstNonEmpty(instance.StatusDetail, instanceFailedMessage))
+		s.terminateReservation(ctx, workspaceID, state, reservation, reconcileReasonProviderFailed, firstNonEmpty(instance.StatusDetail, instanceFailedMessage), now)
 		return true
 	case providers.StatusInterrupted:
 		// No reservation is bought as spot. Should a provider take a machine
 		// back all the same, what is left of it is deleted.
-		s.terminateReservation(ctx, workspaceID, state, reservation, reconcileReasonProviderFailed, firstNonEmpty(instance.StatusDetail, instanceInterruptedMessage))
+		s.terminateReservation(ctx, workspaceID, state, reservation, reconcileReasonProviderFailed, firstNonEmpty(instance.StatusDetail, instanceInterruptedMessage), now)
 		return true
 	case providers.StatusDeleted:
 		// The machine went without Beam deleting it: the provider took it
@@ -761,7 +761,7 @@ func (s *Service) reconcileReservationExpiry(ctx context.Context, workspaceID st
 	if releaseAt, ok := s.billingGraceReleaseAt(state); ok && now.Before(releaseAt) {
 		return false
 	}
-	s.terminateReservation(ctx, workspaceID, state, reservation, reconcileReasonReservationExpired, "reservation ttl expired")
+	s.terminateReservation(ctx, workspaceID, state, reservation, reconcileReasonReservationExpired, "reservation ttl expired", now)
 	return true
 }
 
@@ -794,18 +794,18 @@ func (s *Service) reconcileTerminatingReservation(ctx context.Context, workspace
 		return false
 	}
 	reservation.LastReconcileAt = now
-	s.terminateReservation(ctx, workspaceID, state, reservation, firstNonEmpty(reservation.TerminatingReason, "terminating"), firstNonEmpty(reservation.LastStatusMessage, "reservation terminating"))
+	s.terminateReservation(ctx, workspaceID, state, reservation, firstNonEmpty(reservation.TerminatingReason, "terminating"), firstNonEmpty(reservation.LastStatusMessage, "reservation terminating"), now)
 	return true
 }
 
-func (s *Service) terminateManagedReservations(ctx context.Context, workspaceID string, state *model.PoolState, reason, message string) bool {
+func (s *Service) terminateManagedReservations(ctx context.Context, workspaceID string, state *model.PoolState, reason, message string, now time.Time) bool {
 	changed := false
 	for i := range state.Reservations {
 		reservation := &state.Reservations[i]
 		if !reservation.Managed() || !reservation.Open() {
 			continue
 		}
-		s.terminateReservation(ctx, workspaceID, state, reservation, reason, message)
+		s.terminateReservation(ctx, workspaceID, state, reservation, reason, message, now)
 		changed = true
 	}
 	return changed
@@ -815,12 +815,12 @@ func (s *Service) terminateManagedReservations(ctx context.Context, workspaceID 
 // closes the reservation. While the delete fails the reservation stays
 // terminating, and the reconciler tries again. Callers pass a reservation
 // that is not closed already.
-func (s *Service) terminateReservation(ctx context.Context, workspaceID string, state *model.PoolState, reservation *model.Reservation, reason, message string) {
+func (s *Service) terminateReservation(ctx context.Context, workspaceID string, state *model.PoolState, reservation *model.Reservation, reason, message string, now time.Time) {
 	// Registration tokens are persistent; kill them whenever a reservation closes.
 	s.revokeReservationJoinToken(ctx, reservation)
 	reservation.TerminatingReason = reason
 	reservation.LastStatusMessage = message
-	if err := s.deleteInstance(ctx, *reservation); err != nil {
+	if err := s.deleteInstance(ctx, reservation, now); err != nil {
 		reservation.Status = model.ReservationTerminating
 		reservationFailed(workspaceID, state.Name, reservation, "delete machine", err)
 		return

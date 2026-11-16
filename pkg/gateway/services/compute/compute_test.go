@@ -2,6 +2,7 @@ package compute
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -4806,6 +4807,7 @@ func TestTerminateReservationClosesAReservationWhoseMachineIsAlreadyGone(t *test
 		&state.Reservations[0],
 		reconcileReasonMachineReleased,
 		machineReleasedMessage,
+		now,
 	)
 	if got, want := state.Reservations[0].Status, model.ReservationDeleted; got != want {
 		t.Fatalf("reservation status = %q, want %q", got, want)
@@ -6832,12 +6834,14 @@ func TestListPoolOffersListsNothingForAPoolWhoseProvidersAreNotConfigured(t *tes
 }
 
 // overTheWire is a provider whose calls fail once their context is done, as
-// calls over a network do. It counts how often it is asked what it has.
+// calls over a network do. It counts how often it is asked what it has, and
+// cannot be asked while listErr is set.
 type overTheWire struct {
 	*providers.Fake
 	// afterCreate, when set, runs once after the next create.
 	afterCreate func()
 	lists       int
+	listErr     error
 }
 
 func (p *overTheWire) Create(ctx context.Context, req providers.CreateRequest) (providers.Instance, error) {
@@ -6854,7 +6858,7 @@ func (p *overTheWire) Create(ctx context.Context, req providers.CreateRequest) (
 
 func (p *overTheWire) List(ctx context.Context) ([]providers.Instance, error) {
 	p.lists++
-	if err := ctx.Err(); err != nil {
+	if err := cmp.Or(ctx.Err(), p.listErr); err != nil {
 		return nil, err
 	}
 	return p.Fake.List(ctx)
@@ -7001,8 +7005,10 @@ func TestAFailedLaunchDoesNotLookForAMachineTheProviderRefusedToSell(t *testing.
 }
 
 func TestAFailedLaunchLooksOnceForAMachineWhoseCreateFailedUnclearly(t *testing.T) {
+	// The provider answers, and turns the purchase down for a reason this
+	// service does not know.
 	shadeform := &overTheWire{Fake: fakeProvider("shadeform", a10gOffer)}
-	shadeform.RefuseCreates(errors.New("POST /instances/create: status 502: bad gateway"))
+	shadeform.RefuseCreates(&providers.StatusError{Method: "POST", Path: "/instances/create", Status: 400, Body: "no such region"})
 	repo := &fakeComputeRepo{}
 
 	res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), launchService(repo, shadeform), 1)
@@ -7010,6 +7016,175 @@ func TestAFailedLaunchLooksOnceForAMachineWhoseCreateFailedUnclearly(t *testing.
 	require.Equal(t, 1, shadeform.lists)
 	require.Empty(t, shadeform.Deletes(), "the provider made nothing")
 	require.Empty(t, repo.pools["workspace-1"])
+}
+
+// unansweredPurchase is a launch that failed because its provider gave the
+// purchase no answer, and listed no machine for it when the launch was undone.
+type unansweredPurchase struct {
+	service  *Service
+	provider *overTheWire
+	repo     *fakeComputeRepo
+}
+
+func launchUnanswered(t *testing.T) *unansweredPurchase {
+	t.Helper()
+	var ended time.Time
+	provider := &overTheWire{Fake: fakeProvider("shadeform", a10gOffer)}
+	provider.RefuseCreates(&providers.StatusError{Method: "POST", Path: "/instances/create", Status: 504, Body: "upstream timed out"})
+	provider.afterCreate = func() {
+		// The purchase took a while to end.
+		time.Sleep(time.Millisecond)
+		ended = time.Now()
+	}
+	p := &unansweredPurchase{provider: provider, repo: &fakeComputeRepo{}}
+	p.service = launchService(p.repo, provider)
+
+	res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), p.service, 1)
+	require.False(t, res.Ok)
+	require.Equal(t, launchErrorProviderFailure, res.ErrorCode)
+	require.Contains(t, res.ErrMsg, "does not list it yet")
+
+	// The pool's record is the only trace of the purchase.
+	require.Len(t, p.repo.pools["workspace-1"], 1)
+	state := p.repo.pools["workspace-1"][0]
+	require.Len(t, state.Reservations, 1)
+	require.Zero(t, state.ReservedNodes)
+	require.Zero(t, state.CommittedSpendMicros)
+	reservation := p.reservation()
+	require.Empty(t, computeReservationInstanceID(reservation))
+	require.NotEmpty(t, reservation.MachineID)
+	require.Equal(t, model.ReservationTerminating, reservation.Status)
+	require.Equal(t, reconcileReasonLaunchFailed, reservation.TerminatingReason)
+	require.Contains(t, reservation.LastError, "does not list it yet")
+	require.False(t, reservation.CreatedAt.Before(ended), "the provider's time to list the machine begins when the purchase ends")
+	requireEveryTokenRevoked(t, p.repo)
+	return p
+}
+
+func (p *unansweredPurchase) reservation() model.Reservation {
+	return p.repo.pools["workspace-1"][0].Reservations[0]
+}
+
+// reconcile runs one pass at the given time after the purchase.
+func (p *unansweredPurchase) reconcile(t *testing.T, after time.Duration) model.Reservation {
+	t.Helper()
+	require.NoError(t, p.service.reconcileManagedComputeAt(context.Background(), p.reservation().CreatedAt.Add(after)))
+	return p.reservation()
+}
+
+func (p *unansweredPurchase) deletePool(t *testing.T) *pb.DeletePoolResponse {
+	t.Helper()
+	res, err := p.service.DeletePool(testAuthContext("workspace-1", "token-1"), &pb.DeletePoolRequest{Name: "pool-1"})
+	require.NoError(t, err)
+	return res
+}
+
+func TestAPurchaseThatWentUnansweredIsDeletedOnceItsProviderListsIt(t *testing.T) {
+	p := launchUnanswered(t)
+
+	// The provider had made the machine all the same, and comes to list it.
+	made := p.provider.Plant(testOwner, providers.StatusPending, map[string]string{machineTag: p.reservation().MachineID})
+	// Another machine of this control plane is not taken for it.
+	other := p.provider.Plant(testOwner, providers.StatusActive, map[string]string{"beam-pool-machine": "spot-1"})
+
+	reservation := p.reconcile(t, time.Minute)
+	require.Equal(t, model.ReservationDeleted, reservation.Status)
+	require.Equal(t, made, reservation.InstanceID, "the record names the machine that was deleted")
+	require.Empty(t, reservation.LastError)
+	require.Equal(t, []string{made}, p.provider.Deletes())
+	require.Len(t, p.provider.Everything(), 1)
+	require.Equal(t, other, p.provider.Everything()[0].ID)
+	require.True(t, p.deletePool(t).Ok)
+}
+
+func TestAPurchaseThatWentUnansweredIsGivenUpOnceItsProviderHasHadTimeToListIt(t *testing.T) {
+	p := launchUnanswered(t)
+
+	// The provider may still be making the machine.
+	require.Equal(t, model.ReservationTerminating, p.reconcile(t, time.Minute).Status)
+	require.Empty(t, p.provider.Deletes())
+
+	// Nor can the pool be deleted from under the purchase.
+	res := p.deletePool(t)
+	require.False(t, res.Ok)
+	require.Contains(t, res.ErrMsg, "does not list it yet")
+	require.Equal(t, model.ReservationTerminating, p.reservation().Status)
+
+	// It made none: there is nothing to delete.
+	reservation := p.reconcile(t, providers.LaunchGrace)
+	require.Equal(t, model.ReservationDeleted, reservation.Status)
+	require.Empty(t, reservation.LastError)
+	require.Empty(t, p.provider.Deletes())
+	require.True(t, p.deletePool(t).Ok)
+	require.Empty(t, p.repo.pools["workspace-1"])
+}
+
+func TestAPurchaseThatWentUnansweredDoesNotStandInTheWayOfTheNextLaunch(t *testing.T) {
+	p := launchUnanswered(t)
+	unanswered := p.reservation()
+
+	// The provider sells again.
+	p.provider.RefuseCreates(nil)
+	res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), p.service, 1)
+	require.True(t, res.Ok, res.ErrMsg)
+	state := p.repo.pools["workspace-1"][0]
+	require.Len(t, state.Reservations, 2)
+	require.EqualValues(t, 1, state.ReservedNodes)
+
+	// The machine that was bought is not taken for the one that was not.
+	require.NoError(t, p.service.reconcileManagedComputeAt(context.Background(), unanswered.CreatedAt.Add(providers.LaunchGrace)))
+	require.Empty(t, p.provider.Deletes())
+	require.Len(t, p.provider.Everything(), 1)
+	for _, reservation := range p.repo.pools["workspace-1"][0].Reservations {
+		if reservation.MachineID == unanswered.MachineID {
+			require.Equal(t, model.ReservationDeleted, reservation.Status)
+			require.Empty(t, computeReservationInstanceID(reservation))
+			continue
+		}
+		require.True(t, reservation.Open(), "the machine of the second launch is kept: %s", reservation.Status)
+		require.Equal(t, p.provider.Everything()[0].ID, computeReservationInstanceID(reservation))
+	}
+}
+
+func TestAReservationThatNamesNoMachineDeletesNothing(t *testing.T) {
+	// A machine bought for a pool of the platform carries no tenant's tag.
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	shadeform.Plant(testOwner, providers.StatusActive, map[string]string{"beam-pool-machine": "spot-1"})
+	service := launchService(&fakeComputeRepo{}, shadeform)
+
+	reservation := model.Reservation{Provider: "shadeform", Source: model.SourceCLIReservation}
+	require.NoError(t, service.deleteInstance(context.Background(), &reservation, time.Now()))
+	require.Empty(t, shadeform.Deletes())
+	require.Empty(t, computeReservationInstanceID(reservation))
+}
+
+func TestAFailedLaunchKeepsAPurchaseItCouldNotLookFor(t *testing.T) {
+	// The provider turns the purchase down, and then cannot be asked what
+	// it has.
+	shadeform := &overTheWire{Fake: fakeProvider("shadeform", a10gOffer), listErr: errors.New("shadeform is down")}
+	shadeform.RefuseCreates(&providers.StatusError{Method: "POST", Path: "/instances/create", Status: 400, Body: "no such region"})
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, shadeform)
+
+	res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), service, 1)
+	require.False(t, res.Ok)
+	require.Contains(t, res.ErrMsg, "shadeform is down")
+	require.Len(t, repo.pools["workspace-1"], 1)
+	reservation := repo.pools["workspace-1"][0].Reservations[0]
+	require.Equal(t, model.ReservationTerminating, reservation.Status)
+	require.Contains(t, reservation.LastError, "shadeform is down")
+
+	// Nothing is concluded while the provider stays down.
+	require.NoError(t, service.reconcileManagedComputeAt(context.Background(), reservation.CreatedAt.Add(providers.LaunchGrace)))
+	require.Equal(t, model.ReservationTerminating, repo.pools["workspace-1"][0].Reservations[0].Status)
+
+	// It answers again, and lists no machine for the purchase.
+	shadeform.listErr = nil
+	require.NoError(t, service.reconcileManagedComputeAt(context.Background(), reservation.CreatedAt.Add(2*providers.LaunchGrace)))
+	reservation = repo.pools["workspace-1"][0].Reservations[0]
+	require.Equal(t, model.ReservationDeleted, reservation.Status)
+	require.Empty(t, reservation.LastError)
+	require.Empty(t, shadeform.Deletes())
 }
 
 func TestStatusCheckReportsAChangeOnlyWhenSomethingChanged(t *testing.T) {

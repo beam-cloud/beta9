@@ -208,7 +208,7 @@ func (s *Service) releaseManagedReservation(ctx context.Context, workspaceID str
 		}
 	}
 
-	s.terminateReservation(ctx, workspaceID, state, reservation, reconcileReasonMachineReleased, machineReleasedMessage)
+	s.terminateReservation(ctx, workspaceID, state, reservation, reconcileReasonMachineReleased, machineReleasedMessage, now)
 	state.UpdatedAt = time.Now().UTC()
 	return s.savePrivatePoolState(ctx, workspaceID, state)
 }

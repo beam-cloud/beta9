@@ -205,6 +205,7 @@ func (s *Service) DeletePool(ctx context.Context, in *pb.DeletePoolRequest) (*pb
 // terminating for the reconciler to retry, and the pool is not deleted.
 func (s *Service) deletePoolInstances(ctx context.Context, workspaceID string, state *model.PoolState) error {
 	var failures []string
+	now := time.Now().UTC()
 	for i := range state.Reservations {
 		reservation := &state.Reservations[i]
 		if !reservation.Managed() {
@@ -220,11 +221,11 @@ func (s *Service) deletePoolInstances(ctx context.Context, workspaceID string, s
 		case model.ReservationFailed:
 			// A reservation recorded as failed before failed machines were
 			// deleted at the provider may still have one.
-			if err := s.deleteInstance(ctx, *reservation); err != nil {
+			if err := s.deleteInstance(ctx, reservation, now); err != nil {
 				failures = append(failures, fmt.Sprintf("%s: %v", reservation.Name, err))
 			}
 		default:
-			s.terminateReservation(ctx, workspaceID, state, reservation, reconcileReasonMachineReleased, machineReleasedMessage)
+			s.terminateReservation(ctx, workspaceID, state, reservation, reconcileReasonMachineReleased, machineReleasedMessage, now)
 			if reservation.Status == model.ReservationTerminating {
 				failures = append(failures, fmt.Sprintf("%s: %s", reservation.Name, reservation.LastError))
 			}
@@ -233,7 +234,7 @@ func (s *Service) deletePoolInstances(ctx context.Context, workspaceID string, s
 	if len(failures) == 0 {
 		return nil
 	}
-	state.UpdatedAt = time.Now().UTC()
+	state.UpdatedAt = now
 	if err := s.savePrivatePoolState(ctx, workspaceID, state); err != nil {
 		return err
 	}

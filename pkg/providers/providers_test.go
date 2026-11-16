@@ -1613,6 +1613,8 @@ func TestAPIDoesNotRepeatAPurchaseThatMayHaveGoneThrough(t *testing.T) {
 
 			err := flaky.api.do(context.Background(), call{method: http.MethodPost, path: "/things", body: struct{}{}})
 			require.Error(t, err)
+			require.True(t, Unanswered(err), "the buyer is told that it may have")
+			require.True(t, Unanswered(fmt.Errorf("buy a machine: %w", err)))
 			require.Equal(t, 1, flaky.requests())
 			require.Empty(t, flaky.waits)
 		})
@@ -1654,6 +1656,7 @@ func TestAPIDoesNotRepeatACallTheProviderRefused(t *testing.T) {
 
 		err := flaky.api.do(context.Background(), call{method: http.MethodGet, path: "/things"})
 		require.Equal(t, status, statusOf(err))
+		require.False(t, Unanswered(err), "a refusal is the provider's answer")
 		require.Equal(t, 1, flaky.requests())
 	}
 }
@@ -1673,6 +1676,7 @@ func TestAPIDoesNotWaitOutALongRateLimit(t *testing.T) {
 
 	err := flaky.api.do(context.Background(), call{method: http.MethodGet, path: "/things"})
 	require.Equal(t, http.StatusTooManyRequests, statusOf(err))
+	require.False(t, Unanswered(err), "a call that was turned away did nothing")
 	require.Equal(t, 1, flaky.requests())
 	require.Empty(t, flaky.waits)
 }

@@ -43,7 +43,10 @@ type Provider interface {
 	Offers(ctx context.Context, filter OfferFilter) ([]Offer, error)
 
 	// Create buys one machine. It fails with ErrOutOfStock when the provider
-	// has none left and ErrQuota when the account may not buy more.
+	// has none left and ErrQuota when the account may not buy more. A create
+	// that ends without the provider's answer, which Unanswered reports, may
+	// have bought the machine all the same: List returns it, with its tags,
+	// once the provider knows of it.
 	Create(ctx context.Context, req CreateRequest) (Instance, error)
 
 	// Get fails with ErrNotFound once the provider no longer has the instance.
@@ -492,6 +495,13 @@ type call struct {
 // errNoAnswer marks a call that ended without the provider's whole answer.
 var errNoAnswer = errors.New("no answer from the provider")
 
+// Unanswered reports whether err leaves open what became of a call: the
+// provider gave no answer, or answered that it failed on its side. What the
+// call asked for may have been done all the same.
+func Unanswered(err error) bool {
+	return errors.Is(err, errNoAnswer) || statusOf(err) >= http.StatusInternalServerError
+}
+
 // StatusError is a provider's answer with a status outside 2xx.
 type StatusError struct {
 	Method string
@@ -619,16 +629,14 @@ func (a *api) send(ctx context.Context, c call, payload []byte) (time.Duration, 
 
 // retryable reports whether sending the call again can help and is safe.
 func retryable(c call, err error) bool {
-	status := statusOf(err)
-	if status == http.StatusTooManyRequests {
+	if statusOf(err) == http.StatusTooManyRequests {
 		// A rate-limited call was turned away before it did anything.
 		return true
 	}
 	if !c.repeatable && c.method != http.MethodGet {
 		return false
 	}
-	// No answer, or the provider failed on its side.
-	return errors.Is(err, errNoAnswer) || status >= 500
+	return Unanswered(err)
 }
 
 // retryAfter reads how many seconds the provider asked the caller to wait.

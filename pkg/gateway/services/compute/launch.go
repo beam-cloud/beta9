@@ -272,8 +272,10 @@ func (s *Service) createPlanReservations(ctx context.Context, workspaceID string
 				}
 				// Anything but a clear refusal may be an answer that was lost
 				// on the way, with the machine made all the same. It is passed
-				// on without an ID, for the cleanup to look for by its tag.
-				instance = providers.Instance{}
+				// on without an ID, for the cleanup to look for by its tag,
+				// and is dated from the end of the purchase: that is when
+				// its provider's time to list the machine begins.
+				instance, now = providers.Instance{}, time.Now()
 			}
 			reservation := newReservation(pool, machineID, nodeName, purchase.Offer, instance, now)
 			reservation.RegistrationTokenHash = hashComputeToken(registrationToken)
@@ -337,12 +339,60 @@ func (s *Service) provider(name string) (providers.Provider, error) {
 
 // deleteInstance deletes a reservation's machine at its provider. It succeeds
 // when the machine is already gone.
-func (s *Service) deleteInstance(ctx context.Context, reservation model.Reservation) error {
+//
+// A reservation has no ID when its provider did not answer the purchase. Its
+// machine, if the provider made one, is looked for among what the provider
+// lists, and is recorded on the reservation before it is deleted.
+func (s *Service) deleteInstance(ctx context.Context, reservation *model.Reservation, now time.Time) error {
 	provider, err := s.provider(reservation.Provider)
 	if err != nil {
 		return err
 	}
-	return provider.Delete(ctx, computeReservationInstanceID(reservation))
+	if computeReservationInstanceID(*reservation) == "" {
+		instanceID, err := unansweredInstance(ctx, provider, *reservation, now)
+		if err != nil || instanceID == "" {
+			return err
+		}
+		log.Warn().
+			Str("pool_name", reservation.PoolName).
+			Str("provider", reservation.Provider).
+			Str("machine_id", reservation.MachineID).
+			Str("instance_id", instanceID).
+			Msg("the provider made a machine whose purchase went unanswered; giving it back")
+		reservation.ID, reservation.InstanceID = instanceID, instanceID
+	}
+	return provider.Delete(ctx, computeReservationInstanceID(*reservation))
+}
+
+// errNotListed is why the machine of a purchase that went unanswered is not
+// deleted yet: its provider lists no such machine, and may still come to.
+var errNotListed = errors.New("the provider did not answer when this machine was bought, and does not list it yet")
+
+// unansweredInstance looks for the machine of a purchase that ended without
+// an answer, which the provider may have made all the same. Such a machine is
+// known only by its tag. It is "" when the provider made none, which is not
+// known before the provider has had the time to list what it sold: until
+// then, counted from the end of the purchase, a machine that is not listed
+// is errNotListed, for the caller to come back to.
+func unansweredInstance(ctx context.Context, provider providers.Provider, reservation model.Reservation, now time.Time) (string, error) {
+	if reservation.MachineID == "" {
+		// No machine carries an empty tag: a machine without the tag is
+		// another's, and is not to be taken for this one.
+		return "", nil
+	}
+	instances, err := provider.List(ctx)
+	if err != nil {
+		return "", fmt.Errorf("look for a machine whose purchase went unanswered: %w", err)
+	}
+	for _, instance := range instances {
+		if instance.Tags[machineTag] == reservation.MachineID {
+			return instance.ID, nil
+		}
+	}
+	if now.Sub(reservation.CreatedAt) < providers.LaunchGrace {
+		return "", errNotListed
+	}
+	return "", nil
 }
 
 // instanceOf asks a reservation's provider how its machine is doing. A machine
@@ -375,54 +425,26 @@ func (s *Service) extendInstance(ctx context.Context, reservation model.Reservat
 // their provider. It returns the machines it could not delete, marked as
 // terminating for the reconciler to go on with, and why each could not be
 // deleted.
-func (s *Service) deleteLaunchedInstances(ctx context.Context, workspaceID, poolName string, reservations []model.Reservation) ([]model.Reservation, []string) {
+//
+// The machine of a purchase that failed without a clear refusal has no ID,
+// and is looked for by its tag. A provider that does not list it made none,
+// unless the purchase went unanswered: then the provider may yet come to
+// list the machine, which is left for the reconciler like the others.
+func (s *Service) deleteLaunchedInstances(ctx context.Context, workspaceID, poolName string, reservations []model.Reservation, unanswered bool) ([]model.Reservation, []string) {
 	left := []model.Reservation{}
 	failures := []string{}
+	now := time.Now()
 	for _, reservation := range reservations {
-		if reservation.ID == "" {
-			instanceID, found := s.unansweredInstance(ctx, workspaceID, poolName, reservation)
-			if !found {
-				continue
-			}
-			reservation.ID, reservation.InstanceID = instanceID, instanceID
+		err := s.deleteInstance(ctx, &reservation, now)
+		if err == nil || errors.Is(err, errNotListed) && !unanswered {
+			continue
 		}
-		if err := s.deleteInstance(ctx, reservation); err != nil {
-			reservationFailed(workspaceID, poolName, &reservation, "delete machine", err)
-			markReservationTerminating(&reservation, reconcileReasonLaunchFailed, launchFailedMessage)
-			left = append(left, reservation)
-			failures = append(failures, fmt.Sprintf("delete reservation %q: %v", computeReservationInstanceID(reservation), err))
-		}
+		reservationFailed(workspaceID, poolName, &reservation, "delete machine", err)
+		markReservationTerminating(&reservation, reconcileReasonLaunchFailed, launchFailedMessage)
+		left = append(left, reservation)
+		failures = append(failures, fmt.Sprintf("delete reservation %q: %v", firstNonEmpty(computeReservationInstanceID(reservation), reservation.MachineID), err))
 	}
 	return left, failures
-}
-
-// unansweredInstance looks once for the machine of a create that ended
-// without an answer, which the provider may have made all the same. Such a
-// machine is known only by its tag.
-func (s *Service) unansweredInstance(ctx context.Context, workspaceID, poolName string, reservation model.Reservation) (string, bool) {
-	logger := log.With().
-		Str("workspace_id", workspaceID).
-		Str("pool_name", poolName).
-		Str("provider", reservation.Provider).
-		Str("machine_id", reservation.MachineID).
-		Logger()
-	provider, err := s.provider(reservation.Provider)
-	if err != nil {
-		return "", false
-	}
-	instances, err := provider.List(ctx)
-	if err != nil {
-		logger.Error().Err(err).Msgf("launch: could not look for a machine whose purchase went unanswered; if the provider made it, it carries the tag %s and has no record", machineTag)
-		return "", false
-	}
-	for _, instance := range instances {
-		if instance.Tags[machineTag] == reservation.MachineID {
-			logger.Warn().Str("instance_id", instance.ID).Msg("launch: the provider made a machine whose purchase went unanswered; giving it back")
-			return instance.ID, true
-		}
-	}
-	logger.Info().Msg("launch: the provider made no machine for a purchase that went unanswered")
-	return "", false
 }
 
 // validatePoolLaunchCompatible rejects launches that would change the node
@@ -568,9 +590,9 @@ const launchFailedMessage = "the launch this machine was bought in failed"
 
 // compensatePoolLaunchFailure undoes a launch that failed: it gives back the
 // machines that were bought and puts the pool's record back as it was. A
-// machine that cannot be given back stays in the record as terminating,
-// where the reconciler finds it and goes on trying. next is the record the
-// launch was going to save.
+// machine that cannot be given back, or that its provider may yet come to
+// list, stays in the record as terminating, where the reconciler finds it
+// and goes on trying. next is the record the launch was going to save.
 func (s *Service) compensatePoolLaunchFailure(ctx context.Context, workspaceID string, previous, next *model.PoolState, reservations []model.Reservation, cause error) error {
 	// The caller's context may be why the launch failed. The cleanup is done
 	// all the same.
@@ -587,7 +609,7 @@ func (s *Service) compensatePoolLaunchFailure(ctx context.Context, workspaceID s
 			failures = append(failures, fmt.Sprintf("delete SSH state for %q: %v", reservation.MachineID, err))
 		}
 	}
-	left, undeleted := s.deleteLaunchedInstances(providerCtx, workspaceID, next.Name, reservations)
+	left, undeleted := s.deleteLaunchedInstances(providerCtx, workspaceID, next.Name, reservations, providers.Unanswered(cause))
 	failures = append(failures, undeleted...)
 
 	restore := previous
