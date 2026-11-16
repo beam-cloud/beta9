@@ -1,11 +1,14 @@
 package scheduler
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,19 +17,63 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/compute"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
-	corev1 "k8s.io/api/core/v1"
-
-	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/google/uuid"
 	"github.com/tj/assert"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
+	typedbatchv1 "k8s.io/client-go/kubernetes/typed/batch/v1"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func testWorkspaceWithStorage() types.Workspace {
 	id := uint(1)
 	return types.Workspace{Storage: &types.WorkspaceStorage{Id: &id}}
+}
+
+// inline runs the scheduler's background work on the calling goroutine, so
+// that a scheduling pass is complete when it returns.
+func inline(fn func()) { fn() }
+
+// run schedules the attempt's request as a batch of one, on the calling
+// goroutine.
+func (a *schedulingAttempt) run() {
+	a.scheduler.spawn = inline
+	a.scheduler.processRequestBatch([]*types.ContainerRequest{a.request}, a.workers)
+}
+
+// selectWorker picks a worker for the request from the workers on record.
+func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker, error) {
+	workers, err := s.workerRepo.GetAllWorkers()
+	if err != nil {
+		return nil, err
+	}
+	return s.selectWorkerFromWorkers(workers, request)
+}
+
+// scheduleRequest places the request on the worker, as dispatching a batch
+// does with each request it planned.
+func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
+	return s.pushWorkerRequests(worker, []*types.ContainerRequest{s.prepareWorkerRequest(worker, request)})
+}
+
+// nextContainerRequest takes the next request queued on the worker, as the
+// worker does, or nil when none is queued.
+func nextContainerRequest(workers repo.WorkerRepository, workerId string) (*types.ContainerRequest, error) {
+	requests, err := workers.GetNextContainerRequests(workerId, 1)
+	if err != nil || len(requests) == 0 {
+		return nil, err
+	}
+	return requests[0], nil
 }
 
 func NewSchedulerForTest() (*Scheduler, error) {
@@ -246,30 +293,32 @@ func TestPrivateGPUWorkerCapacityRequiresRequestedGPUCount(t *testing.T) {
 func TestDockerEnabledRequestRuntimeSelection(t *testing.T) {
 	request := &types.ContainerRequest{DockerEnabled: true}
 
-	controllers := []WorkerPoolController{
-		&LocalWorkerPoolControllerForTest{name: "runc", containerRuntime: types.ContainerRuntimeRunc.String()},
-		&LocalWorkerPoolControllerForTest{name: "gvisor", containerRuntime: types.ContainerRuntimeGvisor.String()},
-	}
-
-	filteredControllers := filterControllersByFlags(controllers, request)
-	assert.Equal(t, controllers[1:], filteredControllers)
+	assert.Equal(t, []string{"gvisor"}, poolsAccepting(request, map[string]types.WorkerPoolConfig{
+		"runc":   {ContainerRuntime: types.ContainerRuntimeRunc.String()},
+		"gvisor": {ContainerRuntime: types.ContainerRuntimeGvisor.String()},
+	}))
 
 	workers := []*types.Worker{
 		{Id: "runc-worker", Runtime: types.ContainerRuntimeRunc.String()},
 		{Id: "gvisor-worker", Runtime: types.ContainerRuntimeGvisor.String()},
 	}
 
-	filteredWorkers := filterWorkersByResources(workers, request, nil)
+	filteredWorkers := filterWorkersByResources(workers, request)
 	assert.Equal(t, workers[1:], filteredWorkers)
 }
 
 // The microvm runtime is opt-in in both directions: only use_vm sandboxes
 // reach it, and use_vm sandboxes reach nothing else.
 func TestMicroVMRuntimeIsOptInBothWays(t *testing.T) {
-	runc := &LocalWorkerPoolControllerForTest{name: "runc", containerRuntime: types.ContainerRuntimeRunc.String()}
-	gvisor := &LocalWorkerPoolControllerForTest{name: "gvisor", containerRuntime: types.ContainerRuntimeGvisor.String()}
-	microvm := &LocalWorkerPoolControllerForTest{name: "microvm", containerRuntime: types.ContainerRuntimeMicroVM.String()}
-	controllers := []WorkerPoolController{runc, gvisor, microvm}
+	pools := map[string]types.WorkerPoolConfig{
+		"runc":    {ContainerRuntime: types.ContainerRuntimeRunc.String()},
+		"gvisor":  {ContainerRuntime: types.ContainerRuntimeGvisor.String()},
+		"microvm": {ContainerRuntime: types.ContainerRuntimeMicroVM.String()},
+	}
+	microvm := map[string]types.WorkerPoolConfig{"microvm": pools["microvm"]}
+	gpuMicrovm := map[string]types.WorkerPoolConfig{
+		"microvm": {GPUType: "RTX4090", ContainerRuntime: types.ContainerRuntimeMicroVM.String()},
+	}
 
 	worker := func(id, runtimeName string) *types.Worker {
 		return &types.Worker{Id: id, Status: types.WorkerStatusAvailable, FreeCpu: 4000, FreeMemory: 8000, Runtime: runtimeName}
@@ -286,51 +335,51 @@ func TestMicroVMRuntimeIsOptInBothWays(t *testing.T) {
 	}
 
 	// A plain sandbox never sees VM capacity, even when it is the only idle worker.
-	assert.Equal(t, []WorkerPoolController{runc, gvisor}, filterControllersByFlags(controllers, sandbox(false)))
-	assert.Equal(t, []*types.Worker{runcWorker, gvisorWorker}, filterWorkersByResources(workers, sandbox(false), nil))
-	assert.Equal(t, []*types.Worker{}, filterWorkersByResources([]*types.Worker{microvmWorker}, sandbox(false), nil))
+	assert.Equal(t, []string{"gvisor", "runc"}, poolsAccepting(sandbox(false), pools))
+	assert.Equal(t, []*types.Worker{runcWorker, gvisorWorker}, filterWorkersByResources(workers, sandbox(false)))
+	assert.Equal(t, []*types.Worker{}, filterWorkersByResources([]*types.Worker{microvmWorker}, sandbox(false)))
 
 	// use_vm goes only to microvm, and fails closed when there is none.
-	assert.Equal(t, []WorkerPoolController{microvm}, filterControllersByFlags(controllers, sandbox(true)))
-	assert.Equal(t, []*types.Worker{microvmWorker}, filterWorkersByResources(workers, sandbox(true), nil))
-	assert.Equal(t, []*types.Worker{}, filterWorkersByResources([]*types.Worker{runcWorker, gvisorWorker}, sandbox(true), nil))
+	assert.Equal(t, []string{"microvm"}, poolsAccepting(sandbox(true), pools))
+	assert.Equal(t, []*types.Worker{microvmWorker}, filterWorkersByResources(workers, sandbox(true)))
+	assert.Equal(t, []*types.Worker{}, filterWorkersByResources([]*types.Worker{runcWorker, gvisorWorker}, sandbox(true)))
 
 	// Persistent VMs retain their own kind while using the same placement.
 	vm := sandbox(true)
 	vm.Stub.Type = types.StubType(types.StubTypeVM)
-	assert.Equal(t, []WorkerPoolController{microvm}, filterControllersByFlags(controllers, vm))
-	assert.Equal(t, []*types.Worker{microvmWorker}, filterWorkersByResources(workers, vm, nil))
+	assert.Equal(t, []string{"microvm"}, poolsAccepting(vm, pools))
+	assert.Equal(t, []*types.Worker{microvmWorker}, filterWorkersByResources(workers, vm))
 	vm.UseVM = false
-	assert.Empty(t, filterControllersByFlags(controllers, vm), "VMs must never fall back to a container runtime")
-	assert.Empty(t, filterWorkersByResources(workers, vm, nil))
+	assert.Empty(t, poolsAccepting(vm, pools), "VMs must never fall back to a container runtime")
+	assert.Empty(t, filterWorkersByResources(workers, vm))
 
 	// GPU VMs use the same model and free-device accounting as containers.
 	gpu := sandbox(true)
 	gpu.Gpu = "RTX4090"
 	gpu.GpuCount = 1
-	assert.Equal(t, []WorkerPoolController{microvm}, filterControllersByFlags(controllers, gpu))
+	assert.Equal(t, []string{"microvm"}, poolsAccepting(gpu, gpuMicrovm))
 	gpuWorker := worker("gpu-worker", types.ContainerRuntimeMicroVM.String())
 	gpuWorker.Gpu, gpuWorker.FreeGpuCount = "RTX4090", 1
-	assert.Equal(t, []*types.Worker{gpuWorker}, filterWorkersByResources(append(workers, gpuWorker), gpu, nil))
+	assert.Equal(t, []*types.Worker{gpuWorker}, filterWorkersByResources(append(workers, gpuWorker), gpu))
 	gpuWorker.FreeGpuCount = 0
-	assert.Empty(t, filterWorkersByResources([]*types.Worker{gpuWorker}, gpu, nil))
+	assert.Empty(t, filterWorkersByResources([]*types.Worker{gpuWorker}, gpu))
 	gpuWorker.FreeGpuCount, gpuWorker.Gpu = 1, "A100"
-	assert.Empty(t, filterWorkersByResources([]*types.Worker{gpuWorker}, gpu, nil))
+	assert.Empty(t, newRoute(gpu, nil, "").eligible([]*types.Worker{gpuWorker}))
 	gpu.GpuCount = 2
-	assert.Empty(t, filterControllersByFlags([]WorkerPoolController{microvm}, gpu))
+	assert.Empty(t, poolsAccepting(gpu, gpuMicrovm))
 
 	checkpointing := sandbox(true)
 	checkpointing.CheckpointEnabled = true
-	assert.Len(t, filterControllersByFlags([]WorkerPoolController{microvm}, checkpointing), 1, "VM sandboxes snapshot through the runtime's own checkpoint support")
+	assert.Len(t, poolsAccepting(checkpointing, microvm), 1, "VM sandboxes snapshot through the runtime's own checkpoint support")
 
 	restoring := sandbox(true)
 	restoring.Checkpoint = &types.Checkpoint{CheckpointId: "c1", Status: string(types.CheckpointStatusAvailable), Runtime: types.ContainerRuntimeGvisor.String()}
-	assert.Empty(t, filterControllersByFlags([]WorkerPoolController{microvm}, restoring))
+	assert.Empty(t, poolsAccepting(restoring, microvm))
 
 	pod := &types.ContainerRequest{Cpu: 1000, Memory: 1024, UseVM: true}
 	pod.Stub.Type = types.StubType(types.StubTypePodRun)
-	assert.Empty(t, filterControllersByFlags([]WorkerPoolController{microvm}, pod))
-	assert.Empty(t, filterWorkersByResources([]*types.Worker{microvmWorker}, pod, nil))
+	assert.Empty(t, poolsAccepting(pod, microvm))
+	assert.Empty(t, filterWorkersByResources([]*types.Worker{microvmWorker}, pod))
 }
 
 func buildPoolSchedulerForTest(poolName string) *Scheduler {
@@ -441,18 +490,16 @@ func TestBuildPoolWorkerPlacement(t *testing.T) {
 	}
 }
 
-func TestBuildPoolExcludedFromFailover(t *testing.T) {
+func TestBuildPoolTakesNoOverflow(t *testing.T) {
 	scheduler := buildPoolSchedulerForTest("build")
-	scheduler.config.Scheduling.Failover = types.FailoverConfig{
-		Enabled: true,
-		Chains:  map[string]types.FailoverChain{"A10G": {Pools: []string{"build"}}},
-	}
-	scheduler.workerPoolManager.SetPool("build", types.WorkerPoolConfig{GPUType: "RTX4090"}, &LocalWorkerPoolControllerForTest{name: "build", requiresSelector: true})
+	scheduler.workerPoolManager.SetPool("build", types.WorkerPoolConfig{
+		GPUType: "RTX4090", RequiresPoolSelector: true, AlsoServes: []string{"A10G"},
+	}, &LocalWorkerPoolControllerForTest{name: "build", requiresSelector: true})
 	request := &types.ContainerRequest{Gpu: "A10G", GpuCount: 1}
 	controllers, err := scheduler.getControllers(request)
 	require.Error(t, err)
 	require.Empty(t, controllers)
-	selected, err := scheduler.selectWorkerFromWorkers([]*types.Worker{failoverWorker("build-worker", "build", "RTX4090", 1)}, request)
+	selected, err := scheduler.selectWorkerFromWorkers([]*types.Worker{gpuWorkerForTest("build-worker", "build", "RTX4090", 1)}, request)
 	require.Error(t, err)
 	require.Nil(t, selected)
 }
@@ -474,7 +521,9 @@ func TestBuildPoolLeavesOtherRuncPoolsAvailable(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			scheduler := buildPoolSchedulerForTest("build")
 			controller := &LocalWorkerPoolControllerForTest{name: "default-ovh", requiresSelector: test.selector != "", containerRuntime: types.ContainerRuntimeRunc.String()}
-			scheduler.workerPoolManager.SetPool(controller.Name(), types.WorkerPoolConfig{GPUType: test.gpu, ContainerRuntime: types.ContainerRuntimeRunc.String()}, controller)
+			scheduler.workerPoolManager.SetPool(controller.Name(), types.WorkerPoolConfig{
+				GPUType: test.gpu, ContainerRuntime: types.ContainerRuntimeRunc.String(), RequiresPoolSelector: test.selector != "",
+			}, controller)
 			request := &types.ContainerRequest{PoolSelector: test.selector, Cpu: 1000, Memory: 1024, Gpu: test.gpu}
 			request.Stub.Type = types.StubType(test.stubType)
 			if test.gpu != "" {
@@ -498,22 +547,21 @@ func TestBuildPoolLeavesOtherRuncPoolsAvailable(t *testing.T) {
 
 // Provider pools (workspace-supplied machines) only run platform-owned managed
 // endpoint replicas; ordinary requests never reach them, even by selector.
-func TestProviderControllersOnlyAdmitManagedRequests(t *testing.T) {
-	provider := &LocalWorkerPoolControllerForTest{name: "provider", mode: types.PoolModeProvider, requiresSelector: true}
-	regular := &LocalWorkerPoolControllerForTest{name: "regular", mode: types.PoolModeLocal}
-	controllers := []WorkerPoolController{provider, regular}
+func TestProviderPoolsOnlyAdmitManagedRequests(t *testing.T) {
+	provider := types.WorkerPoolConfig{Mode: types.PoolModeProvider, RequiresPoolSelector: true}
+	pools := map[string]types.WorkerPoolConfig{"provider": provider, "regular": {Mode: types.PoolModeLocal}}
 	workspace := testWorkspaceWithStorage()
 
-	assert.Equal(t, []WorkerPoolController{regular}, filterControllersByFlags(controllers, &types.ContainerRequest{Workspace: workspace}))
-	assert.Empty(t, filterControllersByFlags(controllers, &types.ContainerRequest{PoolSelector: "provider", Workspace: workspace}))
+	assert.Equal(t, []string{"regular"}, poolsAccepting(&types.ContainerRequest{Workspace: workspace}, pools))
+	assert.Empty(t, poolsAccepting(&types.ContainerRequest{PoolSelector: "provider", Workspace: workspace}, pools))
 
 	managed := &types.ContainerRequest{PoolSelector: "provider", Workspace: workspace}
 	managed.Stub.Type = types.StubType(types.StubTypeManagedEndpointDeployment)
-	assert.Equal(t, []WorkerPoolController{provider}, filterControllersByFlags(controllers, managed))
+	assert.Equal(t, []string{"provider"}, poolsAccepting(managed, pools))
 
 	// Provider capacity gets no preemption exception.
-	preemptible := &LocalWorkerPoolControllerForTest{name: "provider", mode: types.PoolModeProvider, requiresSelector: true, preemptable: true}
-	assert.Empty(t, filterControllersByFlags([]WorkerPoolController{preemptible}, managed))
+	provider.Preemptable = true
+	assert.Empty(t, poolsAccepting(managed, map[string]types.WorkerPoolConfig{"provider": provider}))
 }
 
 func TestProviderWorkersOnlyAdmitManagedRequests(t *testing.T) {
@@ -711,8 +759,13 @@ func TestLoadedPrivatePoolDoesNotReconcileOnRequest(t *testing.T) {
 	worker, err := scheduler.workerRepo.GetWorkerById(compute.AgentMachineWorkerID(machine.MachineID))
 	assert.NoError(t, err)
 	assert.NoError(t, scheduler.workerRepo.UpdateWorkerStatus(worker.Id, types.WorkerStatusAvailable))
-	assert.NoError(t, scheduler.workerRepo.UpdateWorkerCapacity(worker, &types.ContainerRequest{Cpu: 100, Memory: 100}, types.RemoveCapacity))
+	placed := &types.ContainerRequest{ContainerId: "container-private", Cpu: 100, Memory: 100}
+	setPendingSchedulerRequests(t, scheduler, placed)
+	assert.NoError(t, scheduler.workerRepo.ScheduleContainerRequests(worker, []*types.ContainerRequest{placed}))
+	worker, err = scheduler.workerRepo.GetWorkerById(worker.Id)
+	assert.NoError(t, err)
 	version := worker.ResourceVersion
+	assert.NotZero(t, version)
 
 	_, err = scheduler.ensureAgentPoolForRequest(request)
 	assert.NoError(t, err)
@@ -733,7 +786,8 @@ func TestFilterWorkersByMachinePinsWorker(t *testing.T) {
 
 	// The pin overrides pool-selector filtering: w2 requires a selector the
 	// request doesn't carry, but it was already selected by the pin.
-	selected := filterWorkersByPoolSelector(pinned, &types.ContainerRequest{MachineId: "machine-2"})
+	request := &types.ContainerRequest{MachineId: "machine-2"}
+	selected := newRoute(request, nil, "").eligible(pinned)
 	assert.Len(t, selected, 1)
 
 	unpinned := filterWorkersByMachine(workers, &types.ContainerRequest{})
@@ -803,7 +857,6 @@ func TestSelectorCannotScheduleForeignPrivateWorker(t *testing.T) {
 type LocalWorkerPoolControllerForTest struct {
 	ctx              context.Context
 	name             string
-	mode             types.PoolMode
 	config           types.AppConfig
 	workerRepo       repo.WorkerRepository
 	preemptable      bool
@@ -812,6 +865,9 @@ type LocalWorkerPoolControllerForTest struct {
 	addWorkerDone    chan struct{}
 	unblockAddWorker chan struct{}
 	addWorkerErr     error
+	// cannotAddWorker and canAddWorkerErr are what CanAddWorker answers.
+	cannotAddWorker  bool
+	canAddWorkerErr  error
 	requiresSelector bool
 	containerRuntime string
 	addWorkerMu      sync.Mutex
@@ -828,13 +884,6 @@ func (wpc *LocalWorkerPoolControllerForTest) IsPreemptable() bool {
 
 func (wpc *LocalWorkerPoolControllerForTest) State() (*types.WorkerPoolState, error) {
 	return &types.WorkerPoolState{}, nil
-}
-
-func (wpc *LocalWorkerPoolControllerForTest) Mode() types.PoolMode {
-	if wpc.mode != "" {
-		return wpc.mode
-	}
-	return types.PoolModeLocal
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) RequiresPoolSelector() bool {
@@ -854,6 +903,10 @@ func (wpc *LocalWorkerPoolControllerForTest) ContainerRuntime() string {
 
 func (wpc *LocalWorkerPoolControllerForTest) generateWorkerId() string {
 	return uuid.New().String()[:8]
+}
+
+func (wpc *LocalWorkerPoolControllerForTest) CanAddWorker(cpu int64, memory int64, gpuCount uint32) (bool, error) {
+	return !wpc.cannotAddWorker, wpc.canAddWorkerErr
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
@@ -926,10 +979,6 @@ func (wpc *LocalWorkerPoolControllerForTest) AddWorkerCallCount() int {
 	wpc.addWorkerMu.Lock()
 	defer wpc.addWorkerMu.Unlock()
 	return wpc.addWorkerCalls
-}
-
-func (wpc *LocalWorkerPoolControllerForTest) AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {
-	return nil, errors.New("unimplemented")
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) Name() string {
@@ -1278,7 +1327,7 @@ func TestSchedulerProcessesLargeReadyBatch(t *testing.T) {
 		default:
 		}
 
-		request, err := wb.workerRepo.GetNextContainerRequest(worker.Id)
+		request, err := nextContainerRequest(wb.workerRepo, worker.Id)
 		assert.Nil(t, err)
 		if request == nil {
 			time.Sleep(time.Millisecond)
@@ -1358,7 +1407,7 @@ func TestSchedulerDoesNotBlockOnSlowWorkerProvisioning(t *testing.T) {
 		default:
 		}
 
-		request, err := wb.workerRepo.GetNextContainerRequest(fastWorker.Id)
+		request, err := nextContainerRequest(wb.workerRepo, fastWorker.Id)
 		assert.Nil(t, err)
 		if request != nil && request.ContainerId == fastRequest.ContainerId {
 			break
@@ -1406,14 +1455,14 @@ func TestProcessRequestUsesInFlightProvisioningForCurrentBatch(t *testing.T) {
 	}
 	setPendingSchedulerRequests(t, wb, firstRequest, secondRequest)
 
-	wb.processRequest(firstRequest, nil)
+	wb.processRequestBatch([]*types.ContainerRequest{firstRequest}, nil)
 	select {
 	case <-started:
 	case <-time.After(time.Second):
 		t.Fatal("expected scheduler to start worker provisioning")
 	}
 
-	wb.processRequest(secondRequest, nil)
+	wb.processRequestBatch([]*types.ContainerRequest{secondRequest}, nil)
 
 	select {
 	case <-started:
@@ -1489,11 +1538,11 @@ func TestProcessRequestTracksPendingWorkerCapacityAcrossBatches(t *testing.T) {
 
 	firstBatchWorkers, err := wb.workerRepo.GetAllWorkers()
 	assert.Nil(t, err)
-	wb.processRequest(firstRequest, firstBatchWorkers)
+	wb.processRequestBatch([]*types.ContainerRequest{firstRequest}, firstBatchWorkers)
 
 	secondBatchWorkers, err := wb.workerRepo.GetAllWorkers()
 	assert.Nil(t, err)
-	wb.processRequest(secondRequest, secondBatchWorkers)
+	wb.processRequestBatch([]*types.ContainerRequest{secondRequest}, secondBatchWorkers)
 
 	select {
 	case <-started:
@@ -1546,7 +1595,7 @@ func TestProcessRequestUpdatesBatchWorkerCapacity(t *testing.T) {
 	}
 	setPendingSchedulerRequests(t, wb, firstRequest)
 
-	wb.processRequest(firstRequest, workers)
+	wb.processRequestBatch([]*types.ContainerRequest{firstRequest}, workers)
 
 	assert.Equal(t, int64(0), workers[0].FreeCpu)
 	assert.Equal(t, int64(0), workers[0].FreeMemory)
@@ -1601,12 +1650,12 @@ func TestProcessRequestBatchDoesNotOverScheduleWorkerSnapshot(t *testing.T) {
 
 	queued := map[string]struct{}{}
 	for i := 0; i < 2; i++ {
-		request, err := wb.workerRepo.GetNextContainerRequest(worker.Id)
+		request, err := nextContainerRequest(wb.workerRepo, worker.Id)
 		assert.Nil(t, err)
 		assert.NotNil(t, request)
 		queued[request.ContainerId] = struct{}{}
 	}
-	extraRequest, err := wb.workerRepo.GetNextContainerRequest(worker.Id)
+	extraRequest, err := nextContainerRequest(wb.workerRepo, worker.Id)
 	assert.Nil(t, err)
 	assert.Nil(t, extraRequest)
 
@@ -1643,7 +1692,7 @@ func TestProcessRequestBatchImmediatelyReplansStaleCapacity(t *testing.T) {
 	currentWorkers, err := first.workerRepo.GetAllWorkers()
 	assert.NoError(t, err)
 	first.processRequestBatch([]*types.ContainerRequest{requeued}, currentWorkers)
-	queued, err := first.workerRepo.GetNextContainerRequest(idle.Id)
+	queued, err := nextContainerRequest(first.workerRepo, idle.Id)
 	assert.NoError(t, err)
 	assert.Equal(t, secondRequest.ContainerId, queued.ContainerId)
 }
@@ -1703,7 +1752,7 @@ func TestProcessRequestBatchPacksOntoSingleWorker(t *testing.T) {
 	for _, w := range []*types.Worker{firstWorker, secondWorker} {
 		queued := 0
 		for {
-			request, err := wb.workerRepo.GetNextContainerRequest(w.Id)
+			request, err := nextContainerRequest(wb.workerRepo, w.Id)
 			assert.Nil(t, err)
 			if request == nil {
 				break
@@ -1817,7 +1866,7 @@ func TestProcessRequestBatchSchedulesTinySandboxBurstByRequestedCapacity(t *test
 	for _, worker := range workers {
 		queued := 0
 		for {
-			request, err := wb.workerRepo.GetNextContainerRequest(worker.Id)
+			request, err := nextContainerRequest(wb.workerRepo, worker.Id)
 			assert.Nil(t, err)
 			if request == nil {
 				break
@@ -1881,13 +1930,13 @@ func TestProcessRequestBatchKeepsCPUAndGPUCapacitySeparate(t *testing.T) {
 
 	wb.processRequestBatch([]*types.ContainerRequest{gpuRequest, cpuRequest}, workers)
 
-	queuedCPURequest, err := wb.workerRepo.GetNextContainerRequest(cpuWorker.Id)
+	queuedCPURequest, err := nextContainerRequest(wb.workerRepo, cpuWorker.Id)
 	assert.Nil(t, err)
 	assert.NotNil(t, queuedCPURequest)
 	assert.Equal(t, cpuRequest.ContainerId, queuedCPURequest.ContainerId)
 	assert.Equal(t, "", queuedCPURequest.Gpu)
 
-	queuedGPURequest, err := wb.workerRepo.GetNextContainerRequest(gpuWorker.Id)
+	queuedGPURequest, err := nextContainerRequest(wb.workerRepo, gpuWorker.Id)
 	assert.Nil(t, err)
 	assert.NotNil(t, queuedGPURequest)
 	assert.Equal(t, gpuRequest.ContainerId, queuedGPURequest.ContainerId)
@@ -1946,16 +1995,16 @@ func TestProcessRequestKeepsCPUAndGPUWorkersSeparate(t *testing.T) {
 	}
 	setPendingSchedulerRequests(t, wb, cpuRequest, gpuRequest)
 
-	wb.processRequest(cpuRequest, workers)
-	wb.processRequest(gpuRequest, workers)
+	wb.processRequestBatch([]*types.ContainerRequest{cpuRequest}, workers)
+	wb.processRequestBatch([]*types.ContainerRequest{gpuRequest}, workers)
 
-	queuedCPURequest, err := wb.workerRepo.GetNextContainerRequest(cpuWorker.Id)
+	queuedCPURequest, err := nextContainerRequest(wb.workerRepo, cpuWorker.Id)
 	assert.Nil(t, err)
 	assert.NotNil(t, queuedCPURequest)
 	assert.Equal(t, cpuRequest.ContainerId, queuedCPURequest.ContainerId)
 	assert.Equal(t, "", queuedCPURequest.Gpu)
 
-	queuedGPURequest, err := wb.workerRepo.GetNextContainerRequest(gpuWorker.Id)
+	queuedGPURequest, err := nextContainerRequest(wb.workerRepo, gpuWorker.Id)
 	assert.Nil(t, err)
 	assert.NotNil(t, queuedGPURequest)
 	assert.Equal(t, gpuRequest.ContainerId, queuedGPURequest.ContainerId)
@@ -2005,9 +2054,9 @@ func TestProcessRequestDefaultsGPUCountBeforeScheduling(t *testing.T) {
 	}
 	setPendingSchedulerRequests(t, wb, request)
 
-	wb.processRequest(request, workers)
+	wb.processRequestBatch([]*types.ContainerRequest{request}, workers)
 
-	queuedRequest, err := wb.workerRepo.GetNextContainerRequest(worker.Id)
+	queuedRequest, err := nextContainerRequest(wb.workerRepo, worker.Id)
 	assert.Nil(t, err)
 	assert.NotNil(t, queuedRequest)
 	assert.Equal(t, uint32(1), queuedRequest.GpuCount)
@@ -2038,6 +2087,7 @@ func schedulerReplicaForTest(source *Scheduler) *Scheduler {
 		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
 		credentials:               newSchedulerCredentialCache(),
 		pushComputeEvent:          source.pushComputeEvent,
+		clock:                     source.clock,
 	}
 }
 
@@ -2083,15 +2133,15 @@ func TestProcessRequestStaleReplicaGPUReservationRequeues(t *testing.T) {
 	}
 	setPendingSchedulerRequests(t, firstScheduler, firstRequest, secondRequest)
 
-	firstScheduler.processRequest(firstRequest, firstReplicaWorkers)
-	secondScheduler.processRequest(secondRequest, secondReplicaWorkers)
+	firstScheduler.processRequestBatch([]*types.ContainerRequest{firstRequest}, firstReplicaWorkers)
+	secondScheduler.processRequestBatch([]*types.ContainerRequest{secondRequest}, secondReplicaWorkers)
 
-	queuedRequest, err := firstScheduler.workerRepo.GetNextContainerRequest(worker.Id)
+	queuedRequest, err := nextContainerRequest(firstScheduler.workerRepo, worker.Id)
 	assert.Nil(t, err)
 	assert.NotNil(t, queuedRequest)
 	assert.Equal(t, firstRequest.ContainerId, queuedRequest.ContainerId)
 
-	extraQueuedRequest, err := firstScheduler.workerRepo.GetNextContainerRequest(worker.Id)
+	extraQueuedRequest, err := nextContainerRequest(firstScheduler.workerRepo, worker.Id)
 	assert.Nil(t, err)
 	assert.Nil(t, extraQueuedRequest)
 
@@ -2171,22 +2221,22 @@ func TestProcessRequestConcurrentStaleReplicaGPUReservationRequeues(t *testing.T
 	go func() {
 		defer wg.Done()
 		<-start
-		firstScheduler.processRequest(firstRequest, firstReplicaWorkers)
+		firstScheduler.processRequestBatch([]*types.ContainerRequest{firstRequest}, firstReplicaWorkers)
 	}()
 	go func() {
 		defer wg.Done()
 		<-start
-		secondScheduler.processRequest(secondRequest, secondReplicaWorkers)
+		secondScheduler.processRequestBatch([]*types.ContainerRequest{secondRequest}, secondReplicaWorkers)
 	}()
 
 	close(start)
 	wg.Wait()
 
-	queuedRequest, err := firstScheduler.workerRepo.GetNextContainerRequest(worker.Id)
+	queuedRequest, err := nextContainerRequest(firstScheduler.workerRepo, worker.Id)
 	assert.Nil(t, err)
 	assert.NotNil(t, queuedRequest)
 
-	extraQueuedRequest, err := firstScheduler.workerRepo.GetNextContainerRequest(worker.Id)
+	extraQueuedRequest, err := nextContainerRequest(firstScheduler.workerRepo, worker.Id)
 	assert.Nil(t, err)
 	assert.Nil(t, extraQueuedRequest)
 
@@ -2258,14 +2308,13 @@ func TestAddWorkerForReservationReleasesOnContextCancellation(t *testing.T) {
 		Timestamp:    time.Now(),
 	}
 
-	controllers, err := wb.getControllers(request)
-	assert.Nil(t, err)
-	reservationID := wb.provisioning.addReservation(wb, request, controllers[0])
+	choice := growthForTest(t, wb, request)
+	reservationID := wb.provisioning.addReservation(wb, request, choice.pool, choice.size)
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		newWorkerProvisioningAttempt(wb, request, controllers[0], reservationID).run()
+		wb.addWorker(request, choice.pool, choice.size, reservationID)
 	}()
 
 	select {
@@ -2299,12 +2348,9 @@ func TestProvisionedWorkerUsesSchedulingMemory(t *testing.T) {
 		Timestamp:    time.Now(),
 	}
 
-	controllers, err := wb.getControllers(request)
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(controllers))
-
+	choice := growthForTest(t, wb, request)
 	expectedMemory := capacityMemoryForScheduling(request)
-	reservationID := wb.provisioning.addReservation(wb, request, controllers[0])
+	reservationID := wb.provisioning.addReservation(wb, request, choice.pool, choice.size)
 
 	wb.provisioning.mu.Lock()
 	reservation := wb.provisioning.reservations[reservationID]
@@ -2313,7 +2359,7 @@ func TestProvisionedWorkerUsesSchedulingMemory(t *testing.T) {
 	assert.Equal(t, int64(0), reservation.worker.FreeMemory)
 	wb.provisioning.mu.Unlock()
 
-	newWorkerProvisioningAttempt(wb, request, controllers[0], reservationID).run()
+	wb.addWorker(request, choice.pool, choice.size, reservationID)
 
 	workers, err := wb.workerRepo.GetAllWorkers()
 	assert.Nil(t, err)
@@ -2348,11 +2394,8 @@ func TestProvisionedWorkerUsesPoolSizingDefaults(t *testing.T) {
 		Timestamp:    time.Now(),
 	}
 
-	controllers, err := wb.getControllers(request)
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(controllers))
-
-	reservationID := wb.provisioning.addReservation(wb, request, controllers[0])
+	choice := growthForTest(t, wb, request)
+	reservationID := wb.provisioning.addReservation(wb, request, choice.pool, choice.size)
 	wb.provisioning.mu.Lock()
 	reservation := wb.provisioning.reservations[reservationID]
 	assert.NotNil(t, reservation)
@@ -2362,7 +2405,7 @@ func TestProvisionedWorkerUsesPoolSizingDefaults(t *testing.T) {
 	assert.Equal(t, int64(16384-capacityMemoryForScheduling(request)), reservation.worker.FreeMemory)
 	wb.provisioning.mu.Unlock()
 
-	newWorkerProvisioningAttempt(wb, request, controllers[0], reservationID).run()
+	wb.addWorker(request, choice.pool, choice.size, reservationID)
 
 	workers, err := wb.workerRepo.GetAllWorkers()
 	assert.Nil(t, err)
@@ -2391,7 +2434,6 @@ func TestAgentHostedProvisioningUsesRequestSizing(t *testing.T) {
 	wb.workerPoolManager.SetPool("private-pool", poolConfig, &LocalWorkerPoolControllerForTest{
 		ctx:        context.Background(),
 		name:       "private-pool",
-		mode:       types.PoolModePrivate,
 		config:     wb.config,
 		workerRepo: wb.workerRepo,
 	})
@@ -2407,11 +2449,8 @@ func TestAgentHostedProvisioningUsesRequestSizing(t *testing.T) {
 		Workspace:    testWorkspaceWithStorage(),
 	}
 
-	controllers, err := wb.getControllers(request)
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(controllers))
-
-	reservationID := wb.provisioning.addReservation(wb, request, controllers[0])
+	choice := growthForTest(t, wb, request)
+	reservationID := wb.provisioning.addReservation(wb, request, choice.pool, choice.size)
 	wb.provisioning.mu.Lock()
 	reservation := wb.provisioning.reservations[reservationID]
 	assert.NotNil(t, reservation)
@@ -2440,7 +2479,7 @@ func TestProcessRequestMarksNoControllerRequestFailed(t *testing.T) {
 	err = wb.containerRepo.CreateContainerStateWithConcurrencyLimit(nil, request)
 	assert.Nil(t, err)
 
-	wb.processRequest(request, nil)
+	wb.processRequestBatch([]*types.ContainerRequest{request}, nil)
 
 	_, err = wb.containerRepo.GetContainerState(request.ContainerId)
 	assert.Error(t, err)
@@ -3031,10 +3070,12 @@ func TestSelectorBoundAnyGPUAcceptsUncataloguedHardware(t *testing.T) {
 		PoolSelector: "my-pool",
 	}
 
-	assert.Equal(t, []*types.Worker{worker}, filterWorkersByResources([]*types.Worker{worker}, request, nil))
+	assert.Equal(t, []*types.Worker{worker}, newRoute(request, nil, "").eligible([]*types.Worker{worker}))
 
+	// Outside a named pool, "any" means any GPU in the catalog.
 	request.PoolSelector = ""
-	assert.Empty(t, filterWorkersByResources([]*types.Worker{worker}, request, nil))
+	worker.RequiresPoolSelector = false
+	assert.Empty(t, newRoute(request, nil, "").eligible([]*types.Worker{worker}))
 }
 
 func TestCheckpointRuntimeSelection(t *testing.T) {
@@ -3067,10 +3108,10 @@ func TestCheckpointRuntimeSelection(t *testing.T) {
 
 	workers := []*types.Worker{runc, gvisor}
 
-	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "legacy checkpoints have no runtime metadata")
+	assert.Equal(t, workers, filterWorkersByResources(workers, request), "legacy checkpoints have no runtime metadata")
 
 	request.Checkpoint.Runtime = types.ContainerRuntimeRunc.String()
-	assert.Equal(t, []*types.Worker{runc}, filterWorkersByResources(workers, request, nil))
+	assert.Equal(t, []*types.Worker{runc}, filterWorkersByResources(workers, request))
 
 	request.Stub.Type = types.StubType(types.StubTypeSandbox)
 	_, err = scheduler.selectWorkerFromWorkers([]*types.Worker{gvisor}, request)
@@ -3100,23 +3141,23 @@ func TestCheckpointRuntimeSelection(t *testing.T) {
 
 	// Matching runtime and logical GPU do not imply a compatible host.
 	runc.CheckpointCompatibilityKey = "changed-driver-or-cpu"
-	assert.Empty(t, filterWorkersByResources([]*types.Worker{runc}, request, nil))
+	assert.Empty(t, filterWorkersByResources([]*types.Worker{runc}, request))
 	selected, err = scheduler.selectWorkerFromWorkers([]*types.Worker{runc}, request)
 	assert.NoError(t, err)
 	assert.Equal(t, runc, selected, "use ready capacity for a compatible variant or cold start")
 	assert.Nil(t, scheduler.prepareWorkerRequest(runc, request).Checkpoint)
 
 	request.Checkpoint.CompatibilityKey = ""
-	assert.Empty(t, filterWorkersByResources(workers, request, nil), "legacy deployment snapshots need rebuilding")
+	assert.Empty(t, filterWorkersByResources(workers, request), "legacy deployment snapshots need rebuilding")
 	request.Stub.Type = types.StubType(types.StubTypeSandbox)
 	request.Checkpoint.Runtime = types.ContainerRuntimeGvisor.String()
-	assert.Equal(t, []*types.Worker{gvisor}, filterWorkersByResources(workers, request, nil))
+	assert.Equal(t, []*types.Worker{gvisor}, filterWorkersByResources(workers, request))
 
 	request.Checkpoint.Runtime = types.CheckpointRuntimeFilesystem
-	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "filesystem checkpoints cold-start on any runtime")
+	assert.Equal(t, workers, filterWorkersByResources(workers, request), "filesystem checkpoints cold-start on any runtime")
 
 	request.Checkpoint.Status = string(types.CheckpointStatusCheckpointFailed)
-	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "non-available checkpoints cold-start normally")
+	assert.Equal(t, workers, filterWorkersByResources(workers, request), "non-available checkpoints cold-start normally")
 }
 
 func TestGPUDeviceCheckpointRequiresCompatibleWorker(t *testing.T) {
@@ -3150,25 +3191,26 @@ func TestGPUDeviceCheckpointRequiresCompatibleWorker(t *testing.T) {
 	legacy := worker("v1:profile", types.WorkerStatusAvailable)
 	gpuDevices := worker("v2:profile", types.WorkerStatusAvailable)
 	pending := worker("", types.WorkerStatusPending)
-	assert.Equal(t, []*types.Worker{gpuDevices}, filterWorkersByResources([]*types.Worker{legacy, gpuDevices, pending}, request, nil))
+	assert.Equal(t, []*types.Worker{gpuDevices}, filterWorkersByResources([]*types.Worker{legacy, gpuDevices, pending}, request))
 	assert.False(t, hostMatchesCheckpoint(request.Checkpoint, pending))
 
 	request.Checkpoint.CompatibilityKey = "v1:profile"
 	assert.True(t, hostMatchesCheckpoint(request.Checkpoint, gpuDevices))
 	assert.True(t, hostMatchesCheckpoint(request.Checkpoint, pending), "legacy pending routing remains unchanged")
 	other := worker("v2:other", types.WorkerStatusAvailable)
-	assert.Equal(t, []*types.Worker{legacy, gpuDevices, pending}, filterWorkersByResources([]*types.Worker{legacy, gpuDevices, pending, other}, request, nil))
+	assert.Equal(t, []*types.Worker{legacy, gpuDevices, pending}, filterWorkersByResources([]*types.Worker{legacy, gpuDevices, pending, other}, request))
 	request.Checkpoint.CompatibilityKey = ""
-	assert.Equal(t, []*types.Worker{other}, filterWorkersByResources([]*types.Worker{other}, request, nil), "keyless restores still use free capacity")
+	assert.Equal(t, []*types.Worker{other}, filterWorkersByResources([]*types.Worker{other}, request), "keyless restores still use free capacity")
 	request.Checkpoint.Runtime = types.CheckpointRuntimeFilesystem
 	request.Checkpoint.CompatibilityKey = "v2:other"
-	assert.Equal(t, []*types.Worker{legacy, gpuDevices, pending}, filterWorkersByResources([]*types.Worker{legacy, gpuDevices, pending}, request, nil))
+	assert.Equal(t, []*types.Worker{legacy, gpuDevices, pending}, filterWorkersByResources([]*types.Worker{legacy, gpuDevices, pending}, request))
 }
 
 func TestCheckpointRuntimeFiltersProvisioningControllers(t *testing.T) {
-	runc := &LocalWorkerPoolControllerForTest{name: "runc", containerRuntime: types.ContainerRuntimeRunc.String()}
-	gvisor := &LocalWorkerPoolControllerForTest{name: "gvisor", containerRuntime: types.ContainerRuntimeGvisor.String()}
-	controllers := []WorkerPoolController{runc, gvisor}
+	pools := map[string]types.WorkerPoolConfig{
+		"runc":   {ContainerRuntime: types.ContainerRuntimeRunc.String()},
+		"gvisor": {ContainerRuntime: types.ContainerRuntimeGvisor.String()},
+	}
 	request := &types.ContainerRequest{
 		Checkpoint: &types.Checkpoint{
 			CheckpointId: "checkpoint-1",
@@ -3177,13 +3219,13 @@ func TestCheckpointRuntimeFiltersProvisioningControllers(t *testing.T) {
 		},
 	}
 
-	assert.Equal(t, []WorkerPoolController{gvisor}, filterControllersByFlags(controllers, request))
+	assert.Equal(t, []string{"gvisor"}, poolsAccepting(request, pools))
 
 	request.Checkpoint.Runtime = ""
-	assert.Equal(t, controllers, filterControllersByFlags(controllers, request), "legacy checkpoints retain existing placement")
+	assert.Equal(t, []string{"gvisor", "runc"}, poolsAccepting(request, pools), "legacy checkpoints retain existing placement")
 
 	request.Checkpoint.Runtime = types.CheckpointRuntimeFilesystem
-	assert.Equal(t, controllers, filterControllersByFlags(controllers, request), "filesystem checkpoints cold-start on any runtime")
+	assert.Equal(t, []string{"gvisor", "runc"}, poolsAccepting(request, pools), "filesystem checkpoints cold-start on any runtime")
 }
 
 func TestCheckpointAcceleratorFiltersExistingWorkers(t *testing.T) {
@@ -3212,18 +3254,18 @@ func TestCheckpointAcceleratorFiltersExistingWorkers(t *testing.T) {
 	l40s := worker("l40s", "L40S")
 	workers := []*types.Worker{rtx5090, l40s}
 
-	assert.Equal(t, []*types.Worker{rtx5090}, filterWorkersByResources(workers, request, nil))
+	assert.Equal(t, []*types.Worker{rtx5090}, filterWorkersByResources(workers, request))
 
 	request.Checkpoint.Accelerator = ""
-	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "legacy checkpoints retain GPU preference placement")
+	assert.Equal(t, workers, filterWorkersByResources(workers, request), "legacy checkpoints retain GPU preference placement")
 
 	request.Checkpoint.Runtime = types.CheckpointRuntimeFilesystem
 	request.Checkpoint.Accelerator = "RTX5090"
-	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "filesystem checkpoints do not require the source accelerator")
+	assert.Equal(t, workers, filterWorkersByResources(workers, request), "filesystem checkpoints do not require the source accelerator")
 
 	request.Checkpoint.Accelerator = "RTX5090"
 	request.Checkpoint.Status = string(types.CheckpointStatusRestoreFailed)
-	assert.Equal(t, workers, filterWorkersByResources(workers, request, nil), "non-available checkpoints cold-start normally")
+	assert.Equal(t, workers, filterWorkersByResources(workers, request), "non-available checkpoints cold-start normally")
 }
 
 func TestCheckpointAcceleratorFiltersProvisioningControllers(t *testing.T) {
@@ -3260,19 +3302,19 @@ func TestCheckpointAcceleratorDefersUnknownAgentGPUToWorker(t *testing.T) {
 	assert.NoError(t, err)
 	scheduler.workerPoolManager = NewWorkerPoolManager()
 
-	private := &LocalWorkerPoolControllerForTest{name: "private", mode: types.PoolModePrivate}
-	localCPU := &LocalWorkerPoolControllerForTest{name: "local-cpu"}
-	privateL40S := &LocalWorkerPoolControllerForTest{name: "private-l40s", mode: types.PoolModePrivate}
-	scheduler.workerPoolManager.SetPool(private.name, types.WorkerPoolConfig{Mode: types.PoolModePrivate}, private)
-	scheduler.workerPoolManager.SetPool(localCPU.name, types.WorkerPoolConfig{}, localCPU)
-	scheduler.workerPoolManager.SetPool(privateL40S.name, types.WorkerPoolConfig{Mode: types.PoolModePrivate, GPUType: "L40S"}, privateL40S)
+	pools := []*WorkerPool{
+		routeTestPool("private", types.WorkerPoolConfig{Mode: types.PoolModePrivate}),
+		routeTestPool("local-cpu", types.WorkerPoolConfig{}),
+		routeTestPool("private-l40s", types.WorkerPoolConfig{Mode: types.PoolModePrivate, GPUType: "L40S"}),
+	}
 
 	request := &types.ContainerRequest{
 		Cpu:          1000,
 		Memory:       1000,
 		GpuRequest:   []string{string(types.GPU_ANY)},
 		GpuCount:     1,
-		PoolSelector: private.name,
+		PoolSelector: "private",
+		Workspace:    testWorkspaceWithStorage(),
 		Checkpoint: &types.Checkpoint{
 			CheckpointId: "checkpoint-1",
 			Status:       string(types.CheckpointStatusAvailable),
@@ -3280,8 +3322,17 @@ func TestCheckpointAcceleratorDefersUnknownAgentGPUToWorker(t *testing.T) {
 		},
 	}
 
-	controllers := []WorkerPoolController{private, localCPU, privateL40S}
-	assert.Equal(t, []WorkerPoolController{private}, scheduler.filterControllersByCheckpointAccelerator(controllers, request))
+	// Whichever pool the request names, these are the ones able to restore it.
+	ableToRun := func() []string {
+		names := []string{}
+		for _, pool := range pools {
+			if poolCanRun(pool, newRouteQuery(request, "")) {
+				names = append(names, pool.Name)
+			}
+		}
+		return names
+	}
+	assert.Equal(t, []string{"private"}, ableToRun())
 
 	matching := &types.Worker{
 		Id:           "rtx5090",
@@ -3299,62 +3350,15 @@ func TestCheckpointAcceleratorDefersUnknownAgentGPUToWorker(t *testing.T) {
 		FreeGpuCount: 1,
 		Gpu:          "L40S",
 	}
-	assert.Equal(t, []*types.Worker{matching}, filterWorkersByResources([]*types.Worker{matching, mismatching}, request, nil))
+	assert.Equal(t, []*types.Worker{matching}, filterWorkersByResources([]*types.Worker{matching, mismatching}, request))
 
 	request.GpuRequest = nil
 	request.GpuCount = 0
 	request.Checkpoint.Accelerator = "CPU"
-	assert.Equal(t, []WorkerPoolController{private, localCPU}, scheduler.filterControllersByCheckpointAccelerator(controllers, request))
+	assert.Equal(t, []string{"private", "local-cpu"}, ableToRun())
 
 	request.Checkpoint.Accelerator = ""
-	assert.Equal(t, controllers, scheduler.filterControllersByCheckpointAccelerator(controllers, request))
-}
-
-func TestCheckpointCompatibilityKeepsManagedOnDemandFallback(t *testing.T) {
-	scheduler, err := NewSchedulerForTest()
-	assert.Nil(t, err)
-	scheduler.workerPoolManager = NewWorkerPoolManager()
-
-	serverless := &LocalWorkerPoolControllerForTest{
-		name:             "serverless-rtx5090",
-		containerRuntime: types.ContainerRuntimeGvisor.String(),
-	}
-	scheduler.workerPoolManager.SetPool(serverless.name, types.WorkerPoolConfig{
-		GPUType:          "RTX5090",
-		ContainerRuntime: types.ContainerRuntimeGvisor.String(),
-	}, serverless)
-
-	onDemandName := types.FailoverOnDemandPoolName("RTX5090")
-	onDemand := &LocalWorkerPoolControllerForTest{
-		name:             onDemandName,
-		containerRuntime: types.ContainerRuntimeRunc.String(),
-		requiresSelector: true,
-	}
-	scheduler.workerPoolManager.SetPool(onDemandName, types.WorkerPoolConfig{
-		GPUType:              "RTX5090",
-		ContainerRuntime:     types.ContainerRuntimeRunc.String(),
-		RequiresPoolSelector: true,
-	}, onDemand)
-	scheduler.config.Scheduling.Failover = types.FailoverConfig{
-		Enabled: true,
-		Chains: map[string]types.FailoverChain{
-			"RTX5090": {OnDemand: &types.FailoverOnDemandStep{MaxNodes: 1}},
-		},
-	}
-
-	request := &types.ContainerRequest{
-		Gpu:      "RTX5090",
-		GpuCount: 1,
-		Checkpoint: &types.Checkpoint{
-			CheckpointId: "checkpoint-1",
-			Status:       string(types.CheckpointStatusAvailable),
-			Runtime:      types.ContainerRuntimeRunc.String(),
-			Accelerator:  "NVIDIA GeForce RTX 5090",
-		},
-	}
-	controllers, err := scheduler.getControllers(request)
-	assert.Nil(t, err)
-	assert.Equal(t, []WorkerPoolController{onDemand}, controllers)
+	assert.Equal(t, []string{"private", "local-cpu", "private-l40s"}, ableToRun())
 }
 
 func TestSelectGPUWorkerDoesNotMutatePriority(t *testing.T) {
@@ -3588,16 +3592,10 @@ func TestAgentManagedCapacityRequiresWorkspaceStorage(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.Nil(t, err)
 
-	agentController := &AgentWorkerPoolController{
-		name:             "gladiator",
-		workerPoolConfig: types.WorkerPoolConfig{Mode: types.PoolModeExternal},
-	}
-	localController := &LocalWorkerPoolControllerForTest{name: "default"}
+	pools := map[string]types.WorkerPoolConfig{"gladiator": {Mode: types.PoolModeExternal}, "default": {}}
 	request := &types.ContainerRequest{Cpu: 1000, Memory: 1000}
 
-	assert.Equal(t, []WorkerPoolController{localController}, filterControllersByFlags(
-		[]WorkerPoolController{agentController, localController}, request,
-	))
+	assert.Equal(t, []string{"default"}, poolsAccepting(request, pools))
 
 	workers := []*types.Worker{
 		{Id: "gladiator", PoolName: "gladiator", PoolSelector: "gladiator", Status: types.WorkerStatusAvailable, FreeCpu: 2000, FreeMemory: 2500, Priority: 1000},
@@ -3612,9 +3610,7 @@ func TestAgentManagedCapacityRequiresWorkspaceStorage(t *testing.T) {
 	worker, err = scheduler.selectWorkerFromWorkers(workers, request)
 	assert.Nil(t, err)
 	assert.Equal(t, "gladiator", worker.Id)
-	assert.Equal(t, []WorkerPoolController{agentController, localController}, filterControllersByFlags(
-		[]WorkerPoolController{agentController, localController}, request,
-	))
+	assert.Equal(t, []string{"default", "gladiator"}, poolsAccepting(request, pools))
 }
 
 func TestSelectBuildWorker(t *testing.T) {
@@ -3943,13 +3939,13 @@ func TestCPUShareAgentPoolAdmission(t *testing.T) {
 
 func TestCPUShareLocalWorkerKeepsPodCPUPhysical(t *testing.T) {
 	controller := &LocalKubernetesWorkerPoolController{
-		name: "shared",
+		name:             "shared",
+		workerPoolConfig: types.WorkerPoolConfig{CPUShareMultiplier: 1.5},
 		config: types.AppConfig{Worker: types.WorkerConfig{
 			JobResourcesEnforced:       true,
 			DefaultWorkerCPURequest:    1000,
 			DefaultWorkerMemoryRequest: 1024,
 		}},
-		workerPoolConfig: types.WorkerPoolConfig{CPUShareMultiplier: 1.5},
 	}
 
 	job, worker := controller.createWorkerJob("worker-1", 4000, 8192, "", 0, "token")
@@ -3964,15 +3960,15 @@ func TestCPUShareProvisioningPlaceholderMatchesLocalWorker(t *testing.T) {
 	s, err := NewSchedulerForTest()
 	require.NoError(t, err)
 	request := &types.ContainerRequest{ContainerId: "c", Cpu: 3000, Memory: 1024}
-	for _, controller := range []*LocalWorkerPoolControllerForTest{{name: "local"}, {name: "agent", mode: types.PoolModePrivate}} {
-		s.workerPoolManager.SetPool(controller.Name(), types.WorkerPoolConfig{CPUShareMultiplier: 2}, controller)
+	for name, mode := range map[string]types.PoolMode{"local": types.PoolModeLocal, "agent": types.PoolModePrivate} {
+		s.workerPoolManager.SetPool(name, types.WorkerPoolConfig{CPUShareMultiplier: 2, Mode: mode}, &LocalWorkerPoolControllerForTest{name: name})
 	}
 
 	local, _ := s.workerPoolManager.GetPool("local")
-	cpu := s.workerCPUForControllerRequest(local.Controller, request)
-	require.Equal(t, 2*cpu, s.newProvisioningReservation(request, local.Controller).worker.TotalCpu)
+	size := s.workerSizeFor(local, request)
+	require.Equal(t, 2*size.cpu, s.newProvisioningReservation(request, local, size, 1).worker.TotalCpu)
 	agent, _ := s.workerPoolManager.GetPool("agent")
-	require.EqualValues(t, 3000, s.newProvisioningReservation(request, agent.Controller).worker.TotalCpu)
+	require.EqualValues(t, 3000, s.newProvisioningReservation(request, agent, s.workerSizeFor(agent, request), 1).worker.TotalCpu)
 }
 
 func TestNewSchedulerRejectsInvalidCPUShareMultiplier(t *testing.T) {
@@ -3981,4 +3977,3506 @@ func TestNewSchedulerRejectsInvalidCPUShareMultiplier(t *testing.T) {
 	}}}
 	_, err := NewScheduler(context.Background(), config, nil, nil, nil, nil)
 	require.ErrorContains(t, err, `worker pool "shared"`)
+}
+
+// routeFleet is one of each kind of pool the routing rule tells apart.
+var routeFleet = map[string]types.WorkerPoolConfig{
+	"cpu":        {},
+	"cpu-first":  {Priority: 10},
+	"cpu-shared": {Priority: 20, CPUShareMultiplier: 2.5},
+	"cpu-named":  {RequiresPoolSelector: true},
+	"build":      {RequiresPoolSelector: true},
+	"gvisor":     {ContainerRuntime: types.ContainerRuntimeGvisor.String()},
+	"microvm":    {ContainerRuntime: types.ContainerRuntimeMicroVM.String()},
+
+	"a10g":         {GPUType: "A10G", Priority: 10},
+	"a10g-reserve": {GPUType: "A10G", Priority: 5},
+	"a10g-agent":   {GPUType: "A10G", Priority: 1, Mode: types.PoolModeExternal},
+	"a10g-spot":    {GPUType: "A10G", Priority: 20, Preemptable: true},
+	"a10g-partner": {GPUType: "A10G", Priority: 30, Mode: types.PoolModeProvider, RequiresPoolSelector: true},
+	"t4":           {GPUType: "T4"},
+	"rtx4090":      {GPUType: "RTX4090", Priority: 5, AlsoServes: []string{"A10G"}},
+	"l40s":         {GPUType: "L40S", Priority: 3, RequiresPoolSelector: true, AlsoServes: []string{"A10G", "T4"}},
+	"h100-spot":    {GPUType: "H100", Priority: 50, Preemptable: true, AlsoServes: []string{"a10g"}},
+	"microvm-4090": {GPUType: "RTX4090", ContainerRuntime: types.ContainerRuntimeMicroVM.String()},
+}
+
+const routeFleetBuildPool = "build"
+
+func routeTestPool(name string, config types.WorkerPoolConfig) *WorkerPool {
+	return &WorkerPool{Name: name, Config: config, Controller: &LocalWorkerPoolControllerForTest{name: name}}
+}
+
+func routeTestPools(configs map[string]types.WorkerPoolConfig) []*WorkerPool {
+	pools := make([]*WorkerPool, 0, len(configs))
+	for name, config := range configs {
+		pools = append(pools, routeTestPool(name, config))
+	}
+	return pools
+}
+
+// describeRoute lists a route's pools in order. A pool that only also serves
+// the request is followed by its rank.
+func describeRoute(r route) []string {
+	names := []string{}
+	for _, pool := range r.pools {
+		name := pool.Name
+		if pool.rank > 0 {
+			name = fmt.Sprintf("%s (%d)", name, pool.rank)
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
+// getControllers returns the controllers of the pools a request may grow, in
+// route order.
+func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoolController, error) {
+	r, err := s.growthRouteFor(request)
+	if err != nil {
+		return nil, err
+	}
+	controllers := make([]WorkerPoolController, 0, len(r.pools))
+	for _, pool := range r.pools {
+		controllers = append(controllers, pool.Controller)
+	}
+	return controllers, nil
+}
+
+func controllerNames(controllers []WorkerPoolController) []string {
+	names := make([]string, 0, len(controllers))
+	for _, controller := range controllers {
+		names = append(names, controller.Name())
+	}
+	return names
+}
+
+// poolsAccepting returns the names of the pools that accept the request, in
+// route order. The pools are the test controllers' own, each with the given
+// config.
+func poolsAccepting(request *types.ContainerRequest, configs map[string]types.WorkerPoolConfig) []string {
+	return describeRoute(newRoute(request, routeTestPools(configs), ""))
+}
+
+func TestRoute(t *testing.T) {
+	gpu := func(gpus ...string) *types.ContainerRequest {
+		return &types.ContainerRequest{GpuRequest: gpus, GpuCount: 1}
+	}
+	withStorage := func(request *types.ContainerRequest) *types.ContainerRequest {
+		request.Workspace = testWorkspaceWithStorage()
+		return request
+	}
+	preemptable := func(request *types.ContainerRequest) *types.ContainerRequest {
+		request.Preemptable = true
+		return request
+	}
+	named := func(pool string, request *types.ContainerRequest) *types.ContainerRequest {
+		request.PoolSelector = pool
+		return request
+	}
+	stub := func(stubType string, request *types.ContainerRequest) *types.ContainerRequest {
+		request.Stub.Type = types.StubType(stubType)
+		return request
+	}
+	tier := func(tier string) *types.ContainerRequest {
+		request := &types.ContainerRequest{}
+		request.Stub.Config = `{"cpu_tier":"` + tier + `"}`
+		return request
+	}
+	dockerfile := "FROM python:3.12"
+
+	tests := []struct {
+		name    string
+		request *types.ContainerRequest
+		want    []string
+	}{
+		// CPU work runs on CPU pools that need no naming, by priority then
+		// name. Work that does not share CPU overflows onto Shared pools
+		// last, whatever their priority.
+		{"cpu work", &types.ContainerRequest{}, []string{"cpu-first", "cpu", "gvisor", "cpu-shared"}},
+		{"performance cpu work", tier("performance"), []string{"cpu-first", "cpu", "gvisor", "cpu-shared"}},
+		{"shared cpu work", tier("shared"), []string{"cpu-shared"}},
+		{"spot cpu work borrows from every hosted cpu pool", tier("spot"), []string{"cpu-shared", "cpu-first", "cpu", "gvisor"}},
+
+		// A named pool is the whole route.
+		{"named pool", named("cpu-named", &types.ContainerRequest{}), []string{"cpu-named"}},
+		{"named pool that does not exist", named("retired", &types.ContainerRequest{}), []string{}},
+		{"named gpu pool", named("l40s", gpu("L40S")), []string{"l40s"}},
+		{"naming a pool does not make it accept the request", named("a10g-spot", gpu("A10G")), []string{}},
+
+		// A GPU request runs on the pools of its type, then on the pools
+		// that also serve it.
+		{"gpu", gpu("A10G"), []string{"a10g", "a10g-reserve", "rtx4090 (1)", "l40s (2)"}},
+		{"gpu with a fallback behind a selector", gpu("T4"), []string{"t4", "l40s (1)"}},
+		{"alsoServes goes one way", gpu("RTX4090"), []string{"rtx4090"}},
+		{"gpu whose only pool must be named", gpu("L40S"), []string{}},
+		{"gpu no pool has or serves", gpu("B200"), []string{}},
+		{"several gpu types use the fallbacks of each", gpu("H100", "T4", "A10G"),
+			[]string{"t4", "a10g", "a10g-reserve", "rtx4090 (1)", "l40s (2)"}},
+		// The order a request lists GPU types in comes before priority.
+		{"gpu types in the order the request lists them", gpu("RTX4090", "A10G"),
+			[]string{"rtx4090", "a10g", "a10g-reserve", "l40s (1)"}},
+		{"any stands for every gpu type not listed before it", gpu("T4", string(types.GPU_ANY)),
+			[]string{"t4", "a10g", "a10g-reserve", "rtx4090"}},
+
+		// What the request brings decides which of those pools it may use.
+		{"agent pools need workspace storage", withStorage(gpu("A10G")),
+			[]string{"a10g", "a10g-reserve", "a10g-agent", "rtx4090 (1)", "l40s (2)"}},
+		{"preemptable pools take work that accepts interruption", preemptable(gpu("A10G")),
+			[]string{"a10g-spot", "a10g", "a10g-reserve", "h100-spot (1)", "rtx4090 (2)", "l40s (3)"}},
+		{"only preemptable pool of its type", gpu("H100"), []string{}},
+		{"partner machines run managed endpoints only", named("a10g-partner", withStorage(gpu("A10G"))), []string{}},
+		{"managed endpoint on partner machines",
+			stub(types.StubTypeManagedEndpointDeployment, named("a10g-partner", withStorage(gpu("A10G")))), []string{"a10g-partner"}},
+
+		// The build pool is for builds.
+		{"build pool refuses other work", named("build", &types.ContainerRequest{}), []string{}},
+		{"build pool takes builds",
+			named("build", &types.ContainerRequest{BuildOptions: types.BuildOptions{Dockerfile: &dockerfile}}), []string{"build"}},
+
+		// Runtimes.
+		{"docker needs a sandboxed runtime", &types.ContainerRequest{DockerEnabled: true}, []string{"gvisor"}},
+		{"vm sandbox runs only on microvm",
+			stub(types.StubTypeSandbox, &types.ContainerRequest{UseVM: true}), []string{"microvm"}},
+		{"gpu vm sandbox", func() *types.ContainerRequest {
+			request := stub(types.StubTypeSandbox, gpu("RTX4090"))
+			request.UseVM = true
+			return request
+		}(), []string{"microvm-4090"}},
+		{"vm without use_vm runs nowhere", stub(types.StubTypeVM, &types.ContainerRequest{}), []string{}},
+		{"checkpoint restores on the runtime it was taken on", &types.ContainerRequest{Checkpoint: &types.Checkpoint{
+			CheckpointId: "c1", Status: string(types.CheckpointStatusAvailable), Runtime: types.ContainerRuntimeGvisor.String(),
+		}}, []string{"gvisor"}},
+	}
+
+	pools := routeTestPools(routeFleet)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidates := pools
+			if test.request.PoolSelector != "" {
+				// routeFor hands a request that names a pool only that pool.
+				candidates = slices.DeleteFunc(slices.Clone(pools), func(pool *WorkerPool) bool {
+					return pool.Name != test.request.PoolSelector
+				})
+			}
+			require.Equal(t, test.want, describeRoute(newRoute(test.request, candidates, routeFleetBuildPool)))
+		})
+	}
+}
+
+func TestRouteOrderDoesNotDependOnTheOrderPoolsAreListed(t *testing.T) {
+	request := &types.ContainerRequest{Gpu: "A10G", GpuCount: 1}
+	pools := routeTestPools(map[string]types.WorkerPoolConfig{
+		"primary-b": {GPUType: "A10G"},
+		"primary-a": {GPUType: "A10G"},
+		"spare-c":   {GPUType: "L40S", AlsoServes: []string{"A10G"}},
+		"spare-b":   {GPUType: "L40S", AlsoServes: []string{"A10G"}},
+		"spare-a":   {GPUType: "H100", AlsoServes: []string{"A10G"}},
+	})
+	want := []string{"primary-a", "primary-b", "spare-a (1)", "spare-b (2)", "spare-c (3)"}
+
+	for range 20 {
+		// routeTestPools ranges over a map, so each call lists the pools in
+		// a different order.
+		require.Equal(t, want, describeRoute(newRoute(request, slices.Clone(pools), "")))
+		pools = routeTestPools(map[string]types.WorkerPoolConfig{
+			"primary-b": {GPUType: "A10G"},
+			"primary-a": {GPUType: "A10G"},
+			"spare-c":   {GPUType: "L40S", AlsoServes: []string{"A10G"}},
+			"spare-b":   {GPUType: "L40S", AlsoServes: []string{"A10G"}},
+			"spare-a":   {GPUType: "H100", AlsoServes: []string{"A10G"}},
+		})
+	}
+}
+
+func TestAnyGPURunsOnEveryGPUPoolThatNeedsNoNaming(t *testing.T) {
+	request := &types.ContainerRequest{Gpu: string(types.GPU_ANY), GpuCount: 1}
+	got := newRoute(request, routeTestPools(routeFleet), routeFleetBuildPool)
+
+	// No CPU pool, no pool behind a selector, nothing preemptable, and no
+	// fallback rank: "any" asks for every type directly, so the pools are
+	// tried by priority alone.
+	require.Equal(t, []string{"a10g", "a10g-reserve", "rtx4090", "t4"}, describeRoute(got))
+}
+
+func TestCheckpointRestoresOnlyOnItsAccelerator(t *testing.T) {
+	request := &types.ContainerRequest{
+		GpuRequest: []string{"A10G", "RTX4090"},
+		GpuCount:   1,
+		Workspace:  testWorkspaceWithStorage(),
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: "c1", Status: string(types.CheckpointStatusAvailable), Accelerator: "RTX4090",
+		},
+	}
+	pools := routeTestPools(map[string]types.WorkerPoolConfig{
+		"a10g":    {GPUType: "A10G"},
+		"rtx4090": {GPUType: "RTX4090"},
+		// An agent pool with no gpuType holds whatever its machines have,
+		// so its workers are checked one by one.
+		"mixed-agent": {Mode: types.PoolModePrivate},
+	})
+
+	require.Equal(t, []string{"rtx4090"}, describeRoute(newRoute(request, pools, "")))
+
+	request.PoolSelector = "mixed-agent"
+	require.Equal(t, []string{"mixed-agent"}, describeRoute(newRoute(request, pools, "")))
+}
+
+func TestRouteRankOfWorker(t *testing.T) {
+	pools := routeTestPools(map[string]types.WorkerPoolConfig{
+		"a10g":      {GPUType: "A10G"},
+		"a10g-spot": {GPUType: "A10G", Preemptable: true},
+		"rtx4090":   {GPUType: "RTX4090", AlsoServes: []string{"A10G"}},
+		"l40s":      {GPUType: "L40S", RequiresPoolSelector: true, AlsoServes: []string{"A10G"}},
+	})
+	worker := func(pool string, requiresSelector bool) *types.Worker {
+		return &types.Worker{PoolName: pool, RequiresPoolSelector: requiresSelector}
+	}
+
+	tests := []struct {
+		name     string
+		selector string
+		worker   *types.Worker
+		wantRank int
+		wantOK   bool
+	}{
+		{name: "pool the request asked for", worker: worker("a10g", false), wantOK: true},
+		{name: "pool that also serves it", worker: worker("rtx4090", false), wantRank: 2, wantOK: true},
+		{name: "pool behind a selector that also serves it", worker: worker("l40s", true), wantRank: 1, wantOK: true},
+		{name: "pool that does not accept it", worker: worker("a10g-spot", false)},
+		// A pool this replica has not loaded is judged by its worker.
+		{name: "unloaded pool", worker: worker("a10g-new", false), wantOK: true},
+		{name: "unloaded pool behind a selector", worker: worker("someones-private-pool", true)},
+		// A workspace's private pool can share a shared pool's name.
+		{name: "private pool named like a shared pool", worker: worker("a10g", true)},
+		{name: "private pool named like a pool that also serves it", worker: &types.Worker{PoolName: "rtx4090", RequiresPoolSelector: true, WorkspaceId: "workspace"}},
+		{name: "managed machine of a pool that also serves it", worker: &types.Worker{PoolName: "rtx4090", WorkspaceId: "workspace", ControlPlaneManaged: true}, wantRank: 2, wantOK: true},
+		{name: "named pool", selector: "a10g", worker: worker("a10g", false), wantOK: true},
+		{name: "another pool than the one named", selector: "a10g", worker: worker("rtx4090", false)},
+		{name: "named pool that is not loaded", selector: "private", worker: worker("private", true), wantOK: true},
+		{name: "another pool than the unloaded one named", selector: "private", worker: worker("a10g", false)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := &types.ContainerRequest{Gpu: "A10G", GpuCount: 1, PoolSelector: test.selector}
+			candidates := pools
+			if test.selector != "" {
+				candidates = slices.DeleteFunc(slices.Clone(pools), func(pool *WorkerPool) bool {
+					return pool.Name != test.selector
+				})
+			}
+
+			rank, ok := newRoute(request, candidates, "").rankOf(test.worker)
+			require.Equal(t, test.wantOK, ok)
+			require.Equal(t, test.wantRank, rank)
+		})
+	}
+}
+
+func TestRouteEligibleWorkers(t *testing.T) {
+	pools := routeTestPools(map[string]types.WorkerPoolConfig{
+		"a10g":    {GPUType: "A10G"},
+		"agent":   {Mode: types.PoolModeExternal},
+		"rtx4090": {GPUType: "RTX4090", AlsoServes: []string{"A10G"}},
+		"t4":      {GPUType: "T4"},
+		"custom":  {GPUType: "FPGA9000", RequiresPoolSelector: true},
+	})
+	worker := func(id, pool, gpu string) *types.Worker {
+		return &types.Worker{Id: id, PoolName: pool, Gpu: gpu, RequiresPoolSelector: pools[slices.IndexFunc(pools, func(p *WorkerPool) bool {
+			return p.Name == pool
+		})].Config.RequiresPoolSelector}
+	}
+	workers := []*types.Worker{
+		worker("a10g", "a10g", "A10G"),
+		worker("agent-a10g", "agent", "A10G"),
+		worker("agent-h100", "agent", "H100"),
+		worker("rtx4090", "rtx4090", "RTX4090"),
+		worker("t4", "t4", "T4"),
+		worker("custom", "custom", "FPGA9000"),
+	}
+	ids := func(workers []*types.Worker) []string {
+		ids := []string{}
+		for _, worker := range workers {
+			ids = append(ids, worker.Id)
+		}
+		return ids
+	}
+	filter := func(request *types.ContainerRequest) []string {
+		candidates := pools
+		if request.PoolSelector != "" {
+			candidates = slices.DeleteFunc(slices.Clone(pools), func(pool *WorkerPool) bool {
+				return pool.Name != request.PoolSelector
+			})
+		}
+		request.Workspace = testWorkspaceWithStorage()
+		return ids(newRoute(request, candidates, "").eligible(workers))
+	}
+
+	// A pool that also serves the request takes it on whatever GPU it has.
+	// The agent pool has no gpuType, so it is in no GPU route, and each of
+	// its machines takes the requests for the GPU it has.
+	require.Equal(t, []string{"a10g", "agent-a10g", "rtx4090"}, filter(&types.ContainerRequest{Gpu: "A10G", GpuCount: 1}))
+	require.Equal(t, []string{"rtx4090"}, filter(&types.ContainerRequest{Gpu: "RTX4090", GpuCount: 1}))
+	require.Equal(t, []string{"agent-h100"}, filter(&types.ContainerRequest{Gpu: "H100", GpuCount: 1}))
+
+	// A pool that cannot run the request rules its machines out. Agent
+	// machines need workspace storage, which this request does not bring.
+	require.Equal(t, []string{"a10g", "rtx4090"},
+		ids(newRoute(&types.ContainerRequest{Gpu: "A10G", GpuCount: 1}, pools, "").eligible(workers)))
+
+	// Inside a named pool, the worker still needs a GPU the request can use.
+	require.Equal(t, []string{"agent-a10g"}, filter(&types.ContainerRequest{Gpu: "A10G", GpuCount: 1, PoolSelector: "agent"}))
+
+	// "any" means any GPU in the catalog, or whatever a named pool has.
+	require.Equal(t, []string{"a10g", "agent-a10g", "agent-h100", "rtx4090", "t4"},
+		filter(&types.ContainerRequest{Gpu: string(types.GPU_ANY), GpuCount: 1}))
+	require.Equal(t, []string{"custom"}, filter(&types.ContainerRequest{Gpu: string(types.GPU_ANY), GpuCount: 1, PoolSelector: "custom"}))
+
+	// A machine pin has already chosen the worker; its GPU still has to fit.
+	require.Equal(t, []string{"a10g", "agent-a10g", "rtx4090"},
+		filter(&types.ContainerRequest{Gpu: "A10G", GpuCount: 1, MachineId: "machine-1"}))
+}
+
+func TestRequestNamingAPoolGetsItsWorkspacesOwnPoolFirst(t *testing.T) {
+	manager := NewWorkerPoolManager()
+	manager.SetPool("gpu", types.WorkerPoolConfig{GPUType: "A10G", Priority: 1}, &LocalWorkerPoolControllerForTest{name: "gpu"})
+	manager.SetPoolAt(
+		agentPoolControllerKey("workspace-1", &compute.PoolState{Selector: "gpu"}), "gpu",
+		types.WorkerPoolConfig{Mode: types.PoolModePrivate, RequiresPoolSelector: true, Priority: 1000},
+		&LocalWorkerPoolControllerForTest{name: "gpu"},
+	)
+	scheduler := &Scheduler{workerPoolManager: manager}
+	request := func(workspace, selector string) *types.ContainerRequest {
+		return &types.ContainerRequest{
+			Gpu: "A10G", GpuCount: 1, WorkspaceId: workspace, PoolSelector: selector, Workspace: testWorkspaceWithStorage(),
+		}
+	}
+
+	own := scheduler.routeFor(request("workspace-1", "gpu"))
+	require.Len(t, own.pools, 1)
+	require.Equal(t, types.PoolModePrivate, own.pools[0].Config.Mode)
+
+	shared := scheduler.routeFor(request("workspace-2", "gpu"))
+	require.Len(t, shared.pools, 1)
+	require.Equal(t, int32(1), shared.pools[0].Config.Priority)
+
+	// A request that names no pool is never routed to a private pool.
+	unnamed := scheduler.routeFor(request("workspace-1", ""))
+	require.Len(t, unnamed.pools, 1)
+	require.Equal(t, int32(1), unnamed.pools[0].Config.Priority)
+}
+
+func TestHasManagedPoolForGPU(t *testing.T) {
+	manager := NewWorkerPoolManager()
+	for name, config := range map[string]types.WorkerPoolConfig{
+		"beta9-t4":     {GPUType: "T4"},
+		"private-h100": {GPUType: "H100", Mode: types.PoolModePrivate, RequiresPoolSelector: true},
+		// Provider pools only host managed endpoint replicas, even when a
+		// misconfigured one does not require a selector.
+		"provider-a6000": {GPUType: "A6000", Mode: types.PoolModeProvider},
+		"provider-spare": {GPUType: "L4", Mode: types.PoolModeProvider, AlsoServes: []string{"A16"}},
+		"spare-l40s":     {GPUType: "L40S", RequiresPoolSelector: true, AlsoServes: []string{"A10G"}},
+	} {
+		manager.SetPool(name, config, &LocalWorkerPoolControllerForTest{name: name})
+	}
+	scheduler := &Scheduler{workerPoolManager: manager}
+
+	// A pool with zero live workers still counts.
+	require.True(t, scheduler.HasManagedPoolForGPU("T4"))
+	// A GPU type that no pool has, but one also serves, has somewhere to run.
+	require.True(t, scheduler.HasManagedPoolForGPU("A10G"))
+	// Pools requiring a pool selector can't serve workloads that name none.
+	require.False(t, scheduler.HasManagedPoolForGPU("H100"))
+	require.False(t, scheduler.HasManagedPoolForGPU("L40S"))
+	// Provider pools never count for ordinary workloads.
+	require.False(t, scheduler.HasManagedPoolForGPU("A6000"))
+	require.False(t, scheduler.HasManagedPoolForGPU("A16"))
+	// GPU_ANY matches any GPU pool usable without a selector.
+	require.True(t, scheduler.HasManagedPoolForGPU(string(types.GPU_ANY)))
+	// A GPU type nothing has or serves would never be placed.
+	require.False(t, scheduler.HasManagedPoolForGPU("B200"))
+}
+
+// The fail-fast check and scheduling must agree about every GPU type, for
+// the work that the most pools take.
+func TestHasManagedPoolForGPUAgreesWithTheRoute(t *testing.T) {
+	manager := NewWorkerPoolManager()
+	for name, config := range routeFleet {
+		manager.SetPool(name, config, &LocalWorkerPoolControllerForTest{name: name})
+	}
+	scheduler := &Scheduler{workerPoolManager: manager}
+
+	for _, gpu := range types.AllGPUTypes() {
+		request := &types.ContainerRequest{
+			Gpu: gpu.String(), GpuCount: 1, Preemptable: true,
+			// A request that brings everything else a pool can ask for.
+			Workspace: testWorkspaceWithStorage(),
+		}
+		routed := len(scheduler.routeFor(request).pools) > 0
+		require.Equal(t, routed, scheduler.HasManagedPoolForGPU(gpu.String()), gpu)
+	}
+}
+
+// overflowSchedulerForTest returns a scheduler whose A10G requests may
+// overflow into the 4090 pool first and the L40S pool second.
+func overflowSchedulerForTest(t *testing.T) *Scheduler {
+	t.Helper()
+
+	scheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	for name, config := range map[string]types.WorkerPoolConfig{
+		"beta9-4090": {GPUType: "RTX4090", Priority: 2, AlsoServes: []string{"A10G"}},
+		"beta9-l40s": {GPUType: "L40S", Priority: 1, AlsoServes: []string{"A10G"}},
+		"beta9-h100": {GPUType: "H100", Priority: 9},
+	} {
+		scheduler.workerPoolManager.SetPool(name, config, &LocalWorkerPoolControllerForTest{
+			ctx:        scheduler.ctx,
+			name:       name,
+			config:     scheduler.config,
+			workerRepo: scheduler.workerRepo,
+		})
+	}
+	return scheduler
+}
+
+func gpuWorkerForTest(id, poolName, gpu string, freeGpuCount uint32) *types.Worker {
+	return &types.Worker{
+		Id:           id,
+		PoolName:     poolName,
+		Gpu:          gpu,
+		Status:       types.WorkerStatusAvailable,
+		FreeCpu:      4000,
+		FreeMemory:   8000,
+		FreeGpuCount: freeGpuCount,
+		Priority:     10,
+	}
+}
+
+// TestSelectionFollowsTheRoute covers the placement rule: free capacity
+// anywhere in the route schedules immediately, the pools of the requested GPU
+// type win while they have room, and the pools that also serve it are taken in
+// route order. Available overflow capacity beating pending capacity of the
+// requested type falls out of the attempt order in reserve.go, which only
+// looks at pending workers after no available worker fits.
+func TestSelectionFollowsTheRoute(t *testing.T) {
+	tests := []struct {
+		name       string
+		workers    []*types.Worker
+		request    *types.ContainerRequest
+		wantWorker string
+	}{
+		{
+			name: "pool of the requested type wins while it has capacity",
+			workers: []*types.Worker{
+				gpuWorkerForTest("spare-4090", "beta9-4090", "RTX4090", 1),
+				gpuWorkerForTest("a10g", "beta9-a10g", "A10G", 1),
+			},
+			request:    &types.ContainerRequest{Gpu: "A10G", GpuCount: 1, Cpu: 1000, Memory: 1000},
+			wantWorker: "a10g",
+		},
+		{
+			name: "pool that also serves the type takes the request when its own pool is full",
+			workers: []*types.Worker{
+				gpuWorkerForTest("a10g", "beta9-a10g", "A10G", 0),
+				gpuWorkerForTest("spare-4090", "beta9-4090", "RTX4090", 1),
+			},
+			request:    &types.ContainerRequest{Gpu: "A10G", GpuCount: 1, Cpu: 1000, Memory: 1000},
+			wantWorker: "spare-4090",
+		},
+		{
+			name: "route order decides between pools that also serve the type",
+			workers: []*types.Worker{
+				gpuWorkerForTest("spare-l40s", "beta9-l40s", "L40S", 1),
+				gpuWorkerForTest("spare-4090", "beta9-4090", "RTX4090", 1),
+			},
+			request:    &types.ContainerRequest{Gpu: "A10G", GpuCount: 1, Cpu: 1000, Memory: 1000},
+			wantWorker: "spare-4090",
+		},
+		{
+			name: "later pool takes the request when the earlier one is full",
+			workers: []*types.Worker{
+				gpuWorkerForTest("spare-4090", "beta9-4090", "RTX4090", 0),
+				gpuWorkerForTest("spare-l40s", "beta9-l40s", "L40S", 1),
+			},
+			request:    &types.ContainerRequest{Gpu: "A10G", GpuCount: 1, Cpu: 1000, Memory: 1000},
+			wantWorker: "spare-l40s",
+		},
+		{
+			name: "gpu spelling in alsoServes is case-insensitive",
+			workers: []*types.Worker{
+				gpuWorkerForTest("spare-4090", "beta9-4090", "RTX4090", 1),
+			},
+			request:    &types.ContainerRequest{GpuRequest: []string{"A10G"}, GpuCount: 1, Cpu: 1000, Memory: 1000},
+			wantWorker: "spare-4090",
+		},
+		{
+			name: "capacity in a pool that does not serve the type is invisible",
+			workers: []*types.Worker{
+				gpuWorkerForTest("h100", "beta9-h100", "H100", 1),
+			},
+			request: &types.ContainerRequest{Gpu: "A10G", GpuCount: 1, Cpu: 1000, Memory: 1000},
+		},
+		{
+			name: "alsoServes goes one way",
+			workers: []*types.Worker{
+				gpuWorkerForTest("a10g", "beta9-a10g", "A10G", 1),
+			},
+			request: &types.ContainerRequest{Gpu: "RTX4090", GpuCount: 1, Cpu: 1000, Memory: 1000},
+		},
+		{
+			name: "any gpu takes no overflow rank",
+			workers: []*types.Worker{
+				gpuWorkerForTest("spare-4090", "beta9-4090", "RTX4090", 1),
+				gpuWorkerForTest("h100", "beta9-h100", "H100", 1),
+			},
+			request: &types.ContainerRequest{Gpu: string(types.GPU_ANY), GpuCount: 1, Cpu: 1000, Memory: 1000},
+			// Both pools are asked for directly, so the ordinary GPU
+			// preference decides.
+			wantWorker: "h100",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scheduler := overflowSchedulerForTest(t)
+
+			worker, err := scheduler.selectWorkerFromWorkers(test.workers, test.request)
+			if test.wantWorker == "" {
+				assert.Error(t, err)
+				return
+			}
+			assert.Nil(t, err)
+			assert.Equal(t, test.wantWorker, worker.Id)
+		})
+	}
+}
+
+func TestReadyOverflowCapacityPrecedesPendingOrProvisionableCapacityOfTheRequestedType(t *testing.T) {
+	scheduler := overflowSchedulerForTest(t)
+	a10gController := &LocalWorkerPoolControllerForTest{
+		ctx:        scheduler.ctx,
+		name:       "beta9-a10g",
+		config:     scheduler.config,
+		workerRepo: scheduler.workerRepo,
+	}
+	scheduler.workerPoolManager.SetPool(
+		"beta9-a10g",
+		types.WorkerPoolConfig{GPUType: "A10G"},
+		a10gController,
+	)
+
+	pendingA10G := gpuWorkerForTest("pending-a10g", "beta9-a10g", "A10G", 1)
+	pendingA10G.Status = types.WorkerStatusPending
+	ready4090 := gpuWorkerForTest("ready-4090", "beta9-4090", "RTX4090", 1)
+	assert.NoError(t, scheduler.workerRepo.AddWorker(pendingA10G))
+	assert.NoError(t, scheduler.workerRepo.AddWorker(ready4090))
+
+	request := &types.ContainerRequest{
+		Gpu:       "A10G",
+		GpuCount:  1,
+		Cpu:       1000,
+		Memory:    1000,
+		Timestamp: time.Now(),
+	}
+	setPendingSchedulerRequests(t, scheduler, request)
+	scheduler.processRequestBatch(
+		[]*types.ContainerRequest{request},
+		[]*types.Worker{pendingA10G, ready4090},
+	)
+
+	queued, err := nextContainerRequest(scheduler.workerRepo, ready4090.Id)
+	assert.NoError(t, err)
+	assert.NotNil(t, queued)
+	assert.Equal(t, request.ContainerId, queued.ContainerId)
+	assert.Equal(t, 0, a10gController.AddWorkerCallCount())
+}
+
+func TestRouteRankOverridesWorkerPriority(t *testing.T) {
+	scheduler := overflowSchedulerForTest(t)
+	a10g := gpuWorkerForTest("a10g", "beta9-a10g", "A10G", 1)
+	a10g.Priority = -100
+	first := gpuWorkerForTest("spare-4090", "beta9-4090", "RTX4090", 1)
+	first.Priority = -50
+	second := gpuWorkerForTest("spare-l40s", "beta9-l40s", "L40S", 1)
+	second.Priority = 100
+	request := &types.ContainerRequest{Gpu: "A10G", GpuCount: 1, Cpu: 1000, Memory: 1000}
+
+	worker, err := scheduler.selectWorkerFromWorkers([]*types.Worker{second, first, a10g}, request)
+	assert.Nil(t, err)
+	assert.Equal(t, a10g.Id, worker.Id)
+
+	a10g.FreeGpuCount = 0
+	worker, err = scheduler.selectWorkerFromWorkers([]*types.Worker{second, first, a10g}, request)
+	assert.Nil(t, err)
+	assert.Equal(t, first.Id, worker.Id)
+}
+
+// A pool that hosts one of the request's GPU types is asked for directly,
+// even though it also serves another of them as overflow.
+func TestPoolOfARequestedGPUTypeIsNotTreatedAsOverflow(t *testing.T) {
+	scheduler := overflowSchedulerForTest(t)
+	configured := gpuWorkerForTest("configured-4090", "beta9-4090", "RTX4090", 1)
+	configured.Priority = 2
+	unloaded := gpuWorkerForTest("unloaded-4090", "pool-this-replica-has-not-loaded", "RTX4090", 1)
+	unloaded.Priority = -1
+
+	request := &types.ContainerRequest{
+		GpuRequest: []string{"RTX4090", "A10G"},
+		GpuCount:   1,
+		Cpu:        1000,
+		Memory:     1000,
+	}
+	worker, err := scheduler.selectWorkerFromWorkers([]*types.Worker{unloaded, configured}, request)
+	assert.Nil(t, err)
+	assert.Equal(t, configured.Id, worker.Id)
+}
+
+func TestStorageBackedRequestPrefersManagedAgentCapacity(t *testing.T) {
+	scheduler := overflowSchedulerForTest(t)
+	agent := gpuWorkerForTest("managed-agent", "agent-4090", "RTX4090", 1)
+	agent.ControlPlaneManaged = true
+	agent.PoolSelector = "agent-4090"
+	agent.Priority = 2
+	legacy := gpuWorkerForTest("legacy-4090", "legacy-4090", "RTX4090", 1)
+	legacy.Priority = 3
+
+	request := &types.ContainerRequest{
+		GpuRequest: []string{"RTX4090", "A10G"},
+		GpuCount:   1,
+		Cpu:        1000,
+		Memory:     1000,
+		Workspace:  testWorkspaceWithStorage(),
+	}
+	worker, err := scheduler.selectWorkerFromWorkers([]*types.Worker{legacy, agent}, request)
+	assert.Nil(t, err)
+	assert.Equal(t, agent.Id, worker.Id)
+
+	request.Workspace = types.Workspace{}
+	worker, err = scheduler.selectWorkerFromWorkers([]*types.Worker{legacy, agent}, request)
+	assert.Nil(t, err)
+	assert.Equal(t, legacy.Id, worker.Id)
+}
+
+func chainsForTest(chains map[string][]string) types.FailoverConfig {
+	config := types.FailoverConfig{Enabled: true, Chains: map[string]types.FailoverChain{}}
+	for gpu, pools := range chains {
+		config.Chains[gpu] = types.FailoverChain{Pools: pools}
+	}
+	return config
+}
+
+func TestChainsBecomeAlsoServes(t *testing.T) {
+	pools := map[string]types.WorkerPoolConfig{
+		"a10g":    {GPUType: "A10G", Priority: 10},
+		"rtx4090": {GPUType: "RTX4090", Priority: 5},
+		"l40s":    {GPUType: "L40S", Priority: 3},
+	}
+
+	migration := migrateFailoverChains(chainsForTest(map[string][]string{"a10g": {"rtx4090", "l40s"}}), pools)
+
+	require.Equal(t, map[string][]string{"rtx4090": {"A10G"}, "l40s": {"A10G"}}, migration.alsoServes)
+	require.Equal(t, []string{
+		"worker.pools.l40s.alsoServes: [A10G]",
+		"worker.pools.rtx4090.alsoServes: [A10G]",
+	}, migration.write)
+	// The chain's order is the order the pools' priorities give.
+	require.Empty(t, migration.reordered)
+	require.Empty(t, migration.notes)
+}
+
+func TestChainWhoseOrderDiffersFromPrioritiesIsFlagged(t *testing.T) {
+	pools := map[string]types.WorkerPoolConfig{
+		"rtx4090": {GPUType: "RTX4090", Priority: 5},
+		"l40s":    {GPUType: "L40S", Priority: 9},
+		"h100":    {GPUType: "H100", Priority: 5},
+	}
+
+	migration := migrateFailoverChains(chainsForTest(map[string][]string{"A10G": {"rtx4090", "l40s", "h100"}}), pools)
+
+	require.Equal(t, []string{
+		"A10G fallbacks were tried in the order [rtx4090, l40s, h100] and are now tried by priority, then name: " +
+			"[l40s, h100, rtx4090]; set worker.pools.<name>.priority to keep the old order",
+	}, migration.reordered)
+}
+
+func TestChainNamingAPoolOutsideTheConfigFile(t *testing.T) {
+	pools := map[string]types.WorkerPoolConfig{"rtx4090": {GPUType: "RTX4090"}}
+
+	migration := migrateFailoverChains(chainsForTest(map[string][]string{"A10G": {"spot-l40s", "rtx4090"}}), pools)
+
+	require.Equal(t, []string{
+		"worker.pools.rtx4090.alsoServes: [A10G]",
+		"worker.pools.spot-l40s.alsoServes: [A10G]  (not in this config: set also_serves on it through the pools API)",
+	}, migration.write)
+	// Its priority is not known here, so its place in the order is not judged.
+	require.Empty(t, migration.reordered)
+}
+
+// A chain could name a pool with no gpuType, which alsoServes cannot.
+func TestChainNamingAPoolWithNoGPUType(t *testing.T) {
+	pools := map[string]types.WorkerPoolConfig{"fleet": {Mode: types.PoolModeExternal}}
+
+	migration := migrateFailoverChains(chainsForTest(map[string][]string{"A10G": {"fleet"}}), pools)
+
+	require.Equal(t, []string{
+		"worker.pools.fleet.alsoServes: [A10G]  (a pool with no gpuType cannot list alsoServes: set its gpuType)",
+	}, migration.write)
+	// Until the section goes, the pool keeps taking the chain's requests.
+	require.Equal(t, []string{"A10G"}, migration.apply("fleet", pools["fleet"]).AlsoServes)
+}
+
+func TestSeveralChainsAreNotedBecauseRequestsNowUseAllOfThem(t *testing.T) {
+	pools := map[string]types.WorkerPoolConfig{"l40s": {GPUType: "L40S"}, "rtx4090": {GPUType: "RTX4090"}}
+
+	migration := migrateFailoverChains(chainsForTest(map[string][]string{"A10G": {"l40s"}, "T4": {"l40s", "rtx4090"}}), pools)
+
+	require.Equal(t, []string{
+		"worker.pools.l40s.alsoServes: [A10G, T4]",
+		"worker.pools.rtx4090.alsoServes: [T4]",
+	}, migration.write)
+	require.Len(t, migration.notes, 1)
+	require.Contains(t, migration.notes[0], "uses the fallback pools of all of them")
+}
+
+func TestDisabledChainsHaveNoEffect(t *testing.T) {
+	config := chainsForTest(map[string][]string{"A10G": {"rtx4090"}})
+	config.Enabled = false
+
+	migration := migrateFailoverChains(config, map[string]types.WorkerPoolConfig{"rtx4090": {GPUType: "RTX4090"}})
+
+	require.Empty(t, migration.alsoServes)
+	require.Empty(t, migration.write)
+	require.Equal(t, []string{"scheduling.failover is disabled, so its chains have no effect; remove the section"}, migration.notes)
+
+	require.Equal(t, chainMigration{alsoServes: map[string][]string{}}, migrateFailoverChains(types.FailoverConfig{}, nil),
+		"a config without the section says nothing")
+}
+
+func TestChainsAreAddedToWhatAPoolAlreadyServes(t *testing.T) {
+	migration := migrateFailoverChains(chainsForTest(map[string][]string{"A10G": {"l40s"}, "T4": {"l40s"}}), nil)
+	written := []string{"t4"}
+
+	config := migration.apply("l40s", types.WorkerPoolConfig{GPUType: "L40S", AlsoServes: written})
+	require.Equal(t, []string{"t4", "A10G"}, config.AlsoServes)
+	require.Equal(t, []string{"t4"}, written, "the pool's own config is not modified")
+	require.NoError(t, config.Validate())
+
+	untouched := migration.apply("a10g", types.WorkerPoolConfig{GPUType: "A10G"})
+	require.Empty(t, untouched.AlsoServes)
+}
+
+// A chain could name a pool of its own GPU type. That changed nothing for a
+// pool requests of the type reach anyway. For one that requires a selector,
+// the chain was what let in the requests that name no pool, after the pools
+// that need no naming.
+func TestChainNamingAPoolOfItsOwnGPUTypeBehindASelector(t *testing.T) {
+	pools := map[string]types.WorkerPoolConfig{
+		"a10g":          {GPUType: "A10G"},
+		"a10g-reserved": {GPUType: "A10G", Priority: 50, RequiresPoolSelector: true},
+		"l40s":          {GPUType: "L40S", Priority: 5},
+	}
+	migration := migrateFailoverChains(chainsForTest(map[string][]string{"A10G": {"a10g", "a10g-reserved", "l40s"}}), pools)
+
+	require.Equal(t, []string{
+		"worker.pools.a10g-reserved.alsoServes: [A10G]",
+		"worker.pools.l40s.alsoServes: [A10G]",
+	}, migration.write, "the open pool of the chain's type has nothing to write")
+	require.Empty(t, migration.reordered)
+
+	for name, config := range pools {
+		config = migration.apply(name, config)
+		require.NoError(t, config.Validate(), name)
+		pools[name] = config
+	}
+	require.Empty(t, pools["a10g"].AlsoServes)
+	require.Equal(t, []string{"A10G"}, pools["a10g-reserved"].AlsoServes)
+
+	request := func(selector string, gpus ...string) *types.ContainerRequest {
+		return &types.ContainerRequest{GpuRequest: gpus, GpuCount: 1, PoolSelector: selector}
+	}
+	routed := func(request *types.ContainerRequest) []string {
+		candidates := routeTestPools(pools)
+		if request.PoolSelector != "" {
+			candidates = slices.DeleteFunc(candidates, func(pool *WorkerPool) bool { return pool.Name != request.PoolSelector })
+		}
+		return describeRoute(newRoute(request, candidates, ""))
+	}
+
+	// The open pool first, whatever the priorities, then the chain's pools.
+	require.Equal(t, []string{"a10g", "a10g-reserved (1)", "l40s (2)"}, routed(request("", "A10G")))
+	require.Equal(t, []string{"a10g-reserved"}, routed(request("a10g-reserved", "A10G")))
+	// Chains never applied to requests for any GPU.
+	require.Equal(t, []string{"l40s", "a10g"}, routed(request("", string(types.GPU_ANY))))
+
+	// Its workers take the request, and are no overflow: they have the GPU
+	// that was asked for. The L40S pool's are.
+	reserved := &types.Worker{Id: "reserved", PoolName: "a10g-reserved", Gpu: "A10G", RequiresPoolSelector: true}
+	spare := &types.Worker{Id: "spare", PoolName: "l40s", Gpu: "L40S"}
+	route := newRoute(request("", "A10G"), routeTestPools(pools), "")
+	require.Equal(t, []*types.Worker{reserved, spare}, route.eligible([]*types.Worker{reserved, spare}))
+	for worker, want := range map[*types.Worker]int{reserved: 0, spare: 2} {
+		rank, ok := route.rankOf(worker)
+		require.True(t, ok, worker.Id)
+		require.Equal(t, want, rank, worker.Id)
+	}
+}
+
+// A config written for the previous release may still hold what that release
+// accepted, such as a chain with only an on-demand step. The section is on
+// its way out: nothing in it may stop the gateway starting.
+func TestAnOldFailoverSectionNeverStopsTheSchedulerStarting(t *testing.T) {
+	server := miniredis.RunT(t)
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
+	require.NoError(t, err)
+
+	manager, err := common.NewConfigManager[types.AppConfig]()
+	require.NoError(t, err)
+	config := manager.GetConfig()
+	config.Worker.Pools = map[string]types.WorkerPoolConfig{
+		"a10g": {GPUType: "A10G", Mode: types.PoolModeLocal},
+		"l40s": {GPUType: "L40S", Mode: types.PoolModeLocal},
+	}
+	config.Scheduling.Failover = types.FailoverConfig{Enabled: true, Chains: map[string]types.FailoverChain{
+		"H100": {},
+		"A10G": {Pools: []string{"a10g", "l40s", "l40s", " "}},
+		" ":    {Pools: []string{"l40s"}},
+	}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, err := NewScheduler(ctx, config, rdb, nil, nil, nil, WithKubernetes(fake.NewSimpleClientset()))
+	require.NoError(t, err)
+
+	l40s, _ := s.workerPoolManager.GetPool("l40s")
+	require.Equal(t, []string{"A10G"}, l40s.Config.AlsoServes)
+	a10g, _ := s.workerPoolManager.GetPool("a10g")
+	require.Empty(t, a10g.Config.AlsoServes, "a pool does not also serve its own GPU type")
+}
+
+// A workspace names its own pools, and may pick the name of a shared pool.
+// The two are different pools: what is asked about the shared one must not
+// be answered from the workspace's.
+
+// ownPool registers a pool of machines that belong to one workspace.
+func ownPool(manager *WorkerPoolManager, workspaceID, name string) {
+	key := agentPoolControllerKey(workspaceID, &compute.PoolState{Selector: name})
+	manager.SetPoolAt(key, name, types.WorkerPoolConfig{Mode: types.PoolModePrivate}, nil)
+}
+
+func TestPoolConfigsLeavesOutTheWorkspacesOwnPools(t *testing.T) {
+	manager := NewWorkerPoolManager()
+	manager.SetPool("cpu", types.WorkerPoolConfig{Mode: types.PoolModeExternal}, nil)
+	ownPool(manager, "workspace-1", "cpu")
+	ownPool(manager, "workspace-1", "rack")
+	s := &Scheduler{workerPoolManager: manager}
+
+	// The pools come out in a different order each time.
+	for range 100 {
+		modes := map[string]types.PoolMode{}
+		for name, config := range s.PoolConfigs() {
+			modes[name] = config.Mode
+		}
+		require.Equal(t, map[string]types.PoolMode{"cpu": types.PoolModeExternal}, modes)
+	}
+}
+
+// A request that names its workspace's own pool falls back to the regular
+// pools when its pool has no room for it and its stub allows it. On its own
+// pool the request is exempt from the credit gate and from the managed
+// concurrency limit. On the regular pools it is not, so the fallback asks
+// both before the request leaves its pool.
+
+const (
+	fallbackWorkspace = "workspace-private-fallback"
+	fallbackOwnPool   = "private-cpu"
+)
+
+// fallbackFixture is a scheduler with a workspace's own pool that has no
+// room for the request and cannot add a worker, and a regular pool with a
+// worker that has room.
+type fallbackFixture struct {
+	*Scheduler
+	t        *testing.T
+	clock    *common.FakeClock
+	request  *types.ContainerRequest
+	regular  *types.Worker
+	failures <-chan *redis.Message
+}
+
+func newFallbackFixture(t *testing.T) *fallbackFixture {
+	t.Helper()
+	s, err := NewSchedulerForTest()
+	require.NoError(t, err)
+
+	f := &fallbackFixture{Scheduler: s, t: t, clock: common.NewFakeClock(time.Now())}
+	s.clock, s.requestBacklog.now, s.spawn = f.clock, f.clock.Now, inline
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	f.failures, _ = s.requestBacklog.rdb.Subscribe(ctx, common.EventChannelKey(common.EventTypeContainerSchedulingFailed))
+
+	state := &compute.PoolState{Selector: fallbackOwnPool, Mode: string(types.PoolModePrivate)}
+	s.workerPoolManager.SetPoolAt(agentPoolControllerKey(fallbackWorkspace, state), fallbackOwnPool,
+		types.WorkerPoolConfig{Mode: types.PoolModePrivate, RequiresPoolSelector: true},
+		&LocalWorkerPoolControllerForTest{ctx: ctx, name: fallbackOwnPool, config: s.config, workerRepo: s.workerRepo, requiresSelector: true, cannotAddWorker: true})
+
+	f.regular = &types.Worker{Id: "regular-worker", Status: types.WorkerStatusAvailable, FreeCpu: 2000, FreeMemory: 2000, PoolName: "beta9-cpu"}
+	for _, worker := range []*types.Worker{
+		{Id: "own-worker", Status: types.WorkerStatusAvailable, FreeCpu: 100, FreeMemory: 2000, PoolName: fallbackOwnPool, RequiresPoolSelector: true},
+		f.regular,
+	} {
+		require.NoError(t, s.workerRepo.AddWorker(worker))
+	}
+
+	f.request = &types.ContainerRequest{
+		ContainerId: uuid.NewString(), TaskId: uuid.NewString(), WorkspaceId: fallbackWorkspace,
+		Cpu: 1000, Memory: 1000, PoolSelector: fallbackOwnPool, Workspace: testWorkspaceWithStorage(),
+	}
+	return f
+}
+
+// submit sends the request to the scheduler. It names its workspace's own
+// pool, so Run asks neither for credit nor for the concurrency limit.
+func (f *fallbackFixture) submit() {
+	f.t.Helper()
+	require.NoError(f.t, f.Run(f.request))
+}
+
+// pass is one pass of the scheduling loop.
+func (f *fallbackFixture) pass() {
+	f.t.Helper()
+	f.ProcessBacklog()
+}
+
+// waiting returns the request as it waits in the backlog, or nil if it does
+// not.
+func (f *fallbackFixture) waiting() *types.ContainerRequest {
+	f.t.Helper()
+	members, err := f.requestBacklog.rdb.ZRange(context.Background(), common.RedisKeys.SchedulerContainerRequests(), 0, -1).Result()
+	require.NoError(f.t, err)
+	for _, member := range members {
+		var request types.ContainerRequest
+		require.NoError(f.t, json.Unmarshal([]byte(member), &request))
+		if request.ContainerId == f.request.ContainerId {
+			return &request
+		}
+	}
+	return nil
+}
+
+// placedOn reports whether the request is on the worker's queue.
+func (f *fallbackFixture) placedOn(worker *types.Worker) bool {
+	f.t.Helper()
+	queued, err := f.workerRepo.GetNextContainerRequests(worker.Id, 1)
+	require.NoError(f.t, err)
+	return len(queued) == 1 && queued[0].ContainerId == f.request.ContainerId
+}
+
+// failed reports whether the scheduler gave up on the request.
+func (f *fallbackFixture) failed() bool {
+	status, err := f.containerRepo.GetContainerRequestStatus(f.request.ContainerId)
+	return err == nil && status == types.ContainerRequestStatusFailed
+}
+
+// failure returns why the scheduler gave up on the request.
+func (f *fallbackFixture) failure() types.ContainerSchedulingFailureReason {
+	f.t.Helper()
+	require.True(f.t, f.failed(), "the scheduler has not given up on the request")
+	select {
+	case message := <-f.failures:
+		event, _, claimed := f.eventBus.Claim(message.Payload)
+		require.True(f.t, claimed)
+		failure, ok := common.ParseContainerSchedulingFailure(event)
+		require.True(f.t, ok)
+		return failure.Reason
+	case <-time.After(time.Second):
+		f.t.Fatal("the scheduler did not say why it gave up on the request")
+		return ""
+	}
+}
+
+// A request that has left its own pool is a request for the regular pools
+// like any other: the fallback places nothing, and the next pass plans it.
+func TestPrivatePoolFallbackLeavesTheRequestToTheNextPass(t *testing.T) {
+	f := newFallbackFixture(t)
+	f.submit()
+	retries := f.waiting().RetryCount
+
+	f.pass()
+
+	waiting := f.waiting()
+	require.NotNil(t, waiting, "the request goes back to the backlog")
+	require.Empty(t, waiting.PoolSelector, "without its pool")
+	require.Equal(t, retries, waiting.RetryCount, "falling back is not a retry")
+	require.False(t, f.placedOn(f.regular))
+
+	f.pass()
+	require.Nil(t, f.waiting())
+	require.True(t, f.placedOn(f.regular))
+}
+
+func TestPrivatePoolFallbackFailsARequestOfAWorkspaceWithoutCredit(t *testing.T) {
+	f := newFallbackFixture(t)
+	billing := &fakeCreditBackend{decision: creditDecision{OK: false, ErrorCode: "insufficient_credits"}}
+	f.creditGate = newCreditGate(types.CreditGateConfig{}, billing, f.requestBacklog.rdb)
+	f.submit()
+
+	f.pass()
+
+	require.Equal(t, types.ContainerSchedulingFailureManagedFallbackNoCredit, f.failure())
+	require.Nil(t, f.waiting())
+	require.False(t, f.placedOn(f.regular))
+}
+
+func TestPrivatePoolFallbackRetriesWhileBillingCannotBeAsked(t *testing.T) {
+	f := newFallbackFixture(t)
+	failOpen := false
+	billing := &fakeCreditBackend{err: errors.New("billing is down")}
+	f.creditGate = newCreditGate(types.CreditGateConfig{FailOpen: &failOpen}, billing, f.requestBacklog.rdb)
+	f.submit()
+	retries := f.waiting().RetryCount
+
+	f.pass()
+
+	require.False(t, f.failed(), "no answer is not a refusal")
+	waiting := f.waiting()
+	require.NotNil(t, waiting)
+	require.Equal(t, fallbackOwnPool, waiting.PoolSelector)
+	require.Equal(t, retries+1, waiting.RetryCount)
+
+	// Billing answers again, and the request goes on to the regular pools.
+	billing.err, billing.decision = nil, creditDecision{OK: true}
+	f.clock.Advance(time.Second)
+	f.pass()
+	f.pass()
+	require.True(t, f.placedOn(f.regular))
+}
+
+func TestPrivatePoolFallbackFailsARequestOverItsWorkspacesConcurrencyLimit(t *testing.T) {
+	f := newFallbackFixture(t)
+	f.backendRepo = &BackendRepoConcurrencyLimitsForTest{BackendRepository: f.backendRepo, CPUConcurrencyLimit: uint32(f.request.Cpu) / 2}
+	// The workspace has asked for the regular pools before, so what it uses
+	// of them is being counted.
+	earlier := &types.ContainerRequest{ContainerId: uuid.NewString(), WorkspaceId: fallbackWorkspace, Cpu: 100}
+	require.NoError(t, f.CheckConcurrencyLimit(earlier))
+	f.submit()
+
+	f.pass()
+
+	require.Equal(t, types.ContainerSchedulingFailureManagedFallbackConcurrencyLimit, f.failure())
+	require.Nil(t, f.waiting())
+	require.False(t, f.placedOn(f.regular))
+}
+
+// unreadableConcurrencyLimits is a database that cannot be reached.
+type unreadableConcurrencyLimits struct {
+	repo.BackendRepository
+}
+
+func (unreadableConcurrencyLimits) GetConcurrencyLimitByWorkspaceId(context.Context, string) (*types.ConcurrencyLimit, error) {
+	return nil, errors.New("database unavailable")
+}
+
+func TestPrivatePoolFallbackRetriesWhileTheConcurrencyLimitCannotBeRead(t *testing.T) {
+	f := newFallbackFixture(t)
+	limits := f.backendRepo
+	f.backendRepo = unreadableConcurrencyLimits{limits}
+	f.submit()
+	retries := f.waiting().RetryCount
+
+	f.pass()
+
+	require.False(t, f.failed(), "no answer is not a refusal")
+	waiting := f.waiting()
+	require.NotNil(t, waiting)
+	require.Equal(t, fallbackOwnPool, waiting.PoolSelector)
+	require.Equal(t, retries+1, waiting.RetryCount)
+
+	// The database answers again, and the request goes on to the regular
+	// pools.
+	f.backendRepo = limits
+	f.clock.Advance(time.Second)
+	f.pass()
+	f.pass()
+	require.True(t, f.placedOn(f.regular))
+}
+
+func TestPrivatePoolFallbackWaitsLikeAnyRequestWhenTheWorkerThatIsStartingIsTaken(t *testing.T) {
+	f := newFallbackFixture(t)
+	// The only regular pool cannot add a worker. It has one that is
+	// starting, with room for one request, and another request waits for it.
+	f.workerPoolManager.DeletePool("default")
+	pool, ok := f.workerPoolManager.GetPool("beta9-cpu")
+	require.True(t, ok)
+	pool.Controller.(*LocalWorkerPoolControllerForTest).cannotAddWorker = true
+	require.NoError(t, f.workerRepo.RemoveWorker(f.regular.Id))
+	starting := &types.Worker{Id: "starting-worker", Status: types.WorkerStatusPending, PoolName: "beta9-cpu",
+		TotalCpu: 1000, FreeCpu: 1000, TotalMemory: 2000, FreeMemory: 2000}
+	require.NoError(t, f.workerRepo.AddWorker(starting))
+	workers, err := f.workerRepo.GetAllWorkers()
+	require.NoError(t, err)
+	other := &types.ContainerRequest{ContainerId: uuid.NewString(), Cpu: 1000, Memory: 1000, Timestamp: f.clock.Now()}
+	require.True(t, f.provisioning.reserveCapacity(f.Scheduler, workers, other))
+	f.submit()
+
+	// The request leaves its pool for the worker that is starting, and then
+	// finds no room on it. It waits for room, as the other request does.
+	for range 3 {
+		f.pass()
+		f.clock.Advance(time.Second)
+	}
+
+	require.False(t, f.failed())
+	waiting := f.waiting()
+	require.NotNil(t, waiting)
+	require.Empty(t, waiting.PoolSelector)
+}
+
+// A machine that drops out of a workspace's own pool leaves its worker on
+// record for a while. A request for the pool is placed only on a worker
+// whose machine is connected, or it would wait there for nothing.
+
+// unlistableMachines is a compute repository whose machines cannot be listed
+// while err is set.
+type unlistableMachines struct {
+	repo.ComputeRepository
+	err error
+}
+
+func (r *unlistableMachines) ListAgentTokenStates(ctx context.Context, workspaceID, poolName string) ([]*compute.AgentTokenState, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.ComputeRepository.ListAgentTokenStates(ctx, workspaceID, poolName)
+}
+
+// ownPoolFixture is a workspace's own pool with two machines, each with a
+// worker that is up and has room. One machine is connected; the other has
+// not been heard from for too long.
+type ownPoolFixture struct {
+	*Scheduler
+	machines   *unlistableMachines
+	controller *AgentWorkerPoolController
+	request    *types.ContainerRequest
+	connected  string
+	silent     string
+}
+
+func newOwnPoolFixture(t *testing.T) *ownPoolFixture {
+	t.Helper()
+	s, err := NewSchedulerForTest()
+	require.NoError(t, err)
+	s.workerPoolManager = NewWorkerPoolManager()
+	f := &ownPoolFixture{
+		Scheduler: s,
+		machines:  &unlistableMachines{ComputeRepository: s.computeRepo},
+		connected: compute.AgentMachineWorkerID("connected"),
+		silent:    compute.AgentMachineWorkerID("silent"),
+	}
+	s.computeRepo = f.machines
+
+	const workspace = "workspace"
+	// The pool's name is not what requests select it by.
+	pool := &compute.PoolState{Name: "rack-1", Selector: "own-cpu", Mode: string(types.PoolModePrivate)}
+	ctx := context.Background()
+	require.NoError(t, s.computeRepo.SavePoolState(ctx, workspace, pool))
+	now := time.Now()
+	for machine, lastHeard := range map[string]time.Time{"connected": now, "silent": now.Add(-2 * compute.AgentHeartbeatTimeout)} {
+		require.NoError(t, s.computeRepo.SaveAgentTokenState(ctx, &compute.AgentTokenState{
+			TokenHash: "token-of-" + machine, WorkspaceID: workspace, PoolName: pool.Name, MachineID: machine,
+			CPUMillicores: 4000, MemoryMB: 8192, Executor: types.DefaultAgentWorkerContainerMode,
+			Schedulable: true, LastHeartbeatAt: lastHeard,
+		}, time.Hour))
+		require.NoError(t, s.workerRepo.AddWorker(&types.Worker{
+			Id: compute.AgentMachineWorkerID(machine), MachineId: machine, Status: types.WorkerStatusAvailable,
+			PoolName: pool.Name, PoolSelector: pool.Selector, WorkspaceId: workspace, RequiresPoolSelector: true,
+			TotalCpu: 4000, FreeCpu: 4000, TotalMemory: 8192, FreeMemory: 8192,
+		}))
+	}
+	require.NoError(t, s.EnsureAgentPool(workspace, pool))
+	loaded, ok := s.privateAgentPool(workspace, pool.Selector)
+	require.True(t, ok)
+	f.controller = loaded.Controller.(*AgentWorkerPoolController)
+
+	f.request = &types.ContainerRequest{
+		ContainerId: "container", WorkspaceId: workspace, PoolSelector: pool.Selector,
+		Cpu: 1000, Memory: 1000, Workspace: testWorkspaceWithStorage(),
+	}
+	return f
+}
+
+// candidates returns the workers the request may be placed on.
+func (f *ownPoolFixture) candidates(t *testing.T) []string {
+	t.Helper()
+	workers, err := f.workerRepo.GetAllWorkers()
+	require.NoError(t, err)
+	var ids []string
+	for _, worker := range f.filterLivePrivateAgentWorkers(workers, f.request) {
+		ids = append(ids, worker.Id)
+	}
+	return ids
+}
+
+func TestAnOwnPoolsLiveWorkersAreThoseOfItsConnectedMachines(t *testing.T) {
+	f := newOwnPoolFixture(t)
+
+	live, err := f.controller.liveWorkerIDs()
+
+	require.NoError(t, err)
+	require.Equal(t, map[string]struct{}{f.connected: {}}, live)
+}
+
+func TestARequestForAnOwnPoolIsPlacedOnlyOnAConnectedMachine(t *testing.T) {
+	f := newOwnPoolFixture(t)
+	require.Equal(t, []string{f.connected}, f.candidates(t))
+
+	// The silent machine has the more room, and still is not chosen.
+	silent, err := f.workerRepo.GetWorkerById(f.silent)
+	require.NoError(t, err)
+	silent.TotalCpu, silent.FreeCpu = 64000, 64000
+	require.NoError(t, f.workerRepo.AddWorker(silent))
+	selected, err := f.selectWorker(f.request)
+	require.NoError(t, err)
+	require.Equal(t, f.connected, selected.Id)
+
+	// A request of another workspace, or for another pool, is not this
+	// pool's to filter.
+	workers, err := f.workerRepo.GetAllWorkers()
+	require.NoError(t, err)
+	for _, other := range []*types.ContainerRequest{
+		{WorkspaceId: "another-workspace", PoolSelector: f.request.PoolSelector},
+		{WorkspaceId: f.request.WorkspaceId, PoolSelector: "another-pool"},
+		{WorkspaceId: f.request.WorkspaceId},
+	} {
+		require.Len(t, f.filterLivePrivateAgentWorkers(workers, other), 2)
+	}
+}
+
+// When the pool's machines cannot be listed, none of its workers can be
+// ruled out: the request is placed as if all were connected, and the failure
+// is reported.
+func TestAnOwnPoolsWorkersAreAllKeptWhenItsMachinesCannotBeListed(t *testing.T) {
+	f := newOwnPoolFixture(t)
+	f.machines.err = errors.New("redis is down")
+	logged := captureLog(t)
+
+	require.ElementsMatch(t, []string{f.connected, f.silent}, f.candidates(t))
+
+	require.Contains(t, logged.String(), "redis is down")
+	require.Contains(t, logged.String(), `"pool_name":"own-cpu"`)
+	require.Contains(t, logged.String(), `"container_id":"container"`)
+}
+
+// growthForTest returns the pool the scheduler would ask for a worker for the
+// request, and the size it would ask for.
+func growthForTest(t *testing.T, s *Scheduler, request *types.ContainerRequest) growth {
+	t.Helper()
+	route, err := s.growthRouteFor(request)
+	require.NoError(t, err)
+	choice := s.chooseGrowth(route, request)
+	require.NotNil(t, choice.pool, "no pool can add a worker for the request")
+	return choice
+}
+
+// growFixture is a scheduler on a fake clock whose route for a CPU request is
+// the pools a, b and c, in that order.
+type growFixture struct {
+	*Scheduler
+	clock *common.FakeClock
+	pools map[string]*LocalWorkerPoolControllerForTest
+}
+
+func newGrowFixture(t *testing.T) *growFixture {
+	t.Helper()
+	s, err := NewSchedulerForTest()
+	require.NoError(t, err)
+
+	fixture := &growFixture{Scheduler: s, clock: common.NewFakeClock(time.Now()), pools: map[string]*LocalWorkerPoolControllerForTest{}}
+	s.clock = fixture.clock
+	s.workerPoolManager = NewWorkerPoolManager()
+	for i, name := range []string{"a", "b", "c"} {
+		controller := &LocalWorkerPoolControllerForTest{ctx: context.Background(), name: name, config: s.config, workerRepo: s.workerRepo}
+		fixture.pools[name] = controller
+		s.workerPoolManager.SetPool(name, types.WorkerPoolConfig{Priority: int32(30 - 10*i)}, controller)
+	}
+	return fixture
+}
+
+func (f *growFixture) choose(t *testing.T, request *types.ContainerRequest) growth {
+	t.Helper()
+	route, err := f.growthRouteFor(request)
+	require.NoError(t, err)
+	return f.chooseGrowth(route, request)
+}
+
+func TestChooseGrowth(t *testing.T) {
+	const noPool = ""
+	asked := func(attempts map[string]int) *types.ContainerRequest {
+		return &types.ContainerRequest{ContainerId: uuid.NewString(), Cpu: 1000, Memory: 1024, GrowAttempts: attempts}
+	}
+
+	for _, test := range []struct {
+		name      string
+		setup     func(f *growFixture)
+		request   *types.ContainerRequest
+		want      string
+		exhausted bool
+	}{
+		{
+			name:    "the first pool in the route",
+			request: asked(nil),
+			want:    "a",
+		},
+		{
+			name:    "a pool that cannot add a worker is passed over",
+			setup:   func(f *growFixture) { f.pools["a"].cannotAddWorker = true },
+			request: asked(nil),
+			want:    "b",
+		},
+		{
+			name:    "a pool that cannot be asked is passed over",
+			setup:   func(f *growFixture) { f.pools["a"].canAddWorkerErr = errors.New("redis is down") },
+			request: asked(nil),
+			want:    "b",
+		},
+		{
+			name:    "a pool that just failed to add a worker is left alone",
+			setup:   func(f *growFixture) { f.workerProvisioningBackoff.failed("a", f.now()) },
+			request: asked(nil),
+			want:    "b",
+		},
+		{
+			name: "and is asked again once the delay has passed",
+			setup: func(f *growFixture) {
+				f.workerProvisioningBackoff.failed("a", f.now())
+				f.clock.Advance(growRetryDelay)
+			},
+			request: asked(nil),
+			want:    "a",
+		},
+		{
+			name:    "a pool the request has asked three times is not asked again",
+			request: asked(map[string]int{"a": maxGrowAttempts}),
+			want:    "b",
+		},
+		{
+			name:    "attempts on one pool do not count against another",
+			request: asked(map[string]int{"a": maxGrowAttempts - 1, "b": maxGrowAttempts, "c": maxGrowAttempts}),
+			want:    "a",
+		},
+		{
+			name: "no pool can add a worker now",
+			setup: func(f *growFixture) {
+				for _, pool := range f.pools {
+					pool.cannotAddWorker = true
+				}
+			},
+			request: asked(nil),
+			want:    noPool,
+		},
+		{
+			name: "every pool is being left alone",
+			setup: func(f *growFixture) {
+				for name := range f.pools {
+					f.workerProvisioningBackoff.failed(name, f.now())
+				}
+			},
+			request: asked(nil),
+			want:    noPool,
+		},
+		{
+			name:      "the request has asked every pool three times",
+			request:   asked(map[string]int{"a": maxGrowAttempts, "b": maxGrowAttempts, "c": maxGrowAttempts}),
+			want:      noPool,
+			exhausted: true,
+		},
+		{
+			name:    "a pool that cannot grow now keeps the request waiting when the others are used up",
+			setup:   func(f *growFixture) { f.pools["b"].cannotAddWorker = true },
+			request: asked(map[string]int{"a": maxGrowAttempts, "c": maxGrowAttempts}),
+			want:    noPool,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f := newGrowFixture(t)
+			if test.setup != nil {
+				test.setup(f)
+			}
+			before := test.request.Clone()
+
+			choice := f.choose(t, test.request)
+
+			got := noPool
+			if choice.pool != nil {
+				got = choice.pool.Name
+			}
+			require.Equal(t, test.want, got)
+			require.Equal(t, test.exhausted, choice.exhausted)
+			// Choosing is a decision only: nothing is asked for and nothing
+			// is counted.
+			require.Equal(t, before.GrowAttempts, test.request.GrowAttempts)
+			for name, pool := range f.pools {
+				require.Zero(t, pool.AddWorkerCallCount(), "pool %s", name)
+			}
+		})
+	}
+}
+
+// A request counts the workers it asked each pool for, so pools that keep
+// failing use up their own attempts and not those of the pools after them.
+func TestGrowCountsAttemptsPerPool(t *testing.T) {
+	f := newGrowFixture(t)
+	f.spawn = func(fn func()) { fn() }
+	f.pools["a"].addWorkerErr = errors.New("cluster refused the job")
+	f.pools["b"].addWorkerErr = errors.New("cluster refused the job")
+	f.pools["c"].cannotAddWorker = true
+
+	request := &types.ContainerRequest{ContainerId: uuid.NewString(), Cpu: 1000, Memory: 1024, Timestamp: f.clock.Now()}
+	setPendingSchedulerRequests(t, f.Scheduler, request)
+
+	for round := 1; round <= maxGrowAttempts; round++ {
+		newSchedulingAttempt(f.Scheduler, request, nil).grow() // a fails
+		newSchedulingAttempt(f.Scheduler, request, nil).grow() // a is left alone, b fails
+		newSchedulingAttempt(f.Scheduler, request, nil).grow() // both left alone, c cannot grow
+		require.Equal(t, map[string]int{"a": round, "b": round}, request.GrowAttempts)
+		require.True(t, newSchedulingAttempt(f.Scheduler, request, nil).runnable(), "round %d", round)
+		f.clock.Advance(growRetryDelay)
+	}
+
+	// a and b are used up. c was never asked for a worker, so it costs
+	// nothing and the request keeps waiting for it.
+	newSchedulingAttempt(f.Scheduler, request, nil).grow()
+	require.True(t, newSchedulingAttempt(f.Scheduler, request, nil).runnable())
+	require.Zero(t, f.pools["c"].AddWorkerCallCount())
+
+	f.pools["c"].cannotAddWorker = false
+	newSchedulingAttempt(f.Scheduler, request, nil).grow()
+	require.Equal(t, 1, f.pools["c"].AddWorkerCallCount())
+	require.Equal(t, map[string]int{"a": maxGrowAttempts, "b": maxGrowAttempts, "c": 1}, request.GrowAttempts)
+}
+
+func TestWorkerSizeFor(t *testing.T) {
+	s, err := NewSchedulerForTest()
+	require.NoError(t, err)
+	s.config.Worker.DefaultWorkerCPURequest = 2000
+	s.config.Worker.DefaultWorkerMemoryRequest = 2048
+
+	sized := types.WorkerPoolJobSpecPoolSizingConfig{DefaultWorkerCPU: "8000m", DefaultWorkerMemory: "16Gi", DefaultWorkerGpuCount: "4"}
+	small := &types.ContainerRequest{Cpu: 500, Memory: 512}
+	large := &types.ContainerRequest{Cpu: 32000, Memory: 64 * 1024, Gpu: "A10G", GpuCount: 8}
+	memory := capacityMemoryForScheduling
+
+	for _, test := range []struct {
+		name    string
+		pool    types.WorkerPoolConfig
+		request *types.ContainerRequest
+		want    workerSize
+	}{
+		{"kubernetes pool: at least the default worker", types.WorkerPoolConfig{}, small,
+			workerSize{cpu: 2000, memory: 2048}},
+		{"kubernetes pool: at least the pool's own default", types.WorkerPoolConfig{GPUType: "A10G", PoolSizing: sized}, small,
+			workerSize{cpu: 8000, memory: 16 * 1024, gpuCount: 4}},
+		{"kubernetes pool: a larger request gets a worker its size", types.WorkerPoolConfig{GPUType: "A10G", PoolSizing: sized}, large,
+			workerSize{cpu: 32000, memory: memory(large), gpuCount: 8}},
+		{"agent pool: what the request needs", types.WorkerPoolConfig{Mode: types.PoolModeExternal, PoolSizing: sized}, small,
+			workerSize{cpu: 500, memory: memory(small)}},
+		{"private pool: what the request needs", types.WorkerPoolConfig{Mode: types.PoolModePrivate, GPUType: "A10G", PoolSizing: sized}, large,
+			workerSize{cpu: 32000, memory: memory(large), gpuCount: 8}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, s.workerSizeFor(&WorkerPool{Name: "pool", Config: test.pool}, test.request))
+		})
+	}
+}
+
+func TestPoolThatFailedToAddAWorkerIsLeftAloneForAMoment(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	started := make(chan struct{}, 2)
+	controller := &LocalWorkerPoolControllerForTest{
+		ctx:              context.Background(),
+		name:             "beta9-cpu",
+		config:           scheduler.config,
+		workerRepo:       scheduler.workerRepo,
+		addWorkerStarted: started,
+		addWorkerErr:     errors.New("provisioning failed"),
+	}
+	scheduler.workerPoolManager.SetPool("beta9-cpu", types.WorkerPoolConfig{}, controller)
+
+	firstRequest := &types.ContainerRequest{
+		ContainerId:  uuid.New().String(),
+		Cpu:          100,
+		Memory:       100,
+		PoolSelector: "beta9-cpu",
+		Timestamp:    time.Now(),
+	}
+	newSchedulingAttempt(scheduler, firstRequest, nil).grow()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("expected first provisioning attempt")
+	}
+
+	deadline := time.After(time.Second)
+	for !scheduler.workerProvisioningBackoff.leftAlone("beta9-cpu", scheduler.now()) {
+		select {
+		case <-deadline:
+			t.Fatal("expected provisioning failure to back off add-worker attempts")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	assert.Equal(t, 1, controller.AddWorkerCallCount())
+
+	secondRequest := &types.ContainerRequest{
+		ContainerId:  uuid.New().String(),
+		Cpu:          100,
+		Memory:       100,
+		PoolSelector: "beta9-cpu",
+		Timestamp:    time.Now(),
+	}
+	newSchedulingAttempt(scheduler, secondRequest, nil).grow()
+	time.Sleep(2 * requestProcessingInterval)
+
+	assert.Equal(t, 1, controller.AddWorkerCallCount())
+}
+
+func TestGrowPassesOverAPoolThatCannotAddAWorker(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+	scheduler.workerPoolManager = NewWorkerPoolManager()
+
+	agent := &LocalWorkerPoolControllerForTest{
+		ctx:             context.Background(),
+		name:            "agent-cpu",
+		config:          scheduler.config,
+		workerRepo:      scheduler.workerRepo,
+		cannotAddWorker: true,
+	}
+	dynamicStarted := make(chan struct{}, 1)
+	dynamic := &LocalWorkerPoolControllerForTest{
+		ctx:              context.Background(),
+		name:             "dynamic-cpu",
+		config:           scheduler.config,
+		workerRepo:       scheduler.workerRepo,
+		addWorkerStarted: dynamicStarted,
+	}
+	scheduler.workerPoolManager.SetPool(agent.name, types.WorkerPoolConfig{
+		Mode:     types.PoolModeExternal,
+		Priority: 10,
+	}, agent)
+	scheduler.workerPoolManager.SetPool(dynamic.name, types.WorkerPoolConfig{
+		Mode:     types.PoolModeLocal,
+		Priority: 0,
+	}, dynamic)
+
+	request := &types.ContainerRequest{
+		ContainerId: uuid.NewString(),
+		Cpu:         8000,
+		Memory:      16 * 1024,
+		Timestamp:   time.Now(),
+		// With storage the agent pool is in the route, ahead of the dynamic one.
+		Workspace: testWorkspaceWithStorage(),
+	}
+	setPendingSchedulerRequests(t, scheduler, request)
+	newSchedulingAttempt(scheduler, request, nil).grow()
+
+	select {
+	case <-dynamicStarted:
+	case <-time.After(time.Second):
+		t.Fatal("expected the dynamic pool to provision a worker")
+	}
+	assert.Equal(t, 0, agent.AddWorkerCallCount())
+	assert.Equal(t, 1, dynamic.AddWorkerCallCount())
+	// Passing over the agent pool cost the request nothing.
+	assert.Equal(t, map[string]int{dynamic.name: 1}, request.GrowAttempts)
+}
+
+func TestGrowDoesNotSpendAnAttemptWhenAPoolCannotBeAsked(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+	scheduler.workerPoolManager = NewWorkerPoolManager()
+
+	agent := &LocalWorkerPoolControllerForTest{
+		ctx:             context.Background(),
+		name:            "agent-cpu",
+		config:          scheduler.config,
+		workerRepo:      scheduler.workerRepo,
+		canAddWorkerErr: context.DeadlineExceeded,
+	}
+	scheduler.workerPoolManager.SetPool(agent.name, types.WorkerPoolConfig{
+		Mode: types.PoolModeExternal,
+	}, agent)
+
+	request := &types.ContainerRequest{
+		ContainerId: uuid.NewString(),
+		Cpu:         8000,
+		Memory:      16 * 1024,
+		Timestamp:   time.Now(),
+		Workspace:   testWorkspaceWithStorage(),
+	}
+	setPendingSchedulerRequests(t, scheduler, request)
+	newSchedulingAttempt(scheduler, request, nil).grow()
+
+	assert.Equal(t, 0, agent.AddWorkerCallCount())
+	assert.Empty(t, request.GrowAttempts)
+	time.Sleep(provisioningWorkerRequeueDelay + 10*time.Millisecond)
+	requeued, err := scheduler.requestBacklog.Pop()
+	assert.Nil(t, err)
+	assert.Equal(t, request.ContainerId, requeued.ContainerId)
+}
+
+func TestEveryReplicaPassesOverAPoolThatCannotAddAWorker(t *testing.T) {
+	first, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+	first.workerPoolManager = NewWorkerPoolManager()
+	replicas := []*Scheduler{first, schedulerReplicaForTest(first), schedulerReplicaForTest(first)}
+
+	dynamic := &LocalWorkerPoolControllerForTest{
+		ctx:        context.Background(),
+		name:       "dynamic-cpu",
+		config:     first.config,
+		workerRepo: first.workerRepo,
+	}
+	agent := &LocalWorkerPoolControllerForTest{
+		ctx:             context.Background(),
+		name:            "agent-cpu",
+		config:          first.config,
+		workerRepo:      first.workerRepo,
+		cannotAddWorker: true,
+	}
+	first.workerPoolManager.SetPool(agent.name, types.WorkerPoolConfig{
+		Mode:     types.PoolModeExternal,
+		Priority: 10,
+	}, agent)
+	first.workerPoolManager.SetPool(dynamic.name, types.WorkerPoolConfig{Mode: types.PoolModeLocal}, dynamic)
+
+	request := &types.ContainerRequest{Cpu: 8000, Memory: 16 * 1024, Workspace: testWorkspaceWithStorage()}
+	for _, scheduler := range replicas {
+		controllers, err := scheduler.getControllers(request)
+		assert.Nil(t, err)
+		assert.Equal(t, []string{agent.name, dynamic.name}, controllerNames(controllers))
+		assert.Equal(t, dynamic.name, growthForTest(t, scheduler, request).pool.Name)
+	}
+	assert.Equal(t, 0, agent.AddWorkerCallCount())
+}
+
+func TestGrowAsksOnePoolPerPass(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+	scheduler.workerPoolManager = NewWorkerPoolManager()
+
+	primaryStarted := make(chan struct{}, 1)
+	secondaryStarted := make(chan struct{}, 1)
+	primary := &LocalWorkerPoolControllerForTest{
+		ctx:              context.Background(),
+		name:             "primary",
+		config:           scheduler.config,
+		workerRepo:       scheduler.workerRepo,
+		addWorkerStarted: primaryStarted,
+		addWorkerErr:     errors.New("provisioning failed"),
+	}
+	secondary := &LocalWorkerPoolControllerForTest{
+		ctx:              context.Background(),
+		name:             "secondary",
+		config:           scheduler.config,
+		workerRepo:       scheduler.workerRepo,
+		addWorkerStarted: secondaryStarted,
+	}
+
+	scheduler.workerPoolManager.SetPool("primary", types.WorkerPoolConfig{Priority: 200}, primary)
+	scheduler.workerPoolManager.SetPool("secondary", types.WorkerPoolConfig{Priority: 100}, secondary)
+
+	request := &types.ContainerRequest{
+		ContainerId: uuid.New().String(),
+		Cpu:         100,
+		Memory:      100,
+		Timestamp:   time.Now(),
+	}
+	newSchedulingAttempt(scheduler, request, nil).grow()
+
+	select {
+	case <-primaryStarted:
+	case <-time.After(time.Second):
+		t.Fatal("expected primary provisioning attempt")
+	}
+
+	select {
+	case <-secondaryStarted:
+		t.Fatal("did not expect same reservation to provision a second pool")
+	case <-time.After(2 * requestProcessingInterval):
+	}
+
+	assert.Equal(t, 1, primary.AddWorkerCallCount())
+	assert.Equal(t, 0, secondary.AddWorkerCallCount())
+}
+
+func TestRequestDoesNotAddASecondWorkerWhileItsFirstIsPending(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	started := make(chan struct{}, 2)
+	done := make(chan struct{}, 1)
+	controller := &LocalWorkerPoolControllerForTest{
+		ctx:              context.Background(),
+		name:             "gvisor-pool",
+		config:           scheduler.config,
+		workerRepo:       scheduler.workerRepo,
+		containerRuntime: types.ContainerRuntimeGvisor.String(),
+		addWorkerStarted: started,
+		addWorkerDone:    done,
+	}
+	scheduler.workerPoolManager.SetPool("gvisor-pool", types.WorkerPoolConfig{
+		ContainerRuntime: types.ContainerRuntimeGvisor.String(),
+	}, controller)
+
+	request := &types.ContainerRequest{
+		ContainerId:       uuid.NewString(),
+		Cpu:               100,
+		Memory:            100,
+		PoolSelector:      "gvisor-pool",
+		Timestamp:         time.Now(),
+		CheckpointEnabled: true,
+		Checkpoint: &types.Checkpoint{
+			CheckpointId: "checkpoint-1",
+			Status:       string(types.CheckpointStatusAvailable),
+			Runtime:      types.ContainerRuntimeGvisor.String(),
+		},
+	}
+	setPendingSchedulerRequests(t, scheduler, request)
+
+	scheduler.processRequestBatch([]*types.ContainerRequest{request}, nil)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("expected the initial worker provisioning attempt")
+	}
+
+	requeued := popBacklogRequest(t, scheduler.requestBacklog)
+	assert.Equal(t, map[string]int{"gvisor-pool": 1}, requeued.GrowAttempts)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("expected the initial worker provisioning attempt to complete")
+	}
+
+	workers, err := scheduler.workerRepo.GetAllWorkers()
+	assert.Nil(t, err)
+	assert.Len(t, workers, 1)
+	workers[0].Runtime = types.ContainerRuntimeRunc.String()
+	assert.Nil(t, scheduler.workerRepo.AddWorker(workers[0]))
+
+	scheduler.processRequestBatch([]*types.ContainerRequest{requeued}, workers)
+	time.Sleep(2 * requestProcessingInterval)
+	assert.Equal(t, 1, controller.AddWorkerCallCount(), "one request must not create another worker while its first worker is pending")
+}
+
+func TestRequestThatHasAskedEveryPoolThreeTimesFails(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	controller := &LocalWorkerPoolControllerForTest{
+		ctx:        context.Background(),
+		name:       "beta9-cpu",
+		config:     scheduler.config,
+		workerRepo: scheduler.workerRepo,
+	}
+	scheduler.workerPoolManager.SetPool("beta9-cpu", types.WorkerPoolConfig{}, controller)
+	request := &types.ContainerRequest{
+		ContainerId:  uuid.NewString(),
+		Cpu:          100,
+		Memory:       100,
+		PoolSelector: "beta9-cpu",
+		Timestamp:    time.Now(),
+		GrowAttempts: map[string]int{"beta9-cpu": maxGrowAttempts},
+	}
+	setPendingSchedulerRequests(t, scheduler, request)
+
+	newSchedulingAttempt(scheduler, request, nil).grow()
+	assert.Equal(t, 0, controller.AddWorkerCallCount())
+	assert.False(t, newSchedulingAttempt(scheduler, request, nil).runnable())
+}
+
+// blockedProvisioning is a pool whose AddWorker parks until unblock closes,
+// reporting each call on started.
+func blockedProvisioning(t *testing.T, scheduler *Scheduler, n int) (*LocalWorkerPoolControllerForTest, chan struct{}) {
+	t.Helper()
+	unblock := make(chan struct{})
+	controller := &LocalWorkerPoolControllerForTest{
+		ctx: context.Background(), name: "beta9-cpu", config: scheduler.config, workerRepo: scheduler.workerRepo,
+		addWorkerStarted: make(chan struct{}, n), addWorkerDone: make(chan struct{}, n), unblockAddWorker: unblock,
+	}
+	scheduler.workerPoolManager.SetPool("beta9-cpu", types.WorkerPoolConfig{}, controller)
+	return controller, unblock
+}
+
+func awaitN(t *testing.T, ch chan struct{}, n int, what string) {
+	t.Helper()
+	for i := range n {
+		select {
+		case <-ch:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s: %d/%d", what, i, n)
+		}
+	}
+}
+
+// Replicas share one lock per container: while one provisions, or until its
+// pending worker's reservation expires, the others do not add a second worker.
+// Distinct containers never contend.
+func TestGrowLockIsPerContainerAcrossReplicas(t *testing.T) {
+	first, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+	second := schedulerReplicaForTest(first)
+	controller, unblock := blockedProvisioning(t, first, 3)
+	request := func() *types.ContainerRequest {
+		return &types.ContainerRequest{ContainerId: uuid.NewString(), Cpu: 100, Memory: 100, PoolSelector: "beta9-cpu", Timestamp: time.Now()}
+	}
+	same, otherA, otherB := request(), request(), request()
+	setPendingSchedulerRequests(t, first, same, otherA, otherB)
+
+	newSchedulingAttempt(first, same, nil).grow()
+	newSchedulingAttempt(second, same, nil).grow()
+	newSchedulingAttempt(second, otherA, nil).grow()
+	newSchedulingAttempt(first, otherB, nil).grow()
+	awaitN(t, controller.addWorkerStarted, 3, "distinct containers started provisioning")
+	time.Sleep(2 * requestProcessingInterval)
+	assert.Equal(t, 3, controller.AddWorkerCallCount(), "the duplicate attempt waits")
+
+	close(unblock)
+	awaitN(t, controller.addWorkerDone, 3, "provisioning finished")
+	newSchedulingAttempt(second, same, nil).grow()
+	time.Sleep(2 * requestProcessingInterval)
+	assert.Equal(t, 3, controller.AddWorkerCallCount(), "the lock outlives a successful attempt")
+	workers, err := first.workerRepo.GetAllWorkers()
+	assert.Nil(t, err)
+	assert.Len(t, workers, 3)
+}
+
+func popBacklogRequest(t *testing.T, backlog *RequestBacklog) *types.ContainerRequest {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		request, err := backlog.Pop()
+		if err == nil {
+			return request
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("expected a request in the scheduler backlog")
+	return nil
+}
+
+func TestPoolLeftAloneAfterAFailureStillPlacesOnItsWorkers(t *testing.T) {
+	scheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	controller := &LocalWorkerPoolControllerForTest{
+		ctx:          context.Background(),
+		name:         "beta9-cpu",
+		config:       scheduler.config,
+		workerRepo:   scheduler.workerRepo,
+		addWorkerErr: errors.New("provisioning failed"),
+	}
+	scheduler.workerPoolManager.SetPool("beta9-cpu", types.WorkerPoolConfig{}, controller)
+
+	provisionRequest := &types.ContainerRequest{
+		ContainerId:  uuid.New().String(),
+		Cpu:          100,
+		Memory:       100,
+		PoolSelector: "beta9-cpu",
+		Timestamp:    time.Now(),
+	}
+	newSchedulingAttempt(scheduler, provisionRequest, nil).grow()
+
+	deadline := time.After(time.Second)
+	for !scheduler.workerProvisioningBackoff.leftAlone("beta9-cpu", scheduler.now()) {
+		select {
+		case <-deadline:
+			t.Fatal("expected add-worker attempt to be backed off")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	worker := &types.Worker{
+		Id:          uuid.New().String(),
+		Status:      types.WorkerStatusAvailable,
+		TotalCpu:    100,
+		FreeCpu:     100,
+		TotalMemory: 125,
+		FreeMemory:  125,
+		PoolName:    "beta9-cpu",
+	}
+	assert.Nil(t, scheduler.workerRepo.AddWorker(worker))
+
+	scheduleRequest := &types.ContainerRequest{
+		ContainerId:  uuid.New().String(),
+		Cpu:          100,
+		Memory:       100,
+		PoolSelector: "beta9-cpu",
+		Timestamp:    time.Now(),
+	}
+	setPendingSchedulerRequests(t, scheduler, scheduleRequest)
+	scheduler.processRequestBatch([]*types.ContainerRequest{scheduleRequest}, []*types.Worker{worker})
+
+	queued, err := nextContainerRequest(scheduler.workerRepo, worker.Id)
+	assert.Nil(t, err)
+	assert.NotNil(t, queued)
+	assert.Equal(t, scheduleRequest.ContainerId, queued.ContainerId)
+}
+
+// A request that asked a pool for a worker holds a lock until it would stop
+// waiting for that worker. Finding the lock held is the normal case for every
+// other scheduling pass and is not an error.
+func TestGrowDoesNotReportAHeldLockAsAnError(t *testing.T) {
+	f := newGrowFixture(t)
+	replica := schedulerReplicaForTest(f.Scheduler)
+
+	request := &types.ContainerRequest{ContainerId: uuid.NewString(), Cpu: 1000, Memory: 1024, Timestamp: f.clock.Now()}
+	setPendingSchedulerRequests(t, f.Scheduler, request)
+
+	var logged bytes.Buffer
+	original := log.Logger
+	log.Logger = zerolog.New(&logged)
+	t.Cleanup(func() { log.Logger = original })
+
+	f.spawn = func(fn func()) { fn() }
+	newSchedulingAttempt(f.Scheduler, request, nil).grow()
+	newSchedulingAttempt(replica, request.Clone(), nil).grow()
+
+	require.Equal(t, 1, f.pools["a"].AddWorkerCallCount())
+	require.NotContains(t, logged.String(), `"level":"error"`)
+}
+
+func TestGrowLockLastsAsLongAsTheRequestWaitsForTheWorker(t *testing.T) {
+	pool := func(stalledAfter time.Duration) *WorkerPool {
+		return &WorkerPool{Name: "pool", Config: types.WorkerPoolConfig{StalledAfter: types.Duration(stalledAfter)}}
+	}
+	require.Equal(t, pendingWorkerReservationTTL, growLockTTL(pool(0)))
+	require.Equal(t, time.Minute, growLockTTL(pool(time.Minute)), "a stalled worker is given up on sooner")
+	require.Equal(t, pendingWorkerReservationTTL, growLockTTL(pool(time.Hour)))
+}
+
+// waitingFixture is a grow fixture whose request has asked pool a for a
+// worker and waits for it. The worker has room for four such requests.
+type waitingFixture struct {
+	*growFixture
+	request *types.ContainerRequest
+	worker  *types.Worker
+}
+
+func newWaitingFixture(t *testing.T) *waitingFixture {
+	t.Helper()
+	f := newGrowFixture(t)
+	f.spawn = func(fn func()) { fn() }
+	f.config.Worker.DefaultWorkerCPURequest = 4000
+	f.config.Worker.DefaultWorkerMemoryRequest = 8192
+
+	request := &types.ContainerRequest{ContainerId: uuid.NewString(), Cpu: 1000, Memory: 1024, Timestamp: f.clock.Now()}
+	setPendingSchedulerRequests(t, f.Scheduler, request)
+	newSchedulingAttempt(f.Scheduler, request, nil).grow()
+	require.Equal(t, 1, f.pools["a"].AddWorkerCallCount())
+
+	workers, err := f.workerRepo.GetAllWorkers()
+	require.NoError(t, err)
+	require.Len(t, workers, 1)
+	return &waitingFixture{growFixture: f, request: request, worker: workers[0]}
+}
+
+// waits reports whether the request goes on waiting for a worker, in a pass
+// that plans with the workers there are now.
+func (f *waitingFixture) waits(t *testing.T) bool {
+	t.Helper()
+	workers, err := f.workerRepo.GetAllWorkers()
+	require.NoError(t, err)
+	return f.provisioning.reserveCapacity(f.Scheduler, workers, f.request)
+}
+
+// A request waits for the worker its pool added until the worker starts or
+// is removed. A machine that was bought and that its provider took back, or
+// failed to start, is removed like that; the request then asks for another
+// worker at once instead of waiting out the time a worker has to start.
+func TestRequestStopsWaitingForAWorkerThatWasRemoved(t *testing.T) {
+	f := newWaitingFixture(t)
+	f.clock.Advance(time.Minute)
+	require.True(t, f.waits(t), "the worker is starting")
+
+	require.NoError(t, f.workerRepo.RemoveWorker(f.worker.Id))
+	require.False(t, f.waits(t), "the worker is gone")
+
+	newSchedulingAttempt(f.Scheduler, f.request, nil).grow()
+	require.Equal(t, 2, f.pools["a"].AddWorkerCallCount(), "another worker is asked for at once")
+	require.True(t, f.waits(t), "and waited for")
+}
+
+// The pass that asks for a worker, and those that had read the workers just
+// before it was added, plan without it.
+func TestRequestWaitsForAWorkerThatWasJustAdded(t *testing.T) {
+	f := newWaitingFixture(t)
+	before := []*types.Worker{}
+
+	require.True(t, f.provisioning.reserveCapacity(f.Scheduler, before, f.request))
+	f.clock.Advance(workerListLag - time.Millisecond)
+	require.True(t, f.provisioning.reserveCapacity(f.Scheduler, before, f.request))
+
+	f.clock.Advance(time.Millisecond)
+	require.False(t, f.provisioning.reserveCapacity(f.Scheduler, before, f.request), "a list that old would have it")
+}
+
+// A pool can take its time to add a worker: a machine is bought before the
+// worker exists. Until the pool answers there is no worker to find missing.
+func TestRequestWaitsWhileItsPoolIsStillAddingTheWorker(t *testing.T) {
+	f := newGrowFixture(t)
+	pool := f.pools["a"]
+	pool.addWorkerStarted, pool.addWorkerDone = make(chan struct{}, 1), make(chan struct{}, 1)
+	pool.unblockAddWorker = make(chan struct{})
+
+	request := &types.ContainerRequest{ContainerId: uuid.NewString(), Cpu: 1000, Memory: 1024, Timestamp: f.clock.Now()}
+	setPendingSchedulerRequests(t, f.Scheduler, request)
+	newSchedulingAttempt(f.Scheduler, request, nil).grow()
+	awaitN(t, pool.addWorkerStarted, 1, "the pool was asked")
+
+	f.clock.Advance(time.Minute)
+	require.True(t, f.provisioning.reserveCapacity(f.Scheduler, nil, request))
+
+	close(pool.unblockAddWorker)
+	awaitN(t, pool.addWorkerDone, 1, "the pool answered")
+}
+
+// A worker that is removed takes every request that waited for it along,
+// whichever of them finds out.
+func TestEveryRequestThatWaitedForARemovedWorkerAsksAgain(t *testing.T) {
+	f := newWaitingFixture(t)
+	f.clock.Advance(time.Minute)
+
+	// A second request finds room on the worker that is starting.
+	second := &types.ContainerRequest{ContainerId: uuid.NewString(), Cpu: 1000, Memory: 1024, Timestamp: f.clock.Now()}
+	workers, err := f.workerRepo.GetAllWorkers()
+	require.NoError(t, err)
+	require.True(t, f.provisioning.reserveCapacity(f.Scheduler, workers, second))
+
+	require.NoError(t, f.workerRepo.RemoveWorker(f.worker.Id))
+	require.False(t, f.provisioning.reserveCapacity(f.Scheduler, nil, second), "the second request finds the worker gone")
+
+	// The first request, which holds the lock on asking, is free to ask.
+	newSchedulingAttempt(f.Scheduler, f.request, nil).grow()
+	require.Equal(t, 2, f.pools["a"].AddWorkerCallCount())
+}
+
+// A worker that was already starting when a request found it is waited for
+// in the same way, and given up on in the same way.
+func TestRequestStopsWaitingForAStartingWorkerItFoundThatWasRemoved(t *testing.T) {
+	f := newGrowFixture(t)
+	starting := &types.Worker{
+		Id: "starting", PoolName: "a", Status: types.WorkerStatusPending,
+		TotalCpu: 4000, FreeCpu: 4000, TotalMemory: 8192, FreeMemory: 8192, CreatedAt: f.clock.Now().Unix(),
+	}
+	request := &types.ContainerRequest{ContainerId: uuid.NewString(), Cpu: 1000, Memory: 1024, Timestamp: f.clock.Now()}
+
+	require.True(t, f.provisioning.reserveCapacity(f.Scheduler, []*types.Worker{starting}, request))
+	f.clock.Advance(workerListLag)
+	require.True(t, f.provisioning.reserveCapacity(f.Scheduler, []*types.Worker{starting}, request))
+	require.False(t, f.provisioning.reserveCapacity(f.Scheduler, nil, request))
+}
+
+// A pool of machines that joined by hand answers with the machine's worker,
+// which may be running already. The request waits for room on it as long as
+// it would wait for a worker to start, and then asks again.
+func TestRequestWaitsForARunningWorkerItsPoolAnsweredWith(t *testing.T) {
+	f := newGrowFixture(t)
+	f.spawn = func(fn func()) { fn() }
+	f.pools["a"].workerStatus = types.WorkerStatusAvailable
+
+	request := &types.ContainerRequest{ContainerId: uuid.NewString(), Cpu: 1000, Memory: 1024, Timestamp: f.clock.Now()}
+	setPendingSchedulerRequests(t, f.Scheduler, request)
+	waits := func() bool {
+		workers, err := f.workerRepo.GetAllWorkers()
+		require.NoError(t, err)
+		return f.provisioning.reserveCapacity(f.Scheduler, workers, request)
+	}
+
+	newSchedulingAttempt(f.Scheduler, request, nil).grow()
+	f.clock.Advance(pendingWorkerReservationTTL - time.Second)
+	require.True(t, waits(), "the pool has no other worker to answer with")
+	newSchedulingAttempt(f.Scheduler, request, nil).grow()
+	require.Equal(t, 1, f.pools["a"].AddWorkerCallCount())
+
+	f.clock.Advance(time.Second)
+	require.False(t, waits(), "the wait is over")
+	newSchedulingAttempt(f.Scheduler, request, nil).grow()
+	require.Equal(t, 2, f.pools["a"].AddWorkerCallCount(), "the pool is asked again")
+}
+
+// A second request that is answered with the worker another one waits for
+// joins that wait; neither is forgotten.
+func TestRequestsAnsweredWithTheSameWorkerWaitTogether(t *testing.T) {
+	f := newGrowFixture(t)
+
+	machine := &types.Worker{
+		Id: "machine", PoolName: "a", Status: types.WorkerStatusAvailable,
+		TotalCpu: 8000, FreeCpu: 8000, TotalMemory: 16384, FreeMemory: 16384,
+	}
+	first := &types.ContainerRequest{ContainerId: uuid.NewString(), Cpu: 1000, Memory: 1024}
+	second := &types.ContainerRequest{ContainerId: uuid.NewString(), Cpu: 1000, Memory: 1024}
+	pool, ok := f.workerPoolManager.GetPool("a")
+	require.True(t, ok)
+	for _, request := range []*types.ContainerRequest{first, second} {
+		reservation := f.provisioning.addReservation(f.Scheduler, request, pool, workerSize{cpu: 1000, memory: 1024})
+		f.provisioning.handoff(f.Scheduler, reservation, machine)
+	}
+
+	workers := []*types.Worker{machine}
+	require.True(t, f.provisioning.reserveCapacity(f.Scheduler, workers, first))
+	require.True(t, f.provisioning.reserveCapacity(f.Scheduler, workers, second))
+
+	f.clock.Advance(pendingWorkerReservationTTL)
+	require.Empty(t, f.provisioning.requestReservations, "the wait ends for both")
+	require.Empty(t, f.provisioning.reservations)
+}
+
+// A request that asked a pool for a worker holds a lock that keeps it from
+// asking again while it waits. The lock is released as soon as the wait is
+// over, whatever ended it.
+func TestGrowLockIsReleasedWhenTheRequestStopsWaiting(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		end  func(t *testing.T, f *waitingFixture)
+	}{
+		{"the worker was removed", func(t *testing.T, f *waitingFixture) {
+			require.NoError(t, f.workerRepo.RemoveWorker(f.worker.Id))
+			require.False(t, f.waits(t))
+		}},
+		{"the worker stalled", func(t *testing.T, f *waitingFixture) {
+			f.workerPoolManager.SetPool("a", types.WorkerPoolConfig{Priority: 30, StalledAfter: types.Duration(time.Minute)}, f.pools["a"])
+			require.False(t, f.waits(t))
+		}},
+		{"the worker took too long to start", func(t *testing.T, f *waitingFixture) {
+			f.clock.Advance(pendingWorkerReservationTTL)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f := newWaitingFixture(t)
+			lock := common.RedisKeys.SchedulerWorkerProvisioningLock(f.request.ContainerId)
+			held := func() bool { return f.requestBacklog.rdb.Exists(context.Background(), lock).Val() == 1 }
+
+			f.clock.Advance(time.Minute)
+			require.True(t, f.waits(t))
+			require.True(t, held(), "the request waits")
+
+			test.end(t, f)
+			require.False(t, held(), "the request stopped waiting")
+		})
+	}
+}
+
+// A pool that failed to add a worker is left alone for a while. A request
+// with no other pool to ask is planned again as soon as any request that
+// waits: a container that finishes meanwhile leaves room for it.
+func TestRequestWhosePoolsAreLeftAloneIsPlannedAgainSoon(t *testing.T) {
+	f := newGrowFixture(t)
+	f.requestBacklog.now = f.clock.Now
+	for name := range f.pools {
+		f.workerProvisioningBackoff.failed(name, f.now())
+	}
+	request := &types.ContainerRequest{ContainerId: uuid.NewString(), Cpu: 1000, Memory: 1024, Timestamp: f.clock.Now()}
+	setPendingSchedulerRequests(t, f.Scheduler, request)
+
+	newSchedulingAttempt(f.Scheduler, request, nil).grow()
+
+	f.clock.Advance(provisioningWorkerRequeueDelay)
+	waiting, err := f.requestBacklog.PopN(1)
+	require.NoError(t, err)
+	require.Len(t, waiting, 1)
+}
+
+// flakyPools fails the next reads of a pool's state.
+type flakyPools struct {
+	repo.ComputeRepository
+	failures int
+}
+
+func (r *flakyPools) GetPoolState(ctx context.Context, workspaceID, name string) (*compute.PoolState, error) {
+	if r.failures > 0 {
+		r.failures--
+		return nil, errors.New("redis timed out")
+	}
+	return r.ComputeRepository.GetPoolState(ctx, workspaceID, name)
+}
+
+// A request fails for want of a pool only when no pool accepts it. Failing
+// to read the pool it names says nothing about the request, which is tried
+// again.
+func TestGrowTriesAgainWhenThePoolCannotBeLookedUp(t *testing.T) {
+	f := newGrowFixture(t)
+	pools := &flakyPools{ComputeRepository: f.computeRepo}
+	f.computeRepo = pools
+
+	request := &types.ContainerRequest{
+		ContainerId: uuid.NewString(), WorkspaceId: "workspace", PoolSelector: "a",
+		Cpu: 1000, Memory: 1024, Timestamp: f.clock.Now(),
+	}
+	setPendingSchedulerRequests(t, f.Scheduler, request)
+
+	pools.failures = 1
+	newSchedulingAttempt(f.Scheduler, request, nil).grow()
+	require.True(t, newSchedulingAttempt(f.Scheduler, request, nil).runnable(), "the request is still to be scheduled")
+	require.Zero(t, f.pools["a"].AddWorkerCallCount())
+
+	newSchedulingAttempt(f.Scheduler, request, nil).grow()
+	require.Equal(t, 1, f.pools["a"].AddWorkerCallCount())
+
+	nowhere := &types.ContainerRequest{ContainerId: uuid.NewString(), PoolSelector: "no-such-pool", Cpu: 1000, Memory: 1024, Timestamp: f.clock.Now()}
+	setPendingSchedulerRequests(t, f.Scheduler, nowhere)
+	newSchedulingAttempt(f.Scheduler, nowhere, nil).grow()
+	require.False(t, newSchedulingAttempt(f.Scheduler, nowhere, nil).runnable(), "no pool accepts it")
+}
+
+func TestWorkerStalled(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	created := func(ago time.Duration) int64 { return now.Add(-ago).Unix() }
+
+	for _, test := range []struct {
+		name         string
+		worker       types.Worker
+		stalledAfter time.Duration
+		want         bool
+	}{
+		{"pending for less than stalledAfter", types.Worker{Status: types.WorkerStatusPending, CreatedAt: created(119 * time.Second)}, 2 * time.Minute, false},
+		{"pending for stalledAfter", types.Worker{Status: types.WorkerStatusPending, CreatedAt: created(2 * time.Minute)}, 2 * time.Minute, true},
+		{"pending for longer", types.Worker{Status: types.WorkerStatusPending, CreatedAt: created(time.Hour)}, 2 * time.Minute, true},
+		{"the pool has no stalledAfter", types.Worker{Status: types.WorkerStatusPending, CreatedAt: created(time.Hour)}, 0, false},
+		{"a worker that started is not stalled, however old", types.Worker{Status: types.WorkerStatusAvailable, CreatedAt: created(time.Hour)}, 2 * time.Minute, false},
+		{"a worker from before workers recorded their age", types.Worker{Status: types.WorkerStatusPending}, 2 * time.Minute, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, workerStalled(&test.worker, test.stalledAfter, now))
+		})
+	}
+}
+
+func TestStallCheckReusesItsAnswerForAnInterval(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	looks := 0
+	answer := true
+	look := func() (bool, error) { looks++; return answer, nil }
+
+	var check stallCheck
+	stalled, err := check.stalledAt(now, look)
+	require.NoError(t, err)
+	require.True(t, stalled)
+
+	// The pool's workers started, but the answer is not looked up again yet.
+	answer = false
+	stalled, _ = check.stalledAt(now.Add(stallCheckInterval-time.Millisecond), look)
+	require.True(t, stalled)
+	require.Equal(t, 1, looks)
+
+	stalled, _ = check.stalledAt(now.Add(stallCheckInterval), look)
+	require.False(t, stalled)
+	require.Equal(t, 2, looks)
+}
+
+func TestStallCheckDoesNotRememberAFailedLook(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	var check stallCheck
+
+	_, err := check.stalledAt(now, func() (bool, error) { return false, errors.New("redis is down") })
+	require.Error(t, err)
+
+	stalled, err := check.stalledAt(now, func() (bool, error) { return true, nil })
+	require.NoError(t, err)
+	require.True(t, stalled)
+}
+
+// A request stops waiting for a worker only when the worker's own pool says
+// so: the pool's stalledAfter, read from the pool the worker belongs to.
+func TestSchedulerStopsWaitingForStalledWorkersOnly(t *testing.T) {
+	s, err := NewSchedulerForTest()
+	require.NoError(t, err)
+	s.workerPoolManager = NewWorkerPoolManager()
+	s.workerPoolManager.SetPool("patient", types.WorkerPoolConfig{}, &LocalWorkerPoolControllerForTest{name: "patient"})
+	s.workerPoolManager.SetPool("impatient", types.WorkerPoolConfig{StalledAfter: types.Duration(time.Minute)}, &LocalWorkerPoolControllerForTest{name: "impatient"})
+
+	now := s.now()
+	old := now.Add(-time.Hour).Unix()
+	workers := []*types.Worker{
+		{Id: "patient-old", PoolName: "patient", Status: types.WorkerStatusPending, CreatedAt: old},
+		{Id: "impatient-old", PoolName: "impatient", Status: types.WorkerStatusPending, CreatedAt: old},
+		{Id: "impatient-new", PoolName: "impatient", Status: types.WorkerStatusPending, CreatedAt: now.Unix()},
+		{Id: "impatient-running", PoolName: "impatient", Status: types.WorkerStatusAvailable, CreatedAt: old},
+		{Id: "unknown-pool", PoolName: "deleted", Status: types.WorkerStatusPending, CreatedAt: old},
+	}
+
+	kept := []string{}
+	for _, worker := range s.filterStalledWorkers(workers) {
+		kept = append(kept, worker.Id)
+	}
+	require.Equal(t, []string{"patient-old", "impatient-new", "impatient-running", "unknown-pool"}, kept)
+	require.Len(t, workers, 5, "the caller's list is left as it was")
+	require.Equal(t, "impatient-old", workers[1].Id)
+}
+
+// A workspace's own pool may have the name of a shared pool. Its workers
+// follow their own pool's stalledAfter, not the shared pool's.
+func TestWorkerOfAPrivatePoolIsNotStalledByASharedPoolOfTheSameName(t *testing.T) {
+	s, err := NewSchedulerForTest()
+	require.NoError(t, err)
+	s.workerPoolManager = NewWorkerPoolManager()
+	s.workerPoolManager.SetPool("gpu", types.WorkerPoolConfig{StalledAfter: types.Duration(time.Minute)}, &LocalWorkerPoolControllerForTest{name: "gpu"})
+	require.NoError(t, s.EnsureAgentPool("tenant", &compute.PoolState{Name: "gpu", Selector: "gpu", Mode: string(types.PoolModePrivate)}))
+
+	now := s.now()
+	old := now.Add(-time.Hour).Unix()
+	shared := &types.Worker{Id: "shared-1", Status: types.WorkerStatusPending, PoolName: "gpu", CreatedAt: old}
+	private := &types.Worker{Id: "private-1", Status: types.WorkerStatusPending, PoolName: "gpu", PoolSelector: "gpu", WorkspaceId: "tenant", CreatedAt: old}
+
+	require.True(t, s.stalled(shared, now))
+	require.False(t, s.stalled(private, now))
+}
+
+// A worker that has been starting for too long is not capacity to wait for:
+// a request that finds only that worker goes on to ask a pool for another.
+func TestRequestDoesNotWaitForAStalledWorker(t *testing.T) {
+	now := time.Now()
+	pending := func(age time.Duration) *types.Worker {
+		return &types.Worker{
+			Id: "worker", PoolName: "impatient", Status: types.WorkerStatusPending,
+			TotalCpu: 4000, FreeCpu: 4000, TotalMemory: 8192, FreeMemory: 8192,
+			CreatedAt: now.Add(-age).Unix(),
+		}
+	}
+	waits := func(t *testing.T, s *Scheduler, request *types.ContainerRequest, worker *types.Worker) bool {
+		t.Helper()
+		return s.provisioning.reserveCapacity(s, []*types.Worker{worker}, request)
+	}
+	fixture := func(t *testing.T) (*Scheduler, *types.ContainerRequest) {
+		t.Helper()
+		s, err := NewSchedulerForTest()
+		require.NoError(t, err)
+		s.workerPoolManager = NewWorkerPoolManager()
+		s.workerPoolManager.SetPool("impatient", types.WorkerPoolConfig{StalledAfter: types.Duration(time.Minute)}, &LocalWorkerPoolControllerForTest{name: "impatient"})
+		return s, &types.ContainerRequest{ContainerId: uuid.NewString(), Cpu: 1000, Memory: 1024, Timestamp: now}
+	}
+
+	t.Run("a worker that is starting is waited for", func(t *testing.T) {
+		s, request := fixture(t)
+		require.True(t, waits(t, s, request, pending(10*time.Second)))
+	})
+
+	t.Run("a stalled worker is not", func(t *testing.T) {
+		s, request := fixture(t)
+		require.False(t, waits(t, s, request, pending(time.Hour)))
+	})
+
+	t.Run("a request stops waiting when its worker stalls", func(t *testing.T) {
+		s, request := fixture(t)
+		worker := pending(50 * time.Second)
+		require.True(t, waits(t, s, request, worker))
+
+		worker.CreatedAt -= 10
+		require.False(t, waits(t, s, request, worker))
+	})
+}
+
+// An agent pool is the machines that joined it. Work can be placed on a
+// machine that is connected and runs workers in containers; the pool counts
+// every machine, and looks after the worker of each.
+
+// agentPoolFixture is a pool of four machines:
+//
+//	ready      connected, its worker is up
+//	starting   connected, its worker has not started yet
+//	silent     not heard from for too long, with the most room of all
+//	no-workers connected, but it does not run workers in containers
+type agentPoolFixture struct {
+	ctx        context.Context
+	workers    *failingWorkerRepo
+	machines   repo.ComputeRepository
+	controller *AgentWorkerPoolController
+}
+
+const (
+	agentPoolWorkspace = "workspace"
+	agentPoolName      = "rack"
+)
+
+func newAgentPoolFixture(t *testing.T) *agentPoolFixture {
+	t.Helper()
+	ctx := context.Background()
+	rdb, err := repo.NewRedisClientForTest()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+	f := &agentPoolFixture{
+		ctx:      ctx,
+		workers:  &failingWorkerRepo{WorkerRepository: repo.NewWorkerRedisRepositoryForTest(rdb)},
+		machines: repo.NewComputeRedisRepository(rdb),
+	}
+
+	now := time.Now()
+	for _, machine := range []*compute.AgentTokenState{
+		{MachineID: "ready", CPUMillicores: 8000, MemoryMB: 16000, LastHeartbeatAt: now, Executor: types.DefaultAgentWorkerContainerMode},
+		{MachineID: "starting", CPUMillicores: 4000, MemoryMB: 8000, LastHeartbeatAt: now, Executor: types.DefaultAgentWorkerContainerMode},
+		{MachineID: "silent", CPUMillicores: 64000, MemoryMB: 128000, LastHeartbeatAt: now.Add(-2 * compute.AgentHeartbeatTimeout), Executor: types.DefaultAgentWorkerContainerMode},
+		{MachineID: "no-workers", CPUMillicores: 32000, MemoryMB: 64000, LastHeartbeatAt: now, Executor: "process"},
+	} {
+		machine.TokenHash, machine.WorkspaceID, machine.PoolName, machine.Schedulable = "token-of-"+machine.MachineID, agentPoolWorkspace, agentPoolName, true
+		require.NoError(t, f.machines.SaveAgentTokenState(ctx, machine, time.Hour))
+	}
+
+	f.controller, err = NewAgentWorkerPoolController(AgentWorkerPoolControllerOptions{
+		Context: ctx, Name: agentPoolName, WorkspaceID: agentPoolWorkspace,
+		WorkerPool: types.WorkerPoolConfig{Mode: types.PoolModeExternal},
+		PoolState:  &compute.PoolState{Name: agentPoolName, Selector: agentPoolName, Mode: string(types.PoolModeExternal)},
+		WorkerRepo: f.workers, ComputeRepo: f.machines,
+	})
+	require.NoError(t, err)
+
+	// The connected machines get their workers, and the ready one's starts.
+	require.NoError(t, f.controller.reconcileMachines())
+	require.NoError(t, f.workers.UpdateWorkerStatus(compute.AgentMachineWorkerID("ready"), types.WorkerStatusAvailable))
+	// The silent machine's worker is on record from before it went quiet.
+	require.NoError(t, f.workers.AddWorker(&types.Worker{
+		Id: compute.AgentMachineWorkerID("silent"), MachineId: "silent", PoolName: agentPoolName, Status: types.WorkerStatusAvailable,
+		TotalCpu: 64000, FreeCpu: 64000, TotalMemory: 128000, FreeMemory: 128000,
+	}))
+	return f
+}
+
+func (f *agentPoolFixture) worker(t *testing.T, machineID string) *types.Worker {
+	t.Helper()
+	worker, err := f.workers.GetWorkerById(compute.AgentMachineWorkerID(machineID))
+	require.NoError(t, err)
+	return worker
+}
+
+func TestAnAgentPoolCountsEveryMachineAndTellsThoseWorkCanBePlacedOn(t *testing.T) {
+	f := newAgentPoolFixture(t)
+
+	state, err := f.controller.State()
+	require.NoError(t, err)
+	require.Equal(t, &types.WorkerPoolState{
+		Status:             types.WorkerPoolStatusHealthy,
+		RegisteredMachines: 4,
+		ReadyMachines:      1,
+		PendingMachines:    1,
+	}, state)
+
+	// With no machine whose worker is up, the pool is degraded.
+	require.NoError(t, f.workers.UpdateWorkerStatus(compute.AgentMachineWorkerID("ready"), types.WorkerStatusPending))
+	state, err = f.controller.State()
+	require.NoError(t, err)
+	require.Equal(t, &types.WorkerPoolState{
+		Status:             types.WorkerPoolStatusDegraded,
+		RegisteredMachines: 4,
+		PendingMachines:    2,
+	}, state)
+
+	// A worker that cannot be read is an error, not a machine to count.
+	f.workers.getWorker = errors.New("redis is down")
+	_, err = f.controller.State()
+	require.ErrorIs(t, err, f.workers.getWorker)
+}
+
+func TestAnAgentPoolAddsAWorkerOnlyOnAMachineWorkCanBePlacedOn(t *testing.T) {
+	f := newAgentPoolFixture(t)
+
+	// Both connected machines have room for a small worker, and only the
+	// ready one for a worker of its own size.
+	can, err := f.controller.CanAddWorker(1000, 1000, 0)
+	require.NoError(t, err)
+	require.True(t, can)
+	worker, err := f.controller.AddWorker(8000, 1000, 0)
+	require.NoError(t, err)
+	require.Equal(t, "ready", worker.MachineId)
+
+	// Only the silent machine and the one that runs no workers have room for
+	// more than that, and neither can take work.
+	can, err = f.controller.CanAddWorker(16000, 1000, 0)
+	require.NoError(t, err)
+	require.False(t, can)
+}
+
+// When no machine has room, the pool says what it had. The scheduler logs
+// it as it is for whoever has to find out why a request for a workspace's
+// own machines is waiting.
+func TestAnAgentPoolWithNoRoomSaysWhatItsMachinesHad(t *testing.T) {
+	f := newAgentPoolFixture(t)
+
+	_, err := f.controller.AddWorker(16000, 1000, 0)
+
+	var noRoom *AgentPoolCapacityError
+	require.ErrorAs(t, err, &noRoom)
+	require.Equal(t, &AgentPoolCapacityError{
+		WorkspaceID: agentPoolWorkspace, PoolName: agentPoolName,
+		CPU: 16000, Memory: 1000,
+		Machines: 4, SchedulableMachines: 2,
+		MaxAvailableCPU: 8000, MaxAvailableMemory: 16000,
+	}, noRoom)
+	require.EqualError(t, err, `no joined agent machine in workspace "workspace" pool "rack" has enough capacity (requested cpu=16000 memory=1000 gpu="" gpu_count=0, schedulable_machines=2/4, max_available_cpu=8000 max_available_memory=16000 max_available_gpu=0)`)
+
+	logged := captureLog(t)
+	logAddWorkerFailure(&types.ContainerRequest{ContainerId: "container"}, err)
+	var line map[string]any
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(logged.String())), &line))
+	for field, want := range map[string]any{
+		"level": "debug", "message": "agent pool capacity unavailable", "container_id": "container",
+		"pool_name": "rack", "machines": 4.0, "schedulable_machines": 2.0,
+		"max_available_cpu": 8000.0, "max_available_memory": 16000.0, "max_available_gpu": 0.0,
+		"error": err.Error(),
+	} {
+		require.Equal(t, want, line[field], field)
+	}
+
+	// A worker that cannot be read does not count towards what was there.
+	f.workers.getWorker = errors.New("redis is down")
+	require.ErrorAs(t, f.controller.capacityError(16000, 1000, "", 0), &noRoom)
+	require.Equal(t, []int{4, 2}, []int{noRoom.Machines, noRoom.SchedulableMachines})
+	require.Zero(t, noRoom.MaxAvailableCPU)
+}
+
+// The gateway looks at a pool's machines all together when it reconciles
+// the pool, and at one alone when that machine's agent sends a heartbeat.
+// Either way a machine is treated the same.
+func TestAMachineIsLookedAfterTheSameAloneAsWithItsPool(t *testing.T) {
+	alone := func(f *agentPoolFixture, machineID string) error { return f.controller.ensureMachine(machineID) }
+	withItsPool := func(f *agentPoolFixture, _ string) error { return f.controller.reconcileMachines() }
+
+	for name, reconcile := range map[string]func(*agentPoolFixture, string) error{"alone": alone, "with its pool": withItsPool} {
+		t.Run(name, func(t *testing.T) {
+			t.Run("a machine that has gone quiet has its worker disabled", func(t *testing.T) {
+				f := newAgentPoolFixture(t)
+				require.NoError(t, reconcile(f, "silent"))
+				require.Equal(t, types.WorkerStatusDisabled, f.worker(t, "silent").Status)
+			})
+
+			t.Run("and that is an error when its worker cannot be read", func(t *testing.T) {
+				f := newAgentPoolFixture(t)
+				f.workers.getWorker = errors.New("redis is down")
+				require.ErrorIs(t, reconcile(f, "silent"), f.workers.getWorker)
+			})
+
+			t.Run("a machine that runs no workers gets none", func(t *testing.T) {
+				f := newAgentPoolFixture(t)
+				require.NoError(t, reconcile(f, "no-workers"))
+				_, err := f.workers.GetWorkerById(compute.AgentMachineWorkerID("no-workers"))
+				var notFound *types.ErrWorkerNotFound
+				require.ErrorAs(t, err, &notFound)
+			})
+
+			t.Run("a connected machine whose worker is gone gets one that is starting", func(t *testing.T) {
+				f := newAgentPoolFixture(t)
+				require.NoError(t, f.workers.RemoveWorker(compute.AgentMachineWorkerID("starting")))
+				require.NoError(t, reconcile(f, "starting"))
+				require.Equal(t, types.WorkerStatusPending, f.worker(t, "starting").Status)
+			})
+		})
+	}
+
+	t.Run("a machine that is not the pool's is not an error", func(t *testing.T) {
+		f := newAgentPoolFixture(t)
+		require.NoError(t, f.controller.ensureMachine("nobody"))
+	})
+}
+
+// A machine that dies stops heartbeating and its worker stops sending
+// keepalives, while the gateway goes on reconciling the machine's pool. The
+// worker's record has to expire all the same: only then do the requests
+// queued on it go back to the backlog.
+func TestReconcilingAPoolLetsTheWorkerRecordOfADeadMachineExpire(t *testing.T) {
+	m := newServingExternalMachine(t, false)
+	key := common.RedisKeys.SchedulerWorkerState(m.workerID)
+	// Most of the record's lifetime passes with no keepalive.
+	const left = 5 * time.Second
+	timePasses := func() { require.NoError(t, m.rdb.Expire(m.ctx, key, left).Err()) }
+	lifetime := func() time.Duration { return m.rdb.TTL(m.ctx, key).Val() }
+
+	// The machine dies with a request queued on its worker.
+	request := &types.ContainerRequest{ContainerId: "queued", WorkspaceId: "workspace", StubId: "stub", Cpu: 100, Memory: 100}
+	require.NoError(t, repo.NewContainerRedisRepositoryForTest(m.rdb).SetContainerState(request.ContainerId, &types.ContainerState{
+		ContainerId: request.ContainerId, Status: types.ContainerStatusPending, WorkspaceId: request.WorkspaceId,
+	}))
+	worker, err := m.workers.GetWorkerById(m.workerID)
+	require.NoError(t, err)
+	require.NoError(t, m.workers.ScheduleContainerRequests(worker, []*types.ContainerRequest{request}))
+
+	// Its last heartbeat still counts for a while, and a reconcile in that
+	// time saves its worker. That gives the record no more time.
+	timePasses()
+	require.NoError(t, m.controller.reconcileMachines())
+	require.Equal(t, left, lifetime())
+
+	// Once the heartbeat is too old the worker is disabled.
+	m.state.LastHeartbeatAt = time.Now().Add(-2 * compute.AgentHeartbeatTimeout)
+	require.NoError(t, m.machines.SaveAgentTokenState(m.ctx, m.state, time.Hour))
+	require.NoError(t, m.controller.reconcileMachines())
+	worker, err = m.workers.GetWorkerById(m.workerID)
+	require.NoError(t, err)
+	require.Equal(t, types.WorkerStatusDisabled, worker.Status)
+
+	// A worker that is disabled already is left as it is, whether the pool
+	// is reconciled or the gateway looks at the machine alone.
+	timePasses()
+	for range 3 {
+		require.NoError(t, m.controller.reconcileMachines())
+		require.NoError(t, m.controller.ensureMachine(m.state.MachineID))
+		require.Equal(t, left, lifetime())
+	}
+
+	// The record expires. Nothing makes it again, and the next look at the
+	// workers returns the request to the backlog.
+	require.NoError(t, m.rdb.Del(m.ctx, key).Err())
+	require.NoError(t, m.controller.reconcileMachines())
+	workers, err := m.workers.GetAllWorkers()
+	require.NoError(t, err)
+	require.Empty(t, workers)
+	require.Zero(t, m.rdb.LLen(m.ctx, common.RedisKeys.SchedulerWorkerRequests(m.workerID)).Val())
+	require.EqualValues(t, 1, m.rdb.ZCard(m.ctx, common.RedisKeys.SchedulerContainerRequests()).Val())
+}
+
+// fakeProvisioner sells machines of one size, or refuses to.
+type fakeProvisioner struct {
+	inStock bool
+	err     error
+	// sells is the size of every machine it sells.
+	sells ProvisionedMachine
+	// asked is what it was asked to hold, by CanProvision and Provision.
+	asked []MachineNeed
+	// sold are the machines it sold. They are booting until removed.
+	sold []ProvisionedMachine
+}
+
+func (p *fakeProvisioner) CanProvision(ctx context.Context, pool string, need MachineNeed) bool {
+	p.asked = append(p.asked, need)
+	return p.inStock
+}
+
+func (p *fakeProvisioner) Provision(ctx context.Context, pool string, need MachineNeed) (*ProvisionedMachine, error) {
+	p.asked = append(p.asked, need)
+	if p.err != nil {
+		return nil, p.err
+	}
+	machine := p.sells
+	machine.MachineID = "machine-" + string(rune('a'+len(p.sold)))
+	p.sold = append(p.sold, machine)
+	return &machine, nil
+}
+
+func (p *fakeProvisioner) Booting(ctx context.Context, pool string) ([]ProvisionedMachine, error) {
+	return p.sold, p.err
+}
+
+// buyingPool is the controller of a pool with a provisioning block, on its
+// own Redis.
+type buyingPool struct {
+	t          *testing.T
+	ctx        context.Context
+	redis      *miniredis.Miniredis
+	workers    repo.WorkerRepository
+	machines   repo.ComputeRepository
+	controller *AgentWorkerPoolController
+}
+
+const buyingWorkspace = "admin-workspace"
+
+func newBuyingPool(t *testing.T, provisioner Provisioner, change ...func(*types.WorkerPoolConfig)) *buyingPool {
+	t.Helper()
+	server := miniredis.RunT(t)
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
+	require.NoError(t, err)
+
+	config := types.WorkerPoolConfig{
+		GPUType:          "L40S",
+		ContainerRuntime: types.ContainerRuntimeRunc.String(),
+		Priority:         5,
+		Provisioning:     types.WorkerPoolProvisioningConfig{Provider: "verda", Spot: true, MaxNodes: 4},
+	}
+	for _, apply := range change {
+		apply(&config)
+	}
+	config.ApplyProvisioning()
+
+	p := &buyingPool{
+		t: t, ctx: context.Background(), redis: server,
+		workers:  repo.NewWorkerRedisRepositoryForTest(rdb),
+		machines: repo.NewComputeRedisRepository(rdb),
+	}
+	p.controller, err = NewAgentWorkerPoolController(AgentWorkerPoolControllerOptions{
+		Context: p.ctx, Name: "spot-l40s", WorkspaceID: buyingWorkspace, WorkerPool: config,
+		Config:      types.AppConfig{Worker: types.WorkerConfig{ImageTag: "v1"}},
+		PoolState:   &compute.PoolState{Name: "spot-l40s", Selector: "spot-l40s", Mode: string(types.PoolModeExternal)},
+		WorkerRepo:  p.workers,
+		ComputeRepo: p.machines,
+		Provisioner: provisioner,
+	})
+	require.NoError(t, err)
+	return p
+}
+
+func (p *buyingPool) poolWorkers() []*types.Worker {
+	p.t.Helper()
+	workers, err := p.workers.GetAllWorkersInPool("spot-l40s")
+	require.NoError(p.t, err)
+	return workers
+}
+
+// join is the machine's agent joining the pool and reporting what it has.
+func (p *buyingPool) join(machineID string, cpuMillicores int64, memoryMB uint64) {
+	p.t.Helper()
+	require.NoError(p.t, p.machines.SaveAgentTokenState(p.ctx, &compute.AgentTokenState{
+		TokenHash: "agent-token-" + machineID, WorkspaceID: buyingWorkspace, PoolName: "spot-l40s", MachineID: machineID,
+		CPUMillicores: cpuMillicores, MemoryMB: memoryMB, GPUs: []string{"L40S"}, GPUCount: 1,
+		Executor: types.DefaultAgentWorkerContainerMode, Schedulable: true, LastHeartbeatAt: time.Now(),
+		Mode: string(types.PoolModeExternal), ManagedPoolInstanceID: "instance-1",
+	}, time.Hour))
+	require.NoError(p.t, p.controller.ensureMachine(machineID))
+}
+
+var oneL40S = ProvisionedMachine{CPU: 20_000, Memory: 54_000, GPUCount: 1}
+
+func TestAPoolThatBuysAddsAWorkerByBuyingAMachine(t *testing.T) {
+	provisioner := &fakeProvisioner{inStock: true, sells: oneL40S}
+	p := newBuyingPool(t, provisioner)
+	require.True(t, p.controller.IsPreemptable(), "spot machines can be taken back")
+
+	can, err := p.controller.CanAddWorker(2000, 8192, 1)
+	require.NoError(t, err)
+	require.True(t, can)
+
+	worker, err := p.controller.AddWorker(2000, 8192, 1)
+	require.NoError(t, err)
+	require.Equal(t, []MachineNeed{{CPU: 2000, Memory: 8192, GPUCount: 1}, {CPU: 2000, Memory: 8192, GPUCount: 1}}, provisioner.asked)
+
+	// The worker stands for the whole machine, under the ID the machine's
+	// own worker will have, and is not usable yet.
+	require.Equal(t, compute.AgentMachineWorkerID("machine-a"), worker.Id)
+	require.Equal(t, "machine-a", worker.MachineId)
+	require.Equal(t, types.WorkerStatusPending, worker.Status)
+	require.Equal(t, "spot-l40s", worker.PoolName)
+	require.Equal(t, "L40S", worker.Gpu)
+	require.EqualValues(t, 20_000, worker.TotalCpu)
+	require.EqualValues(t, 54_000, worker.TotalMemory)
+	require.EqualValues(t, 1, worker.TotalGpuCount)
+	require.EqualValues(t, 5, worker.Priority)
+	require.True(t, worker.Preemptable)
+	require.True(t, worker.ControlPlaneManaged)
+	require.Equal(t, buyingWorkspace, worker.WorkspaceId)
+
+	stored := p.poolWorkers()
+	require.Len(t, stored, 1)
+	require.Equal(t, worker.Id, stored[0].Id)
+
+	// Invariant 3: a booting machine counts as capacity, so the sizer and
+	// waiting requests do not buy another.
+	capacity, err := p.controller.FreeCapacity()
+	require.NoError(t, err)
+	require.EqualValues(t, 1, capacity.PendingGpu)
+	require.Zero(t, capacity.FreeGpu)
+}
+
+func TestAPoolThatBuysAsksForPhysicalCores(t *testing.T) {
+	provisioner := &fakeProvisioner{inStock: true, sells: oneL40S}
+	p := newBuyingPool(t, provisioner, func(pool *types.WorkerPoolConfig) { pool.CPUShareMultiplier = 2 })
+
+	// Four schedulable cores take two physical ones, and a machine with
+	// twenty physical cores offers forty.
+	worker, err := p.controller.AddWorker(4000, 8192, 1)
+	require.NoError(t, err)
+	require.Equal(t, []MachineNeed{{CPU: 2000, Memory: 8192, GPUCount: 1}}, provisioner.asked)
+	require.EqualValues(t, 40_000, worker.TotalCpu)
+}
+
+func TestAPoolThatBuysCannotGrowWhenNothingCanBeBought(t *testing.T) {
+	refused := errors.New("verda has no L40S")
+	provisioner := &fakeProvisioner{inStock: false, err: refused}
+	p := newBuyingPool(t, provisioner)
+
+	can, err := p.controller.CanAddWorker(2000, 8192, 1)
+	require.NoError(t, err)
+	require.False(t, can)
+
+	_, err = p.controller.AddWorker(2000, 8192, 1)
+	require.ErrorIs(t, err, refused)
+	require.Empty(t, p.poolWorkers(), "nothing was bought, so nothing stands for it")
+}
+
+func TestAPoolThatBuysGrowsNoOtherWay(t *testing.T) {
+	provisioner := &fakeProvisioner{inStock: false, sells: oneL40S}
+	p := newBuyingPool(t, provisioner)
+
+	// A machine that has joined has its worker already. There is nothing
+	// else to bind, so its free room is no way to add a worker.
+	p.join("machine-by-hand", 20_000, 58_000)
+	require.Len(t, p.poolWorkers(), 1)
+
+	can, err := p.controller.CanAddWorker(2000, 8192, 1)
+	require.NoError(t, err)
+	require.False(t, can)
+}
+
+func TestAPoolThatBuysOnAGatewayWithNothingToBuyWith(t *testing.T) {
+	p := newBuyingPool(t, nil)
+
+	can, err := p.controller.CanAddWorker(2000, 8192, 1)
+	require.NoError(t, err)
+	require.False(t, can)
+	_, err = p.controller.AddWorker(2000, 8192, 1)
+	require.ErrorContains(t, err, `pool "spot-l40s" buys its machines, but this gateway has nothing to buy them with`)
+	require.NoError(t, p.controller.reconcileMachines())
+}
+
+func TestTheWorkerOfABoughtMachineCarriesOverWhenTheMachineJoins(t *testing.T) {
+	provisioner := &fakeProvisioner{inStock: true, sells: oneL40S}
+	p := newBuyingPool(t, provisioner)
+	bought, err := p.controller.AddWorker(2000, 8192, 1)
+	require.NoError(t, err)
+
+	// The machine reports a little more memory than was counted on.
+	p.join("machine-a", 20_000, 58_500)
+
+	workers := p.poolWorkers()
+	require.Len(t, workers, 1, "the machine has one worker, not two")
+	require.Equal(t, bought.Id, workers[0].Id)
+	require.Equal(t, types.WorkerStatusPending, workers[0].Status)
+	require.EqualValues(t, 58_500, workers[0].TotalMemory)
+	require.True(t, workers[0].Preemptable)
+	require.True(t, workers[0].ControlPlaneManaged)
+
+	// Its worker starts and takes requests.
+	require.NoError(t, p.workers.SetWorkerKeepAlive(bought.Id, types.WorkerKeepAlive{MachineId: "machine-a", RequestStreamOpen: true}))
+	workers = p.poolWorkers()
+	require.Len(t, workers, 1)
+	require.Equal(t, types.WorkerStatusAvailable, workers[0].Status)
+}
+
+func TestBootingMachinesKeepTheirPendingWorker(t *testing.T) {
+	provisioner := &fakeProvisioner{inStock: true, sells: oneL40S}
+	p := newBuyingPool(t, provisioner)
+	worker, err := p.controller.AddWorker(2000, 8192, 1)
+	require.NoError(t, err)
+
+	// A Pending worker expires after ten minutes. A machine can take longer
+	// than that to boot; the pool's reconcile, every thirty seconds, keeps
+	// its worker for as long as the machine is booting.
+	for range 50 {
+		p.redis.FastForward(30 * time.Second)
+		require.NoError(t, p.controller.reconcileMachines())
+	}
+	require.Len(t, p.poolWorkers(), 1)
+
+	// Redis loses the worker: it is made again, since the machine is still
+	// coming.
+	require.NoError(t, p.workers.RemoveWorker(worker.Id))
+	require.Empty(t, p.poolWorkers())
+	require.NoError(t, p.controller.reconcileMachines())
+	workers := p.poolWorkers()
+	require.Len(t, workers, 1)
+	require.Equal(t, worker.Id, workers[0].Id)
+	require.Equal(t, types.WorkerStatusPending, workers[0].Status)
+	require.EqualValues(t, 54_000, workers[0].TotalMemory)
+
+	// The machine is given up: its worker is no longer kept.
+	provisioner.sold = nil
+	for range 21 {
+		p.redis.FastForward(30 * time.Second)
+		require.NoError(t, p.controller.reconcileMachines())
+	}
+	require.Empty(t, p.poolWorkers())
+}
+
+func TestKeepingBootingWorkersLeavesJoinedMachinesToTheirAgent(t *testing.T) {
+	provisioner := &fakeProvisioner{inStock: true, sells: oneL40S}
+	p := newBuyingPool(t, provisioner)
+	worker, err := p.controller.AddWorker(2000, 8192, 1)
+	require.NoError(t, err)
+
+	// The machine has joined and its worker is up, but the provisioner has
+	// not seen that yet and still lists it as booting.
+	p.join("machine-a", 20_000, 58_500)
+	require.NoError(t, p.workers.SetWorkerKeepAlive(worker.Id, types.WorkerKeepAlive{MachineId: "machine-a", RequestStreamOpen: true}))
+	require.NoError(t, p.controller.reconcileMachines())
+
+	workers := p.poolWorkers()
+	require.Len(t, workers, 1)
+	require.Equal(t, types.WorkerStatusAvailable, workers[0].Status, "the worker is not set back to pending")
+	require.EqualValues(t, 58_500, workers[0].TotalMemory, "nor to the size that was counted on")
+}
+
+func TestKeepBootingWorkersReportsAProvisionerItCannotAsk(t *testing.T) {
+	provisioner := &fakeProvisioner{inStock: true, sells: oneL40S}
+	p := newBuyingPool(t, provisioner)
+	_, err := p.controller.AddWorker(2000, 8192, 1)
+	require.NoError(t, err)
+
+	provisioner.err = errors.New("redis is down")
+	require.ErrorContains(t, p.controller.reconcileMachines(), "redis is down")
+	require.Len(t, p.poolWorkers(), 1)
+}
+
+// A request asked for a small worker and the pool bought a machine. What is
+// left of the machine is there for other requests to wait on.
+func TestTakeCapacityOf(t *testing.T) {
+	// The worker the request was going to get, with the request on it.
+	asked := func() *types.Worker {
+		return &types.Worker{
+			TotalCpu: 2000, FreeCpu: 0, TotalMemory: 8192, FreeMemory: 0, TotalGpuCount: 1, FreeGpuCount: 0,
+		}
+	}
+
+	tests := []struct {
+		name        string
+		placeholder *types.Worker
+		added       *types.Worker
+		want        types.Worker
+	}{
+		{
+			name:        "the worker that was asked for",
+			placeholder: asked(),
+			added:       &types.Worker{TotalCpu: 2000, FreeCpu: 2000, TotalMemory: 8192, FreeMemory: 8192, TotalGpuCount: 1, FreeGpuCount: 1},
+			want:        types.Worker{TotalCpu: 2000, TotalMemory: 8192, TotalGpuCount: 1},
+		},
+		{
+			name:        "a machine with more of everything",
+			placeholder: asked(),
+			added:       &types.Worker{Gpu: "L40S", TotalCpu: 40_000, FreeCpu: 40_000, TotalMemory: 108_000, FreeMemory: 108_000, TotalGpuCount: 2, FreeGpuCount: 2},
+			want:        types.Worker{Gpu: "L40S", TotalCpu: 40_000, FreeCpu: 38_000, TotalMemory: 108_000, FreeMemory: 99_808, TotalGpuCount: 2, FreeGpuCount: 1},
+		},
+		{
+			name:        "a worker that came back smaller than asked for",
+			placeholder: asked(),
+			added:       &types.Worker{TotalCpu: 1000, FreeCpu: 1000, TotalMemory: 4096, FreeMemory: 4096},
+			want:        types.Worker{TotalCpu: 1000, TotalMemory: 4096},
+		},
+		{
+			name:        "the placeholder's GPU type stays when the worker names none",
+			placeholder: &types.Worker{Gpu: "L40S", TotalCpu: 2000, TotalGpuCount: 1},
+			added:       &types.Worker{TotalCpu: 20_000, FreeCpu: 20_000, TotalGpuCount: 1, FreeGpuCount: 1},
+			want:        types.Worker{Gpu: "L40S", TotalCpu: 20_000, FreeCpu: 18_000, TotalGpuCount: 1},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			takeCapacityOf(test.placeholder, test.added)
+			require.Equal(t, test.want, *test.placeholder)
+		})
+	}
+}
+
+func TestHoldsHeadroom(t *testing.T) {
+	floor := func(gpus string) types.WorkerPoolConfig {
+		return types.WorkerPoolConfig{GPUType: "L40S", PoolSizing: types.WorkerPoolJobSpecPoolSizingConfig{MinFreeGPU: gpus}}
+	}
+	ready := func(id string, freeGPUs uint32) *types.Worker {
+		return &types.Worker{
+			Id: id, Status: types.WorkerStatusAvailable, Gpu: "L40S",
+			TotalCpu: 20_000, FreeCpu: 20_000, TotalMemory: 54_000, FreeMemory: 54_000,
+			TotalGpuCount: 1, FreeGpuCount: freeGPUs,
+		}
+	}
+	pending := ready("a-pending", 1)
+	pending.Status = types.WorkerStatusPending
+	workers := []*types.Worker{pending, ready("b", 1), ready("c", 0), ready("d", 1), ready("e", 1)}
+
+	tests := []struct {
+		name   string
+		pool   types.WorkerPoolConfig
+		worker *types.Worker
+		want   bool
+	}{
+		{"the first ready worker holds a floor of one", floor("1"), workers[1], true},
+		{"the next free one does not", floor("1"), workers[3], false},
+		{"a busy worker ahead holds nothing, so the next one does", floor("2"), workers[3], true},
+		{"the floor is met before the last", floor("2"), workers[4], false},
+		{"a pending worker holds nothing", floor("1"), pending, false},
+		{"no floor, nothing to hold", floor(""), workers[1], false},
+		{"no worker", floor("1"), nil, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, HoldsHeadroom(test.pool, workers, test.worker))
+		})
+	}
+}
+
+// failingAdds is a worker repository that fails to write the next workers
+// it is given.
+type failingAdds struct {
+	repo.WorkerRepository
+	failures int
+}
+
+func (r *failingAdds) AddWorker(worker *types.Worker) error {
+	if r.failures > 0 {
+		r.failures--
+		return errors.New("redis is down")
+	}
+	return r.WorkerRepository.AddWorker(worker)
+}
+
+// A machine that was bought is paid for, whatever becomes of the worker that
+// stands for it. Reporting it as a worker that could not be added would have
+// the scheduler ask the pool again, and the pool buy a second machine.
+func TestAMachineWhoseWorkerCouldNotBeWrittenIsNotReportedAsAFailure(t *testing.T) {
+	provisioner := &fakeProvisioner{inStock: true, sells: oneL40S}
+	p := newBuyingPool(t, provisioner)
+	p.controller.workerRepo = &failingAdds{WorkerRepository: p.workers, failures: 1}
+
+	worker, err := p.controller.AddWorker(2000, 8192, 1)
+	require.NoError(t, err)
+	require.Equal(t, compute.AgentMachineWorkerID("machine-a"), worker.Id)
+	require.Equal(t, types.WorkerStatusPending, worker.Status)
+	require.Len(t, provisioner.sold, 1)
+	require.Empty(t, p.poolWorkers(), "the worker was not written")
+
+	// The machine is still booting, so the pool's reconcile makes its
+	// worker again.
+	require.NoError(t, p.controller.reconcileMachines())
+	workers := p.poolWorkers()
+	require.Len(t, workers, 1)
+	require.Equal(t, worker.Id, workers[0].Id)
+	require.Equal(t, types.WorkerStatusPending, workers[0].Status)
+	require.Len(t, provisioner.sold, 1, "nothing more was bought")
+}
+
+// A cleanup pass that cannot do its work leaves it for the next pass.
+
+// failingWorkerRepo is a worker repository whose calls fail with the errors
+// that are set.
+type failingWorkerRepo struct {
+	repo.WorkerRepository
+	getWorker, listPool error
+}
+
+func (r *failingWorkerRepo) GetWorkerById(workerId string) (*types.Worker, error) {
+	if r.getWorker != nil {
+		return nil, r.getWorker
+	}
+	return r.WorkerRepository.GetWorkerById(workerId)
+}
+
+func (r *failingWorkerRepo) GetAllWorkersInPool(poolName string) ([]*types.Worker, error) {
+	if r.listPool != nil {
+		return nil, r.listPool
+	}
+	return r.WorkerRepository.GetAllWorkersInPool(poolName)
+}
+
+// cleanerFixture is a cleaner for a pool with one worker Job and its pod.
+type cleanerFixture struct {
+	cleaner *WorkerResourceCleaner
+	kube    *fake.Clientset
+	workers *failingWorkerRepo
+}
+
+func newCleanerFixture(t *testing.T, phase corev1.PodPhase) *cleanerFixture {
+	t.Helper()
+	rdb, err := repo.NewRedisClientForTest()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	job := cleanerTestWorkerJob("worker-default-w1", "w1", "default", "")
+	pod := cleanerTestWorkerPod("worker-default-w1-pod", job.Name, "w1", "default", "", phase)
+	pod.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
+	f := &cleanerFixture{
+		kube:    fake.NewSimpleClientset(job, pod),
+		workers: &failingWorkerRepo{WorkerRepository: repo.NewWorkerRedisRepositoryForTest(rdb)},
+	}
+	f.cleaner = &WorkerResourceCleaner{
+		PoolName:   "default",
+		Config:     types.WorkerConfig{Namespace: "beta9", CleanupPendingWorkerAgeLimit: 10 * time.Minute},
+		KubeClient: f.kube,
+		WorkerRepo: f.workers,
+	}
+	return f
+}
+
+// fail makes the cluster refuse a verb on a resource.
+func (f *cleanerFixture) fail(verb, resource string, err error) {
+	f.kube.PrependReactor(verb, resource, func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, err
+	})
+}
+
+// addWorker puts a worker of the pool on record.
+func (f *cleanerFixture) addWorker(t *testing.T, id string) {
+	t.Helper()
+	require.NoError(t, f.workers.AddWorker(cleanerTestWorker(id, "default", "")))
+}
+
+// What a pass leaves undone, it leaves as it found it.
+func TestACleanupPassThatFailsRemovesNothing(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a job stays when it cannot be told whether its worker is on record", func(t *testing.T) {
+		f := newCleanerFixture(t, corev1.PodRunning)
+		f.workers.getWorker = errors.New("redis is down")
+
+		f.cleaner.Clean(ctx)
+
+		_, err := f.kube.BatchV1().Jobs("beta9").Get(ctx, "worker-default-w1", metav1.GetOptions{})
+		require.NoError(t, err)
+	})
+
+	t.Run("a worker stays on record when it cannot be told whether it has a job", func(t *testing.T) {
+		f := newCleanerFixture(t, corev1.PodRunning)
+		f.addWorker(t, "w1")
+		f.addWorker(t, "no-job")
+		f.fail("get", "jobs", errors.New("the cluster said no"))
+
+		f.cleaner.Clean(ctx)
+
+		_, err := f.workers.GetWorkerById("no-job")
+		require.NoError(t, err)
+	})
+
+	t.Run("and goes once it can", func(t *testing.T) {
+		f := newCleanerFixture(t, corev1.PodRunning)
+		f.addWorker(t, "w1")
+		f.addWorker(t, "no-job")
+		logged := captureLog(t)
+
+		f.cleaner.Clean(ctx)
+
+		_, err := f.workers.GetWorkerById("no-job")
+		var notFound *types.ErrWorkerNotFound
+		require.ErrorAs(t, err, &notFound)
+		_, err = f.kube.BatchV1().Jobs("beta9").Get(ctx, "worker-default-w1", metav1.GetOptions{})
+		require.NoError(t, err, "a job whose worker is on record stays")
+		require.NotContains(t, logged.String(), `"level":"error"`, "a pass that does its work reports no failure")
+	})
+}
+
+// Every scheduler replica runs the cleanup tick for a pool. One cleans up
+// after its workers at a time: a replica that finds another at it leaves the
+// pass to that one, which is no failure.
+
+// cleanupFixture is a Kubernetes pool with a finished worker Job to clean
+// up, and the tick that does it.
+type cleanupFixture struct {
+	*cleanerFixture
+	rdb  *common.RedisClient
+	tick func()
+}
+
+func newCleanupFixture(t *testing.T) *cleanupFixture {
+	t.Helper()
+	f := &cleanupFixture{cleanerFixture: newCleanerFixture(t, corev1.PodSucceeded)}
+	rdb, err := repo.NewRedisClientForTest()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+	f.rdb = rdb
+
+	controller := &LocalKubernetesWorkerPoolController{
+		ctx:            context.Background(),
+		name:           f.cleaner.PoolName,
+		workerPoolRepo: repo.NewWorkerPoolRedisRepositoryForTest(rdb),
+	}
+	f.tick = func() { controller.cleanupTick(f.cleaner) }
+	return f
+}
+
+func (f *cleanupFixture) jobCleanedUp(t *testing.T) bool {
+	t.Helper()
+	jobs, err := f.kube.BatchV1().Jobs("beta9").List(context.Background(), metav1.ListOptions{})
+	require.NoError(t, err)
+	return len(jobs.Items) == 0
+}
+
+func TestTheCleanupTickLeavesThePassToTheReplicaThatIsAtIt(t *testing.T) {
+	f := newCleanupFixture(t)
+	other := repo.NewWorkerPoolRedisRepositoryForTest(f.rdb)
+	logged := captureLog(t)
+
+	require.NoError(t, other.WithWorkerPoolCleanerLock(f.cleaner.PoolName, f.tick))
+	require.False(t, f.jobCleanedUp(t))
+	require.Empty(t, logged.String())
+
+	f.tick()
+	require.True(t, f.jobCleanedUp(t))
+}
+
+func TestTheCleanupTickReportsALockItCouldNotAskFor(t *testing.T) {
+	f := newCleanupFixture(t)
+	require.NoError(t, f.rdb.HSet(context.Background(), common.RedisKeys.WorkerPoolCleanerLock(f.cleaner.PoolName), "not", "a lock").Err())
+	logged := captureLog(t)
+
+	f.tick()
+
+	require.False(t, f.jobCleanedUp(t))
+	require.Contains(t, logged.String(), `"level":"error"`)
+	require.Contains(t, logged.String(), `"pool_name":"default"`)
+}
+
+// A Kubernetes pool adds a worker in three steps: a token for the worker, a
+// Job that carries the token, and the worker's record. A worker that is not
+// added must leave no token that still works.
+
+// workerTokens is the part of the database that adding a worker uses.
+type workerTokens struct {
+	repo.BackendRepository
+	// workspaceErr is why the admin workspace cannot be found, if set.
+	workspaceErr error
+
+	mu      sync.Mutex
+	created []string
+	revoked []string
+}
+
+func (b *workerTokens) GetAdminWorkspace(context.Context) (*types.Workspace, error) {
+	if b.workspaceErr != nil {
+		return nil, b.workspaceErr
+	}
+	return &types.Workspace{Id: 1, ExternalId: "admin"}, nil
+}
+
+func (b *workerTokens) CreateWorkerToken(_ context.Context, _ uint, _ string, workerId string) (types.Token, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	id := fmt.Sprintf("token-%d", len(b.created)+1)
+	b.created = append(b.created, id)
+	return types.Token{ExternalId: id, Key: "key-of-" + id, WorkerID: workerId}, nil
+}
+
+func (b *workerTokens) RevokeTokenByExternalId(ctx context.Context, externalId string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.revoked = append(b.revoked, externalId)
+	return "key-of-" + externalId, nil
+}
+
+// unreliableRecords is a worker repository whose AddWorker reports an error,
+// after writing the record if written is set.
+type unreliableRecords struct {
+	repo.WorkerRepository
+	err     error
+	written bool
+}
+
+func (r *unreliableRecords) AddWorker(worker *types.Worker) error {
+	if r.written {
+		if err := r.WorkerRepository.AddWorker(worker); err != nil {
+			return err
+		}
+	}
+	return r.err
+}
+
+// localPoolFixture is a Kubernetes pool, with the cluster, the worker records
+// and the tokens it adds workers to.
+type localPoolFixture struct {
+	controller *LocalKubernetesWorkerPoolController
+	kube       *fake.Clientset
+	tokens     *workerTokens
+	workers    repo.WorkerRepository
+	stop       context.CancelFunc
+}
+
+func newLocalPoolFixture(t *testing.T) *localPoolFixture {
+	t.Helper()
+	rdb, err := repo.NewRedisClientForTest()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	f := &localPoolFixture{
+		kube:    fake.NewSimpleClientset(),
+		tokens:  &workerTokens{},
+		workers: repo.NewWorkerRedisRepositoryForTest(rdb),
+		stop:    cancel,
+	}
+	config := types.AppConfig{}
+	config.Worker.Namespace = "beta9"
+	f.controller = &LocalKubernetesWorkerPoolController{
+		ctx:         ctx,
+		name:        "cpu",
+		config:      config,
+		kubeClient:  f.kube,
+		workerRepo:  f.workers,
+		backendRepo: f.tokens,
+	}
+	return f
+}
+
+func (f *localPoolFixture) jobs(t *testing.T) []batchv1.Job {
+	t.Helper()
+	jobs, err := f.kube.BatchV1().Jobs("beta9").List(context.Background(), metav1.ListOptions{})
+	require.NoError(t, err)
+	return jobs.Items
+}
+
+func (f *localPoolFixture) workersOnRecord(t *testing.T) []*types.Worker {
+	t.Helper()
+	workers, err := f.workers.GetAllWorkersInPool("cpu")
+	require.NoError(t, err)
+	return workers
+}
+
+func TestAWorkerThatIsAddedKeepsItsToken(t *testing.T) {
+	f := newLocalPoolFixture(t)
+
+	worker, err := f.controller.AddWorker(1000, 1024, 0)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"token-1"}, f.tokens.created)
+	require.Empty(t, f.tokens.revoked)
+	require.Len(t, f.jobs(t), 1)
+	onRecord := f.workersOnRecord(t)
+	require.Len(t, onRecord, 1)
+	require.Equal(t, worker.Id, onRecord[0].Id)
+}
+
+func TestAWorkerWhoseJobTheClusterRefusesLeavesNoTokenThatWorks(t *testing.T) {
+	f := newLocalPoolFixture(t)
+	refused := errors.New("exceeded quota")
+	f.kube.PrependReactor("create", "jobs", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, refused
+	})
+
+	// The pool's sizer asks again every second for as long as it is short.
+	for range 3 {
+		_, err := f.controller.AddWorker(1000, 1024, 0)
+		require.ErrorIs(t, err, refused)
+	}
+
+	require.Equal(t, []string{"token-1", "token-2", "token-3"}, f.tokens.created)
+	require.Equal(t, f.tokens.created, f.tokens.revoked)
+	require.Empty(t, f.workersOnRecord(t))
+}
+
+func TestAWorkerThatCannotBePutOnRecordLeavesNoTokenThatWorks(t *testing.T) {
+	f := newLocalPoolFixture(t)
+	redisDown := errors.New("redis is down")
+	f.controller.workerRepo = &unreliableRecords{WorkerRepository: f.workers, err: redisDown}
+
+	_, err := f.controller.AddWorker(1000, 1024, 0)
+
+	require.ErrorIs(t, err, redisDown)
+	require.Equal(t, []string{"token-1"}, f.tokens.revoked)
+	require.Empty(t, f.workersOnRecord(t))
+	// The Job is left to the cleaner, which removes a Job that has no worker
+	// on record.
+	require.Len(t, f.jobs(t), 1)
+}
+
+// Putting a worker on record can report an error after the record is
+// written: when the lock that guards the write cannot be released, say. The
+// scheduler then has a worker to wait for, and the worker has to be able to
+// start.
+func TestAWorkerThatIsOnRecordKeepsItsTokenThoughAddingItReportedAnError(t *testing.T) {
+	f := newLocalPoolFixture(t)
+	lockLost := errors.New("lock was lost")
+	f.controller.workerRepo = &unreliableRecords{WorkerRepository: f.workers, err: lockLost, written: true}
+
+	_, err := f.controller.AddWorker(1000, 1024, 0)
+
+	require.ErrorIs(t, err, lockLost)
+	require.Len(t, f.workersOnRecord(t), 1)
+	require.Empty(t, f.tokens.revoked)
+}
+
+func TestAddingAWorkerSaysWhyTheWorkspaceCouldNotBeFound(t *testing.T) {
+	f := newLocalPoolFixture(t)
+	f.tokens.workspaceErr = errors.New("connection refused")
+
+	_, err := f.controller.AddWorker(1000, 1024, 0)
+
+	require.ErrorIs(t, err, f.tokens.workspaceErr)
+	require.ErrorContains(t, err, "cpu", "the error names the pool")
+	require.Empty(t, f.tokens.created)
+	require.Empty(t, f.jobs(t))
+}
+
+// A pool's sizer and the requests that grow the pool add workers at the same
+// time. Run with -race.
+func TestWorkersAreAddedAtTheSameTime(t *testing.T) {
+	f := newLocalPoolFixture(t)
+	const callers = 8
+
+	var wg sync.WaitGroup
+	errs := make(chan error, callers)
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := f.controller.AddWorker(1000, 1024, 0)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.Len(t, f.jobs(t), callers)
+	require.Len(t, f.workersOnRecord(t), callers)
+}
+
+// silentCluster is a cluster that does not answer when a Job is created,
+// until the caller gives up.
+type silentCluster struct {
+	kubernetes.Interface
+	asked chan context.Context
+}
+
+func (c *silentCluster) BatchV1() typedbatchv1.BatchV1Interface {
+	return &silentBatch{BatchV1Interface: c.Interface.BatchV1(), cluster: c}
+}
+
+type silentBatch struct {
+	typedbatchv1.BatchV1Interface
+	cluster *silentCluster
+}
+
+func (b *silentBatch) Jobs(namespace string) typedbatchv1.JobInterface {
+	return &silentJobs{JobInterface: b.BatchV1Interface.Jobs(namespace), cluster: b.cluster}
+}
+
+type silentJobs struct {
+	typedbatchv1.JobInterface
+	cluster *silentCluster
+}
+
+func (j *silentJobs) Create(ctx context.Context, _ *batchv1.Job, _ metav1.CreateOptions) (*batchv1.Job, error) {
+	j.cluster.asked <- ctx
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestAddingAWorkerDoesNotWaitForeverForTheCluster(t *testing.T) {
+	f := newLocalPoolFixture(t)
+	cluster := &silentCluster{Interface: f.kube, asked: make(chan context.Context, 1)}
+	f.controller.kubeClient = cluster
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := f.controller.AddWorker(1000, 1024, 0)
+		result <- err
+	}()
+
+	// The cluster is given a limited time to answer.
+	var asked context.Context
+	select {
+	case asked = <-cluster.asked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the cluster was not asked for a Job")
+	}
+	deadline, limited := asked.Deadline()
+	require.True(t, limited)
+	require.WithinDuration(t, time.Now().Add(workerJobCreateTimeout), deadline, 5*time.Second)
+
+	// And the wait ends with the pool, however long is left.
+	f.stop()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("adding a worker outlived its pool")
+	}
+	require.Equal(t, []string{"token-1"}, f.tokens.revoked, "the token is revoked though the pool's context has ended")
 }

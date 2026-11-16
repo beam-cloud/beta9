@@ -4,136 +4,107 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/redislock"
 	"github.com/rs/zerolog/log"
 )
 
+// PoolHealthMonitorOptions is the pool a monitor measures, where it reads
+// the pool's workers and containers, and where what it finds goes.
 type PoolHealthMonitorOptions struct {
 	Controller       WorkerPoolController
 	WorkerPoolConfig types.WorkerPoolConfig
-	FailoverHealth   types.FailoverHealthConfig
 	WorkerRepo       repository.WorkerRepository
 	WorkerPoolRepo   repository.WorkerPoolRepository
 	ContainerRepo    repository.ContainerRepository
 	PushMetrics      func(types.EventComputeSchema)
+	// Clock drives the monitor. Nil means the wall clock.
+	Clock common.Clock
 }
 
+// PoolHealthMonitor measures a pool on an interval. What it finds it stores
+// as the pool's state, for the rest of the gateway to read, and sends as the
+// pool's heartbeat on the compute event stream.
 type PoolHealthMonitor struct {
-	ctx              context.Context
-	wpc              WorkerPoolController
-	workerPoolConfig types.WorkerPoolConfig
-	health           types.FailoverHealthConfig
-	workerRepo       repository.WorkerRepository
-	workerPoolRepo   repository.WorkerPoolRepository
-	containerRepo    repository.ContainerRepository
-	pushMetrics      func(types.EventComputeSchema)
+	opts  PoolHealthMonitorOptions
+	ctx   context.Context
+	clock common.Clock
 }
 
 func NewPoolHealthMonitor(opts PoolHealthMonitorOptions) *PoolHealthMonitor {
 	return &PoolHealthMonitor{
-		ctx:              opts.Controller.Context(),
-		wpc:              opts.Controller,
-		workerPoolConfig: opts.WorkerPoolConfig,
-		health:           opts.FailoverHealth,
-		workerRepo:       opts.WorkerRepo,
-		containerRepo:    opts.ContainerRepo,
-		workerPoolRepo:   opts.WorkerPoolRepo,
-		pushMetrics:      opts.PushMetrics,
+		opts:  opts,
+		ctx:   opts.Controller.Context(),
+		clock: common.ClockOrReal(opts.Clock),
 	}
 }
 
-func (p *PoolHealthMonitor) Start() {
-	ticker := time.NewTicker(poolHealthCheckInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-p.ctx.Done():
-			return
-		case <-ticker.C:
-			func() {
-				if err := p.workerPoolRepo.SetWorkerPoolStateLock(p.wpc.Name()); err != nil {
-					return
-				}
-				defer p.workerPoolRepo.RemoveWorkerPoolStateLock(p.wpc.Name())
-
-				previousState, err := p.workerPoolRepo.GetWorkerPoolState(p.ctx, p.wpc.Name())
-				if err != nil {
-					var notFound *types.ErrWorkerPoolStateNotFound
-					if !errors.As(err, &notFound) {
-						log.Error().Str("pool_name", p.wpc.Name()).Err(err).Msg("failed to get previous pool state")
-						return
-					}
-					previousState = nil
-				}
-
-				poolState, workers, err := p.getPoolState()
-				if err != nil {
-					log.Error().Str("pool_name", p.wpc.Name()).Err(err).Msg("failed to get pool state")
-					return
-				}
-				schedulable, reasons := p.schedulability(poolState)
-				poolState.Status = types.WorkerPoolStatusDegraded
-				if schedulable {
-					poolState.Status = types.WorkerPoolStatusHealthy
-				}
-
-				err = p.workerPoolRepo.SetWorkerPoolState(p.ctx, p.wpc.Name(), poolState)
-				if err != nil {
-					log.Error().Str("pool_name", p.wpc.Name()).Err(err).Msg("failed to set pool state")
-					return
-				}
-				if p.pushMetrics != nil {
-					p.pushMetrics(poolMetricsEvent(p.wpc.Name(), p.workerPoolConfig, poolState, workers))
-					p.emitSchedulabilityTransition(previousState, schedulable, reasons)
-				}
-			}()
-		}
+// tick measures the pool and publishes its state. Only one scheduler replica
+// publishes a pool's state at a time.
+func (p *PoolHealthMonitor) tick() {
+	err := p.opts.WorkerPoolRepo.WithWorkerPoolStateLock(p.opts.Controller.Name(), p.report)
+	if err != nil && !errors.Is(err, redislock.ErrNotObtained) {
+		log.Error().Str("pool_name", p.opts.Controller.Name()).Err(err).Msg("failed to hold worker pool state lock")
 	}
 }
 
-// getPoolState measures various metrics about pool health and returns them
+// report measures the pool, saves what it found and sends the pool's
+// heartbeat.
+func (p *PoolHealthMonitor) report() {
+	poolName := p.opts.Controller.Name()
+	poolState, workers, err := p.getPoolState()
+	if err != nil {
+		log.Error().Str("pool_name", poolName).Err(err).Msg("failed to get pool state")
+		return
+	}
+
+	err = p.opts.WorkerPoolRepo.SetWorkerPoolState(p.ctx, poolName, poolState)
+	if err != nil {
+		log.Error().Str("pool_name", poolName).Err(err).Msg("failed to set pool state")
+		return
+	}
+	if p.opts.PushMetrics != nil {
+		p.opts.PushMetrics(poolMetricsEvent(poolName, p.opts.WorkerPoolConfig, poolState, workers))
+	}
+}
+
+// getPoolState measures the pool: its workers, what they run and how long
+// that took to start, and the machines of a pool that has machines.
 func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, []*types.Worker, error) {
-	schedulingLatencies := []time.Duration{}
-	availableWorkers := 0
-	pendingWorkers := 0
-	pendingContainers := 0
-	runningContainers := 0
-	registeredMachines := 0
-	pendingMachines := 0
-	readyMachines := 0
-
-	workers, err := p.workerRepo.GetAllWorkersInPool(p.wpc.Name())
+	workers, err := p.opts.WorkerRepo.GetAllWorkersInPool(p.opts.Controller.Name())
 	if err != nil {
 		return nil, nil, err
 	}
 
-	if p.workerPoolConfig.AgentHosted() {
-		poolState, err := p.wpc.State()
+	// A pool that can be measured is reported healthy.
+	state := &types.WorkerPoolState{Status: types.WorkerPoolStatusHealthy}
+	if p.opts.WorkerPoolConfig.AgentHosted() {
+		machines, err := p.opts.Controller.State()
 		if err != nil {
 			return nil, nil, err
 		}
-		registeredMachines = int(poolState.RegisteredMachines)
-		pendingMachines = int(poolState.PendingMachines)
-		readyMachines = int(poolState.ReadyMachines)
+		state.RegisteredMachines = machines.RegisteredMachines
+		state.PendingMachines = machines.PendingMachines
+		state.ReadyMachines = machines.ReadyMachines
 	}
 
+	schedulingLatencies := []time.Duration{}
 	for _, worker := range workers {
 		switch worker.Status {
 		case types.WorkerStatusPending:
-			pendingWorkers++
+			state.PendingWorkers++
 		case types.WorkerStatusAvailable:
-			availableWorkers++
+			state.AvailableWorkers++
 		}
 
-		// Retrieve active containers for a worker (all containers associated w/ a worker that are not "STOPPING")
-		containers, err := p.containerRepo.GetActiveContainersByWorkerId(worker.Id)
+		// Every container on the worker's index, stopping ones included.
+		containers, err := p.opts.ContainerRepo.GetActiveContainersByWorkerId(worker.Id)
 		if err != nil {
 			continue
 		}
@@ -141,9 +112,9 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, []*types.Wor
 		for _, container := range containers {
 			switch container.Status {
 			case types.ContainerStatusPending:
-				pendingContainers++
+				state.PendingContainers++
 			case types.ContainerStatusRunning:
-				runningContainers++
+				state.RunningContainers++
 			}
 
 			// Skip containers with invalid StartedAt times
@@ -152,7 +123,7 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, []*types.Wor
 			}
 
 			if container.Status == types.ContainerStatusPending {
-				latency := time.Since(time.Unix(container.ScheduledAt, 0))
+				latency := p.clock.Now().Sub(time.Unix(container.ScheduledAt, 0))
 				schedulingLatencies = append(schedulingLatencies, latency)
 				continue
 			}
@@ -175,67 +146,16 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, []*types.Wor
 		averageSchedulingLatency = total / time.Duration(count)
 	}
 
-	freeCapacity, err := p.wpc.FreeCapacity()
+	freeCapacity, err := p.opts.Controller.FreeCapacity()
 	if err != nil {
 		return nil, nil, err
 	}
 
-	return &types.WorkerPoolState{
-		SchedulingLatency:  int64(averageSchedulingLatency.Milliseconds()),
-		PendingWorkers:     int64(pendingWorkers),
-		AvailableWorkers:   int64(availableWorkers),
-		PendingContainers:  int64(pendingContainers),
-		RunningContainers:  int64(runningContainers),
-		FreeGpu:            freeCapacity.FreeGpu,
-		FreeCpu:            freeCapacity.FreeCpu,
-		FreeMemory:         freeCapacity.FreeMemory,
-		RegisteredMachines: int64(registeredMachines),
-		PendingMachines:    int64(pendingMachines),
-		ReadyMachines:      int64(readyMachines),
-	}, workers, nil
-}
-
-// schedulability evaluates the configured pool-health thresholds.
-func (p *PoolHealthMonitor) schedulability(state *types.WorkerPoolState) (bool, []string) {
-	reasons := []string{}
-
-	if limit := p.health.MaxPendingWorkers; limit > 0 && state.PendingWorkers > limit {
-		reasons = append(reasons, fmt.Sprintf("pending_workers=%d exceeds %d", state.PendingWorkers, limit))
-	}
-	if limit := p.health.MaxSchedulingLatencyMs; limit > 0 && state.SchedulingLatency > limit {
-		reasons = append(reasons, fmt.Sprintf("scheduling_latency_ms=%d exceeds %d", state.SchedulingLatency, limit))
-	}
-	// Machine counts are only meaningful for pools backed by machines the
-	// control plane tracks; local (in-cluster) pools report zero.
-	if limit := p.health.MinMachinesAvailable; limit > 0 && p.wpc.Mode() != types.PoolModeLocal && state.ReadyMachines < limit {
-		reasons = append(reasons, fmt.Sprintf("ready_machines=%d below %d", state.ReadyMachines, limit))
-	}
-
-	return len(reasons) == 0, reasons
-}
-
-func (p *PoolHealthMonitor) emitSchedulabilityTransition(previous *types.WorkerPoolState, schedulable bool, reasons []string) {
-	status := types.WorkerPoolStatusDegraded
-	if schedulable {
-		status = types.WorkerPoolStatusHealthy
-	}
-	if previous != nil && previous.Status == status {
-		return
-	}
-
-	action := types.EventComputeActionPoolUnschedulable
-	if schedulable {
-		action = types.EventComputeActionPoolSchedulable
-	}
-
-	p.pushMetrics(types.EventComputeSchema{
-		PoolName: p.wpc.Name(),
-		Action:   action,
-		Attrs: map[string]string{
-			types.EventComputeAttrPoolMode: string(p.workerPoolConfig.Mode),
-			types.EventComputeAttrReasons:  strings.Join(reasons, "; "),
-		},
-	})
+	state.SchedulingLatency = averageSchedulingLatency.Milliseconds()
+	state.FreeGpu = freeCapacity.FreeGpu
+	state.FreeCpu = freeCapacity.FreeCpu
+	state.FreeMemory = freeCapacity.FreeMemory
+	return state, workers, nil
 }
 
 func poolMetricsEvent(poolName string, config types.WorkerPoolConfig, state *types.WorkerPoolState, workers []*types.Worker) types.EventComputeSchema {
@@ -299,7 +219,7 @@ func poolMetricsEvent(poolName string, config types.WorkerPoolConfig, state *typ
 	}
 }
 
-func newPoolMetricsPusher(ctx context.Context, backendRepo repository.BackendRepository, eventRepo repository.EventRepository) func(types.EventComputeSchema) {
+func newPoolMetricsPusher(ctx context.Context, backendRepo repository.BackendRepository, eventRepo repository.EventRepository, c common.Clock) func(types.EventComputeSchema) {
 	if backendRepo == nil || eventRepo == nil {
 		return func(types.EventComputeSchema) {}
 	}
@@ -308,7 +228,7 @@ func newPoolMetricsPusher(ctx context.Context, backendRepo repository.BackendRep
 	var nextLookup time.Time
 
 	return func(event types.EventComputeSchema) {
-		now := time.Now().UTC()
+		now := common.ClockOrReal(c).Now().UTC()
 		mu.Lock()
 		if workspaceID == "" {
 			if now.Before(nextLookup) {

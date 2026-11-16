@@ -2,7 +2,8 @@ package scheduler
 
 import (
 	"errors"
-	"time"
+	"fmt"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -10,145 +11,139 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// WorkerPoolSizer keeps a pool's free capacity at its floor
+// (poolSizing.minFree*). It works through the pool interface alone, so it
+// sizes any pool that can add workers.
 type WorkerPoolSizer struct {
-	controller             WorkerPoolController
-	workerPoolRepo         repository.WorkerPoolRepository
-	workerPoolSizingConfig *types.WorkerPoolSizingConfig
+	controller     WorkerPoolController
+	workerPoolRepo repository.WorkerPoolRepository
+	sizing         *types.WorkerPoolSizingConfig
 }
 
+// NewWorkerPoolSizer reads the floor and the default worker size from the
+// pool's own config, and says once what it could not use.
 func NewWorkerPoolSizer(controller WorkerPoolController,
 	config types.AppConfig,
 	workerPoolConfig *types.WorkerPoolConfig,
-	workerPoolRepo repository.WorkerPoolRepository) (*WorkerPoolSizer, error) {
-	poolSizingConfig, err := parsePoolSizingConfig(workerPoolConfig.PoolSizing)
-	if err != nil {
-		return nil, err
+	workerPoolRepo repository.WorkerPoolRepository) *WorkerPoolSizer {
+	sizing, ignored := readPoolSizing(*workerPoolConfig)
+	for _, setting := range ignored {
+		log.Warn().Str("pool_name", controller.Name()).Msg("ignoring poolSizing." + setting)
 	}
-	applyBuildPoolSizingMinimums(controller.Name(), config, poolSizingConfig)
+	applyBuildPoolSizingMinimums(controller.Name(), config, sizing)
 
 	return &WorkerPoolSizer{
-		controller:             controller,
-		workerPoolSizingConfig: poolSizingConfig,
-		workerPoolRepo:         workerPoolRepo,
-	}, nil
-}
-
-func (s *WorkerPoolSizer) Start() {
-	ctx := s.controller.Context()
-	ticker := time.NewTicker(poolMonitoringInterval)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		select {
-		case <-ctx.Done():
-			return // Context has been cancelled
-		default: // Continue processing requests
-		}
-
-		func() {
-			if err := s.workerPoolRepo.SetWorkerPoolSizerLock(s.controller.Name()); err != nil {
-				if !errors.Is(err, redislock.ErrNotObtained) {
-					log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to acquire worker pool sizing lock")
-				}
-				return
-			}
-			defer s.workerPoolRepo.RemoveWorkerPoolSizerLock(s.controller.Name())
-
-			// Get the current free capacity of the pool
-			freeCapacity, err := s.controller.FreeCapacity()
-			if err != nil {
-				log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to get free capacity")
-				return
-			}
-
-			// Handle case where pool sizing says we want to keep a buffer
-			newWorker, err := s.addWorkerIfNeeded(freeCapacity)
-			if err != nil {
-				log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to add worker")
-			} else if newWorker != nil {
-				workerLog(log.Info(), newWorker).Msg("added new worker to maintain pool size")
-			}
-		}()
+		controller:     controller,
+		sizing:         sizing,
+		workerPoolRepo: workerPoolRepo,
 	}
 }
 
+// hasFloor reports whether the sizing keeps any capacity free.
+func hasFloor(sizing *types.WorkerPoolSizingConfig) bool {
+	return sizing.MinFreeCpu > 0 || sizing.MinFreeMemory > 0 || sizing.MinFreeGpu > 0
+}
+
+// tick adds one worker when the pool's free capacity, counting workers that
+// are still starting, is under its floor. Only one scheduler replica sizes a
+// pool at a time.
+func (s *WorkerPoolSizer) tick() {
+	err := s.workerPoolRepo.WithWorkerPoolSizerLock(s.controller.Name(), s.size)
+	if err != nil && !errors.Is(err, redislock.ErrNotObtained) {
+		log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to hold worker pool sizing lock")
+	}
+}
+
+func (s *WorkerPoolSizer) size() {
+	freeCapacity, err := s.controller.FreeCapacity()
+	if err != nil {
+		log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to get free capacity")
+		return
+	}
+
+	newWorker, err := s.addWorkerIfNeeded(freeCapacity)
+	if err != nil {
+		log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to add worker")
+	} else if newWorker != nil {
+		workerLog(log.Info(), newWorker).Msg("added new worker to maintain pool size")
+	}
+}
+
+// addWorkerIfNeeded adds a worker of the pool's default size when the pool is
+// under its floor and can add one. A pool that cannot (out of stock, at its
+// limit, stalled) holds what it has; the next tick asks again.
 func (s *WorkerPoolSizer) addWorkerIfNeeded(freeCapacity *WorkerPoolCapacity) (*types.Worker, error) {
-	// Check if the free capacity is below the configured minimum and add a worker if needed
-	if !shouldAddWorker(freeCapacity, s.workerPoolSizingConfig) {
+	if !freeCapacity.withPending().belowMinimum(s.sizing) {
 		return nil, nil
 	}
 
-	return s.controller.AddWorker(
-		s.workerPoolSizingConfig.DefaultWorkerCpu,
-		s.workerPoolSizingConfig.DefaultWorkerMemory,
-		s.workerPoolSizingConfig.DefaultWorkerGpuCount,
-	)
+	cpu, memory, gpuCount := s.sizing.DefaultWorkerCpu, s.sizing.DefaultWorkerMemory, s.sizing.DefaultWorkerGpuCount
+	canAdd, err := s.controller.CanAddWorker(cpu, memory, gpuCount)
+	if err != nil || !canAdd {
+		return nil, err
+	}
+	return s.controller.AddWorker(cpu, memory, gpuCount)
 }
 
-// shouldAddWorker checks if the conditions are met for a new worker to be added
-func shouldAddWorker(freeCapacity *WorkerPoolCapacity, config *types.WorkerPoolSizingConfig) bool {
-	freeCpu := freeCapacity.FreeCpu + freeCapacity.PendingCpu
-	freeMemory := freeCapacity.FreeMemory + freeCapacity.PendingMemory
-	freeGpu := freeCapacity.FreeGpu + freeCapacity.PendingGpu
+// readPoolSizing reads a pool's floor (poolSizing.minFree*) and the size of
+// the worker it adds to keep it. A setting that is left out takes its
+// default: no floor, and a worker of one CPU and 1Gi of memory with no GPU.
+// So does one that cannot be used, which is named in ignored.
+func readPoolSizing(pool types.WorkerPoolConfig) (sizing *types.WorkerPoolSizingConfig, ignored []string) {
+	sizing = types.NewWorkerPoolSizingConfig()
+	written := pool.PoolSizing
 
-	return freeCpu < config.MinFreeCpu ||
-		freeMemory < config.MinFreeMemory ||
-		(config.MinFreeGpu > 0 && freeGpu < config.MinFreeGpu)
+	readSetting(&ignored, "minFreeCpu", written.MinFreeCPU, "2000m", &sizing.MinFreeCpu, ParseCPU)
+	readSetting(&ignored, "minFreeMemory", written.MinFreeMemory, "4Gi", &sizing.MinFreeMemory, ParseMemory)
+	readSetting(&ignored, "minFreeGpu", written.MinFreeGPU, "1", &sizing.MinFreeGpu, ParseGPU)
+	readSetting(&ignored, "defaultWorkerCpu", written.DefaultWorkerCPU, "2000m", &sizing.DefaultWorkerCpu, ParseCPU)
+	readSetting(&ignored, "defaultWorkerMemory", written.DefaultWorkerMemory, "4Gi", &sizing.DefaultWorkerMemory, ParseMemory)
+	readSetting(&ignored, "defaultWorkerGpuType", written.DefaultWorkerGpuType, "A10G", &sizing.DefaultWorkerGpuType, func(value any) (string, error) {
+		gpu, err := ParseGPUType(value)
+		return gpu.String(), err
+	})
+	readSetting(&ignored, "defaultWorkerGpuCount", written.DefaultWorkerGpuCount, "1", &sizing.DefaultWorkerGpuCount, func(value any) (uint32, error) {
+		count, err := ParseGpuCount(value)
+		return uint32(count), err
+	})
+
+	// A pool gives the workers it adds its own gpuType. One with no gpuType
+	// adds none with a GPU, and would add workers for ever to keep one free.
+	if sizing.MinFreeGpu > 0 && pool.GPUType == "" && (pool.Buys() || !pool.AgentHosted()) {
+		sizing.MinFreeGpu = 0
+		ignored = append(ignored, fmt.Sprintf("minFreeGpu %q: the pool has no gpuType, so its workers have no GPU", strings.TrimSpace(written.MinFreeGPU)))
+	}
+	// A worker of a GPU type has a GPU, and so has one added to keep GPUs
+	// free.
+	if sizing.DefaultWorkerGpuCount == 0 && (sizing.DefaultWorkerGpuType != "" || sizing.MinFreeGpu > 0) {
+		sizing.DefaultWorkerGpuCount = 1
+	}
+	return sizing, ignored
 }
 
-// parsePoolSizingConfig converts a common.WorkerPoolJobSpecPoolSizingConfig to a types.WorkerPoolSizingConfig.
-// When a value is not parsable or is invalid, we ignore the error and set a default.
-func parsePoolSizingConfig(config types.WorkerPoolJobSpecPoolSizingConfig) (*types.WorkerPoolSizingConfig, error) {
-	c := types.NewWorkerPoolSizingConfig()
-
-	if minFreeCpu, err := ParseCPU(config.MinFreeCPU); err == nil {
-		c.MinFreeCpu = minFreeCpu
+// readSetting parses one poolSizing setting into field. One that is left out
+// leaves the field at its default. So does one that cannot be parsed, which
+// is added to ignored.
+func readSetting[T any](ignored *[]string, key, value, example string, field *T, parse func(any) (T, error)) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
 	}
-
-	if minFreeMemory, err := ParseMemory(config.MinFreeMemory); err == nil {
-		c.MinFreeMemory = minFreeMemory
+	parsed, err := parse(value)
+	if err != nil {
+		*ignored = append(*ignored, fmt.Sprintf("%s %q: write it like %s", key, value, example))
+		return
 	}
-
-	if minFreeGpu, err := ParseGPU(config.MinFreeGPU); err == nil {
-		c.MinFreeGpu = minFreeGpu
-	}
-
-	if defaultWorkerCpu, err := ParseCPU(config.DefaultWorkerCPU); err == nil {
-		c.DefaultWorkerCpu = defaultWorkerCpu
-	}
-
-	if defaultWorkerMemory, err := ParseMemory(config.DefaultWorkerMemory); err == nil {
-		c.DefaultWorkerMemory = defaultWorkerMemory
-	}
-
-	defaultWorkerGpuType, err := ParseGPUType(config.DefaultWorkerGpuType)
-	if err == nil {
-		c.DefaultWorkerGpuType = defaultWorkerGpuType.String()
-	}
-
-	if defaultWorkerGpuCount, err := ParseGpuCount(config.DefaultWorkerGpuCount); err == nil {
-		c.DefaultWorkerGpuCount = uint32(defaultWorkerGpuCount)
-	}
-
-	// Don't allow creation of workers with no gpu count if there is a GPU type set
-	if c.DefaultWorkerGpuCount <= 0 && defaultWorkerGpuType != "" {
-		c.DefaultWorkerGpuCount = 1
-	}
-
-	return c, nil
+	*field = parsed
 }
 
+// applyBuildPoolSizingMinimums makes the workers the image build pool adds
+// big enough for a build.
 func applyBuildPoolSizingMinimums(poolName string, config types.AppConfig, sizing *types.WorkerPoolSizingConfig) {
 	if sizing == nil || poolName == "" || poolName != config.ImageService.BuildContainerPoolSelector {
 		return
 	}
-
-	if config.ImageService.BuildContainerCpu > sizing.DefaultWorkerCpu {
-		sizing.DefaultWorkerCpu = config.ImageService.BuildContainerCpu
-	}
-
 	buildMemory := capacityMemoryForScheduling(&types.ContainerRequest{Memory: config.ImageService.BuildContainerMemory})
-	if buildMemory > sizing.DefaultWorkerMemory {
-		sizing.DefaultWorkerMemory = buildMemory
-	}
+	sizing.DefaultWorkerCpu = max(sizing.DefaultWorkerCpu, config.ImageService.BuildContainerCpu)
+	sizing.DefaultWorkerMemory = max(sizing.DefaultWorkerMemory, buildMemory)
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	model "github.com/beam-cloud/beta9/pkg/compute"
+	"github.com/beam-cloud/beta9/pkg/providers"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -223,10 +224,11 @@ func TestReconcileManagedComputeHoldsExpiredReservationThroughOutageGrace(t *tes
 func TestRenewManagedReservationsCatchesUpReservationHeldPastExpiry(t *testing.T) {
 	now := time.Now().UTC()
 	state, _, _ := graceFixture(now, now.Add(-90*time.Minute))
-	vendor := &fakeVendor{}
-	service := &Service{}
+	shadeform := fakeProvider("shadeform")
+	instanceID := boughtFrom(shadeform, state)
+	service := &Service{providers: providers.RegistryOf(shadeform)}
 
-	if !service.renewManagedReservations(context.Background(), "workspace-1", state, healthyBalance, 0, now, map[string]model.Vendor{"shadeform": vendor}) {
+	if !service.renewManagedReservations(context.Background(), "workspace-1", state, healthyBalance, 0, now) {
 		t.Fatal("renewManagedReservations() did not renew a reservation held past expiry")
 	}
 	reservation := state.Reservations[0]
@@ -236,8 +238,8 @@ func TestRenewManagedReservationsCatchesUpReservationHeldPastExpiry(t *testing.T
 	if got, want := reservation.CommittedMicros, 2*reservation.HourlyCostMicros; got != want {
 		t.Fatalf("committed micros = %d, want %d (two hours)", got, want)
 	}
-	if got := vendor.extended[computeReservationInstanceID(reservation)]; !got.Equal(reservation.ExpiresAt) {
-		t.Fatalf("vendor extended to %v, want %v", got, reservation.ExpiresAt)
+	if got, want := shadeform.Until(instanceID), reservation.ExpiresAt.Add(reservationDeletionGrace); !got.Equal(want) {
+		t.Fatalf("provider extended to %v, want %v", got, want)
 	}
 }
 

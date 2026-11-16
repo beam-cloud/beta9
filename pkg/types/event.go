@@ -228,12 +228,7 @@ const (
 	EventComputeActionReservationTerminating     = "reservation.terminating"
 	EventComputeActionReservationStatusUpdated   = "reservation.status_updated"
 	EventComputeActionPoolHeartbeat              = "pool.heartbeat"
-	EventComputeActionPoolSchedulable            = "pool.schedulable"
-	EventComputeActionPoolUnschedulable          = "pool.unschedulable"
 	EventComputeActionContainerPlaced            = "container.placed"
-	EventComputeActionOnDemandCreated            = "ondemand.reservation_created"
-	EventComputeActionOnDemandTerminated         = "ondemand.reservation_terminated"
-	EventComputeActionOnDemandBudgetExhausted    = "ondemand.budget_exhausted"
 	EventComputeActionJoinTokenCreated           = "join_token.created"
 	EventComputeActionJoinTokenRevoked           = "join_token.revoked"
 	EventComputeActionMachineJoined              = "machine.joined"
@@ -278,23 +273,16 @@ const (
 	EventComputeAttrTransport                = "transport"
 	EventComputeAttrWorkerCount              = "worker_count"
 
-	// Failover and on-demand attrs. All money is denominated in cents.
-	EventComputeAttrReasons              = "reasons"
-	EventComputeAttrChain                = "chain"
-	EventComputeAttrFailover             = "failover"
-	EventComputeAttrRequestedGPU         = "requested_gpu"
-	EventComputeAttrPlacedGPU            = "placed_gpu"
-	EventComputeAttrWaitMs               = "wait_ms"
-	EventComputeAttrProvider             = "provider"
-	EventComputeAttrGPU                  = "gpu"
-	EventComputeAttrNodeCount            = "node_count"
-	EventComputeAttrBudgetHourlyCents    = "budget_hourly_cents"
-	EventComputeAttrBudgetHourlyMaxCents = "budget_hourly_max_cents"
-	EventComputeAttrBudgetDailyCents     = "budget_daily_cents"
-	EventComputeAttrBudgetDailyMaxCents  = "budget_daily_max_cents"
-	EventComputeAttrOnDemandHourlyCents  = "ondemand_hourly_cost_cents"
-	EventComputeAttrOnDemandNodeCount    = "ondemand_node_count"
+	// Placement attrs.
+	EventComputeAttrRouteRank    = "route_rank"
+	EventComputeAttrRequestedGPU = "requested_gpu"
+	EventComputeAttrPlacedGPU    = "placed_gpu"
+	EventComputeAttrWaitMs       = "wait_ms"
 )
+
+// ComputePoolStatusActive is the status of a pool that is in use, in its
+// record and in its events.
+const ComputePoolStatusActive = "active"
 
 type EventComputeSchema struct {
 	Timestamp    time.Time         `json:"timestamp"`

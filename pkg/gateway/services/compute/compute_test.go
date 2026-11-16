@@ -1,28 +1,36 @@
 package compute
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
+	"maps"
 	"net/url"
+	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	cftypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
 	"github.com/aws/smithy-go"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/common"
 	model "github.com/beam-cloud/beta9/pkg/compute"
+	"github.com/beam-cloud/beta9/pkg/providers"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAgentBootstrapUsesConfiguredPublishingRegistry(t *testing.T) {
@@ -2858,20 +2866,9 @@ func TestCheckManagedLaunchCreditBuildsBillingRequest(t *testing.T) {
 		},
 	}
 
-	plan := model.SolvePlan{
-		Actions: []model.SolveAction{
-			{
-				Type:  model.ActionCreate,
-				Count: 2,
-				Offer: model.Offer{HourlyCostMicros: 1_500_000},
-			},
-			{
-				Type:  model.ActionKeep,
-				Count: 1,
-				Offer: model.Offer{HourlyCostMicros: 9_000_000},
-			},
-		},
-		CommittedCostMicros: 42_000_000,
+	plan := model.Plan{
+		Purchases:  []model.Purchase{{Count: 2, Offer: providers.Offer{HourlyCostMicros: 1_500_000}}},
+		CostMicros: 42_000_000,
 	}
 
 	decision, err := service.checkManagedLaunchCredit(context.Background(), "workspace-1", "pool-1", plan, nil)
@@ -2902,53 +2899,56 @@ func TestCheckManagedLaunchCreditBuildsBillingRequest(t *testing.T) {
 	}
 }
 
-func TestListPoolOffersReturnsHetznerCPUOffers(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/locations":
-			_, _ = w.Write([]byte(`{
-				"locations": [{"id":1,"name":"ash","description":"Ashburn, VA","country":"US","city":"Ashburn","latitude":39.0438,"longitude":-77.4874,"network_zone":"us-east"}],
-				"meta":{"pagination":{"page":1,"per_page":50,"previous_page":null,"next_page":null,"last_page":1,"total_entries":1}}
-			}`))
-		case "/server_types":
-			_, _ = w.Write([]byte(`{
-				"server_types": [{
-					"id":45,
-					"name":"cpx31",
-					"description":"CPX31",
-					"cores":4,
-					"memory":8,
-					"disk":160,
-					"deprecated":false,
-					"category":"Shared vCPU",
-					"cpu_type":"shared",
-					"storage_type":"local",
-					"architecture":"x86",
-					"locations":[{"id":1,"name":"ash","available":true,"deprecation":null}],
-					"prices":[{"location":"ash","price_hourly":{"net":"0.0312","gross":"0.0248"}}]
-				}],
-				"meta":{"pagination":{"page":1,"per_page":50,"previous_page":null,"next_page":null,"last_page":1,"total_entries":1}}
-			}`))
-		default:
-			t.Fatalf("unexpected Hetzner path %s", r.URL.Path)
-		}
-	}))
-	defer server.Close()
+// reconcileManagedComputeAt runs one reconcile at a set time.
+func (s *Service) reconcileManagedComputeAt(ctx context.Context, now time.Time) error {
+	return s.reconcileManagedComputeWithClock(ctx, func() time.Time { return now })
+}
 
-	service := &Service{
+// testOwner is the name the fake providers put on what a test service buys.
+const testOwner = "beam-test"
+
+var (
+	a10gOffer = providers.Offer{
+		ID: "A10G", Cloud: "lambda", InstanceType: "A10G", Region: "us-east",
+		GPU: "A10G", GPUCount: 1, CPUMillicores: 4000, MemoryMB: 16 * 1024, StorageMB: 128 * 1024,
+		HourlyCostMicros: 1_500_000,
+	}
+	cpx31Offer = providers.Offer{
+		ID: "cpx31", Cloud: "hetzner", InstanceType: "cpx31", Region: "ash",
+		CPUMillicores: 4000, MemoryMB: 8192, StorageMB: 163840, HourlyCostMicros: 31_200,
+		DisplayName: "CPX31", Category: "shared", RegionDisplayName: "Ashburn", Latitude: 39.0438, Longitude: -77.4874,
+	}
+)
+
+// fakeProvider is a provider that sells the given offers.
+func fakeProvider(name string, offers ...providers.Offer) *providers.Fake {
+	fake := providers.NewFake(name, testOwner)
+	fake.SetOffers(offers...)
+	return fake
+}
+
+// launchService is a service that can launch machines from the providers.
+func launchService(repo repository.ComputeRepository, from ...providers.Provider) *Service {
+	return &Service{
+		computeRepo: repo,
+		providers:   providers.RegistryOf(from...),
+		billing: &fakeManagedBilling{
+			launchDecision: billingDecision{OK: true, AvailableCents: 5000, RequiredCents: 2500},
+		},
 		appConfig: types.AppConfig{
-			Providers: types.ProviderConfig{
-				Hetzner: types.HetznerProviderConfig{
-					ApiToken:             "hetzner-token",
-					BaseURL:              server.URL,
-					ServerTypeCategories: map[string]string{"cpx31": "shared"},
-					RegionMetadata: map[string]types.HetznerRegionConfig{
-						"ash": {DisplayName: "Ashburn", Latitude: 39.0438, Longitude: -77.4874},
-					},
-				},
+			GatewayService: types.GatewayServiceConfig{
+				HTTP: types.HTTPConfig{ExternalHost: "app.beam.test", ExternalPort: 443, TLS: true},
+			},
+			Tailscale: types.TailscaleConfig{Enabled: true, AuthKey: "gateway-key", AgentAuthKey: "agent-key"},
+			ManagedCompute: types.ManagedComputeConfig{
+				Billing: types.ManagedComputeBillingConfig{MinimumCreditCents: 2500},
 			},
 		},
 	}
+}
+
+func TestListPoolOffersReturnsCPUOffers(t *testing.T) {
+	service := &Service{providers: providers.RegistryOf(fakeProvider("hetzner", cpx31Offer), fakeProvider("shadeform", a10gOffer))}
 
 	res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{
 		Pool: &pb.PoolConfig{Providers: []string{"hetzner"}},
@@ -2967,8 +2967,10 @@ func TestListPoolOffersReturnsHetznerCPUOffers(t *testing.T) {
 	if offer.Provider != "hetzner" || offer.Cloud != "hetzner" {
 		t.Fatalf("offer provider/cloud = %s/%s, want hetzner/hetzner", offer.Provider, offer.Cloud)
 	}
-	if offer.NodeCount != 1 || offer.GpuCount != 0 {
-		t.Fatalf("offer node/gpu count = %d/%d, want 1/0", offer.NodeCount, offer.GpuCount)
+	// An offer is one machine, and a provider that does not count its stock
+	// is shown as having one.
+	if offer.NodeCount != 1 || offer.GpuCount != 0 || offer.Available != 1 {
+		t.Fatalf("offer node/gpu/available = %d/%d/%d, want 1/0/1", offer.NodeCount, offer.GpuCount, offer.Available)
 	}
 	if offer.CpuMillicores != 4000 || offer.MemoryMb != 8192 || offer.StorageMb != 163840 {
 		t.Fatalf("offer resources = %d/%d/%d", offer.CpuMillicores, offer.MemoryMb, offer.StorageMb)
@@ -2979,53 +2981,75 @@ func TestListPoolOffersReturnsHetznerCPUOffers(t *testing.T) {
 	if offer.Latitude != 39.0438 || offer.Longitude != -77.4874 {
 		t.Fatalf("offer coordinates = %f/%f", offer.Latitude, offer.Longitude)
 	}
+	// The tenant is shown the price they pay, which carries the margin.
+	if got, want := offer.HourlyCostMicros, int64(34_320); got != want {
+		t.Fatalf("offer hourly cost = %d, want %d", got, want)
+	}
+}
+
+func TestListPoolOffersAsksEveryProviderWhenThePoolNamesNone(t *testing.T) {
+	service := &Service{providers: providers.RegistryOf(
+		fakeProvider("shadeform", a10gOffer),
+		fakeProvider("hetzner", cpx31Offer),
+	)}
+
+	res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{}})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	listed := []string{}
+	for _, offer := range res.Offers {
+		listed = append(listed, offer.Provider+"/"+offer.Id)
+	}
+	require.Equal(t, []string{"hetzner/cpx31", "shadeform/A10G"}, listed, "cheapest first")
+
+	res, err = service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{Gpu: []string{"A10G"}, Regions: []string{"us-west"}}})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Empty(t, res.Offers, "the pool's regions narrow what is listed")
+}
+
+// A reservation is sold for a term. A spot machine costs less and can be
+// taken back at any time, so it is neither shown nor bought as one.
+func TestReservationsAreNeverSpotMachines(t *testing.T) {
+	spot := a10gOffer
+	spot.Spot = true
+	spot.HourlyCostMicros = a10gOffer.HourlyCostMicros / 4
+	shadeform := fakeProvider("shadeform", spot, a10gOffer)
+	service := &Service{providers: providers.RegistryOf(shadeform)}
+
+	res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{}})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Len(t, res.Offers, 1)
+	require.Equal(t, service.billableOffer(a10gOffer).HourlyCostMicros, res.Offers[0].HourlyCostMicros, "the on-demand machine, at its price")
+
+	// These are the offers a launch chooses from.
+	offers, err := service.collectPoolOffers(context.Background(), model.Pool{})
+	require.NoError(t, err)
+	require.Len(t, offers, 1)
+	require.False(t, offers[0].Spot)
+	require.Equal(t, a10gOffer.HourlyCostMicros, offers[0].HourlyCostMicros)
+}
+
+func TestListPoolOffersNeedsAProvider(t *testing.T) {
+	res, err := (&Service{}).ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{}})
+	require.NoError(t, err)
+	require.False(t, res.Ok)
+	require.Equal(t, "no compute providers are configured", res.ErrMsg)
 }
 
 func TestLaunchPoolCapacityCreatesProviderReservation(t *testing.T) {
-	var createCalls int
-	var createBody map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/instances/types":
-			_, _ = w.Write([]byte(`{"instance_types":[{"id":"sf-a10g-1","cloud":"lambda","shade_instance_type":"A10Gx1","hourly_price":150,"deployment_type":"vm","configuration":{"gpu_type":"A10G","num_gpus":1,"vcpus":4,"memory_in_gb":16,"storage_in_gb":128},"availability":[{"region":"us-east","available":true}]}]}`))
-		case "/instances/create":
-			createCalls++
-			if err := json.NewDecoder(r.Body).Decode(&createBody); err != nil {
-				t.Fatalf("decode create body: %v", err)
-			}
-			_, _ = w.Write([]byte(`{"id":"reservation-1"}`))
-		default:
-			t.Fatalf("unexpected shadeform path %s", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
+	shadeform := fakeProvider("shadeform", a10gOffer)
 	repo := &fakeComputeRepo{}
-	service := &Service{
-		computeRepo: repo,
-		billing: &fakeManagedBilling{
-			launchDecision: billingDecision{OK: true, AvailableCents: 5000, RequiredCents: 2500},
-		},
-		appConfig: types.AppConfig{
-			GatewayService: types.GatewayServiceConfig{
-				HTTP: types.HTTPConfig{ExternalHost: "app.beam.test", ExternalPort: 443, TLS: true},
-			},
-			Tailscale: types.TailscaleConfig{Enabled: true, AuthKey: "gateway-key", AgentAuthKey: "agent-key"},
-			Providers: types.ProviderConfig{
-				Shadeform: types.ShadeformProviderConfig{ApiKey: "shadeform-key", BaseURL: server.URL},
-			},
-			ManagedCompute: types.ManagedComputeConfig{
-				Billing: types.ManagedComputeBillingConfig{MinimumCreditCents: 2500},
-			},
-		},
-	}
+	service := launchService(repo, shadeform)
+	started := time.Now()
 
 	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
 		Pool: &pb.PoolConfig{
 			Name:      "pool-1",
 			Gpu:       []string{"A10G"},
 			Nodes:     1,
-			OfferId:   "sf-a10g-1",
+			OfferId:   "A10G",
 			Ttl:       "1h",
 			MaxSpend:  2,
 			Providers: []string{"shadeform"},
@@ -3038,97 +3062,119 @@ func TestLaunchPoolCapacityCreatesProviderReservation(t *testing.T) {
 	if !res.Ok {
 		t.Fatalf("LaunchPoolCapacity() not ok: code=%s msg=%s", res.ErrorCode, res.ErrMsg)
 	}
-	if createCalls != 1 {
-		t.Fatalf("shadeform create calls = %d, want 1", createCalls)
-	}
+
+	creates := shadeform.Creates()
+	require.Len(t, creates, 1)
 	state := repo.pools["workspace-1"][0]
-	if got, want := len(state.Reservations), 1; got != want {
-		t.Fatalf("reservation count = %d, want %d", got, want)
-	}
+	require.Len(t, state.Reservations, 1)
 	reservation := state.Reservations[0]
-	if got, want := reservation.ID, "reservation-1"; got != want {
-		t.Fatalf("reservation id = %q, want %q", got, want)
-	}
-	if reservation.MachineID == "" {
-		t.Fatal("reservation missing managed machine id")
-	}
-	if !strings.Contains(createBody["name"].(string), reservation.MachineID) {
-		t.Fatalf("provider name %q does not include machine id %q", createBody["name"], reservation.MachineID)
-	}
+	require.NotEmpty(t, reservation.MachineID, "reservation missing managed machine id")
+
+	// The provider is given the machine's name, the command that joins it to
+	// the pool, a tag that says which machine it is, and a time well past its
+	// term at which to delete it should Beam not have done so.
+	create := creates[0]
+	require.Equal(t, a10gOffer.ID, create.Offer.ID)
+	require.Contains(t, create.Name, reservation.MachineID)
+	require.Equal(t, reservation.Name, create.Name)
+	require.Contains(t, create.StartupScript, "app.beam.test")
+	require.Equal(t, map[string]string{"beam-machine": reservation.MachineID}, create.Tags)
+	require.WithinDuration(t, started.Add(time.Hour).Add(reservationDeletionGrace), create.Until, time.Minute)
+
+	// The record says what was bought, from the offer, and on what terms.
+	instances := shadeform.Everything()
+	require.Len(t, instances, 1)
+	require.Equal(t, instances[0].ID, reservation.ID)
+	require.Equal(t, instances[0].ID, reservation.InstanceID)
+	require.Equal(t, "pool-1", reservation.PoolName)
+	require.Equal(t, "pool-1", reservation.Selector)
+	require.Equal(t, "shadeform", reservation.Provider)
+	require.Equal(t, "lambda", reservation.Cloud)
+	require.Equal(t, "us-east", reservation.Region)
+	require.Equal(t, "A10G", reservation.OfferID)
+	require.Equal(t, "A10G", reservation.InstanceType)
+	require.Equal(t, "A10G", reservation.GPU)
+	require.Equal(t, uint32(1), reservation.GPUCount)
+	require.Equal(t, uint32(1), reservation.NodeCount)
+	require.Equal(t, int64(4000), reservation.CPUMillicores)
+	require.Equal(t, int64(16*1024), reservation.MemoryMB)
+	require.Equal(t, int64(128*1024), reservation.StorageMB)
+	require.Equal(t, int64(1_500_000), reservation.HourlyCostMicros)
+	require.Equal(t, int64(1_500_000), reservation.CommittedMicros, "one hour at the provider's price")
+	require.Equal(t, model.SourceCLIReservation, reservation.Source)
+	require.Equal(t, model.ReservationPending, reservation.Status)
+	require.Equal(t, time.Hour, reservation.ExpiresAt.Sub(reservation.CreatedAt))
+	require.Equal(t, time.Hour, reservation.BillingRenewalAt.Sub(reservation.CreatedAt))
+	require.NotEmpty(t, reservation.RegistrationTokenHash)
 }
 
-func TestLaunchPoolCapacityCreatesHetznerCPUNodeReservation(t *testing.T) {
-	var createCalls int
-	var createBody map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/locations":
-			_, _ = w.Write([]byte(`{
-				"locations": [{"id":1,"name":"ash","description":"Ashburn","network_zone":"us-east"}],
-				"meta":{"pagination":{"page":1,"per_page":50,"previous_page":null,"next_page":null,"last_page":1,"total_entries":1}}
-			}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/server_types":
-			_, _ = w.Write([]byte(`{
-				"server_types": [{
-					"id":45,
-					"name":"cpx31",
-					"description":"CPX31",
-					"cores":4,
-					"memory":8,
-					"disk":160,
-					"deprecated":false,
-					"category":"Shared vCPU",
-					"cpu_type":"shared",
-					"storage_type":"local",
-					"architecture":"x86",
-					"locations":[{"id":1,"name":"ash","available":true,"deprecation":null}],
-					"prices":[{"location":"ash","price_hourly":{"net":"0.0312","gross":"0.0248"}}]
-				}],
-				"meta":{"pagination":{"page":1,"per_page":50,"previous_page":null,"next_page":null,"last_page":1,"total_entries":1}}
-			}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/networks":
-			_, _ = w.Write([]byte(`{
-				"networks": [{"id":456,"name":"beam-workers","subnets":[{"type":"cloud","ip_range":"10.42.0.0/24","network_zone":"us-east"}]}],
-				"meta":{"pagination":{"page":1,"per_page":50,"previous_page":null,"next_page":null,"last_page":1,"total_entries":1}}
-			}`))
-		case r.Method == http.MethodPost && r.URL.Path == "/servers":
-			createCalls++
-			if err := json.NewDecoder(r.Body).Decode(&createBody); err != nil {
-				t.Fatalf("decode create body: %v", err)
-			}
-			_, _ = w.Write([]byte(`{"server":{"id":42,"status":"initializing","location":{"name":"ash"},"server_type":{"id":45,"name":"cpx31","cores":4,"memory":8,"disk":160}}}`))
-		default:
-			t.Fatalf("unexpected Hetzner request %s %s", r.Method, r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
+func TestLaunchPoolCapacityBuysTheOfferInTheRegionAsked(t *testing.T) {
+	// One instance type is sold in several regions and by several clouds.
+	paris := a10gOffer
+	paris.Cloud, paris.Region, paris.HourlyCostMicros = "scaleway", "paris", 1_000_000
+	shadeform := fakeProvider("shadeform", paris, a10gOffer)
 	repo := &fakeComputeRepo{}
-	service := &Service{
-		computeRepo: repo,
-		billing: &fakeManagedBilling{
-			launchDecision: billingDecision{OK: true, AvailableCents: 5000, RequiredCents: 2500},
-		},
-		appConfig: types.AppConfig{
-			GatewayService: types.GatewayServiceConfig{
-				HTTP: types.HTTPConfig{ExternalHost: "app.beam.test", ExternalPort: 443, TLS: true},
-			},
-			Tailscale: types.TailscaleConfig{Enabled: true, AuthKey: "gateway-key", AgentAuthKey: "agent-key"},
-			Providers: types.ProviderConfig{
-				Hetzner: types.HetznerProviderConfig{
-					ApiToken: "hetzner-token",
-					BaseURL:  server.URL,
-					Image:    "ubuntu-24.04",
-					PrivateNetwork: types.HetznerPrivateNetworkConfig{
-						Name: "beam-workers",
-					},
-				},
-			},
-			ManagedCompute: types.ManagedComputeConfig{
-				Billing: types.ManagedComputeBillingConfig{MinimumCreditCents: 2500},
-			},
-		},
-	}
+	service := launchService(repo, shadeform)
+
+	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		Pool: &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: 1, OfferId: "A10G", Ttl: "1h", MaxSpend: 2, Providers: []string{"shadeform"}, Regions: []string{"us-east"}},
+	})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+
+	creates := shadeform.Creates()
+	require.Len(t, creates, 1)
+	require.Equal(t, "us-east", creates[0].Offer.Region)
+	require.Equal(t, "lambda", creates[0].Offer.Cloud)
+	reservation := repo.pools["workspace-1"][0].Reservations[0]
+	require.Equal(t, "us-east", reservation.Region)
+	require.Equal(t, "lambda", reservation.Cloud)
+}
+
+func TestLaunchPoolCapacityBuysNothingWhenTheProviderIsOutOfStock(t *testing.T) {
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	shadeform.RefuseCreates(fmt.Errorf("%w: none left in us-east", providers.ErrOutOfStock))
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, shadeform)
+
+	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		Pool: &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: 1, Ttl: "1h", MaxSpend: 2},
+	})
+	require.NoError(t, err)
+	require.False(t, res.Ok)
+	require.Equal(t, launchErrorProviderFailure, res.ErrorCode)
+	require.Contains(t, res.ErrMsg, "out of stock")
+	require.Empty(t, repo.pools["workspace-1"], "no pool is left behind")
+	requireEveryTokenRevoked(t, repo)
+}
+
+func TestLaunchPoolCapacityDeletesWhatItBoughtWhenALaterMachineFails(t *testing.T) {
+	// The catalogue says the offer is in stock, and the provider has one.
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	shadeform.RefuseCreatesAfter(1, fmt.Errorf("%w: none left in us-east", providers.ErrOutOfStock))
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, shadeform)
+
+	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		Pool: &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: 2, Ttl: "1h", MaxSpend: 10},
+	})
+	require.NoError(t, err)
+	require.False(t, res.Ok)
+	require.Equal(t, launchErrorProviderFailure, res.ErrorCode)
+	require.Contains(t, res.ErrMsg, "out of stock")
+
+	creates := shadeform.Creates()
+	require.Len(t, creates, 1)
+	require.Empty(t, shadeform.Everything(), "the machine that was bought is deleted again")
+	require.Empty(t, repo.pools["workspace-1"], "no pool is left behind")
+	require.Len(t, repo.joinTokens, 2)
+	requireEveryTokenRevoked(t, repo)
+}
+
+func TestLaunchPoolCapacityCreatesCPUNodeReservation(t *testing.T) {
+	hetzner := fakeProvider("hetzner", cpx31Offer)
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, hetzner)
 
 	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
 		Nodes: 1,
@@ -3147,15 +3193,10 @@ func TestLaunchPoolCapacityCreatesHetznerCPUNodeReservation(t *testing.T) {
 	if !res.Ok {
 		t.Fatalf("LaunchPoolCapacity() not ok: code=%s msg=%s", res.ErrorCode, res.ErrMsg)
 	}
-	if createCalls != 1 {
-		t.Fatalf("Hetzner create calls = %d, want 1", createCalls)
-	}
-	if createBody["server_type"] != "cpx31" || createBody["image"] != "ubuntu-24.04" || createBody["location"] != "ash" {
-		t.Fatalf("unexpected Hetzner create body: %#v", createBody)
-	}
-	if got := createBody["networks"]; fmt.Sprint(got) != "[456]" {
-		t.Fatalf("Hetzner networks = %#v, want [456]", got)
-	}
+	creates := hetzner.Creates()
+	require.Len(t, creates, 1)
+	require.Equal(t, "cpx31", creates[0].Offer.ID)
+	require.Equal(t, "ash", creates[0].Offer.Region)
 
 	state := repo.pools["workspace-1"][0]
 	if got, want := state.ReservedNodes, uint32(1); got != want {
@@ -3173,20 +3214,23 @@ func TestLaunchPoolCapacityCreatesHetznerCPUNodeReservation(t *testing.T) {
 	}
 }
 
+func TestLaunchPoolCapacityBuysSeveralMachinesOfAnOfferTheProviderDoesNotCount(t *testing.T) {
+	hetzner := fakeProvider("hetzner", cpx31Offer)
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, hetzner)
+
+	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		Nodes: 3,
+		Pool:  &pb.PoolConfig{Name: "cpu-pool", Ttl: "1h", MaxSpend: 1},
+	})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Len(t, hetzner.Creates(), 3)
+	require.Len(t, repo.pools["workspace-1"][0].Reservations, 3)
+}
+
 func TestLaunchPoolCapacityAddsReservationToExistingPool(t *testing.T) {
-	var createCalls int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/instances/types":
-			_, _ = w.Write([]byte(`{"instance_types":[{"id":"sf-a10g-1","cloud":"lambda","shade_instance_type":"A10Gx1","hourly_price":150,"deployment_type":"vm","configuration":{"gpu_type":"A10G","num_gpus":1,"vcpus":4,"memory_in_gb":16,"storage_in_gb":128},"availability":[{"region":"us-east","available":true}]}]}`))
-		case "/instances/create":
-			createCalls++
-			_, _ = w.Write([]byte(`{"id":"reservation-2"}`))
-		default:
-			t.Fatalf("unexpected shadeform path %s", r.URL.Path)
-		}
-	}))
-	defer server.Close()
+	shadeform := fakeProvider("shadeform", a10gOffer)
 
 	now := time.Now().UTC()
 	repo := &fakeComputeRepo{
@@ -3205,7 +3249,7 @@ func TestLaunchPoolCapacityAddsReservationToExistingPool(t *testing.T) {
 							PoolName:         "pool-1",
 							Selector:         "pool-1",
 							Provider:         "shadeform",
-							OfferID:          "sf-a10g-1",
+							OfferID:          "A10G",
 							MachineID:        "machine-1",
 							GPU:              "A10G",
 							GPUCount:         1,
@@ -3220,31 +3264,14 @@ func TestLaunchPoolCapacityAddsReservationToExistingPool(t *testing.T) {
 			},
 		},
 	}
-	service := &Service{
-		computeRepo: repo,
-		billing: &fakeManagedBilling{
-			launchDecision: billingDecision{OK: true, AvailableCents: 5000, RequiredCents: 2500},
-		},
-		appConfig: types.AppConfig{
-			GatewayService: types.GatewayServiceConfig{
-				HTTP: types.HTTPConfig{ExternalHost: "app.beam.test", ExternalPort: 443, TLS: true},
-			},
-			Tailscale: types.TailscaleConfig{Enabled: true, AuthKey: "gateway-key", AgentAuthKey: "agent-key"},
-			Providers: types.ProviderConfig{
-				Shadeform: types.ShadeformProviderConfig{ApiKey: "shadeform-key", BaseURL: server.URL},
-			},
-			ManagedCompute: types.ManagedComputeConfig{
-				Billing: types.ManagedComputeBillingConfig{MinimumCreditCents: 2500},
-			},
-		},
-	}
+	service := launchService(repo, shadeform)
 
 	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
 		Pool: &pb.PoolConfig{
 			Name:      "pool-1",
 			Gpu:       []string{"A10G"},
 			Nodes:     1,
-			OfferId:   "sf-a10g-1",
+			OfferId:   "A10G",
 			Ttl:       "1h",
 			MaxSpend:  2,
 			Providers: []string{"shadeform"},
@@ -3257,14 +3284,16 @@ func TestLaunchPoolCapacityAddsReservationToExistingPool(t *testing.T) {
 	if !res.Ok {
 		t.Fatalf("LaunchPoolCapacity() not ok: code=%s msg=%s", res.ErrorCode, res.ErrMsg)
 	}
-	if createCalls != 1 {
-		t.Fatalf("shadeform create calls = %d, want 1", createCalls)
+	if got := len(shadeform.Creates()); got != 1 {
+		t.Fatalf("shadeform create calls = %d, want 1", got)
 	}
 	state := repo.pools["workspace-1"][0]
 	if got, want := len(state.Reservations), 2; got != want {
 		t.Fatalf("reservation count = %d, want %d", got, want)
 	}
-	if got, want := state.Reservations[1].ID, "reservation-2"; got != want {
+	bought := shadeform.Everything()
+	require.Len(t, bought, 1)
+	if got, want := state.Reservations[1].ID, bought[0].ID; got != want {
 		t.Fatalf("new reservation id = %q, want %q", got, want)
 	}
 	if got, want := state.ReservedNodes, uint32(2); got != want {
@@ -3386,32 +3415,13 @@ func TestValidatePoolLaunchCompatibleRejectsGPUMismatch(t *testing.T) {
 	}
 }
 
-type fakeVendor struct {
-	extended  map[string]time.Time
-	deleted   []string
-	deleteErr error
-}
-
-func (v *fakeVendor) Name() string { return "shadeform" }
-func (v *fakeVendor) ListOffers(context.Context, model.OfferRequest) ([]model.Offer, error) {
-	return nil, nil
-}
-func (v *fakeVendor) CreateReservation(context.Context, model.ReservationRequest) (*model.Reservation, error) {
-	return nil, nil
-}
-func (v *fakeVendor) GetReservation(context.Context, string) (*model.Reservation, error) {
-	return nil, nil
-}
-func (v *fakeVendor) ExtendReservation(_ context.Context, id string, expiresAt time.Time) error {
-	if v.extended == nil {
-		v.extended = map[string]time.Time{}
-	}
-	v.extended[id] = expiresAt
-	return nil
-}
-func (v *fakeVendor) DeleteReservation(_ context.Context, id string) error {
-	v.deleted = append(v.deleted, id)
-	return v.deleteErr
+// boughtFrom plants a machine at a fake provider and points the state's first
+// reservation at it, as if the service had bought it there.
+func boughtFrom(fake *providers.Fake, state *model.PoolState) string {
+	id := fake.Plant(testOwner, providers.StatusActive, nil)
+	state.Reservations[0].Provider = fake.Name()
+	state.Reservations[0].InstanceID = id
+	return id
 }
 
 func TestRenewManagedReservationsExtendsExpiringReservation(t *testing.T) {
@@ -3433,12 +3443,13 @@ func TestRenewManagedReservationsExtendsExpiringReservation(t *testing.T) {
 			},
 		},
 	}
-	vendor := &fakeVendor{}
-	service := &Service{}
+	shadeform := fakeProvider("shadeform")
+	instanceID := boughtFrom(shadeform, state)
+	service := &Service{providers: providers.RegistryOf(shadeform)}
 
 	// Plenty of balance: renew for another hour
 	decision := billingDecision{OK: true, AvailableCents: 10_000}
-	if !service.renewManagedReservations(context.Background(), "workspace-1", state, decision, 5, now, map[string]model.Vendor{"shadeform": vendor}) {
+	if !service.renewManagedReservations(context.Background(), "workspace-1", state, decision, 5, now) {
 		t.Fatal("renewManagedReservations() did not report a state change")
 	}
 	if got, want := state.Reservations[0].ExpiresAt, expiresAt.Add(time.Hour); !got.Equal(want) {
@@ -3450,8 +3461,8 @@ func TestRenewManagedReservationsExtendsExpiringReservation(t *testing.T) {
 	if got, want := state.CommittedSpendMicros, int64(1_650_000); got != want {
 		t.Fatalf("pool committed spend = %d, want %d", got, want)
 	}
-	if got, want := vendor.extended["instance-1"], expiresAt.Add(time.Hour); !got.Equal(want) {
-		t.Fatalf("vendor extended to %s, want %s", got, want)
+	if got, want := shadeform.Until(instanceID), expiresAt.Add(time.Hour).Add(reservationDeletionGrace); !got.Equal(want) {
+		t.Fatalf("provider extended to %s, want %s", got, want)
 	}
 }
 
@@ -3473,19 +3484,20 @@ func TestRenewManagedReservationsSkipsWhenBalanceInsufficient(t *testing.T) {
 			},
 		},
 	}
-	vendor := &fakeVendor{}
-	service := &Service{}
+	shadeform := fakeProvider("shadeform")
+	instanceID := boughtFrom(shadeform, state)
+	service := &Service{providers: providers.RegistryOf(shadeform)}
 
 	// 16.5 cents/hr billable but only 10 cents headroom: do not renew
 	decision := billingDecision{OK: true, AvailableCents: 15}
-	if service.renewManagedReservations(context.Background(), "workspace-1", state, decision, 5, now, map[string]model.Vendor{"shadeform": vendor}) {
+	if service.renewManagedReservations(context.Background(), "workspace-1", state, decision, 5, now) {
 		t.Fatal("renewManagedReservations() renewed without sufficient balance")
 	}
 	if !state.Reservations[0].ExpiresAt.Equal(expiresAt) {
 		t.Fatal("reservation expiry should be unchanged")
 	}
-	if len(vendor.extended) != 0 {
-		t.Fatal("vendor should not have been called")
+	if !shadeform.Until(instanceID).IsZero() {
+		t.Fatal("provider should not have been called")
 	}
 }
 
@@ -3506,11 +3518,12 @@ func TestRenewManagedReservationsIgnoresDistantExpiry(t *testing.T) {
 			},
 		},
 	}
-	vendor := &fakeVendor{}
-	service := &Service{}
+	shadeform := fakeProvider("shadeform")
+	boughtFrom(shadeform, state)
+	service := &Service{providers: providers.RegistryOf(shadeform)}
 
 	decision := billingDecision{OK: true, AvailableCents: 10_000}
-	if service.renewManagedReservations(context.Background(), "workspace-1", state, decision, 0, now, map[string]model.Vendor{"shadeform": vendor}) {
+	if service.renewManagedReservations(context.Background(), "workspace-1", state, decision, 0, now) {
 		t.Fatal("renewManagedReservations() should not renew a reservation far from expiry")
 	}
 }
@@ -4253,14 +4266,13 @@ func TestReconcileManagedComputeChecksBalanceAfterFreshUsageTick(t *testing.T) {
 		Name:        "pool-1",
 		Reservations: []model.Reservation{
 			{
-				ID:                 "reservation-1",
-				Source:             model.SourceCLIReservation,
-				Status:             model.ReservationActive,
-				CreatedAt:          now.Add(-time.Hour),
-				BillingCursorAt:    now.Add(-time.Minute),
-				LastBillingCheckAt: now.Add(-time.Second),
-				ExpiresAt:          now.Add(time.Hour),
-				HourlyCostMicros:   1_000_000,
+				ID:               "reservation-1",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationActive,
+				CreatedAt:        now.Add(-time.Hour),
+				BillingCursorAt:  now.Add(-time.Minute),
+				ExpiresAt:        now.Add(time.Hour),
+				HourlyCostMicros: 1_000_000,
 			},
 		},
 	}
@@ -4283,14 +4295,13 @@ func TestReconcileManagedComputeChecksBalanceWhenUsageCursorIsFresh(t *testing.T
 		Name:        "pool-1",
 		Reservations: []model.Reservation{
 			{
-				ID:                 "reservation-1",
-				Source:             model.SourceCLIReservation,
-				Status:             model.ReservationActive,
-				CreatedAt:          now.Add(-time.Hour),
-				BillingCursorAt:    now,
-				LastBillingCheckAt: now,
-				ExpiresAt:          now.Add(time.Hour),
-				HourlyCostMicros:   1_000_000,
+				ID:               "reservation-1",
+				Source:           model.SourceCLIReservation,
+				Status:           model.ReservationActive,
+				CreatedAt:        now.Add(-time.Hour),
+				BillingCursorAt:  now,
+				ExpiresAt:        now.Add(time.Hour),
+				HourlyCostMicros: 1_000_000,
 			},
 		},
 	}
@@ -4330,7 +4341,9 @@ func TestReconcileManagedComputeBillsExpiredReservationBeforeTerminating(t *test
 		},
 	}
 	repo := &fakeComputeRepo{pools: map[string][]*model.PoolState{"workspace-1": {state}}}
-	billing := &fakeManagedBilling{balanceDecision: billingDecision{OK: true, RequiredCents: 1, AvailableCents: 1000}}
+	// The balance does not cover another hour, so the reservation is not
+	// renewed and ends at its expiry.
+	billing := &fakeManagedBilling{balanceDecision: billingDecision{OK: true, RequiredCents: 1, AvailableCents: 50}}
 	service := &Service{computeRepo: repo, billing: billing}
 
 	if err := service.ReconcileManagedCompute(context.Background()); err != nil {
@@ -4612,8 +4625,8 @@ func TestReleasePrivateMachineTransitionsManagedReservation(t *testing.T) {
 	if got, want := saved.Reservations[0].MachineID, "machine-1"; got != want {
 		t.Fatalf("reservation machine id = %q, want %q", got, want)
 	}
-	if !strings.Contains(saved.Reservations[0].LastError, "vendor \"shadeform\" is not configured") {
-		t.Fatalf("reservation last error = %q, want missing vendor error", saved.Reservations[0].LastError)
+	if !strings.Contains(saved.Reservations[0].LastError, "provider \"shadeform\" is not configured") {
+		t.Fatalf("reservation last error = %q, want missing provider error", saved.Reservations[0].LastError)
 	}
 	if machine.Schedulable {
 		t.Fatal("releasePrivateMachine() did not mark the machine unschedulable before deleting it")
@@ -4765,7 +4778,7 @@ func TestReleasePrivateMachineCleansMachineScopedRedisState(t *testing.T) {
 	}
 }
 
-func TestTerminateReservationTreatsProviderNotFoundAsDeleted(t *testing.T) {
+func TestTerminateReservationClosesAReservationWhoseMachineIsAlreadyGone(t *testing.T) {
 	now := time.Now().UTC()
 	state := &model.PoolState{
 		WorkspaceID: "workspace-1",
@@ -4783,32 +4796,26 @@ func TestTerminateReservationTreatsProviderNotFoundAsDeleted(t *testing.T) {
 			},
 		},
 	}
-	vendor := &fakeVendor{deleteErr: &model.HTTPStatusError{
-		Method:     http.MethodDelete,
-		Path:       "/servers/42",
-		StatusCode: http.StatusNotFound,
-		Body:       "not found",
-	}}
-	service := &Service{}
+	// The provider has no machine 42 any more, and deleting it succeeds.
+	hetzner := fakeProvider("hetzner")
+	service := &Service{providers: providers.RegistryOf(hetzner)}
 
-	if !service.terminateReservation(
+	service.terminateReservation(
 		context.Background(),
 		"workspace-1",
 		state,
 		&state.Reservations[0],
-		map[string]model.Vendor{"hetzner": vendor},
 		reconcileReasonMachineReleased,
 		machineReleasedMessage,
-	) {
-		t.Fatal("terminateReservation() did not report a change")
-	}
+		now,
+	)
 	if got, want := state.Reservations[0].Status, model.ReservationDeleted; got != want {
 		t.Fatalf("reservation status = %q, want %q", got, want)
 	}
 	if got := state.Reservations[0].LastError; got != "" {
 		t.Fatalf("reservation last error = %q, want empty", got)
 	}
-	if got, want := vendor.deleted, []string{"42"}; !sameStrings(got, want) {
+	if got, want := hetzner.Deletes(), []string{"42"}; !sameStrings(got, want) {
 		t.Fatalf("deleted reservations = %v, want %v", got, want)
 	}
 }
@@ -4961,8 +4968,8 @@ func TestDeletePrivateMachineReleasesManagedReservationID(t *testing.T) {
 	if got, want := state.Reservations[0].TerminatingReason, reconcileReasonMachineReleased; got != want {
 		t.Fatalf("terminating reason = %q, want %q", got, want)
 	}
-	if !strings.Contains(state.Reservations[0].LastError, "vendor \"shadeform\" is not configured") {
-		t.Fatalf("reservation last error = %q, want missing vendor error", state.Reservations[0].LastError)
+	if !strings.Contains(state.Reservations[0].LastError, "provider \"shadeform\" is not configured") {
+		t.Fatalf("reservation last error = %q, want missing provider error", state.Reservations[0].LastError)
 	}
 }
 
@@ -5342,18 +5349,18 @@ func TestAssignManagedReservationToMachineUsesJoinTokenHash(t *testing.T) {
 	}
 	service := &Service{computeRepo: repo}
 
-	err := service.assignManagedReservationToMachine(
+	err := service.assignManagedReservationToMachineLocked(
 		context.Background(),
 		state,
 		&model.JoinTokenState{TokenHash: "token-hash"},
 		&model.AgentTokenState{WorkspaceID: "workspace-1", PoolName: "pool-1", MachineID: "machine-1"},
 	)
 	if err != nil {
-		t.Fatalf("assignManagedReservationToMachine() error = %v", err)
+		t.Fatalf("assignManagedReservationToMachineLocked() error = %v", err)
 	}
 
 	if !repo.savedPool {
-		t.Fatal("assignManagedReservationToMachine() did not persist the pool state")
+		t.Fatal("assignManagedReservationToMachineLocked() did not persist the pool state")
 	}
 	if got, want := state.Reservations[0].MachineID, "machine-1"; got != want {
 		t.Fatalf("reservation machine id = %q, want %q", got, want)
@@ -5381,27 +5388,9 @@ func TestAssignManagedReservationToMachineRejectsClosedManagedJoinToken(t *testi
 	}
 	machine := &model.AgentTokenState{MachineID: "machine-1"}
 
-	err := (&Service{}).assignManagedReservationToMachine(context.Background(), state, token, machine)
+	err := (&Service{}).assignManagedReservationToMachineLocked(context.Background(), state, token, machine)
 	if err == nil {
-		t.Fatal("assignManagedReservationToMachine() accepted a closed managed reservation")
-	}
-}
-
-func TestAssignManagedReservationToMachineRequiresRepository(t *testing.T) {
-	state := &model.PoolState{Reservations: []model.Reservation{{
-		Source:                model.SourceCLIReservation,
-		Status:                model.ReservationPending,
-		RegistrationTokenHash: "join-token-hash",
-	}}}
-	token := &model.JoinTokenState{TokenHash: "join-token-hash"}
-	machine := &model.AgentTokenState{MachineID: "machine-1"}
-
-	err := (&Service{}).assignManagedReservationToMachine(context.Background(), state, token, machine)
-	if err == nil || !strings.Contains(err.Error(), "compute repository is unavailable") {
-		t.Fatalf("assignManagedReservationToMachine() error = %v", err)
-	}
-	if state.Reservations[0].MachineID != "" {
-		t.Fatal("reservation was mutated without a repository")
+		t.Fatal("assignManagedReservationToMachineLocked() accepted a closed managed reservation")
 	}
 }
 
@@ -5466,39 +5455,11 @@ type fakeComputeRepo struct {
 	joinTokens map[string]*model.JoinTokenState
 	sshStates  map[string]*model.MachineSSHState
 	sshMu      sync.Mutex
-	demand     map[string]*model.FailoverDemand
-	spendCents float64
 	savedPool  bool
 }
 
-func (r *fakeComputeRepo) PushFailoverDemand(ctx context.Context, demand *model.FailoverDemand, ttl time.Duration) error {
-	if r.demand == nil {
-		r.demand = map[string]*model.FailoverDemand{}
-	}
-	r.demand[demand.GPU] = demand
-	return nil
-}
-
-func (r *fakeComputeRepo) ListFailoverDemand(ctx context.Context) ([]*model.FailoverDemand, error) {
-	out := []*model.FailoverDemand{}
-	for _, demand := range r.demand {
-		out = append(out, demand)
-	}
-	return out, nil
-}
-
-func (r *fakeComputeRepo) DeleteFailoverDemand(ctx context.Context, gpu string) error {
-	delete(r.demand, gpu)
-	return nil
-}
-
-func (r *fakeComputeRepo) RecordOnDemandSpend(ctx context.Context, at time.Time, cents float64) error {
-	r.spendCents += cents
-	return nil
-}
-
-func (r *fakeComputeRepo) OnDemandSpendCents(ctx context.Context, window time.Duration) (float64, error) {
-	return r.spendCents, nil
+func (r *fakeComputeRepo) ProviderOwner(ctx context.Context) (string, error) {
+	return testOwner, nil
 }
 
 func (r *fakeComputeRepo) WithPoolStateLock(ctx context.Context, workspaceID, name string, fn func(context.Context) error) error {
@@ -6075,4 +6036,2918 @@ func TestListMachineContainersReturnsManagedPoolStoreError(t *testing.T) {
 	if response.Ok || response.ErrMsg != "managed pool store unavailable" {
 		t.Fatalf("response = %+v, want managed pool store error", response)
 	}
+}
+
+// standIn puts a value in a package variable, such as a call to AWS, and puts
+// back what was there when the test ends.
+func standIn[T any](t *testing.T, variable *T, value T) {
+	t.Helper()
+	previous := *variable
+	*variable = value
+	t.Cleanup(func() { *variable = previous })
+}
+
+// faultyPools is a repository in which reading or saving a pool's record, or
+// saving a join token, fails with the error set for it.
+//
+// It holds a pool's lock the way the Redis repository does: what the work
+// done under the lock returns comes back joined with the lock's own errors,
+// of which a healthy lock has none.
+type faultyPools struct {
+	*fakeComputeRepo
+	getErr, saveErr, tokenErr error
+}
+
+func (r *faultyPools) WithPoolStateLock(ctx context.Context, workspaceID, name string, fn func(context.Context) error) error {
+	var leaseErr, releaseErr error
+	return errors.Join(fn(ctx), leaseErr, releaseErr)
+}
+
+func (r *faultyPools) GetPoolState(ctx context.Context, workspaceID, name string) (*model.PoolState, error) {
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
+	return r.fakeComputeRepo.GetPoolState(ctx, workspaceID, name)
+}
+
+func (r *faultyPools) SavePoolState(ctx context.Context, workspaceID string, state *model.PoolState) error {
+	if r.saveErr != nil {
+		return r.saveErr
+	}
+	return r.fakeComputeRepo.SavePoolState(ctx, workspaceID, state)
+}
+
+func (r *faultyPools) SaveJoinTokenState(ctx context.Context, state *model.JoinTokenState, ttl time.Duration) error {
+	// Revoking a token saves it once more, and that still works.
+	if r.tokenErr != nil && !state.Revoked {
+		return r.tokenErr
+	}
+	return r.fakeComputeRepo.SaveJoinTokenState(ctx, state, ttl)
+}
+
+// faultyProvider is a provider whose offers cannot be listed, that cannot be
+// asked about a machine, or that cannot be told how long a machine is wanted,
+// while the error for that call is set. It counts how often it is told how
+// long a machine is wanted. Creates and deletes fail when the fake it wraps
+// is told to fail them.
+type faultyProvider struct {
+	*providers.Fake
+	offersErr, getErr, extendErr error
+	asked, extends               int
+}
+
+func (p *faultyProvider) Offers(ctx context.Context, filter providers.OfferFilter) ([]providers.Offer, error) {
+	p.asked++
+	if p.offersErr != nil {
+		return nil, p.offersErr
+	}
+	return p.Fake.Offers(ctx, filter)
+}
+
+func (p *faultyProvider) Get(ctx context.Context, id string) (providers.Instance, error) {
+	if p.getErr != nil {
+		return providers.Instance{}, p.getErr
+	}
+	return p.Fake.Get(ctx, id)
+}
+
+func (p *faultyProvider) Extend(ctx context.Context, id string, until time.Time) error {
+	p.extends++
+	if p.extendErr != nil {
+		return p.extendErr
+	}
+	return p.Fake.Extend(ctx, id, until)
+}
+
+// takeSelector gives the service a scheduler in which another pool of the
+// workspace answers to the selector already.
+func takeSelector(t *testing.T, service *Service, selector string) {
+	t.Helper()
+	service.scheduler = scheduler.NewSchedulerForCapacityChecks(nil, service.computeRepo, scheduler.NewWorkerPoolManager())
+	require.NoError(t, service.scheduler.EnsureAgentPool("workspace-1", &model.PoolState{
+		Name: "selector-owner", Selector: selector, Mode: string(types.PoolModePrivate),
+	}))
+}
+
+func launchA10Gs(t *testing.T, ctx context.Context, service *Service, nodes uint32) *pb.LaunchPoolCapacityResponse {
+	t.Helper()
+	res, err := service.LaunchPoolCapacity(ctx, &pb.LaunchPoolCapacityRequest{
+		Pool: &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: nodes, Ttl: "1h", MaxSpend: 100},
+	})
+	require.NoError(t, err)
+	return res
+}
+
+func requireEveryTokenRevoked(t *testing.T, repo *fakeComputeRepo) {
+	t.Helper()
+	require.NotEmpty(t, repo.joinTokens)
+	for _, token := range repo.joinTokens {
+		require.True(t, token.Revoked, "no join token outlives a launch that failed")
+	}
+}
+
+// boughtMachine is a pool with one machine bought from a provider, and what a
+// test needs to watch the service look after it.
+type boughtMachine struct {
+	service  *Service
+	provider *faultyProvider
+	repo     *fakeComputeRepo
+	events   *capturedEvents
+	state    *model.PoolState
+	instance string
+	// now is when the fixture was made, moved on by every check. expiry is
+	// when the machine's term ended as the fixture was made.
+	now, expiry time.Time
+}
+
+const boughtTokenHash = "join-token-hash"
+
+// boughtMachineAt is the pool at the given time. Its machine was bought an
+// hour before, is in the given state at its provider, and is wanted for the
+// given time more.
+func boughtMachineAt(now time.Time, status providers.Status, wantedFor time.Duration) *boughtMachine {
+	provider := &faultyProvider{Fake: fakeProvider("shadeform")}
+	instance := provider.Plant(testOwner, status, nil)
+	recorded := model.ReservationPending
+	if status == providers.StatusActive {
+		recorded = model.ReservationActive
+	}
+	state := &model.PoolState{
+		WorkspaceID: "workspace-1",
+		Name:        "pool-1",
+		Mode:        string(types.PoolModePrivate),
+		Reservations: []model.Reservation{{
+			ID:                    instance,
+			InstanceID:            instance,
+			Provider:              provider.Name(),
+			Name:                  "beam-pool-1-machine-1",
+			MachineID:             "machine-1",
+			Source:                model.SourceCLIReservation,
+			Status:                recorded,
+			CreatedAt:             now.Add(-time.Hour),
+			ExpiresAt:             now.Add(wantedFor),
+			HourlyCostMicros:      1_000_000,
+			RegistrationTokenHash: boughtTokenHash,
+		}},
+	}
+	repo := &fakeComputeRepo{
+		pools:      map[string][]*model.PoolState{"workspace-1": {state}},
+		joinTokens: map[string]*model.JoinTokenState{boughtTokenHash: {TokenHash: boughtTokenHash, ExpiresAt: now.Add(time.Hour)}},
+	}
+	events := &capturedEvents{}
+	return &boughtMachine{
+		service:  &Service{computeRepo: repo, eventRepo: events, providers: providers.RegistryOf(provider)},
+		provider: provider,
+		repo:     repo,
+		events:   events,
+		state:    state,
+		instance: instance,
+		now:      now,
+		expiry:   now.Add(wantedFor),
+	}
+}
+
+// newBoughtMachine has a machine that is still booting and is wanted for six
+// hours.
+func newBoughtMachine(t *testing.T) *boughtMachine {
+	t.Helper()
+	return boughtMachineAt(time.Now().UTC(), providers.StatusPending, 6*time.Hour)
+}
+
+// newRenewedMachine has a running machine whose term is about to end, in a
+// workspace that can pay for more.
+func newRenewedMachine(t *testing.T) *boughtMachine {
+	t.Helper()
+	m := boughtMachineAt(time.Now().UTC().Truncate(time.Second), providers.StatusActive, 90*time.Second)
+	m.state.Reservations[0].BillingCursorAt = m.now.Add(-time.Minute)
+	m.service.billing = &fakeManagedBilling{balanceDecision: healthyBalance}
+	return m
+}
+
+// newExtendedPool has a running machine that is wanted for another six hours,
+// as its pool is.
+func newExtendedPool(t *testing.T) *boughtMachine {
+	t.Helper()
+	p := boughtMachineAt(time.Now().UTC(), providers.StatusActive, 6*time.Hour)
+	p.state.Config = &pb.PoolConfig{Name: "pool-1", Ttl: "6h", MaxSpend: 10}
+	p.state.ExpiresAt = p.expiry
+	p.state.Reservations[0].CommittedMicros = 7_000_000
+	return p
+}
+
+// check runs the reconciler over the pool once, after the given time has
+// passed, and returns the reservation as it was saved.
+func (m *boughtMachine) check(t *testing.T, after time.Duration) model.Reservation {
+	t.Helper()
+	m.now = m.now.Add(after)
+	m.repo.savedPool = false
+	require.NoError(t, m.service.reconcilePool(context.Background(), "workspace-1", m.state, m.now))
+	return m.repo.pools["workspace-1"][0].Reservations[0]
+}
+
+// extend asks for the pool to be extended, as its owner does.
+func (m *boughtMachine) extend(t *testing.T, in *pb.ExtendPoolCapacityRequest) *pb.ExtendPoolCapacityResponse {
+	t.Helper()
+	m.repo.savedPool = false
+	res, err := m.service.ExtendPoolCapacity(testAuthContext("workspace-1", "owner-token"), in)
+	require.NoError(t, err)
+	return res
+}
+
+func (m *boughtMachine) tokenRevoked() bool {
+	return m.repo.joinTokens[boughtTokenHash].Revoked
+}
+
+// reported returns the status of every event of the given kind, in order, and
+// forgets the events it has seen.
+func reported(events *capturedEvents, action string) []string {
+	statuses := []string{}
+	for _, event := range events.events {
+		if event.Action == action {
+			statuses = append(statuses, event.Status)
+		}
+	}
+	events.events = nil
+	return statuses
+}
+
+// byocTokenHash is the hash of the token the stack of byocPool joins with.
+var byocTokenHash = hashComputeToken("byoc-token")
+
+// byocPool is a pool whose machines run in the tenant's own AWS account. The
+// stack it was set up with gave Beam a role to ask about it with.
+func byocPool(now time.Time) *model.PoolState {
+	stackURL := awsCloudFormationStackURL("us-east-1", "beam-aws-cpu-test")
+	return &model.PoolState{
+		Name:             "aws-cpu",
+		Selector:         "aws-cpu",
+		Mode:             string(types.PoolModePrivate),
+		Status:           types.ComputePoolStatusActive,
+		CreatedByTokenID: "owner-token",
+		Source:           model.SourceAWS,
+		CreatedAt:        now.Add(-24 * time.Hour),
+		Config:           &pb.PoolConfig{Name: "aws-cpu", Regions: []string{"us-east-1"}},
+		BYOC: &model.BYOCProviderState{
+			Provider:     "aws",
+			AccountID:    "123456789012",
+			Region:       "us-east-1",
+			ResourceName: "beam-aws-cpu-test",
+			ResourceURL:  stackURL,
+			DestroyURL:   stackURL,
+			Labels: map[string]string{
+				byocBootstrapJoinTokenHashLabel:   byocTokenHash,
+				byocBootstrapJoinTokenHashesLabel: byocTokenHash,
+				"instance_type":                   "i4i.xlarge",
+				"desired_nodes":                   "1",
+				"max_nodes":                       "1",
+				"target_sandboxes":                "20",
+				"sandboxes_per_node":              "20",
+				awsBYOCAutoScalingGroupNameLabel:  "beam-asg-aws-cpu-test",
+				awsBYOCControlRoleArnLabel:        "arn:aws:iam::123456789012:role/beam-control-aws-cpu-test",
+				awsBYOCControlRoleExternalIDLabel: "beam-byoc-test-external-id",
+			},
+		},
+	}
+}
+
+// silentBYOCPool is a BYOC pool whose only machine was last heard from the
+// given time ago, with the token its stack joins with.
+func silentBYOCPool(silentFor time.Duration) *fakeComputeRepo {
+	now := time.Now().UTC()
+	return &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{"workspace-1": {byocPool(now)}},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "aws-cpu"): {{
+				WorkspaceID:     "workspace-1",
+				PoolName:        "aws-cpu",
+				MachineID:       "machine-1",
+				TokenHash:       hashComputeToken("machine-token"),
+				Schedulable:     true,
+				LastJoinAt:      now.Add(-time.Hour),
+				LastHeartbeatAt: now.Add(-silentFor),
+			}},
+		},
+		joinTokens: map[string]*model.JoinTokenState{
+			byocTokenHash: {TokenHash: byocTokenHash, WorkspaceID: "workspace-1", PoolName: "aws-cpu"},
+		},
+	}
+}
+
+// byocTemplateURL is where byocService keeps the template of a tenant's
+// stack.
+const byocTemplateURL = "https://s3.us-east-1.amazonaws.com/beam-byoc-templates-test/aws/byoc-template.yaml"
+
+// byocService is a service that can set up pools in a tenant's AWS account,
+// and look after the machines that join them.
+func byocService(repo repository.ComputeRepository) *Service {
+	return &Service{
+		computeRepo:   repo,
+		containerRepo: &fakeContainerRepo{},
+		appConfig: types.AppConfig{
+			GatewayService: types.GatewayServiceConfig{
+				HTTP: types.HTTPConfig{ExternalHost: "app.beam.cloud", ExternalPort: 443, TLS: true},
+			},
+			ManagedCompute: types.ManagedComputeConfig{BYOC: types.ManagedComputeBYOCConfig{
+				AWS: types.ManagedComputeBYOCAWSConfig{TemplateURL: byocTemplateURL},
+			}},
+		},
+	}
+}
+
+// anAWSCPUPool is a request for a pool of CPU machines on AWS, which a test
+// may change before it sends it.
+func anAWSCPUPool() *pb.CreateBYOCPoolRequest {
+	return &pb.CreateBYOCPoolRequest{
+		Provider:     "aws",
+		PoolName:     "aws-cpu",
+		Region:       "us-east-1",
+		InstanceType: "i4i.xlarge",
+		DesiredNodes: 1,
+		AccountId:    "123456789012",
+	}
+}
+
+// stackCheckAnswers makes the check of a pool's AWS stack answer as given,
+// and returns how often it was asked.
+func stackCheckAnswers(t *testing.T, deleted bool, err error) *int {
+	t.Helper()
+	asked := 0
+	standIn(t, &awsBYOCResourceDeleted, func(context.Context, awsBYOCResourceDeletedInput) (bool, error) {
+		asked++
+		return deleted, err
+	})
+	return &asked
+}
+
+// buyingTestService is a gateway that has credentials for one provider,
+// verda.
+func buyingTestService(config types.AppConfig) (*Service, *fakeComputeRepo) {
+	repo := &fakeComputeRepo{}
+	service := managedPoolTestService(config, repo)
+	service.providers = providers.RegistryOf(providers.NewFake("verda", "test"))
+	return service, repo
+}
+
+// spotPool is the least that makes a pool buy its machines.
+func spotPool(change ...func(*types.WorkerPoolConfig)) types.WorkerPoolConfig {
+	pool := types.WorkerPoolConfig{
+		GPUType:      "L40S",
+		Provisioning: types.WorkerPoolProvisioningConfig{Provider: "verda", Spot: true, MaxNodes: 4},
+	}
+	for _, apply := range change {
+		apply(&pool)
+	}
+	return pool
+}
+
+var joinTokenInScript = regexp.MustCompile(`--join-token '?([^' ]+)'?`)
+
+// joinAs runs what the machine's startup script would: a machine with one
+// L40S joins with the token in the script.
+func joinAs(t *testing.T, service *Service, script, hostname string) *pb.JoinAgentResponse {
+	t.Helper()
+	token := joinTokenInScript.FindStringSubmatch(script)
+	require.NotNil(t, token, "no join token in %q", script)
+	response, err := service.JoinAgent(context.Background(), &pb.JoinAgentRequest{
+		JoinToken:          token[1],
+		MachineFingerprint: "fingerprint-" + hostname,
+		Hostname:           hostname,
+		CpuCount:           20,
+		MemoryMb:           60_000,
+		Gpu:                []string{"L40S"},
+		GpuCount:           1,
+		Schedulable:        true,
+	})
+	require.NoError(t, err)
+	return response
+}
+
+// joinedByHand makes a pool of L40S machines, l40s, and joins one to it. It
+// returns the command the machine joined with, and the machine as it joined.
+func joinedByHand(t *testing.T, service *Service) (script string, machine model.AgentTokenState) {
+	t.Helper()
+	ctx := context.Background()
+	_, err := service.CreateManagedPool(ctx, clusterAdminAuth(), "l40s", types.WorkerPoolConfig{GPUType: "L40S"})
+	require.NoError(t, err)
+	bootstrap, err := service.CreateManagedMachine(ctx, clusterAdminAuth(), "l40s")
+	require.NoError(t, err)
+	response := joinAs(t, service, bootstrap.InstallCommand, "by-hand")
+	require.True(t, response.Ok, response.ErrMsg)
+
+	joined, err := service.computeRepo.GetAgentMachineState(ctx, "admin-workspace", "l40s", response.MachineId)
+	require.NoError(t, err)
+	require.NotNil(t, joined)
+	return bootstrap.InstallCommand, *joined
+}
+
+// a10gPool is the record of a pool of one A10G machine that was bought.
+func a10gPool(now time.Time) *model.PoolState {
+	return &model.PoolState{
+		WorkspaceID:          "workspace-1",
+		Name:                 "pool-1",
+		Selector:             "pool-1",
+		Mode:                 string(types.PoolModePrivate),
+		Source:               model.SourceCLIReservation,
+		Config:               &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: 1, Ttl: "1h", MaxSpend: 100},
+		CreatedAt:            now.Add(-time.Minute),
+		ReservedNodes:        1,
+		CommittedSpendMicros: 1_650_000,
+		Reservations: []model.Reservation{{
+			ID: "reservation-1", InstanceID: "reservation-1", Provider: "shadeform", MachineID: "machine-1",
+			GPU: "A10G", GPUCount: 1, NodeCount: 1, HourlyCostMicros: 1_500_000,
+			Source: model.SourceCLIReservation, Status: model.ReservationActive,
+			CreatedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour),
+		}},
+	}
+}
+
+func TestLaunchPoolCapacitySaysWhyItBoughtNothing(t *testing.T) {
+	limited := a10gOffer
+	limited.Available = 1
+	for name, tt := range map[string]struct {
+		offer               providers.Offer
+		existing            *model.PoolState
+		billing             *fakeManagedBilling
+		getErr              error
+		in                  *pb.PoolConfig
+		code, message       string
+		required, available int64
+	}{
+		"the name belongs to a pool of another kind": {
+			existing: &model.PoolState{Name: "pool-1", Mode: string(types.PoolModeProvider)},
+			message:  "pool already exists in this workspace",
+		},
+		"the pool's record cannot be read": {
+			getErr:  errors.New("redis is down"),
+			message: "redis is down",
+		},
+		"the pool has machines of another GPU": {
+			existing: &model.PoolState{Name: "pool-1", Mode: string(types.PoolModePrivate), Config: &pb.PoolConfig{Name: "pool-1", Gpu: []string{"H100"}}},
+			code:     "pool_gpu_mismatch",
+			message:  `pool "pool-1" is configured for H100 node attributes; create a new pool for A10G`,
+		},
+		"no provider has as many machines": {
+			offer:   limited,
+			in:      &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: 2, Ttl: "1h", MaxSpend: 100},
+			code:    "no_compatible_capacity",
+			message: "insufficient compatible capacity",
+		},
+		"the machines cost more than the pool may spend": {
+			in:      &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: 1, Ttl: "1h", MaxSpend: 1},
+			code:    "no_compatible_capacity",
+			message: "max spend would be exceeded",
+		},
+		"billing cannot be asked": {
+			billing:  &fakeManagedBilling{launchErr: errors.New("billing is down"), launchDecision: billingDecision{RequiredCents: 2500}},
+			code:     "billing_unavailable",
+			message:  "billing is down",
+			required: 2500,
+		},
+		"the workspace has too little credit": {
+			billing:   &fakeManagedBilling{launchDecision: billingDecision{OK: false, RequiredCents: 2500, AvailableCents: 100}},
+			code:      "insufficient_credits",
+			message:   "not enough credits to launch managed compute",
+			required:  2500,
+			available: 100,
+		},
+		"billing says why it refuses": {
+			billing: &fakeManagedBilling{launchDecision: billingDecision{OK: false, ErrorCode: "payment_method_required", Message: "add a card to launch machines"}},
+			code:    "payment_method_required",
+			message: "add a card to launch machines",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			offer := a10gOffer
+			if tt.offer.ID != "" {
+				offer = tt.offer
+			}
+			shadeform := fakeProvider("shadeform", offer)
+			repo := &faultyPools{fakeComputeRepo: &fakeComputeRepo{}, getErr: tt.getErr}
+			if tt.existing != nil {
+				repo.pools = map[string][]*model.PoolState{"workspace-1": {tt.existing}}
+			}
+			service := launchService(repo, shadeform)
+			if tt.billing != nil {
+				service.billing = tt.billing
+			}
+			in := tt.in
+			if in == nil {
+				in = &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: 1, Ttl: "1h", MaxSpend: 100}
+			}
+
+			res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{Pool: in})
+			require.NoError(t, err)
+			require.False(t, res.Ok)
+			require.Equal(t, tt.code, res.ErrorCode)
+			require.Equal(t, tt.message, res.ErrMsg)
+			require.Equal(t, tt.required, res.RequiredCents)
+			require.Equal(t, tt.available, res.AvailableCents)
+			require.Nil(t, res.Pool)
+
+			require.Empty(t, shadeform.Creates(), "nothing is bought")
+			require.Empty(t, repo.joinTokens, "and nothing is given a token to join with")
+			require.False(t, repo.savedPool, "and no record is written")
+		})
+	}
+}
+
+func TestLaunchPoolCapacityUndoesWhatItBoughtOnceWhenItCannotFinish(t *testing.T) {
+	sshWithoutAKey := func(service *Service) { service.appConfig.ManagedCompute.SSH.Enabled = true }
+	selectorTaken := func(service *Service) { takeSelector(t, service, "pool-1") }
+	for name, tt := range map[string]struct {
+		arrange  func(*Service)
+		saveErr  error
+		existing bool
+		code     string
+		message  string
+	}{
+		"its SSH key cannot be made": {
+			arrange: sshWithoutAKey,
+			code:    "ssh_bootstrap_failed",
+			message: "database.postgres.encryptionKey is required for managed SSH",
+		},
+		"the pool's record cannot be saved": {
+			saveErr: errors.New("redis is down"),
+			code:    "store_failed",
+			message: "redis is down",
+		},
+		"the record of the pool it adds to cannot be saved, or put back": {
+			saveErr:  errors.New("redis is down"),
+			existing: true,
+			code:     "store_failed",
+			message:  "redis is down; cleanup failed: restore pool state: redis is down",
+		},
+		"the scheduler will not have the pool": {
+			arrange: selectorTaken,
+			code:    "scheduler_failed",
+			message: `pool selector "pool-1" is already owned by another pool`,
+		},
+		"the scheduler will not have the pool it adds to": {
+			arrange:  selectorTaken,
+			existing: true,
+			code:     "scheduler_failed",
+			message:  `pool selector "pool-1" is already owned by another pool`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			now := time.Now().UTC()
+			shadeform := fakeProvider("shadeform", a10gOffer)
+			repo := &faultyPools{fakeComputeRepo: &fakeComputeRepo{}}
+			var before model.PoolState
+			if tt.existing {
+				existing := a10gPool(now)
+				before = *existing
+				repo.pools = map[string][]*model.PoolState{"workspace-1": {existing}}
+			}
+			service := launchService(repo, shadeform)
+			if tt.arrange != nil {
+				tt.arrange(service)
+			}
+			repo.saveErr = tt.saveErr
+
+			res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), service, 1)
+			require.False(t, res.Ok)
+			require.Equal(t, tt.code, res.ErrorCode)
+			require.Contains(t, res.ErrMsg, tt.message)
+			if tt.code != "scheduler_failed" {
+				require.Equal(t, tt.message, res.ErrMsg)
+			}
+			require.Nil(t, res.Pool)
+
+			require.Len(t, shadeform.Creates(), 1, "the machine was bought")
+			require.Len(t, shadeform.Deletes(), 1, "and is given back once")
+			require.Empty(t, shadeform.Everything())
+			requireEveryTokenRevoked(t, repo.fakeComputeRepo)
+			require.Empty(t, repo.sshStates, "no SSH key is left for a machine that is gone")
+			if tt.existing {
+				require.Len(t, repo.pools["workspace-1"], 1)
+				require.Equal(t, before, *repo.pools["workspace-1"][0], "the pool is as it was")
+			} else {
+				require.Empty(t, repo.pools["workspace-1"], "no pool is left behind")
+			}
+		})
+	}
+}
+
+func TestLaunchPoolCapacityBuysNothingWhenAMachineCannotBeGivenAJoinCommand(t *testing.T) {
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	repo := &faultyPools{fakeComputeRepo: &fakeComputeRepo{}, tokenErr: errors.New("redis is down")}
+
+	res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), launchService(repo, shadeform), 1)
+	require.False(t, res.Ok)
+	require.Equal(t, "bootstrap_failed", res.ErrorCode)
+	require.Equal(t, "redis is down", res.ErrMsg)
+	require.Empty(t, shadeform.Creates())
+	require.Empty(t, repo.pools["workspace-1"])
+}
+
+// resold is a provider whose offers name another provider as their seller.
+type resold struct {
+	*providers.Fake
+	seller string
+}
+
+func (p resold) Offers(ctx context.Context, filter providers.OfferFilter) ([]providers.Offer, error) {
+	offers, err := p.Fake.Offers(ctx, filter)
+	for i := range offers {
+		offers[i].Provider = p.seller
+	}
+	return offers, err
+}
+
+func TestLaunchPoolCapacityBuysNothingFromAProviderThatIsNotConfigured(t *testing.T) {
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, resold{Fake: shadeform, seller: "elsewhere"})
+
+	res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), service, 1)
+	require.False(t, res.Ok)
+	require.Equal(t, "provider_unavailable", res.ErrorCode)
+	require.Equal(t, `provider "elsewhere" is not configured`, res.ErrMsg)
+	require.Empty(t, shadeform.Creates())
+	require.Empty(t, repo.joinTokens)
+	require.Empty(t, repo.pools["workspace-1"])
+}
+
+func TestLaunchPoolCapacityAnswersWithThePoolItLaunchedInto(t *testing.T) {
+	now := time.Now().UTC()
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	repo := &fakeComputeRepo{pools: map[string][]*model.PoolState{"workspace-1": {a10gPool(now)}}}
+	events := &capturedEvents{}
+	service := launchService(repo, shadeform)
+	service.eventRepo = events
+
+	res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), service, 2)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Empty(t, res.ErrorCode)
+	require.Equal(t, "pool-1", res.Pool.Name)
+	require.Len(t, res.Pool.Reservations, 3)
+	require.Equal(t, uint32(3), res.Pool.ReservedNodes)
+
+	stored := repo.pools["workspace-1"][0]
+	require.Len(t, stored.Reservations, 3)
+	require.Equal(t, "reservation-1", stored.Reservations[0].ID, "the machine the pool had comes first")
+	require.Equal(t, uint32(3), stored.ReservedNodes)
+	require.Equal(t, uint32(3), stored.Config.Nodes, "what the pool asks for grows by what was launched")
+	require.Equal(t, float64(200), stored.Config.MaxSpend)
+	// Two machines for an hour at $1.50, with the margin, on top of what the
+	// pool had committed.
+	require.Equal(t, int64(1_650_000+2*1_650_000), stored.CommittedSpendMicros)
+	require.Equal(t, model.SourceCLIReservation, stored.Source)
+	require.Equal(t, now.Add(-time.Minute), stored.CreatedAt, "the pool is as old as it was")
+	require.WithinDuration(t, time.Now().Add(time.Hour), stored.ExpiresAt, time.Minute)
+	for _, reservation := range stored.Reservations[1:] {
+		token := repo.joinTokens[reservation.RegistrationTokenHash]
+		require.NotNil(t, token)
+		require.Equal(t, stored.CreatedAt, token.PoolCreatedAt, "a machine joins with a token tied to when the pool was made")
+		require.Equal(t, reservation.MachineID, token.MachineID)
+		require.True(t, token.ExpiresAt.IsZero(), "which does not lapse while the machine boots")
+	}
+
+	require.Len(t, reported(events, types.EventComputeActionPoolReserved), 1, "the launch is reported once")
+}
+
+func TestListPoolOffersSkipsAProviderThatCannotBeAsked(t *testing.T) {
+	shadeform := &faultyProvider{Fake: fakeProvider("shadeform"), offersErr: errors.New("shadeform is down")}
+	service := &Service{providers: providers.RegistryOf(shadeform, fakeProvider("hetzner", cpx31Offer))}
+
+	res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{}})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Len(t, res.Offers, 1, "what the other providers sell is still listed")
+	require.Equal(t, "hetzner", res.Offers[0].Provider)
+}
+
+func TestLaunchPoolCapacityBuysFromAProviderThatAnswersWhenAnotherDoesNot(t *testing.T) {
+	shadeform := &faultyProvider{Fake: fakeProvider("shadeform"), offersErr: errors.New("shadeform is down")}
+	hetzner := fakeProvider("hetzner", cpx31Offer)
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, shadeform, hetzner)
+
+	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		Nodes: 1,
+		Pool:  &pb.PoolConfig{Name: "cpu-pool", Ttl: "1h", MaxSpend: 1},
+	})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Len(t, hetzner.Creates(), 1)
+}
+
+func TestListPoolOffersFailsWhenNoProviderAnswers(t *testing.T) {
+	hetzner := &faultyProvider{Fake: fakeProvider("hetzner", cpx31Offer)}
+	service := &Service{providers: providers.RegistryOf(
+		hetzner,
+		&faultyProvider{Fake: fakeProvider("shadeform"), offersErr: errors.New("shadeform is down")},
+	)}
+
+	// The pool names the one that is down, so nobody is left to answer.
+	res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{
+		Pool: &pb.PoolConfig{Providers: []string{"shadeform"}},
+	})
+	require.NoError(t, err)
+	require.False(t, res.Ok)
+	require.Contains(t, res.ErrMsg, "shadeform: shadeform is down")
+	require.Zero(t, hetzner.asked)
+
+	hetzner.offersErr = errors.New("hetzner token expired")
+	res, err = service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{}})
+	require.NoError(t, err)
+	require.False(t, res.Ok)
+	require.Contains(t, res.ErrMsg, "hetzner: hetzner token expired", "every failure is named")
+	require.Contains(t, res.ErrMsg, "shadeform: shadeform is down")
+}
+
+// The providers that pools buy their own machines from are configured in the
+// same place. What one of them sells on demand is not for a tenant to
+// reserve, however little it costs, and it is not asked.
+func TestOnlyProvidersThatSellReservationsAreAskedWhatTheySell(t *testing.T) {
+	cheaper := a10gOffer
+	cheaper.HourlyCostMicros = a10gOffer.HourlyCostMicros / 2
+	verda := &faultyProvider{Fake: fakeProvider("verda", cheaper)}
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, verda, shadeform)
+
+	for _, named := range [][]string{nil, {"verda", "shadeform"}} {
+		res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{Providers: named}})
+		require.NoError(t, err)
+		require.True(t, res.Ok, res.ErrMsg)
+		require.Len(t, res.Offers, 1)
+		require.Equal(t, "shadeform", res.Offers[0].Provider)
+	}
+	res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{Providers: []string{"verda"}}})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Empty(t, res.Offers)
+
+	launched, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		Pool: &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: 1, Ttl: "1h", MaxSpend: 2},
+	})
+	require.NoError(t, err)
+	require.True(t, launched.Ok, launched.ErrMsg)
+	require.Len(t, shadeform.Creates(), 1)
+	require.Empty(t, verda.Creates())
+	require.Zero(t, verda.asked)
+
+	// With nobody to sell a reservation there is nothing to list.
+	service.providers = providers.RegistryOf(verda)
+	res, err = service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{}})
+	require.NoError(t, err)
+	require.False(t, res.Ok)
+	require.Equal(t, "no compute providers are configured", res.ErrMsg)
+}
+
+func TestAnOfferWithoutAPriceIsNeitherListedNorBought(t *testing.T) {
+	// The provider's catalogue has the same machine in a region it gave no
+	// price for.
+	unpriced := a10gOffer
+	unpriced.Region, unpriced.HourlyCostMicros = "us-west", 0
+	shadeform := fakeProvider("shadeform", unpriced, a10gOffer)
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, shadeform)
+
+	listed, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{}})
+	require.NoError(t, err)
+	require.True(t, listed.Ok, listed.ErrMsg)
+	require.Len(t, listed.Offers, 1)
+	require.Equal(t, "us-east", listed.Offers[0].Region)
+
+	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		Pool: &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: 1, Ttl: "1h", MaxSpend: 2},
+	})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	reservation := repo.pools["workspace-1"][0].Reservations[0]
+	require.Equal(t, "us-east", reservation.Region, "no price is not the lowest price")
+	require.Equal(t, a10gOffer.HourlyCostMicros, reservation.HourlyCostMicros)
+}
+
+func TestListPoolOffersListsNothingForAPoolWhoseProvidersAreNotConfigured(t *testing.T) {
+	service := &Service{providers: providers.RegistryOf(fakeProvider("hetzner", cpx31Offer))}
+
+	res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{
+		Pool: &pb.PoolConfig{Providers: []string{"shadeform"}},
+	})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Empty(t, res.Offers, "nobody was asked, so nothing failed")
+}
+
+// overTheWire is a provider whose calls fail once their context is done, as
+// calls over a network do. It counts how often it is asked what it has, and
+// cannot be asked while listErr is set.
+type overTheWire struct {
+	*providers.Fake
+	// afterCreate, when set, runs once after the next create.
+	afterCreate func()
+	lists       int
+	listErr     error
+}
+
+func (p *overTheWire) Create(ctx context.Context, req providers.CreateRequest) (providers.Instance, error) {
+	if err := ctx.Err(); err != nil {
+		return providers.Instance{}, err
+	}
+	instance, err := p.Fake.Create(ctx, req)
+	if p.afterCreate != nil {
+		p.afterCreate()
+		p.afterCreate = nil
+	}
+	return instance, err
+}
+
+func (p *overTheWire) List(ctx context.Context) ([]providers.Instance, error) {
+	p.lists++
+	if err := cmp.Or(ctx.Err(), p.listErr); err != nil {
+		return nil, err
+	}
+	return p.Fake.List(ctx)
+}
+
+func (p *overTheWire) Delete(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return p.Fake.Delete(ctx, id)
+}
+
+func TestAFailedLaunchGivesBackItsMachinesAfterTheCallerHasGone(t *testing.T) {
+	ctx, hangUp := context.WithCancel(testAuthContext("workspace-1", "token-1"))
+	defer hangUp()
+	// The caller goes away while the second machine is being bought.
+	shadeform := &overTheWire{Fake: fakeProvider("shadeform", a10gOffer), afterCreate: hangUp}
+	repo := &fakeComputeRepo{}
+
+	res := launchA10Gs(t, ctx, launchService(repo, shadeform), 2)
+	require.False(t, res.Ok)
+	require.Equal(t, launchErrorProviderFailure, res.ErrorCode)
+	require.NotContains(t, res.ErrMsg, "cleanup failed")
+
+	require.Len(t, shadeform.Creates(), 1)
+	require.Empty(t, shadeform.Everything(), "the machine that was bought is deleted although the caller has gone")
+	require.Empty(t, repo.pools["workspace-1"], "no pool is left behind")
+	requireEveryTokenRevoked(t, repo)
+}
+
+func TestAMachineAFailedLaunchCannotGiveBackIsKeptForTheReconciler(t *testing.T) {
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	shadeform.RefuseCreatesAfter(1, fmt.Errorf("%w: none left in us-east", providers.ErrOutOfStock))
+	shadeform.FailDeletes(errors.New("provider is down"))
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, shadeform)
+
+	res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), service, 2)
+	require.False(t, res.Ok)
+	require.Contains(t, res.ErrMsg, "out of stock")
+	require.Contains(t, res.ErrMsg, "cleanup failed")
+	require.Contains(t, res.ErrMsg, "provider is down")
+
+	// The pool's record is the only record of the machine. It is kept, with
+	// the machine marked for the reconciler to go on deleting.
+	bought := shadeform.Everything()
+	require.Len(t, bought, 1)
+	require.Len(t, repo.pools["workspace-1"], 1)
+	state := repo.pools["workspace-1"][0]
+	require.Equal(t, "pool-1", state.Name)
+	require.Equal(t, string(types.PoolModePrivate), state.Mode)
+	require.Zero(t, state.ReservedNodes)
+	require.Zero(t, state.CommittedSpendMicros, "nothing was reserved, so nothing is committed")
+	require.Len(t, state.Reservations, 1)
+	reservation := state.Reservations[0]
+	require.Equal(t, bought[0].ID, reservation.ID)
+	require.Equal(t, model.ReservationTerminating, reservation.Status)
+	require.Equal(t, "launch_failed", reservation.TerminatingReason)
+	require.Equal(t, "provider is down", reservation.LastError)
+	requireEveryTokenRevoked(t, repo)
+
+	// It is not billed while it waits to be deleted.
+	_, _, billed := reservationBillingWindow(&reservation, time.Now().Add(time.Hour))
+	require.False(t, billed)
+
+	shadeform.FailDeletes(nil)
+	require.NoError(t, service.ReconcileManagedCompute(context.Background()))
+	require.Empty(t, shadeform.Everything(), "the reconciler deleted the machine")
+	require.Equal(t, model.ReservationDeleted, repo.pools["workspace-1"][0].Reservations[0].Status)
+}
+
+func TestAMachineAFailedLaunchCannotGiveBackIsAddedToThePoolAsItWas(t *testing.T) {
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, shadeform)
+	require.True(t, launchA10Gs(t, testAuthContext("workspace-1", "token-1"), service, 1).Ok)
+	before := *repo.pools["workspace-1"][0]
+
+	shadeform.RefuseCreatesAfter(1, fmt.Errorf("%w: none left in us-east", providers.ErrOutOfStock))
+	shadeform.FailDeletes(errors.New("provider is down"))
+	res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), service, 2)
+	require.False(t, res.Ok)
+
+	state := repo.pools["workspace-1"][0]
+	require.Len(t, state.Reservations, 2)
+	require.Equal(t, before.Reservations[0], state.Reservations[0], "the machine the pool had is as it was")
+	require.Equal(t, model.ReservationTerminating, state.Reservations[1].Status)
+	require.Equal(t, before.Config.Nodes, state.Config.Nodes, "the pool was not given what the launch asked for")
+	require.Equal(t, before.CommittedSpendMicros, state.CommittedSpendMicros)
+	require.Equal(t, before.ReservedNodes, state.ReservedNodes)
+}
+
+func TestAFailedLaunchDeletesAMachineWhoseCreateWentUnanswered(t *testing.T) {
+	// The provider makes the machine, and the answer is lost on the way.
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	shadeform.LoseAnswers(1)
+	repo := &fakeComputeRepo{}
+
+	res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), launchService(repo, shadeform), 1)
+	require.False(t, res.Ok)
+	require.Equal(t, launchErrorProviderFailure, res.ErrorCode)
+
+	require.Len(t, shadeform.Deletes(), 1, "the machine is found by its tag and deleted")
+	require.Empty(t, shadeform.Everything())
+	require.Empty(t, repo.pools["workspace-1"], "no pool is left behind")
+	requireEveryTokenRevoked(t, repo)
+}
+
+func TestAnUnansweredMachineThatCannotBeDeletedIsKeptForTheReconciler(t *testing.T) {
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	shadeform.LoseAnswers(1)
+	shadeform.FailDeletes(errors.New("provider is down"))
+	repo := &fakeComputeRepo{}
+
+	res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), launchService(repo, shadeform), 1)
+	require.False(t, res.Ok)
+
+	bought := shadeform.Everything()
+	require.Len(t, bought, 1)
+	require.Len(t, repo.pools["workspace-1"], 1)
+	reservation := repo.pools["workspace-1"][0].Reservations[0]
+	require.Equal(t, bought[0].ID, reservation.ID, "the record names the machine the provider made")
+	require.Equal(t, bought[0].ID, reservation.InstanceID)
+	require.Equal(t, bought[0].Tags["beam-machine"], reservation.MachineID)
+	require.Equal(t, model.ReservationTerminating, reservation.Status)
+}
+
+func TestAFailedLaunchDoesNotLookForAMachineTheProviderRefusedToSell(t *testing.T) {
+	for name, refusal := range map[string]error{
+		"out of stock": fmt.Errorf("%w: none left in us-east", providers.ErrOutOfStock),
+		"over quota":   fmt.Errorf("%w: account limit reached", providers.ErrQuota),
+	} {
+		t.Run(name, func(t *testing.T) {
+			shadeform := &overTheWire{Fake: fakeProvider("shadeform", a10gOffer)}
+			shadeform.RefuseCreates(refusal)
+			repo := &fakeComputeRepo{}
+
+			res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), launchService(repo, shadeform), 1)
+			require.False(t, res.Ok)
+			require.Zero(t, shadeform.lists, "a clear refusal bought nothing")
+			require.Empty(t, repo.pools["workspace-1"])
+		})
+	}
+}
+
+func TestAFailedLaunchLooksOnceForAMachineWhoseCreateFailedUnclearly(t *testing.T) {
+	// The provider answers, and turns the purchase down for a reason this
+	// service does not know.
+	shadeform := &overTheWire{Fake: fakeProvider("shadeform", a10gOffer)}
+	shadeform.RefuseCreates(&providers.StatusError{Method: "POST", Path: "/instances/create", Status: 400, Body: "no such region"})
+	repo := &fakeComputeRepo{}
+
+	res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), launchService(repo, shadeform), 1)
+	require.False(t, res.Ok)
+	require.Equal(t, 1, shadeform.lists)
+	require.Empty(t, shadeform.Deletes(), "the provider made nothing")
+	require.Empty(t, repo.pools["workspace-1"])
+}
+
+// unansweredPurchase is a launch that failed because its provider gave the
+// purchase no answer, and listed no machine for it when the launch was undone.
+type unansweredPurchase struct {
+	service  *Service
+	provider *overTheWire
+	repo     *fakeComputeRepo
+}
+
+func launchUnanswered(t *testing.T) *unansweredPurchase {
+	t.Helper()
+	var ended time.Time
+	provider := &overTheWire{Fake: fakeProvider("shadeform", a10gOffer)}
+	provider.RefuseCreates(&providers.StatusError{Method: "POST", Path: "/instances/create", Status: 504, Body: "upstream timed out"})
+	provider.afterCreate = func() {
+		// The purchase took a while to end.
+		time.Sleep(time.Millisecond)
+		ended = time.Now()
+	}
+	p := &unansweredPurchase{provider: provider, repo: &fakeComputeRepo{}}
+	p.service = launchService(p.repo, provider)
+
+	res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), p.service, 1)
+	require.False(t, res.Ok)
+	require.Equal(t, launchErrorProviderFailure, res.ErrorCode)
+	require.Contains(t, res.ErrMsg, "does not list it yet")
+
+	// The pool's record is the only trace of the purchase.
+	require.Len(t, p.repo.pools["workspace-1"], 1)
+	state := p.repo.pools["workspace-1"][0]
+	require.Len(t, state.Reservations, 1)
+	require.Zero(t, state.ReservedNodes)
+	require.Zero(t, state.CommittedSpendMicros)
+	reservation := p.reservation()
+	require.Empty(t, computeReservationInstanceID(reservation))
+	require.NotEmpty(t, reservation.MachineID)
+	require.Equal(t, model.ReservationTerminating, reservation.Status)
+	require.Equal(t, reconcileReasonLaunchFailed, reservation.TerminatingReason)
+	require.Contains(t, reservation.LastError, "does not list it yet")
+	require.False(t, reservation.CreatedAt.Before(ended), "the provider's time to list the machine begins when the purchase ends")
+	requireEveryTokenRevoked(t, p.repo)
+	return p
+}
+
+func (p *unansweredPurchase) reservation() model.Reservation {
+	return p.repo.pools["workspace-1"][0].Reservations[0]
+}
+
+// reconcile runs one pass at the given time after the purchase.
+func (p *unansweredPurchase) reconcile(t *testing.T, after time.Duration) model.Reservation {
+	t.Helper()
+	require.NoError(t, p.service.reconcileManagedComputeAt(context.Background(), p.reservation().CreatedAt.Add(after)))
+	return p.reservation()
+}
+
+func (p *unansweredPurchase) deletePool(t *testing.T) *pb.DeletePoolResponse {
+	t.Helper()
+	res, err := p.service.DeletePool(testAuthContext("workspace-1", "token-1"), &pb.DeletePoolRequest{Name: "pool-1"})
+	require.NoError(t, err)
+	return res
+}
+
+func TestAPurchaseThatWentUnansweredIsDeletedOnceItsProviderListsIt(t *testing.T) {
+	p := launchUnanswered(t)
+
+	// The provider had made the machine all the same, and comes to list it.
+	made := p.provider.Plant(testOwner, providers.StatusPending, map[string]string{machineTag: p.reservation().MachineID})
+	// Another machine of this control plane is not taken for it.
+	other := p.provider.Plant(testOwner, providers.StatusActive, map[string]string{"beam-pool-machine": "spot-1"})
+
+	reservation := p.reconcile(t, time.Minute)
+	require.Equal(t, model.ReservationDeleted, reservation.Status)
+	require.Equal(t, made, reservation.InstanceID, "the record names the machine that was deleted")
+	require.Empty(t, reservation.LastError)
+	require.Equal(t, []string{made}, p.provider.Deletes())
+	require.Len(t, p.provider.Everything(), 1)
+	require.Equal(t, other, p.provider.Everything()[0].ID)
+	require.True(t, p.deletePool(t).Ok)
+}
+
+func TestAPurchaseThatWentUnansweredIsGivenUpOnceItsProviderHasHadTimeToListIt(t *testing.T) {
+	p := launchUnanswered(t)
+
+	// The provider may still be making the machine.
+	require.Equal(t, model.ReservationTerminating, p.reconcile(t, time.Minute).Status)
+	require.Empty(t, p.provider.Deletes())
+
+	// Nor can the pool be deleted from under the purchase.
+	res := p.deletePool(t)
+	require.False(t, res.Ok)
+	require.Contains(t, res.ErrMsg, "does not list it yet")
+	require.Equal(t, model.ReservationTerminating, p.reservation().Status)
+
+	// It made none: there is nothing to delete.
+	reservation := p.reconcile(t, providers.LaunchGrace)
+	require.Equal(t, model.ReservationDeleted, reservation.Status)
+	require.Empty(t, reservation.LastError)
+	require.Empty(t, p.provider.Deletes())
+	require.True(t, p.deletePool(t).Ok)
+	require.Empty(t, p.repo.pools["workspace-1"])
+}
+
+func TestAPurchaseThatWentUnansweredDoesNotStandInTheWayOfTheNextLaunch(t *testing.T) {
+	p := launchUnanswered(t)
+	unanswered := p.reservation()
+
+	// The provider sells again.
+	p.provider.RefuseCreates(nil)
+	res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), p.service, 1)
+	require.True(t, res.Ok, res.ErrMsg)
+	state := p.repo.pools["workspace-1"][0]
+	require.Len(t, state.Reservations, 2)
+	require.EqualValues(t, 1, state.ReservedNodes)
+
+	// The machine that was bought is not taken for the one that was not.
+	require.NoError(t, p.service.reconcileManagedComputeAt(context.Background(), unanswered.CreatedAt.Add(providers.LaunchGrace)))
+	require.Empty(t, p.provider.Deletes())
+	require.Len(t, p.provider.Everything(), 1)
+	for _, reservation := range p.repo.pools["workspace-1"][0].Reservations {
+		if reservation.MachineID == unanswered.MachineID {
+			require.Equal(t, model.ReservationDeleted, reservation.Status)
+			require.Empty(t, computeReservationInstanceID(reservation))
+			continue
+		}
+		require.True(t, reservation.Open(), "the machine of the second launch is kept: %s", reservation.Status)
+		require.Equal(t, p.provider.Everything()[0].ID, computeReservationInstanceID(reservation))
+	}
+}
+
+func TestAReservationThatNamesNoMachineDeletesNothing(t *testing.T) {
+	// A machine bought for a pool of the platform carries no tenant's tag.
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	shadeform.Plant(testOwner, providers.StatusActive, map[string]string{"beam-pool-machine": "spot-1"})
+	service := launchService(&fakeComputeRepo{}, shadeform)
+
+	reservation := model.Reservation{Provider: "shadeform", Source: model.SourceCLIReservation}
+	require.NoError(t, service.deleteInstance(context.Background(), &reservation, time.Now()))
+	require.Empty(t, shadeform.Deletes())
+	require.Empty(t, computeReservationInstanceID(reservation))
+}
+
+func TestAFailedLaunchKeepsAPurchaseItCouldNotLookFor(t *testing.T) {
+	// The provider turns the purchase down, and then cannot be asked what
+	// it has.
+	shadeform := &overTheWire{Fake: fakeProvider("shadeform", a10gOffer), listErr: errors.New("shadeform is down")}
+	shadeform.RefuseCreates(&providers.StatusError{Method: "POST", Path: "/instances/create", Status: 400, Body: "no such region"})
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, shadeform)
+
+	res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), service, 1)
+	require.False(t, res.Ok)
+	require.Contains(t, res.ErrMsg, "shadeform is down")
+	require.Len(t, repo.pools["workspace-1"], 1)
+	reservation := repo.pools["workspace-1"][0].Reservations[0]
+	require.Equal(t, model.ReservationTerminating, reservation.Status)
+	require.Contains(t, reservation.LastError, "shadeform is down")
+
+	// Nothing is concluded while the provider stays down.
+	require.NoError(t, service.reconcileManagedComputeAt(context.Background(), reservation.CreatedAt.Add(providers.LaunchGrace)))
+	require.Equal(t, model.ReservationTerminating, repo.pools["workspace-1"][0].Reservations[0].Status)
+
+	// It answers again, and lists no machine for the purchase.
+	shadeform.listErr = nil
+	require.NoError(t, service.reconcileManagedComputeAt(context.Background(), reservation.CreatedAt.Add(2*providers.LaunchGrace)))
+	reservation = repo.pools["workspace-1"][0].Reservations[0]
+	require.Equal(t, model.ReservationDeleted, reservation.Status)
+	require.Empty(t, reservation.LastError)
+	require.Empty(t, shadeform.Deletes())
+}
+
+func TestStatusCheckReportsAChangeOnlyWhenSomethingChanged(t *testing.T) {
+	m := newBoughtMachine(t)
+	const statusUpdated = types.EventComputeActionReservationStatusUpdated
+
+	// Nothing has changed at the provider. The time of the check is saved, so
+	// that the provider is not asked again by the next pass, and nothing is
+	// reported.
+	reservation := m.check(t, 0)
+	require.Equal(t, model.ReservationPending, reservation.Status)
+	require.Equal(t, m.now, reservation.LastStatusCheckAt)
+	require.True(t, m.repo.savedPool)
+	require.Empty(t, reported(m.events, statusUpdated))
+
+	for range 3 {
+		m.check(t, 2*reconcileStatusCheckInterval)
+	}
+	require.Empty(t, reported(m.events, statusUpdated), "a machine that is still booting is not news")
+
+	// The machine comes up.
+	m.provider.SetStatus(m.instance, providers.StatusActive, "")
+	reservation = m.check(t, 2*reconcileStatusCheckInterval)
+	require.Equal(t, model.ReservationActive, reservation.Status)
+	require.Equal(t, []string{string(model.ReservationActive)}, reported(m.events, statusUpdated))
+
+	m.check(t, 2*reconcileStatusCheckInterval)
+	require.Empty(t, reported(m.events, statusUpdated), "a machine that is still running is not news")
+
+	// The provider's wording, and the machine's address, are changes too.
+	m.provider.SetStatus(m.instance, providers.StatusActive, "Running startup script")
+	reservation = m.check(t, 2*reconcileStatusCheckInterval)
+	require.Equal(t, "Running startup script", reservation.LastStatusMessage)
+	require.Len(t, reported(m.events, statusUpdated), 1)
+
+	m.provider.SetAddress(m.instance, "203.0.113.7")
+	reservation = m.check(t, 2*reconcileStatusCheckInterval)
+	require.Equal(t, "203.0.113.7", reservation.PublicIP)
+	require.Len(t, reported(m.events, statusUpdated), 1)
+
+	m.check(t, 2*reconcileStatusCheckInterval)
+	require.Empty(t, reported(m.events, statusUpdated))
+}
+
+func TestStatusCheckAsksTheProviderAtMostOncePerInterval(t *testing.T) {
+	m := newBoughtMachine(t)
+	m.check(t, 0)
+
+	m.provider.SetStatus(m.instance, providers.StatusActive, "")
+	reservation := m.check(t, reconcileStatusCheckInterval/2)
+	require.Equal(t, model.ReservationPending, reservation.Status, "checked too recently to ask again")
+
+	reservation = m.check(t, reconcileStatusCheckInterval)
+	require.Equal(t, model.ReservationActive, reservation.Status)
+}
+
+func TestStatusCheckLeavesAMachineAloneWhenItsStatusIsUnknown(t *testing.T) {
+	for _, was := range []model.ReservationStatus{model.ReservationPending, model.ReservationActive} {
+		t.Run(string(was), func(t *testing.T) {
+			m := newBoughtMachine(t)
+			m.state.Reservations[0].Status = was
+			m.provider.SetStatus(m.instance, providers.StatusUnknown, "resizing")
+
+			reservation := m.check(t, 0)
+			require.Equal(t, was, reservation.Status, "a status nobody understands says nothing about the machine")
+			require.Empty(t, m.provider.Deletes())
+			require.False(t, m.tokenRevoked())
+		})
+	}
+}
+
+func TestStatusCheckClosesAReservationWhoseMachineIsGone(t *testing.T) {
+	for name, lose := range map[string]func(*boughtMachine){
+		"the provider no longer knows it":  func(m *boughtMachine) { m.provider.Forget(m.instance) },
+		"the provider says it was deleted": func(m *boughtMachine) { m.provider.SetStatus(m.instance, providers.StatusDeleted, "") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := newBoughtMachine(t)
+			m.state.Reservations[0].Status = model.ReservationActive
+			lose(m)
+
+			reservation := m.check(t, 0)
+			require.Equal(t, model.ReservationDeleted, reservation.Status)
+			require.Equal(t, instanceGoneMessage, reservation.LastStatusMessage)
+			require.Empty(t, reservation.LastError)
+			require.True(t, m.tokenRevoked(), "nothing can join the pool as a machine that is gone")
+			require.Equal(t, []string{string(model.ReservationDeleted)}, reported(m.events, types.EventComputeActionReservationStatusUpdated))
+			require.Empty(t, m.provider.Deletes(), "there is nothing left to delete")
+
+			// It is closed: the provider is not asked about it again.
+			m.check(t, 2*reconcileStatusCheckInterval)
+			require.Empty(t, reported(m.events, types.EventComputeActionReservationStatusUpdated))
+		})
+	}
+}
+
+func TestStatusCheckWaitsForAProviderToKnowOfAMachineItHasJustSold(t *testing.T) {
+	m := newBoughtMachine(t)
+	m.state.Reservations[0].CreatedAt = m.now
+	m.provider.Forget(m.instance)
+
+	reservation := m.check(t, 0)
+	require.Equal(t, model.ReservationPending, reservation.Status, "the machine may yet be there")
+	require.Contains(t, reservation.LastError, "instance not found")
+	require.False(t, m.tokenRevoked())
+
+	reservation = m.check(t, providers.LaunchGrace-time.Second)
+	require.Equal(t, model.ReservationPending, reservation.Status)
+
+	reservation = m.check(t, reconcileStatusCheckInterval)
+	require.Equal(t, model.ReservationDeleted, reservation.Status, "a provider that still has no such machine never made it")
+	require.Empty(t, reservation.LastError)
+	require.True(t, m.tokenRevoked())
+}
+
+func TestStatusCheckKeepsAReservationWhenTheProviderCannotBeAsked(t *testing.T) {
+	m := newBoughtMachine(t)
+	m.state.Reservations[0].Status = model.ReservationActive
+	m.service.providers = providers.RegistryOf()
+
+	reservation := m.check(t, 0)
+	require.Equal(t, model.ReservationActive, reservation.Status)
+	require.Equal(t, `provider "shadeform" is not configured`, reservation.LastError)
+	require.False(t, m.tokenRevoked())
+}
+
+func TestStatusCheckDeletesAMachineTheProviderFailedToStart(t *testing.T) {
+	m := newBoughtMachine(t)
+	m.provider.SetStatus(m.instance, providers.StatusFailed, "no capacity in the zone")
+
+	reservation := m.check(t, 0)
+	require.Equal(t, model.ReservationFailed, reservation.Status)
+	require.Equal(t, reconcileReasonProviderFailed, reservation.TerminatingReason)
+	require.Equal(t, "no capacity in the zone", reservation.LastStatusMessage)
+	require.Empty(t, reservation.LastError)
+	require.Equal(t, []string{m.instance}, m.provider.Deletes(), "a failed machine is not left at the provider")
+	require.True(t, m.tokenRevoked())
+
+	require.Empty(t, m.provider.Everything())
+}
+
+func TestStatusCheckDeletesWhatIsLeftOfAMachineTheProviderTookBack(t *testing.T) {
+	m := newBoughtMachine(t)
+	m.state.Reservations[0].Status = model.ReservationActive
+	m.provider.SetStatus(m.instance, providers.StatusInterrupted, "")
+
+	reservation := m.check(t, 0)
+	require.Equal(t, model.ReservationFailed, reservation.Status)
+	require.Equal(t, instanceInterruptedMessage, reservation.LastStatusMessage)
+	require.Equal(t, []string{m.instance}, m.provider.Deletes(), "a stopped machine or its disk is not left at the provider")
+	require.True(t, m.tokenRevoked())
+}
+
+func TestStatusCheckKeepsDeletingAFailedMachineUntilTheProviderLetsItGo(t *testing.T) {
+	m := newBoughtMachine(t)
+	m.provider.SetStatus(m.instance, providers.StatusFailed, "")
+	m.provider.FailDeletes(errors.New("provider is down"))
+
+	reservation := m.check(t, 0)
+	require.Equal(t, model.ReservationTerminating, reservation.Status)
+	require.Equal(t, reconcileReasonProviderFailed, reservation.TerminatingReason)
+	require.Equal(t, instanceFailedMessage, reservation.LastStatusMessage)
+	require.Equal(t, "provider is down", reservation.LastError)
+
+	reservation = m.check(t, 2*reconcileStatusCheckInterval)
+	require.Equal(t, model.ReservationTerminating, reservation.Status)
+	require.Len(t, m.provider.Deletes(), 2, "the delete is tried again")
+
+	m.provider.FailDeletes(nil)
+	reservation = m.check(t, 2*reconcileStatusCheckInterval)
+	require.Equal(t, model.ReservationFailed, reservation.Status, "it ends as the failure it was, not as a release")
+	require.Equal(t, instanceFailedMessage, reservation.LastStatusMessage)
+	require.Empty(t, reservation.LastError)
+	require.Len(t, m.provider.Deletes(), 3)
+
+	require.Empty(t, m.provider.Everything())
+}
+
+func TestFailedMachineThatHasAlsoExpiredStillEndsAsAFailure(t *testing.T) {
+	m := newBoughtMachine(t)
+	m.provider.SetStatus(m.instance, providers.StatusFailed, "")
+	m.provider.FailDeletes(errors.New("provider is down"))
+
+	// The machine failed and is past the time it was wanted for. One pass
+	// asks the provider to delete it once, as the failure it is.
+	reservation := m.check(t, 7*time.Hour)
+	require.Equal(t, model.ReservationTerminating, reservation.Status)
+	require.Equal(t, reconcileReasonProviderFailed, reservation.TerminatingReason)
+	require.Len(t, m.provider.Deletes(), 1)
+
+	m.provider.FailDeletes(nil)
+	reservation = m.check(t, 2*reconcileStatusCheckInterval)
+	require.Equal(t, model.ReservationFailed, reservation.Status)
+}
+
+func TestExpiredReservationIsDeletedAtTheProvider(t *testing.T) {
+	m := newBoughtMachine(t)
+	m.provider.SetStatus(m.instance, providers.StatusActive, "")
+
+	reservation := m.check(t, 7*time.Hour)
+	require.Equal(t, model.ReservationDeleted, reservation.Status)
+	require.Equal(t, reconcileReasonReservationExpired, reservation.TerminatingReason)
+	require.Equal(t, []string{m.instance}, m.provider.Deletes())
+	require.True(t, m.tokenRevoked())
+}
+
+func TestDeletePoolDeletesItsMachinesAtTheProvider(t *testing.T) {
+	m := newBoughtMachine(t)
+
+	res, err := m.service.DeletePool(testAuthContext("workspace-1", "owner-token"), &pb.DeletePoolRequest{Name: "pool-1"})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Equal(t, []string{m.instance}, m.provider.Deletes())
+	require.Empty(t, m.repo.pools["workspace-1"])
+	require.True(t, m.tokenRevoked())
+}
+
+func TestDeletePoolKeepsThePoolWhileAMachineCannotBeDeleted(t *testing.T) {
+	m := newBoughtMachine(t)
+	m.provider.FailDeletes(errors.New("provider is down"))
+
+	// The pool's record is the only record of the machine. Dropping it would
+	// leave the machine running, and charged for, with nothing to find it by.
+	res, err := m.service.DeletePool(testAuthContext("workspace-1", "owner-token"), &pb.DeletePoolRequest{Name: "pool-1"})
+	require.NoError(t, err)
+	require.False(t, res.Ok)
+	require.Contains(t, res.ErrMsg, `pool "pool-1" was not deleted`)
+	require.Contains(t, res.ErrMsg, "provider is down")
+	require.Len(t, m.repo.pools["workspace-1"], 1)
+	require.True(t, m.repo.savedPool)
+	reservation := m.repo.pools["workspace-1"][0].Reservations[0]
+	require.Equal(t, model.ReservationTerminating, reservation.Status)
+	require.Equal(t, reconcileReasonMachineReleased, reservation.TerminatingReason)
+	require.True(t, m.tokenRevoked())
+
+	// The reconciler goes on trying, and then the pool can be deleted.
+	m.provider.FailDeletes(nil)
+	reservation = m.check(t, 2*reconcileStatusCheckInterval)
+	require.Equal(t, model.ReservationDeleted, reservation.Status)
+
+	res, err = m.service.DeletePool(testAuthContext("workspace-1", "owner-token"), &pb.DeletePoolRequest{Name: "pool-1"})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Empty(t, m.repo.pools["workspace-1"])
+	require.Empty(t, m.provider.Everything())
+}
+
+func TestDeletePoolDeletesAMachineLeftBehindByAnOlderFailure(t *testing.T) {
+	// Reservations that failed before failed machines were deleted may still
+	// have a machine at the provider.
+	m := newBoughtMachine(t)
+	m.state.Reservations[0].Status = model.ReservationFailed
+
+	res, err := m.service.DeletePool(testAuthContext("workspace-1", "owner-token"), &pb.DeletePoolRequest{Name: "pool-1"})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Equal(t, []string{m.instance}, m.provider.Deletes())
+	require.Empty(t, m.repo.pools["workspace-1"])
+}
+
+func TestARenewalStandsWhenTheProviderCannotBeToldOfIt(t *testing.T) {
+	m := newRenewedMachine(t)
+	m.provider.extendErr = errors.New("shadeform: 503 service unavailable")
+
+	// The term is renewed for the hour the workspace can pay for.
+	reservation := m.check(t, 0)
+	require.Equal(t, m.expiry.Add(time.Hour), reservation.ExpiresAt)
+	require.Contains(t, reservation.LastError, "503 service unavailable")
+
+	// The provider stays down past the time the term would have ended. The
+	// machine is running and paid for, and it is kept.
+	for after := time.Minute; after <= 3*time.Minute; after += time.Minute {
+		reservation = m.check(t, time.Minute)
+		require.Equal(t, model.ReservationActive, reservation.Status, "after %s", after)
+	}
+	require.Empty(t, m.provider.Deletes())
+	require.Len(t, m.provider.Everything(), 1)
+}
+
+func TestAProviderThatCouldNotBeToldOfARenewalIsToldOnTheNextPass(t *testing.T) {
+	m := newRenewedMachine(t)
+	m.provider.extendErr = errors.New("shadeform: 503 service unavailable")
+	reservation := m.check(t, 0)
+	require.Equal(t, m.expiry.Add(time.Hour), reservation.ExpiresAt, "the term is renewed all the same")
+	require.Equal(t, 1, m.provider.extends)
+	require.True(t, m.provider.Until(m.instance).IsZero(), "the provider has not heard of the renewal")
+
+	// It is still down a minute later, and is asked again although the term
+	// is not due for another renewal.
+	m.check(t, time.Minute)
+	require.Equal(t, 2, m.provider.extends)
+
+	m.provider.extendErr = nil
+	reservation = m.check(t, time.Minute)
+	require.Equal(t, 3, m.provider.extends)
+	require.Equal(t, reservation.ExpiresAt.Add(reservationDeletionGrace), m.provider.Until(m.instance))
+	require.Empty(t, reservation.LastError)
+
+	// Once it has been told, it is left alone until the next renewal.
+	m.check(t, time.Minute)
+	require.Equal(t, 3, m.provider.extends)
+}
+
+func TestARenewalStandsWhenTheProviderIsNotConfigured(t *testing.T) {
+	m := newRenewedMachine(t)
+	configured := m.service.providers
+	m.service.providers = providers.RegistryOf()
+
+	reservation := m.check(t, 0)
+	require.Equal(t, m.expiry.Add(time.Hour), reservation.ExpiresAt)
+	reservation = m.check(t, 3*time.Minute)
+	require.Equal(t, model.ReservationActive, reservation.Status)
+	require.Contains(t, reservation.LastError, `provider "shadeform" is not configured`)
+
+	// The provider is configured again, and hears of the renewal it missed.
+	m.service.providers = configured
+	reservation = m.check(t, 2*time.Minute)
+	require.Equal(t, reservation.ExpiresAt.Add(reservationDeletionGrace), m.provider.Until(m.instance))
+}
+
+// logged is what was logged while a test ran.
+type logged struct {
+	mu    sync.Mutex
+	lines bytes.Buffer
+}
+
+func (l *logged) Write(line []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.lines.Write(line)
+}
+
+// failures returns the entries that say an operation on a reservation failed,
+// by operation.
+func (l *logged) failures(t *testing.T) map[string]map[string]any {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	failures := map[string]map[string]any{}
+	for _, line := range bytes.Split(bytes.TrimSpace(l.lines.Bytes()), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		entry := map[string]any{}
+		require.NoError(t, json.Unmarshal(line, &entry))
+		if operation, ok := entry["operation"].(string); ok {
+			failures[operation] = entry
+		}
+	}
+	return failures
+}
+
+func captureLog(t *testing.T) *logged {
+	t.Helper()
+	captured := &logged{}
+	standIn(t, &log.Logger, zerolog.New(captured))
+	return captured
+}
+
+func TestAFailureOnAReservationIsLoggedWithWhatItIsAbout(t *testing.T) {
+	for name, tc := range map[string]struct {
+		// breaks makes something fail for the machine before the pass.
+		breaks    func(m *boughtMachine)
+		operation string
+		problem   string
+	}{
+		"usage that billing does not take": {
+			breaks: func(m *boughtMachine) {
+				m.service.billing.(*fakeManagedBilling).usageErr = errors.New("billing callback unavailable")
+			},
+			operation: "record usage",
+			problem:   "billing callback unavailable",
+		},
+		"a provider that cannot be told of a renewal": {
+			breaks:    func(m *boughtMachine) { m.provider.extendErr = errors.New("shadeform: 503 service unavailable") },
+			operation: "extend at provider",
+			problem:   "503 service unavailable",
+		},
+		"a provider that cannot be asked about the machine": {
+			breaks:    func(m *boughtMachine) { m.provider.getErr = errors.New("shadeform: connection reset") },
+			operation: "check status",
+			problem:   "connection reset",
+		},
+		"a provider that is not configured": {
+			breaks:    func(m *boughtMachine) { m.service.providers = providers.RegistryOf() },
+			operation: "check status",
+			problem:   `provider "shadeform" is not configured`,
+		},
+		"a machine that cannot be deleted when its term ends": {
+			breaks: func(m *boughtMachine) {
+				// The workspace cannot pay for another hour.
+				m.service.billing.(*fakeManagedBilling).balanceDecision.AvailableCents = 50
+				m.state.Reservations[0].ExpiresAt = m.now.Add(-time.Second)
+				m.provider.FailDeletes(errors.New("provider is down"))
+			},
+			operation: "delete machine",
+			problem:   "provider is down",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := newRenewedMachine(t)
+			tc.breaks(m)
+			captured := captureLog(t)
+
+			reservation := m.check(t, 0)
+
+			entry, ok := captured.failures(t)[tc.operation]
+			require.True(t, ok, "nothing was logged for %q: %v", tc.operation, captured.failures(t))
+			require.Equal(t, "warn", entry["level"])
+			require.Equal(t, "workspace-1", entry["workspace_id"])
+			require.Equal(t, "pool-1", entry["pool_name"])
+			require.Equal(t, m.instance, entry["reservation_id"])
+			require.Contains(t, entry["error"], tc.problem)
+			require.Contains(t, reservation.LastError, tc.problem, "and the reservation says so too")
+		})
+	}
+}
+
+func TestAFailedExtensionIsLogged(t *testing.T) {
+	p := newExtendedPool(t)
+	p.provider.extendErr = errors.New("shadeform: 503 service unavailable")
+	captured := captureLog(t)
+
+	res := p.extend(t, &pb.ExtendPoolCapacityRequest{Name: "pool-1", Ttl: "48h"})
+	require.True(t, res.Ok, res.ErrMsg)
+
+	entry, ok := captured.failures(t)["extend"]
+	require.True(t, ok, "nothing was logged: %v", captured.failures(t))
+	require.Equal(t, "workspace-1", entry["workspace_id"])
+	require.Equal(t, "pool-1", entry["pool_name"])
+	require.Equal(t, p.instance, entry["reservation_id"])
+	require.Contains(t, entry["error"], "503 service unavailable")
+	reservation := p.repo.pools["workspace-1"][0].Reservations[0]
+	require.Contains(t, reservation.LastError, "503 service unavailable")
+	require.Equal(t, p.expiry, reservation.ExpiresAt, "the machine keeps the term its provider knows")
+}
+
+func TestAStatusCheckDoesNotClearWhatBillingRecordedInTheSamePass(t *testing.T) {
+	m := newRenewedMachine(t)
+	m.service.billing.(*fakeManagedBilling).usageErr = errors.New("billing callback unavailable")
+
+	// Usage cannot be recorded, pass after pass, while the provider answers
+	// every status check. The record goes on saying what is wrong.
+	for pass, wait := range []time.Duration{0, time.Minute, time.Minute} {
+		reservation := m.check(t, wait)
+		require.Contains(t, reservation.LastError, "billing callback unavailable", "pass %d", pass+1)
+	}
+}
+
+// A provider that deletes machines by itself is a safety net for a machine
+// Beam has lost track of. It is told a time a week past the machine's term
+// wherever it is told one, so that it never ends a machine Beam still runs.
+func TestAProviderIsToldAMachineIsWantedUntilAWeekPastItsTerm(t *testing.T) {
+	require.Equal(t, 7*24*time.Hour, reservationDeletionGrace)
+
+	t.Run("when the machine is bought", func(t *testing.T) {
+		shadeform := fakeProvider("shadeform", a10gOffer)
+		repo := &fakeComputeRepo{}
+
+		res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), launchService(repo, shadeform), 1)
+		require.True(t, res.Ok, res.ErrMsg)
+		reservation := repo.pools["workspace-1"][0].Reservations[0]
+		require.Equal(t, reservation.ExpiresAt.Add(reservationDeletionGrace), shadeform.Creates()[0].Until)
+		require.Equal(t, reservation.ExpiresAt.Add(reservationDeletionGrace), shadeform.Until(reservation.ID))
+	})
+
+	t.Run("when its term is renewed", func(t *testing.T) {
+		m := newRenewedMachine(t)
+
+		reservation := m.check(t, 0)
+		require.Equal(t, m.expiry.Add(time.Hour), reservation.ExpiresAt)
+		require.Equal(t, reservation.ExpiresAt.Add(reservationDeletionGrace), m.provider.Until(m.instance))
+	})
+
+	t.Run("when its pool is extended", func(t *testing.T) {
+		p := newExtendedPool(t)
+
+		res := p.extend(t, &pb.ExtendPoolCapacityRequest{Name: "pool-1", Ttl: "48h"})
+		require.True(t, res.Ok, res.ErrMsg)
+		reservation := p.repo.pools["workspace-1"][0].Reservations[0]
+		require.True(t, reservation.ExpiresAt.After(p.expiry))
+		require.Equal(t, reservation.ExpiresAt.Add(reservationDeletionGrace), p.provider.Until(p.instance))
+	})
+}
+
+func TestCreatePoolOverAPoolKeepsWhatItDoesNotSet(t *testing.T) {
+	now := time.Now().UTC()
+	existing := byocPool(now)
+	existing.CreditLowSince = now.Add(-time.Hour)
+	existing.BillingDegradedSince = now.Add(-2 * time.Hour)
+	repo := &fakeComputeRepo{pools: map[string][]*model.PoolState{"workspace-1": {existing}}}
+	service := &Service{computeRepo: repo}
+
+	res, err := service.CreatePool(testAuthContext("workspace-1", "owner-token"), &pb.CreatePoolRequest{Pool: &pb.PoolConfig{Name: "aws-cpu"}})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+
+	stored := repo.pools["workspace-1"][0]
+	require.NotNil(t, stored.BYOC, "the pool's cloud resources, and the tokens its stack joins with")
+	require.Equal(t, byocTokenHash, stored.BYOC.Labels[byocBootstrapJoinTokenHashLabel])
+	require.Equal(t, now.Add(-time.Hour), stored.CreditLowSince, "a grace period is not started again")
+	require.Equal(t, now.Add(-2*time.Hour), stored.BillingDegradedSince)
+	require.Equal(t, model.SourceAWS, stored.Source)
+	require.Equal(t, now.Add(-24*time.Hour), stored.CreatedAt)
+	require.True(t, service.poolNeedsManagedBilling(stored, now), "its machines are still billed")
+}
+
+func TestLaunchIntoABYOCPoolIsRefused(t *testing.T) {
+	now := time.Now().UTC()
+	existing := byocPool(now)
+	existing.Config.Gpu = []string{"A10G"}
+	repo := &fakeComputeRepo{pools: map[string][]*model.PoolState{"workspace-1": {existing}}}
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	service := launchService(repo, shadeform)
+
+	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "owner-token"), &pb.LaunchPoolCapacityRequest{
+		Pool: &pb.PoolConfig{Name: "aws-cpu", Gpu: []string{"A10G"}, Nodes: 1, Ttl: "1h", MaxSpend: 2},
+	})
+	require.NoError(t, err)
+	require.False(t, res.Ok)
+	require.Contains(t, res.ErrMsg, `pool "aws-cpu" runs on machines from your own cloud account`)
+	require.Empty(t, shadeform.Creates(), "nothing is bought")
+
+	stored := repo.pools["workspace-1"][0]
+	require.NotNil(t, stored.BYOC)
+	require.Equal(t, model.SourceAWS, stored.Source)
+	require.Empty(t, stored.Reservations)
+}
+
+func TestCreateBYOCPoolThatCannotBeRegisteredLeavesNoPoolAndNoToken(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	repo := &fakeComputeRepo{}
+	service := byocService(repo)
+	takeSelector(t, service, "aws-cpu")
+
+	res, err := service.CreateBYOCPool(ctx, anAWSCPUPool())
+	require.NoError(t, err)
+	require.False(t, res.Ok)
+	require.Contains(t, res.ErrMsg, "already owned by another pool")
+
+	state, err := repo.GetPoolState(context.Background(), "workspace-1", "aws-cpu")
+	require.NoError(t, err)
+	require.Nil(t, state)
+	for _, token := range repo.joinTokens {
+		require.True(t, token.Revoked, "a token nobody was given admits nobody")
+	}
+}
+
+func TestExtendPoolCapacityMovesThePoolAndItsMachinesToTheNewExpiry(t *testing.T) {
+	p := newExtendedPool(t)
+	started := time.Now()
+
+	res := p.extend(t, &pb.ExtendPoolCapacityRequest{Name: "pool-1", Ttl: "48h", MaxSpend: 60})
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Equal(t, "pool-1", res.Pool.Name)
+
+	stored := p.repo.pools["workspace-1"][0]
+	require.WithinDuration(t, started.Add(48*time.Hour), stored.ExpiresAt, time.Minute)
+	require.Equal(t, "48h", stored.Config.Ttl)
+	require.Equal(t, float64(60), stored.Config.MaxSpend)
+	reservation := stored.Reservations[0]
+	require.Equal(t, stored.ExpiresAt, reservation.ExpiresAt)
+	require.Equal(t, stored.ExpiresAt.Add(reservationDeletionGrace), p.provider.Until(p.instance), "the provider is told too")
+	require.Equal(t, int64(7_000_000+43_000_000), reservation.CommittedMicros, "42 hours and a moment more, in whole hours")
+}
+
+func TestExtendPoolCapacityRefusesATTLThatIsNotPositive(t *testing.T) {
+	for _, ttl := range []string{"-5h", "0s", "0"} {
+		t.Run(ttl, func(t *testing.T) {
+			p := newExtendedPool(t)
+
+			res := p.extend(t, &pb.ExtendPoolCapacityRequest{Name: "pool-1", Ttl: ttl})
+			require.False(t, res.Ok)
+			require.Equal(t, "ttl must be positive", res.ErrMsg)
+
+			stored := p.repo.pools["workspace-1"][0]
+			require.Equal(t, p.expiry, stored.ExpiresAt, "the pool does not end in the past")
+			require.Equal(t, p.expiry, stored.Reservations[0].ExpiresAt)
+			require.Equal(t, "6h", stored.Config.Ttl)
+			require.False(t, p.repo.savedPool)
+		})
+	}
+}
+
+func TestExtendPoolCapacityRefusesWhatItCannotExtend(t *testing.T) {
+	p := newExtendedPool(t)
+
+	res := p.extend(t, &pb.ExtendPoolCapacityRequest{Name: "another-pool", Ttl: "48h"})
+	require.False(t, res.Ok)
+	require.Equal(t, "pool not found", res.ErrMsg)
+
+	res = p.extend(t, &pb.ExtendPoolCapacityRequest{Name: "pool-1", Ttl: "two days"})
+	require.False(t, res.Ok)
+	require.Contains(t, res.ErrMsg, "two days")
+	require.Equal(t, "6h", p.repo.pools["workspace-1"][0].Config.Ttl)
+	require.False(t, p.repo.savedPool)
+}
+
+// twoPoolsOfMachines is a workspace with two pools of its own, one machine in
+// the first and two in the second, and a pool it gives a machine to.
+func twoPoolsOfMachines() *fakeComputeRepo {
+	machine := func(pool, id string) *model.AgentTokenState {
+		return &model.AgentTokenState{WorkspaceID: "workspace-1", PoolName: pool, MachineID: id}
+	}
+	return &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{"workspace-1": {
+			{Name: "first", Mode: string(types.PoolModePrivate)},
+			{Name: "given", Mode: string(types.PoolModeProvider)},
+			{Name: "second", Mode: string(types.PoolModePrivate)},
+		}},
+		machines: map[string][]*model.AgentTokenState{
+			fakeComputeKey("workspace-1", "first"):  {machine("first", "first-1")},
+			fakeComputeKey("workspace-1", "given"):  {machine("given", "given-1")},
+			fakeComputeKey("workspace-1", "second"): {machine("second", "second-1"), machine("second", "second-2")},
+		},
+	}
+}
+
+func listPoolMachines(t *testing.T, ctx context.Context, service *Service, in *pb.ListPoolMachinesRequest) *pb.ListPoolMachinesResponse {
+	t.Helper()
+	res, err := service.ListPoolMachines(ctx, in)
+	require.NoError(t, err)
+	return res
+}
+
+func machineIDs(machines []*pb.Machine) []string {
+	ids := []string{}
+	for _, machine := range machines {
+		ids = append(ids, machine.Id)
+	}
+	return ids
+}
+
+func TestListPoolMachinesListsTheMachinesOfTheWorkspacesOwnPools(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	service := &Service{computeRepo: twoPoolsOfMachines()}
+
+	res := listPoolMachines(t, ctx, service, &pb.ListPoolMachinesRequest{})
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Equal(t, []string{"first-1", "second-1", "second-2"}, machineIDs(res.Machines), "not those it gives to a provider pool")
+
+	res = listPoolMachines(t, ctx, service, &pb.ListPoolMachinesRequest{Limit: 2})
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Equal(t, []string{"first-1", "second-1"}, machineIDs(res.Machines), "the limit counts across pools")
+
+	res = listPoolMachines(t, ctx, service, &pb.ListPoolMachinesRequest{PoolName: "second"})
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Equal(t, []string{"second-1", "second-2"}, machineIDs(res.Machines))
+
+	for _, name := range []string{"given", "no-such-pool"} {
+		res = listPoolMachines(t, ctx, service, &pb.ListPoolMachinesRequest{PoolName: name})
+		require.False(t, res.Ok)
+		require.Equal(t, "pool not found", res.ErrMsg)
+	}
+}
+
+func TestListPoolMachinesShowsSSHAccessOnlyToATokenThatMayUseIt(t *testing.T) {
+	repo := twoPoolsOfMachines()
+	repo.sshStates = map[string]*model.MachineSSHState{
+		fakeComputeSSHKey("workspace-1", "first", "first-1"): {
+			WorkspaceID: "workspace-1", PoolName: "first", MachineID: "first-1",
+			Username: "beam", PublicIP: "203.0.113.7", Status: model.MachineSSHStatusReady,
+		},
+	}
+	sshEnabled := types.AppConfig{ManagedCompute: types.ManagedComputeConfig{SSH: types.ManagedComputeSSHConfig{Enabled: true}}}
+	owner := testAuthContext("workspace-1", "owner-token")
+	workload := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Workspace: &types.Workspace{ExternalId: "workspace-1"},
+		Token:     &types.Token{ExternalId: "workload-token", TokenType: types.TokenTypeWorkspaceRestricted},
+	})
+
+	res := listPoolMachines(t, owner, &Service{computeRepo: repo, appConfig: sshEnabled}, &pb.ListPoolMachinesRequest{})
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Len(t, res.Machines, 3)
+	require.NotNil(t, res.Machines[0].Ssh)
+	require.True(t, res.Machines[0].Ssh.Supported)
+	require.Equal(t, "203.0.113.7", res.Machines[0].Ssh.Host)
+	require.Nil(t, res.Machines[1].Ssh, "a machine without an SSH record shows none")
+	require.Nil(t, res.Machines[2].Ssh)
+
+	for name, listed := range map[string]*pb.ListPoolMachinesResponse{
+		"a token workloads run with": listPoolMachines(t, workload, &Service{computeRepo: repo, appConfig: sshEnabled}, &pb.ListPoolMachinesRequest{}),
+		"SSH is not enabled":         listPoolMachines(t, owner, &Service{computeRepo: repo}, &pb.ListPoolMachinesRequest{}),
+	} {
+		require.True(t, listed.Ok, listed.ErrMsg)
+		require.Len(t, listed.Machines, 3, name)
+		for _, machine := range listed.Machines {
+			require.Nil(t, machine.Ssh, name)
+		}
+	}
+}
+
+func TestListPoolMachinesLeavesOutAPoolWhoseStackIsGone(t *testing.T) {
+	ctx := testAuthContext("workspace-1", "owner-token")
+	for name, in := range map[string]*pb.ListPoolMachinesRequest{
+		"every pool":    {},
+		"the pool only": {PoolName: "aws-cpu"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := silentBYOCPool(time.Second)
+			stackCheckAnswers(t, true, nil)
+
+			res := listPoolMachines(t, ctx, byocService(repo), in)
+			require.True(t, res.Ok, res.ErrMsg)
+			require.Empty(t, res.Machines)
+			require.Empty(t, repo.pools["workspace-1"], "what Beam held for the pool is cleaned up")
+			require.Empty(t, repo.machines[fakeComputeKey("workspace-1", "aws-cpu")])
+			require.True(t, repo.joinTokens[byocTokenHash].Revoked)
+		})
+	}
+}
+
+func TestListPoolMachinesListsTheMachinesOfABYOCPoolWhoseStackExists(t *testing.T) {
+	repo := silentBYOCPool(time.Second)
+	stackCheckAnswers(t, false, nil)
+
+	res := listPoolMachines(t, testAuthContext("workspace-1", "owner-token"), byocService(repo), &pb.ListPoolMachinesRequest{})
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Equal(t, []string{"machine-1"}, machineIDs(res.Machines))
+	require.Len(t, repo.pools["workspace-1"], 1)
+}
+
+func TestGetBYOCPoolDoesNotFindAPoolWhoseStackIsGone(t *testing.T) {
+	repo := silentBYOCPool(time.Second)
+	stackCheckAnswers(t, true, nil)
+
+	res, err := byocService(repo).GetBYOCPool(testAuthContext("workspace-1", "owner-token"), &pb.GetBYOCPoolRequest{PoolName: "aws-cpu"})
+	require.NoError(t, err)
+	require.False(t, res.Ok)
+	require.Equal(t, "pool not found", res.ErrMsg)
+	require.Empty(t, repo.pools["workspace-1"], "what Beam held for the pool is cleaned up")
+	require.True(t, repo.joinTokens[byocTokenHash].Revoked)
+}
+
+func TestScaleBYOCPoolSaysWhyItDidNotScale(t *testing.T) {
+	for name, tt := range map[string]struct {
+		pool    string
+		nodes   uint32
+		awsErr  error
+		saveErr error
+		want    string
+	}{
+		"a pool the workspace does not have":     {pool: "another-pool", nodes: 2, want: "pool not found"},
+		"a pool that is not in the tenant cloud": {pool: "bought", nodes: 2, want: "missing BYOC provider metadata"},
+		"more nodes than a pool may have":        {pool: "aws-cpu", nodes: 101, want: "desired_nodes must be <= 100"},
+		"AWS refuses":                            {pool: "aws-cpu", nodes: 2, awsErr: errors.New("update AWS BYOC node group: AccessDenied"), want: "update AWS BYOC node group: AccessDenied"},
+		"the record cannot be saved":             {pool: "aws-cpu", nodes: 2, saveErr: errors.New("redis is down"), want: "redis is down"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			standIn(t, &awsBYOCScaleAutoScalingGroup, func(context.Context, awsBYOCScaleAutoScalingGroupInput) error { return tt.awsErr })
+			repo := &faultyPools{saveErr: tt.saveErr, fakeComputeRepo: &fakeComputeRepo{pools: map[string][]*model.PoolState{"workspace-1": {
+				byocPool(time.Now().UTC()),
+				{Name: "bought", Mode: string(types.PoolModePrivate), Source: model.SourceCLIReservation},
+			}}}}
+
+			res, err := byocService(repo).ScaleBYOCPool(testAuthContext("workspace-1", "owner-token"),
+				&pb.ScaleBYOCPoolRequest{PoolName: tt.pool, DesiredNodes: tt.nodes})
+			require.NoError(t, err)
+			require.False(t, res.Ok)
+			require.Equal(t, tt.want, res.ErrMsg)
+			require.Nil(t, res.Pool)
+		})
+	}
+}
+
+func TestExtendPoolCapacitySaysWhyItDidNotExtend(t *testing.T) {
+	for name, tt := range map[string]struct {
+		in      *pb.ExtendPoolCapacityRequest
+		saveErr error
+		want    string
+	}{
+		"a pool the workspace does not have": {in: &pb.ExtendPoolCapacityRequest{Name: "another-pool", Ttl: "48h"}, want: "pool not found"},
+		"a TTL that cannot be read":          {in: &pb.ExtendPoolCapacityRequest{Name: "pool-1", Ttl: "two days"}, want: `time: invalid duration "two days"`},
+		"a TTL that is not ahead":            {in: &pb.ExtendPoolCapacityRequest{Name: "pool-1", Ttl: "-5h"}, want: "ttl must be positive"},
+		"the record cannot be saved":         {in: &pb.ExtendPoolCapacityRequest{Name: "pool-1", Ttl: "48h"}, saveErr: errors.New("redis is down"), want: "redis is down"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := newExtendedPool(t)
+			p.service.computeRepo = &faultyPools{fakeComputeRepo: p.repo, saveErr: tt.saveErr}
+
+			res := p.extend(t, tt.in)
+			require.False(t, res.Ok)
+			require.Equal(t, tt.want, res.ErrMsg)
+			require.Nil(t, res.Pool)
+		})
+	}
+}
+
+func TestScaleBYOCPoolAndExtendPoolCapacityAnswerUnderALeasedLock(t *testing.T) {
+	standIn(t, &awsBYOCScaleAutoScalingGroup, func(context.Context, awsBYOCScaleAutoScalingGroupInput) error { return nil })
+	repo := &faultyPools{fakeComputeRepo: &fakeComputeRepo{pools: map[string][]*model.PoolState{"workspace-1": {
+		byocPool(time.Now().UTC()),
+	}}}}
+	scaled, err := byocService(repo).ScaleBYOCPool(testAuthContext("workspace-1", "owner-token"),
+		&pb.ScaleBYOCPoolRequest{PoolName: "aws-cpu", DesiredNodes: 2})
+	require.NoError(t, err)
+	require.True(t, scaled.Ok, scaled.ErrMsg)
+	require.Equal(t, uint32(2), scaled.Byoc.DesiredNodes)
+
+	p := newExtendedPool(t)
+	p.service.computeRepo = &faultyPools{fakeComputeRepo: p.repo}
+	extended := p.extend(t, &pb.ExtendPoolCapacityRequest{Name: "pool-1", Ttl: "48h"})
+	require.True(t, extended.Ok, extended.ErrMsg)
+	require.Equal(t, "pool-1", extended.Pool.Name)
+}
+
+// stackParameters reads what a setup link asks CloudFormation to create: the
+// template, the stack's name and its parameters.
+func stackParameters(t *testing.T, setupURL string) map[string]string {
+	t.Helper()
+	prefix, query, found := strings.Cut(setupURL, "#/stacks/create/review?")
+	require.True(t, found, setupURL)
+	require.Equal(t, "https://console.aws.amazon.com/cloudformation/home?region=us-west-2", prefix)
+	values, err := url.ParseQuery(query)
+	require.NoError(t, err)
+	parameters := map[string]string{}
+	for key, value := range values {
+		require.Len(t, value, 1, key)
+		parameters[key] = value[0]
+	}
+	return parameters
+}
+
+func TestCreateBYOCPoolAnswersWithTheStackTheTenantIsToCreate(t *testing.T) {
+	const principal = "arn:aws:iam::999999999999:role/beam-gateway"
+	repo := &fakeComputeRepo{}
+	events := &capturedEvents{}
+	service := byocService(repo)
+	service.eventRepo = events
+	service.appConfig.ManagedCompute.BYOC.AWS.ControlRolePrincipalARN = principal
+	service.appConfig.Worker = types.WorkerConfig{ImageRegistry: "public.ecr.aws/n4e0e1y0", ImageName: "beta9-worker", ImageTag: "worker-test"}
+
+	res, err := service.CreateBYOCPool(testAuthContext("workspace-1", "owner-token"), &pb.CreateBYOCPoolRequest{
+		Provider:     "aws",
+		PoolName:     "aws-gpu",
+		Region:       "us-west-2",
+		InstanceType: "g6.xlarge",
+		DesiredNodes: 2,
+		MaxNodes:     4,
+		AccountId:    "123456789012",
+	})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+
+	stack := awsCloudFormationStackName("workspace-1", "aws-gpu")
+	require.Equal(t, stack, res.ResourceName)
+	require.Equal(t, awsCloudFormationStackURL("us-west-2", stack), res.ResourceUrl)
+	require.Equal(t, res.Pool.Byoc, res.Byoc)
+	require.Equal(t, stack, res.Byoc.ResourceName)
+	require.True(t, res.Byoc.DirectScaleEnabled)
+
+	parameters := stackParameters(t, res.SetupUrl)
+	joinToken := parameters["param_BeamJoinToken"]
+	require.NotEmpty(t, joinToken)
+	stored := repo.pools["workspace-1"][0]
+	require.Equal(t, hashComputeToken(joinToken), stored.BYOC.Labels[byocBootstrapJoinTokenHashLabel], "the stack joins with the token saved with the pool")
+	delete(parameters, "param_BeamJoinToken")
+	require.Equal(t, map[string]string{
+		"templateURL":                       byocTemplateURL,
+		"stackName":                         stack,
+		"param_BeamAutoScalingGroupName":    awsBYOCAutoScalingGroupName("workspace-1", "aws-gpu"),
+		"param_BeamControlExternalId":       awsBYOCControlExternalID("workspace-1", "aws-gpu"),
+		"param_BeamControlRoleName":         awsBYOCControlRoleName("workspace-1", "aws-gpu"),
+		"param_BeamControlRolePrincipalArn": principal,
+		"param_BeamGatewayURL":              "https://app.beam.cloud",
+		"param_BeamPoolName":                "aws-gpu",
+		"param_BeamWorkerImage":             "public.ecr.aws/n4e0e1y0/beta9-worker:worker-test",
+		"param_ContainerStartConcurrency":   "16",
+		"param_DesiredCapacity":             "2",
+		"param_MaxSize":                     "4",
+		"param_MinSize":                     "2",
+		"param_NetworkSlots":                "128",
+		"param_NodeGPUCount":                "1",
+		"param_NodeInstanceType":            "g6.xlarge",
+		"param_RootVolumeSizeGB":            "200",
+		"param_TargetAWSAccountID":          "123456789012",
+	}, parameters)
+
+	require.Equal(t, &model.BYOCProviderState{
+		Provider:     "aws",
+		AccountID:    "123456789012",
+		Region:       "us-west-2",
+		ResourceName: stack,
+		ResourceURL:  res.ResourceUrl,
+		DestroyURL:   res.ResourceUrl,
+		Labels: map[string]string{
+			"instance_type":                   "g6.xlarge",
+			"desired_nodes":                   "2",
+			"max_nodes":                       "4",
+			"target_sandboxes":                "40",
+			"sandboxes_per_node":              "20",
+			"hourly_cost_micros":              "110000",
+			"total_hourly_cost_micros":        "220000",
+			"capacity_unit":                   "gpu",
+			"capacity_unit_label":             "GPUs",
+			"gpu":                             "L4",
+			"gpu_count":                       "1",
+			awsBYOCAutoScalingGroupNameLabel:  awsBYOCAutoScalingGroupName("workspace-1", "aws-gpu"),
+			awsBYOCControlRoleNameLabel:       awsBYOCControlRoleName("workspace-1", "aws-gpu"),
+			awsBYOCControlRoleArnLabel:        awsBYOCControlRoleARN("us-west-2", "123456789012", awsBYOCControlRoleName("workspace-1", "aws-gpu")),
+			awsBYOCControlRoleExternalIDLabel: awsBYOCControlExternalID("workspace-1", "aws-gpu"),
+			byocBootstrapJoinTokenHashLabel:   hashComputeToken(joinToken),
+			byocBootstrapJoinTokenHashesLabel: hashComputeToken(joinToken),
+		},
+	}, stored.BYOC)
+	require.Equal(t, model.SourceAWS, stored.Source)
+	require.Equal(t, []string{"us-west-2"}, stored.Config.Regions)
+	require.Equal(t, []string{"L4"}, stored.Config.Gpu)
+
+	configured := []types.EventComputeSchema{}
+	for _, event := range events.events {
+		if event.Status == "byoc_pool_configured" {
+			configured = append(configured, event)
+		}
+	}
+	require.Len(t, configured, 1)
+	event := configured[0]
+	event.Timestamp = time.Time{}
+	require.Equal(t, types.EventComputeSchema{
+		WorkspaceID: "workspace-1",
+		PoolName:    "aws-gpu",
+		Action:      types.EventComputeActionPoolCreated,
+		Status:      "byoc_pool_configured",
+		Source:      "aws",
+		Transport:   stored.Transport,
+		Fallback:    stored.Fallback,
+		NodeCount:   2,
+		Attrs: map[string]string{
+			"provider":      "aws",
+			"cloud":         "aws",
+			"region":        "us-west-2",
+			"instance_type": "g6.xlarge",
+			"gpu":           "L4",
+			"gpu_count":     "1",
+		},
+	}, event)
+}
+
+func TestCreateBYOCPoolTakesOnlyAProviderItKnows(t *testing.T) {
+	for provider, want := range map[string]string{
+		"":      "provider is required",
+		"   ":   "provider is required",
+		"gcp":   `unsupported BYOC provider "gcp"`,
+		" GCP ": `unsupported BYOC provider " GCP "`,
+	} {
+		repo := &fakeComputeRepo{}
+		request := anAWSCPUPool()
+		request.Provider = provider
+
+		res, err := byocService(repo).CreateBYOCPool(testAuthContext("workspace-1", "owner-token"), request)
+		require.NoError(t, err)
+		require.False(t, res.Ok)
+		require.Equal(t, want, res.ErrMsg)
+		require.Empty(t, repo.pools["workspace-1"])
+		require.Empty(t, repo.joinTokens)
+	}
+
+	repo := &fakeComputeRepo{}
+	request := anAWSCPUPool()
+	request.Provider = " AWS "
+	res, err := byocService(repo).CreateBYOCPool(testAuthContext("workspace-1", "owner-token"), request)
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Equal(t, "aws", repo.pools["workspace-1"][0].BYOC.Provider)
+}
+
+func TestCreateBYOCPoolSaysWhyItMadeNoPool(t *testing.T) {
+	for name, tt := range map[string]struct {
+		change   func(*pb.CreateBYOCPoolRequest)
+		existing *model.PoolState
+		want     string
+	}{
+		"no pool name":                    {change: func(in *pb.CreateBYOCPoolRequest) { in.PoolName = " " }, want: "pool name is required"},
+		"a region AWS does not have":      {change: func(in *pb.CreateBYOCPoolRequest) { in.Region = "moon-1" }, want: `invalid AWS region "moon-1"`},
+		"an instance type not on offer":   {change: func(in *pb.CreateBYOCPoolRequest) { in.InstanceType = "m5.large" }, want: `unsupported AWS instance type "m5.large"`},
+		"a GPU the instance type lacks":   {change: func(in *pb.CreateBYOCPoolRequest) { in.Gpu = "L4" }, want: `AWS instance type "i4i.xlarge" does not provide GPUs`},
+		"more nodes than the limit":       {change: func(in *pb.CreateBYOCPoolRequest) { in.DesiredNodes = 101 }, want: "desired_nodes must be <= 100"},
+		"fewer nodes at most than wanted": {change: func(in *pb.CreateBYOCPoolRequest) { in.DesiredNodes, in.MaxNodes = 3, 2 }, want: "max_nodes must be >= desired_nodes"},
+		"no account":                      {change: func(in *pb.CreateBYOCPoolRequest) { in.AccountId = "" }, want: "AWS account ID is required"},
+		"an account that is not one":      {change: func(in *pb.CreateBYOCPoolRequest) { in.AccountId = "12345" }, want: "invalid AWS account ID"},
+		"a pool of bought machines has the name": {
+			existing: &model.PoolState{Name: "aws-cpu", Mode: string(types.PoolModePrivate), Source: model.SourceCLIReservation},
+			want:     "pool already exists with source cli_reservation",
+		},
+		"a pool of another kind has the name": {
+			existing: &model.PoolState{Name: "aws-cpu", Mode: string(types.PoolModeProvider)},
+			want:     "pool already exists in this workspace",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := &fakeComputeRepo{}
+			if tt.existing != nil {
+				repo.pools = map[string][]*model.PoolState{"workspace-1": {tt.existing}}
+			}
+			request := anAWSCPUPool()
+			if tt.change != nil {
+				tt.change(request)
+			}
+
+			res, err := byocService(repo).CreateBYOCPool(testAuthContext("workspace-1", "owner-token"), request)
+			require.NoError(t, err)
+			require.False(t, res.Ok)
+			require.Equal(t, tt.want, res.ErrMsg)
+			require.Empty(t, repo.joinTokens)
+			require.False(t, repo.savedPool)
+		})
+	}
+}
+
+func TestABYOCPoolIsAskedAboutAndReleasedWithTheRoleItsStackGave(t *testing.T) {
+	// The pool's machine is connected.
+	repo := silentBYOCPool(0)
+	machine := repo.machines[fakeComputeKey("workspace-1", "aws-cpu")][0]
+
+	var asked awsBYOCResourceDeletedInput
+	standIn(t, &awsBYOCResourceDeleted, func(_ context.Context, input awsBYOCResourceDeletedInput) (bool, error) {
+		asked = input
+		return false, nil
+	})
+	var released awsBYOCReleaseMachineInput
+	standIn(t, &awsBYOCReleaseMachine, func(_ context.Context, input awsBYOCReleaseMachineInput) error {
+		released = input
+		return nil
+	})
+	service := byocService(repo)
+	ctx := testAuthContext("workspace-1", "owner-token")
+
+	listed, err := service.ListPrivatePools(ctx, &pb.ListPrivatePoolsRequest{})
+	require.NoError(t, err)
+	require.True(t, listed.Ok, listed.ErrMsg)
+	require.Equal(t, awsBYOCResourceDeletedInput{
+		Region:     "us-east-1",
+		RoleARN:    "arn:aws:iam::123456789012:role/beam-control-aws-cpu-test",
+		ExternalID: "beam-byoc-test-external-id",
+		StackName:  "beam-aws-cpu-test",
+	}, asked)
+
+	deleted, err := service.DeletePrivateMachine(ctx, &pb.DeleteMachineRequest{PoolName: "aws-cpu", MachineId: "machine-1"})
+	require.NoError(t, err)
+	require.True(t, deleted.Ok, deleted.ErrMsg)
+	require.Equal(t, awsBYOCReleaseMachineInput{
+		Region:               "us-east-1",
+		RoleARN:              "arn:aws:iam::123456789012:role/beam-control-aws-cpu-test",
+		ExternalID:           "beam-byoc-test-external-id",
+		AutoScalingGroupName: "beam-asg-aws-cpu-test",
+		Machine:              machine,
+	}, released)
+}
+
+func TestABYOCPoolWhoseStackGaveNoRoleIsNeitherAskedAboutNorScaledAtAWS(t *testing.T) {
+	// The pool's machine is connected.
+	repo := silentBYOCPool(0)
+	delete(repo.pools["workspace-1"][0].BYOC.Labels, awsBYOCControlRoleArnLabel)
+	calls := 0
+	standIn(t, &awsBYOCResourceDeleted, func(context.Context, awsBYOCResourceDeletedInput) (bool, error) { calls++; return false, nil })
+	standIn(t, &awsBYOCReleaseMachine, func(context.Context, awsBYOCReleaseMachineInput) error { calls++; return nil })
+	standIn(t, &awsBYOCScaleAutoScalingGroup, func(context.Context, awsBYOCScaleAutoScalingGroupInput) error { calls++; return nil })
+	service := byocService(repo)
+	ctx := testAuthContext("workspace-1", "owner-token")
+
+	listed, err := service.ListPrivatePools(ctx, &pb.ListPrivatePoolsRequest{})
+	require.NoError(t, err)
+	require.True(t, listed.Ok, listed.ErrMsg)
+	require.Len(t, listed.Pools, 1)
+	require.False(t, listed.Pools[0].Byoc.DirectScaleEnabled)
+
+	scaled, err := service.ScaleBYOCPool(ctx, &pb.ScaleBYOCPoolRequest{PoolName: "aws-cpu", DesiredNodes: 2})
+	require.NoError(t, err)
+	require.False(t, scaled.Ok)
+	require.Equal(t, errBYOCDirectScaleUnavailable.Error(), scaled.ErrMsg)
+
+	deleted, err := service.DeletePrivateMachine(ctx, &pb.DeleteMachineRequest{PoolName: "aws-cpu", MachineId: "machine-1"})
+	require.NoError(t, err)
+	require.False(t, deleted.Ok, "a connected machine is not dropped while its node cannot be terminated")
+	require.Equal(t, errBYOCDirectScaleUnavailable.Error(), deleted.ErrMsg)
+	require.Zero(t, calls, "AWS is not called without a role to call it with")
+}
+
+// requireBYOCPoolKept lists the workspace's pools, and checks that the BYOC
+// pool is among them and that what Beam holds for it is still there.
+func requireBYOCPoolKept(t *testing.T, repo *fakeComputeRepo) {
+	t.Helper()
+	res, err := byocService(repo).ListPrivatePools(testAuthContext("workspace-1", "owner-token"), &pb.ListPrivatePoolsRequest{})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Len(t, res.Pools, 1, "the pool is listed")
+	require.Len(t, repo.pools["workspace-1"], 1, "its record is kept")
+	require.Len(t, repo.machines[fakeComputeKey("workspace-1", "aws-cpu")], 1, "and so is its machine's")
+	require.False(t, repo.joinTokens[byocTokenHash].Revoked, "the token in the tenant's stack still joins")
+}
+
+// requireBYOCPoolCleanedUp lists the workspace's pools, and checks that the
+// BYOC pool is not among them and that what Beam held for it is gone.
+func requireBYOCPoolCleanedUp(t *testing.T, repo *fakeComputeRepo) {
+	t.Helper()
+	res, err := byocService(repo).ListPrivatePools(testAuthContext("workspace-1", "owner-token"), &pb.ListPrivatePoolsRequest{})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Empty(t, res.Pools)
+	require.Empty(t, repo.pools["workspace-1"])
+	require.True(t, repo.joinTokens[byocTokenHash].Revoked)
+}
+
+func TestABYOCPoolIsCleanedUpWhenAWSSaysItsStackIsGone(t *testing.T) {
+	// Its machine was heard from a moment ago, and AWS knows better.
+	repo := silentBYOCPool(time.Second)
+	stackCheckAnswers(t, true, nil)
+
+	requireBYOCPoolCleanedUp(t, repo)
+}
+
+func TestABYOCPoolThatAWSCannotBeAskedAboutIsCleanedUpOnceItsMachinesStaySilent(t *testing.T) {
+	// A stack from before stacks gave Beam a role to ask with.
+	withoutRole := func(repo *fakeComputeRepo) {
+		labels := repo.pools["workspace-1"][0].BYOC.Labels
+		delete(labels, awsBYOCControlRoleArnLabel)
+		delete(labels, awsBYOCControlRoleExternalIDLabel)
+	}
+
+	repo := silentBYOCPool(byocDeletedPoolRetention - time.Minute)
+	withoutRole(repo)
+	asked := stackCheckAnswers(t, false, nil)
+	requireBYOCPoolKept(t, repo)
+
+	repo = silentBYOCPool(byocDeletedPoolRetention + time.Minute)
+	withoutRole(repo)
+	requireBYOCPoolCleanedUp(t, repo)
+	require.Zero(t, *asked, "there is nobody to ask")
+}
+
+// tokensInRedis is a gateway that keeps its join tokens in Redis, as a real
+// one does, and has one pool that buys its machines.
+func tokensInRedis(t *testing.T) (*Service, *miniredis.Miniredis) {
+	t.Helper()
+	server := miniredis.RunT(t)
+	rdb, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{server.Addr()}, Mode: types.RedisModeSingle})
+	require.NoError(t, err)
+
+	service, _ := buyingTestService(types.AppConfig{})
+	service.computeRepo = repository.NewComputeRedisRepository(rdb)
+	_, err = service.CreateManagedPool(context.Background(), clusterAdminAuth(), "spot-l40s", spotPool())
+	require.NoError(t, err)
+	return service, server
+}
+
+// A pool that buys its machines makes a join token for every machine it
+// buys, and the token does not expire. One that stayed in Redis after its
+// machine was given back would stay for good.
+func TestTheJoinTokenOfAForgottenMachineIsRemoved(t *testing.T) {
+	ctx := context.Background()
+	service, server := tokensInRedis(t)
+
+	script, tokenHash, err := service.JoinScript(ctx, "spot-l40s", "machine-1")
+	require.NoError(t, err)
+	key := common.RedisKeys.ComputeJoinToken(tokenHash)
+	require.True(t, server.Exists(key))
+
+	require.NoError(t, service.ForgetMachine(ctx, "spot-l40s", "machine-1", tokenHash))
+	require.False(t, joinAs(t, service, script, "verda-1").Ok, "the token admits nothing from the moment it is revoked")
+
+	server.FastForward(revokedJoinTokenKept)
+	require.False(t, server.Exists(key), "the token is still in Redis")
+	response := joinAs(t, service, script, "verda-1")
+	require.False(t, response.Ok)
+	require.Equal(t, "join token is invalid or expired", response.ErrMsg)
+
+	// Forgetting the machine again finds no token, and does not mind.
+	require.NoError(t, service.ForgetMachine(ctx, "spot-l40s", "machine-1", tokenHash))
+	require.False(t, server.Exists(key))
+}
+
+// Earlier releases kept a revoked token in Redis, marked as revoked. Such a
+// token admits nothing, and goes when it is revoked again.
+func TestAJoinTokenThatWasKeptAsRevokedAdmitsNothing(t *testing.T) {
+	ctx := context.Background()
+	service, server := tokensInRedis(t)
+
+	script, tokenHash, err := service.JoinScript(ctx, "spot-l40s", "machine-1")
+	require.NoError(t, err)
+	token, err := service.computeRepo.GetJoinTokenState(ctx, tokenHash)
+	require.NoError(t, err)
+	token.Revoked = true
+	require.NoError(t, service.computeRepo.SaveJoinTokenState(ctx, token, 0))
+
+	response := joinAs(t, service, script, "verda-1")
+	require.False(t, response.Ok)
+	require.Equal(t, "join token is invalid or expired", response.ErrMsg)
+
+	require.NoError(t, service.ForgetMachine(ctx, "spot-l40s", "machine-1", tokenHash))
+	server.FastForward(revokedJoinTokenKept)
+	require.False(t, server.Exists(common.RedisKeys.ComputeJoinToken(tokenHash)))
+}
+
+// An agent that is refused goes on with the identity it has saved. These
+// tests pin what a refused join leaves behind: what was there before it, and
+// nothing else.
+
+// unwritableWorkers is a worker repository that can refuse to add a worker,
+// which fails a join after its machine has been saved.
+type unwritableWorkers struct {
+	*fakeWorkerRepo
+	addErr error
+}
+
+func (r *unwritableWorkers) AddWorker(worker *types.Worker) error {
+	if r.addErr != nil {
+		return r.addErr
+	}
+	return r.fakeWorkerRepo.AddWorker(worker)
+}
+
+func joinTestService() (*Service, *fakeComputeRepo, *unwritableWorkers) {
+	service, repo := buyingTestService(types.AppConfig{})
+	workers := &unwritableWorkers{fakeWorkerRepo: &fakeWorkerRepo{}}
+	service.workerRepo = workers
+	service.scheduler = scheduler.NewSchedulerForCapacityChecks(workers, repo, scheduler.NewWorkerPoolManager())
+	return service, repo, workers
+}
+
+func TestARefusedJoinLeavesAMachineThatHadJoinedAsItWas(t *testing.T) {
+	ctx := context.Background()
+
+	for name, refuse := range map[string]func(*Service, *unwritableWorkers, string) *pb.JoinAgentResponse{
+		"before the machine is saved": func(service *Service, _ *unwritableWorkers, script string) *pb.JoinAgentResponse {
+			token := joinTokenInScript.FindStringSubmatch(script)[1]
+			response, err := service.JoinAgent(ctx, &pb.JoinAgentRequest{
+				JoinToken: token, MachineFingerprint: "fingerprint-by-hand", Hostname: "by-hand",
+				CpuCount: 20, MemoryMb: 60_000, Schedulable: true,
+			})
+			require.NoError(t, err)
+			return response
+		},
+		"after the machine is saved": func(service *Service, workers *unwritableWorkers, script string) *pb.JoinAgentResponse {
+			workers.addErr = errors.New("the worker cannot be written")
+			return joinAs(t, service, script, "by-hand")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			service, repo, workers := joinTestService()
+			script, joined := joinedByHand(t, service)
+			worker := workers.worker
+			require.NotNil(t, worker)
+
+			response := refuse(service, workers, script)
+			require.False(t, response.Ok)
+
+			machine, err := repo.GetAgentMachineState(ctx, "admin-workspace", "l40s", joined.MachineID)
+			require.NoError(t, err)
+			require.NotNil(t, machine, "the machine is still in its pool")
+			require.Equal(t, joined.TokenHash, machine.TokenHash, "under the token its agent holds")
+			require.Same(t, worker, workers.worker, "with its worker")
+		})
+	}
+}
+
+func TestARefusedFirstJoinLeavesNothing(t *testing.T) {
+	ctx := context.Background()
+	service, repo, workers := joinTestService()
+	_, err := service.CreateManagedPool(ctx, clusterAdminAuth(), "l40s", types.WorkerPoolConfig{GPUType: "L40S"})
+	require.NoError(t, err)
+	bootstrap, err := service.CreateManagedMachine(ctx, clusterAdminAuth(), "l40s")
+	require.NoError(t, err)
+
+	workers.addErr = errors.New("the worker cannot be written")
+	response := joinAs(t, service, bootstrap.InstallCommand, "by-hand")
+	require.False(t, response.Ok)
+	require.Contains(t, response.ErrMsg, "the worker cannot be written")
+
+	machine, err := repo.GetAgentMachineState(ctx, "admin-workspace", "l40s", bootstrap.MachineID)
+	require.NoError(t, err)
+	require.Nil(t, machine)
+	require.Nil(t, workers.worker)
+}
+
+// The worker of a machine that a pool bought stands for it from the purchase
+// on, and requests wait on it. A join that fails is tried again by the
+// machine; what gives up on it is the pool's boot timeout.
+func TestARefusedJoinLeavesTheWorkerOfAMachineThatWasBought(t *testing.T) {
+	ctx := context.Background()
+	service, repo, workers := joinTestService()
+	_, err := service.CreateManagedPool(ctx, clusterAdminAuth(), "spot-l40s", spotPool())
+	require.NoError(t, err)
+	script, _, err := service.JoinScript(ctx, "spot-l40s", "machine-1")
+	require.NoError(t, err)
+	booting := &types.Worker{Id: model.AgentMachineWorkerID("machine-1"), MachineId: "machine-1", PoolName: "spot-l40s", Status: types.WorkerStatusPending}
+	workers.worker = booting
+
+	workers.addErr = errors.New("the worker cannot be written")
+	require.False(t, joinAs(t, service, script, "verda-1").Ok)
+
+	require.Same(t, booting, workers.worker)
+	machine, err := repo.GetAgentMachineState(ctx, "admin-workspace", "spot-l40s", "machine-1")
+	require.NoError(t, err)
+	require.Nil(t, machine, "the machine has not joined")
+
+	workers.addErr = nil
+	require.True(t, joinAs(t, service, script, "verda-1").Ok)
+}
+
+func TestARefusedJoinLeavesAMachineOfAWorkspacesOwnPoolAsItWas(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	repo := &fakeComputeRepo{
+		pools: map[string][]*model.PoolState{"workspace-1": {{
+			WorkspaceID: "workspace-1",
+			Name:        "own",
+			Mode:        string(types.PoolModePrivate),
+			Config:      &pb.PoolConfig{Name: "own"},
+			CreatedAt:   now,
+		}}},
+		joinTokens: map[string]*model.JoinTokenState{hashComputeToken("join-token"): {
+			TokenHash:     hashComputeToken("join-token"),
+			WorkspaceID:   "workspace-1",
+			PoolName:      "own",
+			PoolCreatedAt: now,
+		}},
+	}
+	workers := &unwritableWorkers{fakeWorkerRepo: &fakeWorkerRepo{}}
+	service := &Service{
+		computeRepo: repo,
+		workerRepo:  workers,
+		scheduler:   scheduler.NewSchedulerForCapacityChecks(workers, repo, scheduler.NewWorkerPoolManager()),
+	}
+	join := func() *pb.JoinAgentResponse {
+		response, err := service.JoinAgent(ctx, &pb.JoinAgentRequest{
+			JoinToken: "join-token", MachineFingerprint: "fingerprint-1",
+			CpuCount: 4, MemoryMb: 8192, Schedulable: true,
+		})
+		require.NoError(t, err)
+		return response
+	}
+
+	first := join()
+	require.True(t, first.Ok, first.ErrMsg)
+	joined, err := repo.GetAgentMachineState(ctx, "workspace-1", "own", first.MachineId)
+	require.NoError(t, err)
+	tokenHash := joined.TokenHash
+	worker := workers.worker
+	require.NotNil(t, worker)
+
+	workers.addErr = errors.New("the worker cannot be written")
+	require.False(t, join().Ok)
+
+	machine, err := repo.GetAgentMachineState(ctx, "workspace-1", "own", first.MachineId)
+	require.NoError(t, err)
+	require.NotNil(t, machine, "the machine is still in its pool")
+	require.Equal(t, tokenHash, machine.TokenHash, "under the token its agent holds")
+	require.Same(t, worker, workers.worker, "with its worker")
+}
+
+func TestCreateManagedPoolThatBuysItsMachines(t *testing.T) {
+	ctx := context.Background()
+	service, _ := buyingTestService(types.AppConfig{})
+
+	// A provisioning block is all it takes: no mode, and spot machines make
+	// the pool preemptable.
+	pool, err := service.CreateManagedPool(ctx, clusterAdminAuth(), "spot-l40s", spotPool())
+	require.NoError(t, err)
+	require.Equal(t, types.PoolModeExternal, pool.Config.Mode)
+	require.True(t, pool.Config.Preemptable)
+	require.Equal(t, spotPool().Provisioning, pool.Config.Provisioning)
+
+	onDemand, err := service.CreateManagedPool(ctx, clusterAdminAuth(), "on-demand-l40s", spotPool(func(pool *types.WorkerPoolConfig) {
+		pool.Provisioning.Spot = false
+	}))
+	require.NoError(t, err)
+	require.False(t, onDemand.Config.Preemptable)
+
+	// A pool cannot buy from a provider the gateway has no credentials for.
+	_, err = service.CreateManagedPool(ctx, clusterAdminAuth(), "spot-a10g", spotPool(func(pool *types.WorkerPoolConfig) {
+		pool.Provisioning.Provider = "nebius"
+	}))
+	require.ErrorIs(t, err, model.ErrInvalidManagedPoolConfig)
+	require.ErrorContains(t, err, `provisioning.provider "nebius" is not configured under providers (configured: verda)`)
+
+	_, err = service.CreateManagedPool(ctx, clusterAdminAuth(), "spot-a10g", spotPool(func(pool *types.WorkerPoolConfig) {
+		pool.Provisioning.MaxNodes = 0
+	}))
+	require.ErrorIs(t, err, model.ErrInvalidManagedPoolConfig)
+	require.ErrorContains(t, err, "provisioning.maxNodes must be at least 1")
+
+	// The same goes for a change to a pool that exists.
+	_, err = service.UpdateManagedPool(ctx, clusterAdminAuth(), "spot-l40s", spotPool(func(pool *types.WorkerPoolConfig) {
+		pool.Provisioning.Provider = "nebius"
+	}))
+	require.ErrorIs(t, err, model.ErrInvalidManagedPoolConfig)
+}
+
+func TestBuyingPoolsAreThePoolsThisReplicaRunsThatBuy(t *testing.T) {
+	ctx := context.Background()
+	service, _ := buyingTestService(types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+		"spot-a10g":   spotPool(func(pool *types.WorkerPoolConfig) { pool.GPUType = "A10G" }),
+		"hand-joined": {Mode: types.PoolModeExternal},
+		"kubernetes":  {Mode: types.PoolModeLocal},
+	}}})
+	require.NoError(t, service.ReconcileManagedPools(ctx))
+	_, err := service.CreateManagedPool(ctx, clusterAdminAuth(), "spot-l40s", spotPool())
+	require.NoError(t, err)
+	_, err = service.CreateManagedPool(ctx, clusterAdminAuth(), "public-cpu", types.WorkerPoolConfig{Mode: types.PoolModeExternal})
+	require.NoError(t, err)
+
+	pools, unloaded, err := service.BuyingPools(ctx)
+	require.NoError(t, err)
+	require.Empty(t, unloaded)
+	require.ElementsMatch(t, []string{"spot-a10g", "spot-l40s"}, slices.Sorted(maps.Keys(pools)))
+	// A pool from the config file is what the API would have made of it.
+	require.Equal(t, types.PoolModeExternal, pools["spot-a10g"].Mode)
+	require.True(t, pools["spot-a10g"].Preemptable)
+	require.Equal(t, 4, pools["spot-l40s"].Provisioning.MaxNodes)
+
+	// A replica whose config no longer has the pool does not buy for it,
+	// though the pool's state is still stored.
+	newer, _ := buyingTestService(types.AppConfig{})
+	newer.managedPoolRepo = service.managedPoolRepo
+	pools, unloaded, err = newer.BuyingPools(ctx)
+	require.NoError(t, err)
+	require.Empty(t, unloaded)
+	require.Equal(t, []string{"spot-l40s"}, slices.Sorted(maps.Keys(pools)))
+
+	// A pool that no longer buys is not listed.
+	_, err = service.UpdateManagedPool(ctx, clusterAdminAuth(), "spot-l40s", types.WorkerPoolConfig{GPUType: "L40S"})
+	require.NoError(t, err)
+	pools, unloaded, err = service.BuyingPools(ctx)
+	require.NoError(t, err)
+	require.Empty(t, unloaded)
+	require.Equal(t, []string{"spot-a10g"}, slices.Sorted(maps.Keys(pools)))
+}
+
+// The provisioner drains the machines of a pool it is not told about, so a
+// pool that failed to load must not look like a pool that is gone. It is
+// named, so that the pools that did load are not held up by it.
+func TestBuyingPoolsSaysWhenNotEveryPoolLoaded(t *testing.T) {
+	ctx := context.Background()
+	service, _ := buyingTestService(types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+		"spot-a10g": spotPool(func(pool *types.WorkerPoolConfig) { pool.GPUType = "A10G" }),
+		"spot-t4":   spotPool(func(pool *types.WorkerPoolConfig) { pool.GPUType = "T4"; pool.Provisioning.MaxNodes = 0 }),
+	}}})
+	_ = service.ReconcileManagedPools(ctx)
+
+	pools, unloaded, err := service.BuyingPools(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"spot-a10g"}, slices.Sorted(maps.Keys(pools)))
+	require.Len(t, unloaded, 1)
+	require.ErrorContains(t, unloaded["spot-t4"], "provisioning.maxNodes must be at least 1")
+
+	// The pools cannot be read at all.
+	service.backendRepo = &fakeManagedPoolBackendRepo{workspaceFailures: 1}
+	pools, unloaded, err = service.BuyingPools(ctx)
+	require.Error(t, err)
+	require.Nil(t, pools)
+	require.Nil(t, unloaded)
+}
+
+// A pool that was made through the API and that a replica's config file now
+// defines too is refused by that replica. Its machines are still running.
+func TestBuyingPoolsNamesAPoolThatConflictsWithTheConfigFile(t *testing.T) {
+	ctx := context.Background()
+	service, _ := buyingTestService(types.AppConfig{})
+	_, err := service.CreateManagedPool(ctx, clusterAdminAuth(), "spot-l40s", spotPool())
+	require.NoError(t, err)
+
+	newer, _ := buyingTestService(types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+		"spot-l40s": spotPool(),
+		"spot-a10g": spotPool(func(pool *types.WorkerPoolConfig) { pool.GPUType = "A10G" }),
+	}}})
+	newer.managedPoolRepo = service.managedPoolRepo
+	_ = newer.ReconcileManagedPools(ctx)
+
+	pools, unloaded, err := newer.BuyingPools(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"spot-a10g"}, slices.Sorted(maps.Keys(pools)))
+	require.Len(t, unloaded, 1)
+	require.ErrorContains(t, unloaded["spot-l40s"], `API-managed pool "spot-l40s" conflicts with config`)
+}
+
+func TestJoinScriptLetsOneMachineJoinItsPool(t *testing.T) {
+	ctx := context.Background()
+	service, repo := buyingTestService(types.AppConfig{
+		GatewayService: types.GatewayServiceConfig{HTTP: types.HTTPConfig{ExternalHost: "gateway.example.com", ExternalPort: 443, TLS: true}},
+	})
+	_, err := service.CreateManagedPool(ctx, clusterAdminAuth(), "spot-l40s", spotPool())
+	require.NoError(t, err)
+
+	script, tokenHash, err := service.JoinScript(ctx, "spot-l40s", "machine-1")
+	require.NoError(t, err)
+	require.Contains(t, script, "https://gateway.example.com/install/agent")
+
+	// The token is for that machine in that pool, and does not expire: how
+	// long a machine takes to boot is its provider's business.
+	token := repo.joinTokens[tokenHash]
+	require.NotNil(t, token)
+	require.Equal(t, "machine-1", token.MachineID)
+	require.Equal(t, "spot-l40s", token.PoolName)
+	require.Equal(t, string(types.PoolModeExternal), token.Mode)
+	require.NotEmpty(t, token.ManagedPoolInstanceID)
+	require.True(t, token.ExpiresAt.IsZero())
+
+	response := joinAs(t, service, script, "verda-1")
+	require.True(t, response.Ok, response.ErrMsg)
+	joined, err := repo.GetAgentMachineState(ctx, "admin-workspace", "spot-l40s", "machine-1")
+	require.NoError(t, err)
+	require.NotNil(t, joined, "the machine joined under the ID it was bought with")
+
+	// Only pools that buy hand out such scripts.
+	_, err = service.CreateManagedPool(ctx, clusterAdminAuth(), "public-cpu", types.WorkerPoolConfig{Mode: types.PoolModeExternal})
+	require.NoError(t, err)
+	_, _, err = service.JoinScript(ctx, "public-cpu", "machine-2")
+	require.ErrorContains(t, err, `pool "public-cpu" does not buy machines`)
+	_, _, err = service.JoinScript(ctx, "no-such-pool", "machine-3")
+	require.ErrorContains(t, err, `pool "no-such-pool" does not buy machines`)
+}
+
+func TestForgetMachineRemovesAMachineThatJoined(t *testing.T) {
+	ctx := context.Background()
+	service, repo := buyingTestService(types.AppConfig{})
+	workers := &fakeWorkerRepo{}
+	service.workerRepo = workers
+	_, err := service.CreateManagedPool(ctx, clusterAdminAuth(), "spot-l40s", spotPool())
+	require.NoError(t, err)
+
+	script, tokenHash, err := service.JoinScript(ctx, "spot-l40s", "machine-1")
+	require.NoError(t, err)
+	require.True(t, joinAs(t, service, script, "verda-1").Ok)
+	workers.worker = &types.Worker{Id: model.AgentMachineWorkerID("machine-1"), MachineId: "machine-1", PoolName: "spot-l40s", Status: types.WorkerStatusAvailable}
+
+	require.NoError(t, service.ForgetMachine(ctx, "spot-l40s", "machine-1", tokenHash))
+
+	require.Nil(t, workers.worker, "its worker is removed, which returns its requests to the backlog")
+	machine, err := repo.GetAgentMachineState(ctx, "admin-workspace", "spot-l40s", "machine-1")
+	require.NoError(t, err)
+	require.Nil(t, machine)
+	require.True(t, repo.joinTokens[tokenHash].Revoked)
+	require.False(t, joinAs(t, service, script, "verda-1").Ok, "it cannot join again")
+
+	// Forgetting is safe to repeat: a pass that failed half-way runs again.
+	require.NoError(t, service.ForgetMachine(ctx, "spot-l40s", "machine-1", tokenHash))
+}
+
+func TestForgetMachineRemovesAMachineThatNeverJoined(t *testing.T) {
+	ctx := context.Background()
+	service, repo := buyingTestService(types.AppConfig{})
+	workers := &fakeWorkerRepo{}
+	service.workerRepo = workers
+	_, err := service.CreateManagedPool(ctx, clusterAdminAuth(), "spot-l40s", spotPool())
+	require.NoError(t, err)
+
+	script, tokenHash, err := service.JoinScript(ctx, "spot-l40s", "machine-1")
+	require.NoError(t, err)
+	// All there is of it: the worker that stands for it while it boots.
+	workers.worker = &types.Worker{Id: model.AgentMachineWorkerID("machine-1"), MachineId: "machine-1", PoolName: "spot-l40s", Status: types.WorkerStatusPending}
+
+	require.NoError(t, service.ForgetMachine(ctx, "spot-l40s", "machine-1", tokenHash))
+	require.Nil(t, workers.worker)
+	require.True(t, repo.joinTokens[tokenHash].Revoked)
+
+	// Should it boot after all, it is not let in.
+	response := joinAs(t, service, script, "verda-1")
+	require.False(t, response.Ok)
+	require.Equal(t, "join token is invalid or expired", response.ErrMsg)
+
+	// A machine with no worker and no token is forgotten without complaint.
+	require.NoError(t, service.ForgetMachine(ctx, "spot-l40s", "machine-2", ""))
+}
+
+func TestForgetMachineLeavesOtherMachinesAlone(t *testing.T) {
+	ctx := context.Background()
+	service, repo := buyingTestService(types.AppConfig{})
+	_, err := service.CreateManagedPool(ctx, clusterAdminAuth(), "spot-l40s", spotPool())
+	require.NoError(t, err)
+
+	first, firstHash, err := service.JoinScript(ctx, "spot-l40s", "machine-1")
+	require.NoError(t, err)
+	second, _, err := service.JoinScript(ctx, "spot-l40s", "machine-2")
+	require.NoError(t, err)
+	require.True(t, joinAs(t, service, first, "verda-1").Ok)
+	require.True(t, joinAs(t, service, second, "verda-2").Ok)
+	other := &types.Worker{Id: model.AgentMachineWorkerID("machine-2"), MachineId: "machine-2", PoolName: "spot-l40s"}
+	service.workerRepo = &fakeWorkerRepo{worker: other}
+
+	require.NoError(t, service.ForgetMachine(ctx, "spot-l40s", "machine-1", firstHash))
+
+	machine, err := repo.GetAgentMachineState(ctx, "admin-workspace", "spot-l40s", "machine-2")
+	require.NoError(t, err)
+	require.NotNil(t, machine)
+	require.Same(t, other, service.workerRepo.(*fakeWorkerRepo).worker)
+}
+
+// A pool of the config file is stored once, as it was then. Whether it buys
+// its machines is for the config to say.
+func TestAPoolOfTheConfigFileBuysWhenItsConfigSaysSo(t *testing.T) {
+	ctx := context.Background()
+	older, _ := buyingTestService(types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+		"l40s": {Mode: types.PoolModeExternal, GPUType: "L40S"},
+	}}})
+	require.NoError(t, older.ReconcileManagedPools(ctx))
+
+	service, repo := buyingTestService(types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{
+		"l40s": spotPool(),
+	}}})
+	service.managedPoolRepo = older.managedPoolRepo
+	require.NoError(t, service.ReconcileManagedPools(ctx))
+	stored, err := service.managedPoolRepo.GetManagedPoolState(ctx, "admin-workspace", "l40s")
+	require.NoError(t, err)
+	require.False(t, stored.WorkerConfig.Buys(), "the record is as it was first stored")
+
+	script, _, err := service.JoinScript(ctx, "l40s", "machine-1")
+	require.NoError(t, err)
+	require.True(t, joinAs(t, service, script, "verda-1").Ok)
+
+	_, err = service.CreateManagedMachine(ctx, clusterAdminAuth(), "l40s")
+	require.ErrorIs(t, err, model.ErrManagedPoolBuysMachines)
+	err = service.DeleteManagedMachine(ctx, clusterAdminAuth(), "l40s", "machine-1")
+	require.ErrorIs(t, err, model.ErrManagedPoolBuysMachines)
+	machine, err := repo.GetAgentMachineState(ctx, "admin-workspace", "l40s", "machine-1")
+	require.NoError(t, err)
+	require.NotNil(t, machine)
+}
+
+// A pool either buys its machines or has them joined by hand. Machines the
+// provisioner has no record of would never be given back, and would count
+// against nothing.
+func TestAPoolThatBuysTakesNoMachinesByHand(t *testing.T) {
+	ctx := context.Background()
+	service, _ := buyingTestService(types.AppConfig{})
+	_, err := service.CreateManagedPool(ctx, clusterAdminAuth(), "spot-l40s", spotPool())
+	require.NoError(t, err)
+
+	_, err = service.CreateManagedMachine(ctx, clusterAdminAuth(), "spot-l40s")
+	require.ErrorIs(t, err, model.ErrManagedPoolBuysMachines)
+	require.ErrorContains(t, err, `"spot-l40s" gets its machines from verda; raise provisioning.maxNodes for more`)
+	// The API answers a conflict with 409 and the error's own words.
+	require.ErrorIs(t, err, model.ErrManagedPoolConflict)
+	require.NotErrorIs(t, model.ErrManagedPoolConflict, model.ErrManagedPoolBuysMachines)
+}
+
+func TestAPoolWithMachinesJoinedByHandCannotStartBuying(t *testing.T) {
+	ctx := context.Background()
+	service, _ := buyingTestService(types.AppConfig{})
+	_, byHand := joinedByHand(t, service)
+
+	_, err := service.UpdateManagedPool(ctx, clusterAdminAuth(), "l40s", spotPool())
+	require.ErrorIs(t, err, model.ErrManagedPoolBuysMachines)
+	state, err := service.managedPoolRepo.GetManagedPoolState(ctx, "admin-workspace", "l40s")
+	require.NoError(t, err)
+	require.False(t, state.WorkerConfig.Buys(), "the pool is as it was")
+
+	// With the machine removed, it can.
+	require.NoError(t, service.DeleteManagedMachine(ctx, clusterAdminAuth(), "l40s", byHand.MachineID))
+	pool, err := service.UpdateManagedPool(ctx, clusterAdminAuth(), "l40s", spotPool())
+	require.NoError(t, err)
+	require.True(t, pool.Config.Buys())
+
+	// And its limits can be changed while it holds machines it bought.
+	script, _, err := service.JoinScript(ctx, "l40s", "machine-1")
+	require.NoError(t, err)
+	require.True(t, joinAs(t, service, script, "verda-1").Ok)
+	pool, err = service.UpdateManagedPool(ctx, clusterAdminAuth(), "l40s", spotPool(func(pool *types.WorkerPoolConfig) {
+		pool.Provisioning.MaxNodes = 8
+	}))
+	require.NoError(t, err)
+	require.Equal(t, 8, pool.Config.Provisioning.MaxNodes)
+}
+
+func TestAPoolThatBuysCanBeDeletedWhileItHoldsMachines(t *testing.T) {
+	ctx := context.Background()
+	service, _ := buyingTestService(types.AppConfig{})
+
+	// A pool whose machines were joined by hand cannot: nobody would take
+	// them away.
+	joinedByHand(t, service)
+	require.ErrorIs(t, service.DeleteManagedPool(ctx, clusterAdminAuth(), "l40s"), model.ErrManagedPoolInUse)
+
+	// The provisioner gives back what a pool bought once the pool is gone.
+	_, err := service.CreateManagedPool(ctx, clusterAdminAuth(), "spot-l40s", spotPool())
+	require.NoError(t, err)
+	script, _, err := service.JoinScript(ctx, "spot-l40s", "machine-1")
+	require.NoError(t, err)
+	require.True(t, joinAs(t, service, script, "verda-1").Ok)
+
+	require.NoError(t, service.DeleteManagedPool(ctx, clusterAdminAuth(), "spot-l40s"))
+	pools, unloaded, err := service.BuyingPools(ctx)
+	require.NoError(t, err)
+	require.Empty(t, pools)
+	require.Empty(t, unloaded)
+
+	// A machine that was still booting does not join the pool's successor.
+	_, err = service.CreateManagedPool(ctx, clusterAdminAuth(), "spot-l40s", spotPool())
+	require.NoError(t, err)
+	require.False(t, joinAs(t, service, script, "verda-1").Ok)
+}
+
+func TestManagedPoolAlsoServesOtherGPUTypes(t *testing.T) {
+	config, err := normalizeManagedPoolConfig(types.WorkerPoolConfig{
+		Mode:       types.PoolModeExternal,
+		GPUType:    "RTX4090",
+		AlsoServes: []string{"A10G"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !config.Serves("A10G") {
+		t.Fatalf("alsoServes = %v, want A10G kept", config.AlsoServes)
+	}
+
+	for name, config := range map[string]types.WorkerPoolConfig{
+		"cpu pool":     {AlsoServes: []string{"A10G"}},
+		"its own type": {GPUType: "RTX4090", AlsoServes: []string{"RTX4090"}},
+		"any":          {GPUType: "RTX4090", AlsoServes: []string{"any"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			config.Mode = types.PoolModeExternal
+			if _, err := normalizeManagedPoolConfig(config); err == nil {
+				t.Fatal("alsoServes that cannot route anything was accepted")
+			}
+		})
+	}
+}
+
+// A workspace can give a pool of its own the name of a pool that serves
+// everyone. What that pool holds is not this pool's.
+func TestAManagedPoolHoldsOnlyItsOwnWorkers(t *testing.T) {
+	ctx := context.Background()
+	service, _ := buyingTestService(types.AppConfig{})
+	workers := &fakeWorkerRepo{}
+	service.workerRepo = workers
+	_, err := service.CreateManagedPool(ctx, clusterAdminAuth(), "l40s", types.WorkerPoolConfig{GPUType: "L40S"})
+	require.NoError(t, err)
+
+	workers.worker = &types.Worker{Id: "its-own", PoolName: "l40s", WorkspaceId: "admin-workspace", ControlPlaneManaged: true}
+	_, err = service.UpdateManagedPool(ctx, clusterAdminAuth(), "l40s", spotPool())
+	require.ErrorIs(t, err, model.ErrManagedPoolBuysMachines)
+	require.ErrorIs(t, service.DeleteManagedPool(ctx, clusterAdminAuth(), "l40s"), model.ErrManagedPoolInUse)
+
+	workers.worker = &types.Worker{Id: "a-workspaces", PoolName: "l40s", WorkspaceId: "workspace-1"}
+	_, err = service.UpdateManagedPool(ctx, clusterAdminAuth(), "l40s", spotPool())
+	require.NoError(t, err)
+	_, err = service.UpdateManagedPool(ctx, clusterAdminAuth(), "l40s", types.WorkerPoolConfig{GPUType: "L40S"})
+	require.NoError(t, err)
+	require.NoError(t, service.DeleteManagedPool(ctx, clusterAdminAuth(), "l40s"))
+}
+
+// The provisioner gives back what a pool bought. A machine removed by hand
+// would be paid for until the provisioner missed its worker.
+func TestAMachineThatWasBoughtIsNotRemovedByHand(t *testing.T) {
+	ctx := context.Background()
+	service, repo := buyingTestService(types.AppConfig{})
+	_, err := service.CreateManagedPool(ctx, clusterAdminAuth(), "spot-l40s", spotPool())
+	require.NoError(t, err)
+	script, _, err := service.JoinScript(ctx, "spot-l40s", "machine-1")
+	require.NoError(t, err)
+	require.True(t, joinAs(t, service, script, "verda-1").Ok)
+
+	err = service.DeleteManagedMachine(ctx, clusterAdminAuth(), "spot-l40s", "machine-1")
+	require.ErrorIs(t, err, model.ErrManagedPoolBuysMachines)
+	require.ErrorContains(t, err, `"spot-l40s" gives its machines back itself`)
+	machine, err := repo.GetAgentMachineState(ctx, "admin-workspace", "spot-l40s", "machine-1")
+	require.NoError(t, err)
+	require.NotNil(t, machine)
+
+	// One that was joined by hand is.
+	_, byHand := joinedByHand(t, service)
+	require.NoError(t, service.DeleteManagedMachine(ctx, clusterAdminAuth(), "l40s", byHand.MachineID))
+	machine, err = repo.GetAgentMachineState(ctx, "admin-workspace", "l40s", byHand.MachineID)
+	require.NoError(t, err)
+	require.Nil(t, machine)
 }

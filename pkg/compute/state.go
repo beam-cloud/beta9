@@ -51,7 +51,19 @@ var (
 	ErrManagedPoolImmutable     = errors.New("config-managed pools are read-only")
 	ErrManagedPoolInUse         = errors.New("pool must have no machines or workers")
 	ErrInvalidManagedPoolConfig = errors.New("invalid pool configuration")
+
+	// A pool either buys its machines or has them joined by hand. Deleting
+	// the pool gives back what it bought; nothing takes away what was joined.
+	ErrManagedPoolBuysMachines error = poolConflict("pool buys its machines")
 )
+
+// A poolConflict is a request that is at odds with what its pool is. It is
+// answered as ErrManagedPoolConflict is, in its own words.
+type poolConflict string
+
+func (e poolConflict) Error() string { return string(e) }
+
+func (e poolConflict) Is(target error) bool { return target == ErrManagedPoolConflict }
 
 type ManagedPool struct {
 	Name              string                           `json:"name"`
@@ -61,19 +73,6 @@ type ManagedPool struct {
 	State             *types.WorkerPoolState           `json:"-"` // Used by the admin CLI, not the HTTP API.
 	MachineCount      int                              `json:"machine_count"`
 	ReadyMachineCount int                              `json:"ready_machine_count"`
-}
-
-// FailoverDemand records that the entire serverless estate refused a request
-// whose failover chain ends in on-demand hardware. The scheduler writes one
-// short-lived record per GPU type; the reconcile loop consumes it. Records
-// expire on their own, so a resolved backlog stops provisioning with no
-// bookkeeping.
-type FailoverDemand struct {
-	GPU string `json:"gpu"`
-	// Pools are the serverless pools that refused, recorded for observability.
-	Pools     []string  `json:"pools,omitempty"`
-	GPUCount  uint32    `json:"gpu_count,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
 }
 
 type BYOCProviderState struct {

@@ -48,14 +48,6 @@ func (r *WorkerPoolRedisRepository) DeleteWorkerPoolState(ctx context.Context, p
 	return r.rdb.Del(ctx, common.RedisKeys.WorkerPoolState(poolName)).Err()
 }
 
-func (r *WorkerPoolRedisRepository) SetWorkerPoolStateLock(poolName string) error {
-	return r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerPoolStateLock(poolName), common.RedisLockOptions{TtlS: 10, Retries: 0})
-}
-
-func (r *WorkerPoolRedisRepository) RemoveWorkerPoolStateLock(poolName string) error {
-	return r.lock.Release(common.RedisKeys.WorkerPoolStateLock(poolName))
-}
-
 // SetWorkerPoolState updates the worker pool state with some recent health metrics
 func (r *WorkerPoolRedisRepository) SetWorkerPoolState(ctx context.Context, poolName string, state *types.WorkerPoolState) error {
 	return r.rdb.HSet(
@@ -75,18 +67,35 @@ func (r *WorkerPoolRedisRepository) SetWorkerPoolState(ctx context.Context, pool
 	).Err()
 }
 
-func (r *WorkerPoolRedisRepository) SetWorkerPoolSizerLock(poolName string) error {
-	return r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerPoolSizerLock(poolName), common.RedisLockOptions{TtlS: workerPoolSizerLockTTLSeconds, Retries: 0})
+// Three kinds of work are done for a pool by one scheduler replica at a time:
+// sizing it, reporting its state and cleaning up after its workers. Each has
+// a lock of its own, so none holds up another.
+
+// WithWorkerPoolSizerLock runs size while this replica is the only one sizing
+// the pool.
+func (r *WorkerPoolRedisRepository) WithWorkerPoolSizerLock(poolName string, size func()) error {
+	return r.withPoolLock(common.RedisKeys.WorkerPoolSizerLock(poolName), common.RedisLockOptions{TtlS: workerPoolSizerLockTTLSeconds, Retries: 0}, size)
 }
 
-func (r *WorkerPoolRedisRepository) RemoveWorkerPoolSizerLock(poolName string) error {
-	return r.lock.Release(common.RedisKeys.WorkerPoolSizerLock(poolName))
+// WithWorkerPoolStateLock runs report while this replica is the only one
+// reporting the pool's state.
+func (r *WorkerPoolRedisRepository) WithWorkerPoolStateLock(poolName string, report func()) error {
+	return r.withPoolLock(common.RedisKeys.WorkerPoolStateLock(poolName), common.RedisLockOptions{TtlS: 10, Retries: 0}, report)
 }
 
-func (r *WorkerPoolRedisRepository) SetWorkerCleanerLock(poolName string) error {
-	return r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerPoolCleanerLock(poolName), common.RedisLockOptions{TtlS: 10, Retries: 3})
+// WithWorkerPoolCleanerLock runs clean while this replica is the only one
+// cleaning up after the pool's workers.
+func (r *WorkerPoolRedisRepository) WithWorkerPoolCleanerLock(poolName string, clean func()) error {
+	return r.withPoolLock(common.RedisKeys.WorkerPoolCleanerLock(poolName), common.RedisLockOptions{TtlS: 10, Retries: 3}, clean)
 }
 
-func (r *WorkerPoolRedisRepository) RemoveWorkerCleanerLock(poolName string) error {
-	return r.lock.Release(common.RedisKeys.WorkerPoolCleanerLock(poolName))
+// withPoolLock runs work while this replica holds the lock. It returns
+// redislock.ErrNotObtained without running it when another replica does. The
+// lock is held for as long as work runs, however long that is, and expires
+// on its own if the replica dies.
+func (r *WorkerPoolRedisRepository) withPoolLock(key string, options common.RedisLockOptions, work func()) error {
+	return r.lock.WithLease(context.TODO(), key, options, func(context.Context) error {
+		work()
+		return nil
+	})
 }
