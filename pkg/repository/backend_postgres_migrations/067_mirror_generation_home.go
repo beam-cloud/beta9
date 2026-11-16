@@ -10,9 +10,10 @@ import (
 func init() { goose.AddMigrationContext(upMirrorGenerationHome, downMirrorGenerationHome) }
 
 // The home directory a generation's files came from; empty for generations
-// that do not record one.
+// that do not record one. Databases that ran this as migration 066 already
+// have the column.
 func upMirrorGenerationHome(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.ExecContext(ctx, `ALTER TABLE mirror_generation ADD COLUMN home TEXT NOT NULL DEFAULT ''`)
+	_, err := tx.ExecContext(ctx, `ALTER TABLE mirror_generation ADD COLUMN IF NOT EXISTS home TEXT NOT NULL DEFAULT ''`)
 	return err
 }
 
