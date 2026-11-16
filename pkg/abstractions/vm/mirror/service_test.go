@@ -26,6 +26,7 @@ import (
 
 type memoryRepo struct {
 	repository.BackendRepository
+	repository.VMRepository
 	mu          sync.Mutex
 	mirrors     []*types.Mirror
 	purged      map[string]time.Time

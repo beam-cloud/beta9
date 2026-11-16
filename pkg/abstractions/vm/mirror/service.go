@@ -103,7 +103,7 @@ type ServiceOpts struct {
 }
 
 type Service struct {
-	repo       repository.MirrorRepository
+	repo       repository.VMRepository
 	workspaces repository.BackendRepository
 	config     Config
 	store      func(context.Context, *types.Workspace) (ObjectStore, error)
@@ -114,7 +114,7 @@ type Service struct {
 }
 
 func New(ctx context.Context, opts ServiceOpts) (*Service, error) {
-	repo, ok := opts.BackendRepo.(repository.MirrorRepository)
+	repo, ok := opts.BackendRepo.(repository.VMRepository)
 	if !ok {
 		return nil, errors.New("backend does not support mirrors")
 	}
