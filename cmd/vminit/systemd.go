@@ -106,6 +106,10 @@ func bootSystemd(spec *specs.Spec, workload *workloadMemory, lateDevices bool) e
 		return err
 	}
 
+	if err := guestResolvConf("/etc/resolv.conf"); err != nil {
+		return err
+	}
+
 	if err := workload.configureSystemd("/"); err != nil {
 		return err
 	}
@@ -493,6 +497,25 @@ func guestHosts(hostname string) error {
 	}
 
 	return os.WriteFile("/etc/hostname", []byte(hostname+"\n"), 0644)
+}
+
+// guestResolvConf makes the worker's read-only resolv.conf bind the guest's
+// own file, which tailscaled, resolvconf and the like rewrite. Every boot
+// starts from the worker's resolvers: a restricted network lets DNS reach
+// only those.
+func guestResolvConf(name string) error {
+	data, err := os.ReadFile(name)
+	if os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if err := unix.Unmount(name, unix.MNT_DETACH); err == unix.EINVAL {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("unmount guest resolv.conf: %w", err)
+	}
+	return replaceFile(name, data)
 }
 
 func runSystemdAgent() (int, error) {
