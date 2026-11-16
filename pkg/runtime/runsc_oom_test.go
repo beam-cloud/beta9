@@ -349,17 +349,20 @@ esac
 func TestRunscBoundsOrphanedOutput(t *testing.T) {
 	for _, action := range []string{"run", "wait", "delete", "no wait"} {
 		t.Run(action, func(t *testing.T) {
-			t.Parallel()
 			root := t.TempDir()
 			path := filepath.Join(root, "runsc")
 			require.NoError(t, os.WriteFile(path, []byte(`#!/bin/sh
 case " $* " in
- *" run "*|*" restore "*) sleep 60 & echo $! > "$0.child"; echo final-output ;;
+ *" run "*|*" restore "*) sleep 60 & echo final-output; echo $! > "$0.child" ;;
  *" state "*) echo '{"pid":4321,"status":"running"}' ;;
  *" wait --restore "*|*" delete "*) exit 0 ;;
  *" wait "*) echo '{"exitStatus":42}' ;;
 esac
 `), 0o755))
+			// Every script is written before any subtest runs one. A process
+			// forked while a script is open for writing keeps it open until it
+			// execs, and until then running the script fails as "text file busy".
+			t.Parallel()
 			t.Cleanup(func() {
 				data, _ := os.ReadFile(path + ".child")
 				if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 1 {
@@ -373,6 +376,12 @@ esac
 			if action != "run" {
 				_, err := rt.Restore(t.Context(), "container", &RestoreOpts{BundlePath: bundle, OutputWriter: &output})
 				require.NoError(t, err)
+				// Restore returns once the container runs, which may be before
+				// its command has printed. The command records its child last.
+				require.Eventually(t, func() bool {
+					data, _ := os.ReadFile(path + ".child")
+					return strings.HasSuffix(string(data), "\n")
+				}, 5*time.Second, 10*time.Millisecond)
 			}
 			finished := make(chan struct{})
 			go func() {
