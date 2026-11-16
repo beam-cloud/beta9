@@ -10,7 +10,7 @@ found, and the store format both sides implement.
 `beam setup mirror --from DMG|URL` installs the app on a Mac and opens it
 with the Beam CLI's sign-in, offered first in its onboarding;
 `beam --context NAME setup mirror` offers another one. Without `--from`, it
-opens the app already installed.
+downloads the app from `downloads.beam.cloud` if it isn't installed.
 
 ## How it fits together
 

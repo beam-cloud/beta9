@@ -2814,8 +2814,9 @@ def fake_mirror_tools(monkeypatch, bundle_id="com.beam.mirror"):
         if command[:2] == ["hdiutil", "attach"]:
             mount = Path(command[command.index("-mountpoint") + 1])
             info = {"CFBundleIdentifier": bundle_id, "CFBundleShortVersionString": "0.2.10"}
-            (mount / "Beam Mirror.app" / "Contents").mkdir(parents=True)
-            (mount / "Beam Mirror.app" / "Contents" / "Info.plist").write_bytes(plistlib.dumps(info))
+            contents = mount / "Beam Mirror.app" / "Contents"
+            contents.mkdir(parents=True)
+            (contents / "Info.plist").write_bytes(plistlib.dumps(info))
         elif command[0] == "ditto":
             shutil.copytree(command[1], command[2])
         return subprocess.CompletedProcess(command, 0, "", "")
@@ -2850,7 +2851,30 @@ def test_setup_mirror_installs_the_app_and_offers_the_sign_in(tmp_path, monkeypa
     assert commands[-1] == ["open", "-n", "-a", str(app), "--args", "app", "--context", "staging"]
 
 
-def test_setup_mirror_needs_macos_an_app_and_a_beam_mirror_image(tmp_path, monkeypatch):
+def test_setup_mirror_downloads_a_missing_app_and_opens_an_installed_one(tmp_path, monkeypatch):
+    from beta9.cli import setup
+
+    app = tmp_path / "Beam Mirror.app"
+    monkeypatch.setattr(setup, "MIRROR_APP", app)
+    commands = fake_mirror_tools(monkeypatch)
+    downloads = []
+
+    def download(url, path):
+        downloads.append(url)
+        path.write_bytes(b"image")
+
+    monkeypatch.setattr(setup, "download_image", download)
+
+    opened = ["open", "-n", "-a", str(app), "--args", "app", "--context", "staging"]
+    for _ in range(2):
+        result = CliRunner().invoke(setup.common, ["setup", "mirror", "--context", "staging"])
+        assert result.exit_code == 0, result.output
+        assert commands[-1] == opened
+    assert downloads == [setup.MIRROR_DOWNLOAD_URL]
+    assert (app / "Contents" / "Info.plist").exists()
+
+
+def test_setup_mirror_needs_macos_and_a_beam_mirror_image(tmp_path, monkeypatch):
     from beta9.cli import setup
 
     app = tmp_path / "Beam Mirror.app"
@@ -2858,9 +2882,6 @@ def test_setup_mirror_needs_macos_an_app_and_a_beam_mirror_image(tmp_path, monke
     image = tmp_path / "Other.dmg"
     image.write_bytes(b"image")
     commands = fake_mirror_tools(monkeypatch, bundle_id="com.example.other")
-
-    result = CliRunner().invoke(setup.common, ["setup", "mirror"])
-    assert result.exit_code != 0 and "--from" in result.output
 
     result = CliRunner().invoke(setup.common, ["setup", "mirror", "--from", str(image)])
     assert result.exit_code != 0 and "doesn't hold Beam Mirror" in result.output

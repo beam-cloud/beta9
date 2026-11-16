@@ -263,6 +263,7 @@ def setup_vm(name, template, desktop, clients, skip_agents, yes, context):
 
 MIRROR_APP = Path("/Applications/Beam Mirror.app")
 MIRROR_BUNDLE_ID = "com.beam.mirror"
+MIRROR_DOWNLOAD_URL = "https://downloads.beam.cloud/mirror/Beam-Mirror.dmg"
 # Far more than a Beam Mirror disk image needs.
 MIRROR_IMAGE_LIMIT = 1 << 30
 
@@ -276,7 +277,8 @@ MIRROR_IMAGE_LIMIT = 1 << 30
     "--from",
     "source",
     metavar="DMG|URL",
-    help="Install or update from this disk image: a path or an https URL.",
+    help="Install or update from this disk image: a path or an https URL. "
+    "Without it, Beam Mirror is downloaded if it isn't installed.",
 )
 @extraclick.config_context_option
 def setup_mirror(source: Optional[str], context: Optional[str]):
@@ -288,13 +290,9 @@ def setup_mirror(source: Optional[str], context: Optional[str]):
     try:
         with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
             connect_workspace(selected)
-            if source:
+            if source or not MIRROR_APP.exists():
                 with terminal.progress("Installing Beam Mirror"):
-                    install_mirror(source)
-            elif not MIRROR_APP.exists():
-                raise click.ClickException(
-                    "Beam Mirror isn't installed. Run this again with --from and its disk image."
-                )
+                    install_mirror(source or MIRROR_DOWNLOAD_URL)
             # A Beam Mirror that is running offers the sign-in, or makes way
             # for a newer one; otherwise this one starts.
             run_checked(
