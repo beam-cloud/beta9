@@ -543,9 +543,17 @@ func (f *FS) decodedExtent(ctx context.Context, number uint32, extent Extent) ([
 	// The flight is shared, so one caller's cancellation must not fail the
 	// others: the fetch runs detached from any single request.
 	result := f.flights.DoChan(fmt.Sprint(number), func() (any, error) {
+		detached := context.WithoutCancel(ctx)
+		// A guest decides how many extents are read at once, so each read
+		// takes what it is about to hold from the budget first.
+		weight := int64(extent.StoredLen) + int64(extent.RawLen)
+		if err := acquireBudget(detached, decodeBudget, weight); err != nil {
+			return nil, fmt.Errorf("wait to read a mirror extent: %w", err)
+		}
+		defer decodeBudget.Release(weight)
 		stored := make([]byte, extent.StoredLen)
 		object := f.manifest.Object(extent.Object)
-		if err := f.source.ReadObject(context.WithoutCancel(ctx), object, int64(extent.Offset), stored); err != nil {
+		if err := f.source.ReadObject(detached, object, int64(extent.Offset), stored); err != nil {
 			return nil, err
 		}
 		raw, err := decompress(stored, uint64(extent.RawLen))
@@ -709,11 +717,34 @@ type recentObject struct {
 
 var ErrObjectMismatch = errors.New("mirror object does not match its digest")
 
-const downloadBudgetBytes = 128 << 20
+const (
+	downloadBudgetBytes = 128 << 20
+	// An extent is at most MaxExtentLen stored and as much decoded.
+	decodeBudgetBytes = 128 << 20
+	budgetWait        = 2 * time.Minute
+)
 
-// All mounts in this process share the budget. A manifest can be larger
-// than a file object and takes the whole budget if it exceeds it.
-var downloadBudget = semaphore.NewWeighted(downloadBudgetBytes)
+// Guests decide how much is read at once, so what the mounts in this process
+// hold for reads in progress comes out of two budgets they all share, taken
+// before anything is allocated: downloadBudget for objects on their way from
+// the store, and decodeBudget for extents being decompressed. A manifest can
+// be larger than a file object and takes the whole download budget if it
+// exceeds it.
+var (
+	downloadBudget = semaphore.NewWeighted(downloadBudgetBytes)
+	decodeBudget   = semaphore.NewWeighted(decodeBudgetBytes)
+)
+
+func acquireBudget(ctx context.Context, budget *semaphore.Weighted, weight int64) error {
+	ctx, cancel := context.WithTimeout(ctx, budgetWait)
+	defer cancel()
+	return budget.Acquire(ctx, weight)
+}
+
+// downloadWeight is what an object takes from the download budget.
+func downloadWeight(object Object) int64 {
+	return min(int64(object.Size)+1, downloadBudgetBytes)
+}
 
 func (s *CachedSource) ReadObject(ctx context.Context, object Object, offset int64, dest []byte) error {
 	if object.Size > MaxManifestSize {
@@ -767,11 +798,8 @@ func (s *CachedSource) fetch(ctx context.Context, object Object) ([]byte, error)
 	if data := s.remembered(object.Digest); data != nil {
 		return data, nil
 	}
-	weight := min(int64(object.Size)+1, downloadBudgetBytes)
-	waitCtx, cancelWait := context.WithTimeout(ctx, 2*time.Minute)
-	err := downloadBudget.Acquire(waitCtx, weight)
-	cancelWait()
-	if err != nil {
+	weight := downloadWeight(object)
+	if err := acquireBudget(ctx, downloadBudget, weight); err != nil {
 		return nil, fmt.Errorf("wait to fetch mirror object %s: %w", object.Digest, err)
 	}
 	defer downloadBudget.Release(weight)
@@ -801,7 +829,7 @@ func (s *CachedSource) Prefetch(ctx context.Context, object Object) (bool, error
 	if s.Cache == nil || s.cached(ctx, object) {
 		return false, nil
 	}
-	weight := min(int64(object.Size)+1, downloadBudgetBytes)
+	weight := downloadWeight(object)
 	for !downloadBudget.TryAcquire(weight) {
 		select {
 		case <-ctx.Done():
@@ -822,6 +850,40 @@ func (s *CachedSource) Prefetch(ctx context.Context, object Object) (bool, error
 		return false, err
 	}
 	return true, nil
+}
+
+// Manifest reads and parses a generation's manifest. The cache is trusted
+// for file contents as for every other reader of it, but the manifest decides
+// what the whole filesystem contains, so its bytes are checked against its
+// name wherever they come from. Its size comes out of the download budget
+// before any of it is held, and only the parsed manifest is kept.
+func (s *CachedSource) Manifest(ctx context.Context, object Object) (*Manifest, error) {
+	if object.Size == 0 || object.Size > MaxManifestSize {
+		return nil, ErrObjectMismatch
+	}
+	weight := downloadWeight(object)
+	if err := acquireBudget(ctx, downloadBudget, weight); err != nil {
+		return nil, fmt.Errorf("wait to fetch mirror manifest %s: %w", object.Digest, err)
+	}
+	defer downloadBudget.Release(weight)
+
+	if s.Cache != nil && s.cached(ctx, object) {
+		stored := make([]byte, object.Size)
+		if s.Cache.ReadObject(ctx, object, 0, stored) {
+			if DigestOf(stored) != object.Digest {
+				return nil, ErrObjectMismatch
+			}
+			return ParseBounded(stored)
+		}
+	}
+	stored, err := s.retrieve(ctx, object)
+	if err != nil {
+		return nil, err
+	}
+	if s.Cache != nil {
+		_ = s.Cache.StoreObject(ctx, object, stored)
+	}
+	return ParseBounded(stored)
 }
 
 // cached reports whether a read would find the object without downloading

@@ -236,18 +236,9 @@ func (m *mirrorLayers) serve(ctx context.Context, layer *mirrorLayer, request *t
 		// mirror have put there is visible here.
 		source.Cache = mirror.ScopedCache{Store: m.cache, Scope: fmt.Appendf(nil, "mirror %d %s", request.Workspace.Id, mirrorID)}
 	}
-	stored := make([]byte, manifest.Size)
-	if err := source.ReadObject(ctx, manifest, 0, stored); err != nil {
-		return fmt.Errorf("read mirror manifest: %w", err)
-	}
-	// The cache is trusted for file contents as for every other reader of
-	// it, but the manifest decides what the whole layer contains.
-	if mirror.DigestOf(stored) != manifest.Digest {
-		return mirror.ErrObjectMismatch
-	}
-	parsed, err := mirror.ParseBounded(stored)
+	parsed, err := source.Manifest(ctx, manifest)
 	if err != nil {
-		return err
+		return fmt.Errorf("read mirror manifest: %w", err)
 	}
 	fsys, err := mirror.NewFS(parsed, source, mirror.FSOptions{Placements: placements})
 	if err != nil {

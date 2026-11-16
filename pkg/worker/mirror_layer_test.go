@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -137,6 +138,10 @@ func (m blockingMirrorMount) Unmount() error {
 	<-m.finish
 	return nil
 }
+
+type mirrorUnmountFunc func() error
+
+func (unmount mirrorUnmountFunc) Unmount() error { return unmount() }
 
 type mirrorLayerHarness struct {
 	layers    *mirrorLayers
@@ -302,6 +307,51 @@ func TestMirrorLayersReservePathUntilIdleTeardownFinishes(t *testing.T) {
 	defer releaseAgain()
 	require.Equal(t, path, again)
 	require.Equal(t, int32(2), h.opened.Load())
+}
+
+// A layer that could not be unmounted is still mounted: it stays its
+// generation's mount, and a purge still stops it serving.
+func TestMirrorLayerThatCannotBeUnmountedStaysTracked(t *testing.T) {
+	h := newMirrorLayerHarness(t)
+	pin := h.generation(t, 1, map[string]string{"notes.txt": "one"})
+	busy := true
+	attempts := 0
+	h.layers.mount = func(path string, fsys *mirror.FS) (mirrorMount, error) {
+		h.mounts[path] = fsys
+		return mirrorUnmountFunc(func() error {
+			attempts++
+			if busy {
+				return syscall.EBUSY
+			}
+			return nil
+		}), nil
+	}
+	ctx := t.Context()
+	path, release, err := h.layers.acquire(ctx, mirrorRequest(7), pin, nil)
+	require.NoError(t, err)
+	release()
+	h.layers.pruneIdle(time.Now().Add(time.Hour))
+	require.Equal(t, 1, attempts)
+	require.DirExists(t, path)
+
+	// The next VM joins it instead of mounting over it.
+	again, release, err := h.layers.acquire(ctx, mirrorRequest(7), pin, nil)
+	require.NoError(t, err)
+	require.Equal(t, path, again)
+	require.Equal(t, int32(1), h.opened.Load())
+
+	h.bucket.objects = map[string][]byte{}
+	require.Equal(t, 1, h.layers.revokePurged(ctx))
+	require.True(t, h.mounts[path].Revoked())
+	release()
+	require.Equal(t, 2, attempts, "unmounted when its last VM stops")
+	_, _, err = h.layers.acquire(ctx, mirrorRequest(7), pin, nil)
+	require.ErrorContains(t, err, "no longer in the store")
+
+	// It is unmounted once it can be.
+	busy = false
+	require.Equal(t, 1, h.layers.pruneIdle(time.Now().Add(time.Hour)))
+	require.NoDirExists(t, path)
 }
 
 // The homes are the image's, so VMs of images whose desktop users differ

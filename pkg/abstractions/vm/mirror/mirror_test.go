@@ -657,6 +657,72 @@ func TestCachedSourcesShareDownloadBudget(t *testing.T) {
 	}
 }
 
+// A guest decides how many compressed extents are read at once. Each read
+// takes what it is about to hold from a budget before it holds any of it.
+func TestDecodingSharesABudget(t *testing.T) {
+	text := bytes.Repeat([]byte("all work and no play\n"), 4000)
+	manifest, _, store := writeTree(t, map[string][]byte{"notes.txt": text}, DefaultWriterOptions())
+	fsys, err := NewFS(manifest, store, FSOptions{})
+	require.NoError(t, err)
+	index, ok := manifest.Find("notes.txt")
+	require.True(t, ok)
+	extent := manifest.Extent(manifest.Entry(index).First)
+	require.True(t, extent.Compressed())
+
+	ctx := context.Background()
+	reserved := int64(decodeBudgetBytes) - int64(extent.StoredLen) - int64(extent.RawLen) + 1
+	require.NoError(t, decodeBudget.Acquire(ctx, reserved))
+	blocked, cancel := context.WithTimeout(ctx, 25*time.Millisecond)
+	defer cancel()
+	_, err = fsys.ReadFile(blocked, index, 0, make([]byte, 100))
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Zero(t, store.reads.Load(), "the extent is not read without room for it")
+
+	decodeBudget.Release(reserved)
+	require.Equal(t, text, readAll(t, fsys, manifest, "notes.txt"))
+}
+
+func TestManifestIsLoadedWithinTheDownloadBudget(t *testing.T) {
+	_, stored, _ := writeTree(t, map[string][]byte{"notes.txt": []byte("one")}, DefaultWriterOptions())
+	object := Object{Digest: DigestOf(stored), Size: uint64(len(stored))}
+	downloads := 0
+	cache := &countingCache{objects: map[Digest][]byte{}}
+	source := &CachedSource{Cache: cache, Download: func(context.Context, Digest) (io.ReadCloser, error) {
+		downloads++
+		return io.NopCloser(bytes.NewReader(stored)), nil
+	}}
+	ctx := context.Background()
+
+	// It waits for room before it downloads anything.
+	reserved := int64(downloadBudgetBytes - len(stored))
+	require.NoError(t, downloadBudget.Acquire(ctx, reserved))
+	blocked, cancel := context.WithTimeout(ctx, 25*time.Millisecond)
+	defer cancel()
+	_, err := source.Manifest(blocked, object)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Zero(t, downloads)
+	downloadBudget.Release(reserved)
+
+	// Only the parsed manifest stays in memory, and the next mount finds
+	// its bytes in the cache.
+	manifest, err := source.Manifest(ctx, object)
+	require.NoError(t, err)
+	require.Equal(t, object.Digest, manifest.Digest())
+	require.Equal(t, 1, cache.stores)
+	require.Empty(t, source.recent)
+	_, err = source.Manifest(ctx, object)
+	require.NoError(t, err)
+	require.Equal(t, 1, downloads)
+
+	// What the cache holds is checked against the manifest's name.
+	cache.objects[object.Digest][len(stored)-1] ^= 1
+	_, err = source.Manifest(ctx, object)
+	require.ErrorIs(t, err, ErrObjectMismatch)
+
+	_, err = source.Manifest(ctx, Object{Digest: object.Digest, Size: MaxManifestSize + 1})
+	require.ErrorIs(t, err, ErrObjectMismatch)
+}
+
 func TestCachedSourcePrefetch(t *testing.T) {
 	ctx := context.Background()
 	data := pseudoRandom(5, 3000)
