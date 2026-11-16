@@ -231,6 +231,20 @@ func workspaceOwned(worker *types.Worker) bool {
 	return worker.WorkspaceId != "" && !worker.ControlPlaneManaged
 }
 
+// SharedPools returns the pools that any workspace may be routed to. A
+// workspace's private pool is registered under a workspace-scoped key and is
+// reachable only by naming it.
+func (m *WorkerPoolManager) SharedPools() []*WorkerPool {
+	var pools []*WorkerPool
+	m.poolMap.Range(func(key string, pool *WorkerPool) bool {
+		if key == pool.Name {
+			pools = append(pools, pool)
+		}
+		return true
+	})
+	return pools
+}
+
 // routeFor returns where the request may run. It reads only the request and
 // the pools this replica has loaded, so every placement decision can call it.
 func (s *Scheduler) routeFor(request *types.ContainerRequest) route {

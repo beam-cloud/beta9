@@ -161,6 +161,42 @@ func (w *Worker) ToProto() *pb.Worker {
 	}
 }
 
+func NewWorkerFromProto(in *pb.Worker) *Worker {
+	containers := make([]Container, len(in.ActiveContainers))
+	for i, c := range in.ActiveContainers {
+		containers[i] = *NewContainerFromProto(c)
+	}
+
+	return &Worker{
+		Id:                   in.Id,
+		Status:               WorkerStatus(in.Status),
+		TotalCpu:             in.TotalCpu,
+		TotalMemory:          in.TotalMemory,
+		TotalGpuCount:        in.TotalGpuCount,
+		FreeCpu:              in.FreeCpu,
+		FreeMemory:           in.FreeMemory,
+		FreeGpuCount:         in.FreeGpuCount,
+		EvictableCpu:         in.EvictableCpu,
+		EvictableMemory:      in.EvictableMemory,
+		EvictableGpuCount:    in.EvictableGpuCount,
+		Gpu:                  in.Gpu,
+		PoolName:             in.PoolName,
+		MachineId:            in.MachineId,
+		ResourceVersion:      in.ResourceVersion,
+		RequiresPoolSelector: in.RequiresPoolSelector,
+		Priority:             in.Priority,
+		Preemptable:          in.Preemptable,
+		BuildVersion:         in.BuildVersion,
+		ActiveContainers:     containers,
+		Runtime:              in.Runtime,
+		PoolSelector:         in.PoolSelector,
+		CordonRequested:      in.CordonRequested,
+		RolloutGeneration:    in.RolloutGeneration,
+		RolloutBuildVersion:  in.RolloutBuildVersion,
+		WorkerImageOverride:  in.WorkerImageOverride,
+	}
+}
+
 type CapacityUpdateType int
 
 // AddCapacity is the one capacity update: a worker gives back what a
@@ -293,6 +329,19 @@ func (c *Container) ToProto() *pb.Container {
 		WorkerId:     c.WorkerId,
 		MachineId:    c.MachineId,
 		DeploymentId: c.DeploymentId,
+	}
+}
+
+func NewContainerFromProto(in *pb.Container) *Container {
+	return &Container{
+		ContainerId: in.ContainerId,
+		StubId:      in.StubId,
+		Status:      ContainerStatus(in.Status),
+		ScheduledAt: in.ScheduledAt.AsTime(),
+		StartedAt:   in.StartedAt.AsTime(),
+		WorkspaceId: in.WorkspaceId,
+		WorkerId:    in.WorkerId,
+		MachineId:   in.MachineId,
 	}
 }
 
@@ -564,6 +613,15 @@ func WorkerStartConcurrencyForPool(poolConfig WorkerPoolConfig, globalRuntime, r
 		return maxStarts
 	}
 	return limit
+}
+
+func WorkerStartConcurrency(workerConfig WorkerConfig, worker *Worker) int {
+	if worker == nil {
+		return DefaultRuncStartConcurrency
+	}
+
+	poolConfig := workerConfig.Pools[worker.PoolName]
+	return WorkerStartConcurrencyForPool(poolConfig, workerConfig.ContainerRuntime, worker.Runtime, worker.TotalCpu)
 }
 
 // CapacityMemory includes runtime overhead in MiB without changing the

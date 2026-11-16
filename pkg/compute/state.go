@@ -54,8 +54,16 @@ var (
 
 	// A pool either buys its machines or has them joined by hand. Deleting
 	// the pool gives back what it bought; nothing takes away what was joined.
-	ErrManagedPoolBuysMachines = errors.New("pool buys its machines")
+	ErrManagedPoolBuysMachines error = poolConflict("pool buys its machines")
 )
+
+// A poolConflict is a request that is at odds with what its pool is. It is
+// answered as ErrManagedPoolConflict is, in its own words.
+type poolConflict string
+
+func (e poolConflict) Error() string { return string(e) }
+
+func (e poolConflict) Is(target error) bool { return target == ErrManagedPoolConflict }
 
 type ManagedPool struct {
 	Name              string                           `json:"name"`

@@ -53,33 +53,51 @@ func TestKeylessCheckpointMayEvict(t *testing.T) {
 }
 
 func TestWorkerStartConcurrencyUsesPoolAndRuntime(t *testing.T) {
-	pool := WorkerPoolConfig{
-		ContainerRuntime:          ContainerRuntimeRunc.String(),
-		ContainerStartConcurrency: 32,
+	worker := &Worker{
+		TotalCpu: 16000,
+		PoolName: "default",
+		Runtime:  ContainerRuntimeRunc.String(),
+	}
+	config := WorkerConfig{
+		Pools: map[string]WorkerPoolConfig{
+			"default": {
+				ContainerRuntime:          ContainerRuntimeRunc.String(),
+				ContainerStartConcurrency: 32,
+			},
+		},
 	}
 
-	require.Equal(t, 32, WorkerStartConcurrencyForPool(pool, "", ContainerRuntimeRunc.String(), 16000))
+	require.Equal(t, 32, WorkerStartConcurrency(config, worker))
 }
 
 func TestWorkerStartConcurrencyCapsByWorkerCPU(t *testing.T) {
-	pool := WorkerPoolConfig{
-		ContainerRuntime:          ContainerRuntimeRunc.String(),
-		ContainerStartConcurrency: 32,
+	worker := &Worker{
+		TotalCpu: 1000,
+		PoolName: "default",
+		Runtime:  ContainerRuntimeRunc.String(),
+	}
+	config := WorkerConfig{
+		Pools: map[string]WorkerPoolConfig{
+			"default": {
+				ContainerRuntime:          ContainerRuntimeRunc.String(),
+				ContainerStartConcurrency: 32,
+			},
+		},
 	}
 
-	require.Equal(t, 2, WorkerStartConcurrencyForPool(pool, "", ContainerRuntimeRunc.String(), 1000))
+	require.Equal(t, 2, WorkerStartConcurrency(config, worker))
 }
 
-func TestWorkerProtoCarriesRuntimeAndPoolSelector(t *testing.T) {
+func TestWorkerProtoRoundTripPreservesRuntimeAndPoolSelector(t *testing.T) {
 	worker := &Worker{
 		Id:           "worker-1",
 		Runtime:      ContainerRuntimeRunc.String(),
 		PoolSelector: "private-cpu",
 	}
 
-	proto := worker.ToProto()
-	require.Equal(t, ContainerRuntimeRunc.String(), proto.Runtime)
-	require.Equal(t, "private-cpu", proto.PoolSelector)
+	roundTrip := NewWorkerFromProto(worker.ToProto())
+	require.Equal(t, ContainerRuntimeRunc.String(), roundTrip.Runtime)
+	require.Equal(t, "private-cpu", roundTrip.PoolSelector)
 }
 
 func TestContainerRequestProtoRoundTripPreservesTaskID(t *testing.T) {
@@ -205,64 +223,4 @@ func TestCPUShareMultiplier(t *testing.T) {
 	require.EqualValues(t, 16000, CPUShareMultiplier(0).Schedulable(16000))
 	require.EqualValues(t, 24000, CPUShareMultiplier(1.5).Schedulable(16000))
 	require.EqualValues(t, 22050, CPUShareMultiplier(1.4).Schedulable(15750))
-}
-
-// MachineId means two things: the machine a caller chose, and the machine a
-// request was placed on. Only the second is undone when the request goes
-// back to the backlog.
-func TestContainerRequestMachineAssignment(t *testing.T) {
-	t.Run("placed on a machine, then returned to the backlog", func(t *testing.T) {
-		request := &ContainerRequest{}
-		request.AssignMachine("machine-1")
-		if request.MachineId != "machine-1" || !request.MachineAssigned {
-			t.Fatalf("placed request = %q assigned %v", request.MachineId, request.MachineAssigned)
-		}
-		request.ReleaseMachine()
-		if request.MachineId != "" || request.MachineAssigned {
-			t.Fatalf("released request = %q assigned %v, want it free to run anywhere", request.MachineId, request.MachineAssigned)
-		}
-		// Placed again, elsewhere.
-		request.AssignMachine("machine-2")
-		request.ReleaseMachine()
-		if request.MachineId != "" {
-			t.Fatalf("request is bound to %q after its second placement", request.MachineId)
-		}
-	})
-
-	t.Run("pinned by its caller", func(t *testing.T) {
-		request := &ContainerRequest{MachineId: "machine-1"}
-		request.AssignMachine("machine-1")
-		if request.MachineId != "machine-1" || request.MachineAssigned {
-			t.Fatalf("pinned request = %q assigned %v", request.MachineId, request.MachineAssigned)
-		}
-		request.ReleaseMachine()
-		if request.MachineId != "machine-1" {
-			t.Fatalf("pinned request lost its machine: %q", request.MachineId)
-		}
-	})
-
-	t.Run("placed on a worker with no machine", func(t *testing.T) {
-		request := &ContainerRequest{}
-		request.AssignMachine("")
-		if request.MachineId != "" || request.MachineAssigned {
-			t.Fatalf("request = %q assigned %v", request.MachineId, request.MachineAssigned)
-		}
-	})
-
-	t.Run("the flag survives the queue", func(t *testing.T) {
-		request := &ContainerRequest{ContainerId: "c"}
-		request.AssignMachine("machine-1")
-		data, err := json.Marshal(request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var queued ContainerRequest
-		if err := json.Unmarshal(data, &queued); err != nil {
-			t.Fatal(err)
-		}
-		queued.ReleaseMachine()
-		if queued.MachineId != "" {
-			t.Fatalf("a queued request stayed bound to %q", queued.MachineId)
-		}
-	})
 }

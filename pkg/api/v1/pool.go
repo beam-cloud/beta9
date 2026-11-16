@@ -11,7 +11,6 @@ import (
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
-	"github.com/rs/zerolog/log"
 )
 
 const poolRequestLimit = 1024 * 1024
@@ -79,13 +78,11 @@ func poolHTTPError(err error) error {
 		return HTTPNotFound()
 	case errors.Is(err, model.ErrManagedPoolConflict),
 		errors.Is(err, model.ErrManagedPoolImmutable),
-		errors.Is(err, model.ErrManagedPoolInUse),
-		errors.Is(err, model.ErrManagedPoolBuysMachines):
+		errors.Is(err, model.ErrManagedPoolInUse):
 		return HTTPConflict(err.Error())
 	case errors.Is(err, model.ErrInvalidManagedPoolConfig):
 		return HTTPBadRequest(err.Error())
 	default:
-		log.Error().Err(err).Msg("pool request failed")
 		return HTTPInternalServerError("Unable to manage pool")
 	}
 }

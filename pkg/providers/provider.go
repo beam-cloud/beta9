@@ -29,6 +29,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
@@ -950,6 +951,26 @@ func sortOffers(offers []Offer) {
 
 func containsAny(text string, words ...string) bool {
 	return slices.ContainsFunc(words, func(word string) bool { return strings.Contains(text, word) })
+}
+
+// gpuName is Beam's name for a GPU as a provider's catalog names it, or the
+// catalog's own name when Beam has none.
+func gpuName(catalog string) types.GpuType {
+	key := strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return unicode.ToUpper(r)
+		}
+		return -1
+	}, catalog)
+	switch {
+	case containsAny(key, "GB200", "GB300"):
+		// Not the B200 or B300 its name contains. Beam has no name for it.
+		return types.GpuType(strings.TrimSpace(catalog))
+	case strings.Contains(key, "RTXPROSERVER6000"):
+		// What EC2 calls the GPU of its g7e instances.
+		return types.GPU_RTX_PRO6000
+	}
+	return types.NormalizeGPUType(catalog)
 }
 
 // bootScript wraps a create request's startup commands as the script a

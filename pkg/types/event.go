@@ -237,7 +237,6 @@ const (
 	EventComputeActionMachineReleased            = "machine.released"
 	EventComputeActionMachineAvailabilityUpdated = "machine.availability_updated"
 	EventComputeActionMachineNetworkUpdated      = "machine.network_updated"
-	EventComputeActionMachineInterruptionNotice  = "machine.interruption_notice"
 	EventComputeActionSSHKeyCreated              = "ssh_key.created"
 	EventComputeActionSSHKeyDownloaded           = "ssh_key.downloaded"
 	EventComputeActionSSHKeyRotated              = "ssh_key.rotated"

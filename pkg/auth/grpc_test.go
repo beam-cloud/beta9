@@ -46,8 +46,6 @@ func TestAuthInterceptorLetsAgentTokenRPCsSelfAuthenticate(t *testing.T) {
 
 	for _, method := range []string{
 		pb.GatewayService_GetAgentPoolVirtualization_FullMethodName,
-		pb.GatewayService_ReportAgentInterruption_FullMethodName,
-		pb.GatewayService_UpdateAgentAvailability_FullMethodName,
 		pb.GatewayService_CreateNodeEnrollment_FullMethodName,
 		pb.GatewayService_DeleteNodeEnrollment_FullMethodName,
 	} {

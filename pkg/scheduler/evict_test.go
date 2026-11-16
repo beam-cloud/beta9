@@ -182,8 +182,7 @@ func TestOpportunisticRequestFailsFastWithoutIdleCapacity(t *testing.T) {
 		Timestamp:         time.Now(),
 	}
 	setPendingSchedulerRequests(t, scheduler, request)
-	scheduler.spawn = inline
-	scheduler.processRequestBatch([]*types.ContainerRequest{request}, nil)
+	newSchedulingAttempt(scheduler, request, nil).run()
 
 	// No worker was provisioned, nothing was queued, and the request is
 	// marked failed so the controller can back off.

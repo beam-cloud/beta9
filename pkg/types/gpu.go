@@ -169,11 +169,6 @@ func NormalizeGPUType(value string) GpuType {
 	if strings.Contains(key, "A100") && strings.Contains(key, "40G") {
 		return GPU_A100_40
 	}
-	for _, lookalike := range gpuLookalikes {
-		if strings.Contains(key, lookalike) {
-			return GpuType(raw)
-		}
-	}
 	for _, alias := range gpuAliases {
 		if strings.Contains(key, alias.match) {
 			return alias.gpu
@@ -182,16 +177,11 @@ func NormalizeGPUType(value string) GpuType {
 	return GpuType(raw)
 }
 
-// gpuLookalikes are GPUs Beam has no name for, whose names contain the name
-// of one it has: a GB300 is not a B300. They keep the name they came with.
-var gpuLookalikes = []string{"GB200", "GB300"}
-
 var gpuAliases = []struct {
 	match string
 	gpu   GpuType
 }{
 	{"RTXPRO6000", GPU_RTX_PRO6000},
-	{"RTXPROSERVER6000", GPU_RTX_PRO6000},
 	{"RTX6000ADA", GPU_RTX6000_ADA},
 	{"RTX4000ADA", GPU_RTX4000_ADA},
 	{"RTX6000", GPU_RTX6000},
@@ -243,6 +233,14 @@ func compactGPUName(value string) string {
 		}
 	}
 	return b.String()
+}
+
+func GpuTypesToSlice(gpuTypes []GpuType) []string {
+	gpuTypesSlice := []string{}
+	for _, gpuType := range gpuTypes {
+		gpuTypesSlice = append(gpuTypesSlice, string(NormalizeGPUType(string(gpuType))))
+	}
+	return gpuTypesSlice
 }
 
 func GPUTypesToMap(gpuTypes []GpuType) map[string]int {

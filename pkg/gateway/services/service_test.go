@@ -88,15 +88,6 @@ func TestGatewayServiceForwardsManagedSSHMethods(t *testing.T) {
 	}
 }
 
-func TestGatewayServiceForwardsInterruptionNotices(t *testing.T) {
-	service := &GatewayService{computeService: computesvc.New(computesvc.Options{})}
-
-	response, err := service.ReportAgentInterruption(context.Background(), &pb.ReportAgentInterruptionRequest{})
-	if err != nil || response == nil || response.Ok || response.ErrMsg != "invalid agent token" {
-		t.Fatalf("ReportAgentInterruption() = %+v, %v", response, err)
-	}
-}
-
 func TestConfigurePoolSelectorNamesReservedPool(t *testing.T) {
 	pool := poolConfigFromProto(&pb.PoolConfig{
 		Nodes:     1,

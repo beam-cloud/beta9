@@ -95,7 +95,7 @@ func (c *Shadeform) Offers(ctx context.Context, filter OfferFilter) ([]Offer, er
 				Cloud:            instanceType.Cloud,
 				InstanceType:     instanceType.ShadeInstanceType,
 				Region:           stock.Region,
-				GPU:              string(types.NormalizeGPUType(instanceType.Configuration.GPUType)),
+				GPU:              string(gpuName(instanceType.Configuration.GPUType)),
 				GPUCount:         instanceType.Configuration.NumGPUs,
 				CPUMillicores:    instanceType.Configuration.VCPUs * 1000,
 				MemoryMB:         instanceType.Configuration.MemoryInGB * 1024,

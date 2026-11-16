@@ -68,19 +68,6 @@ type WorkerPoolController interface {
 	ContainerRuntime() string
 }
 
-// poolIdentity is what a controller says about its pool that comes straight
-// from the pool's name and config.
-type poolIdentity struct {
-	ctx              context.Context
-	name             string
-	workerPoolConfig types.WorkerPoolConfig
-}
-
-func (p *poolIdentity) Context() context.Context   { return p.ctx }
-func (p *poolIdentity) Name() string               { return p.name }
-func (p *poolIdentity) IsPreemptable() bool        { return p.workerPoolConfig.Preemptable }
-func (p *poolIdentity) RequiresPoolSelector() bool { return p.workerPoolConfig.RequiresPoolSelector }
-
 // pendingWorker is the record of a worker of this size that is not ready
 // yet: all of it is free.
 func pendingWorker(id string, cpu, memory int64, gpu string, gpuCount uint32) *types.Worker {

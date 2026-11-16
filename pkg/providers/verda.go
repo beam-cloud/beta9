@@ -128,7 +128,7 @@ func (t verdaInstanceType) gpu() string {
 	if t.GPU.Count == 0 {
 		return ""
 	}
-	return string(types.NormalizeGPUType(t.Name))
+	return string(gpuName(t.Name))
 }
 
 // price is what the machine costs per hour in the location, in micros.

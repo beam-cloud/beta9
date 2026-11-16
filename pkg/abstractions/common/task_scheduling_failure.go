@@ -86,10 +86,7 @@ func schedulingFailureMessage(failure common.ContainerSchedulingFailure) string 
 		return fmt.Sprintf("The selected compute pool %q is unavailable or has no active controller.", failure.PoolSelector)
 	case types.ContainerSchedulingFailureManagedFallbackConcurrencyLimit:
 		return "Private compute had no capacity, and managed fallback exceeded the workspace concurrency limit."
-	case types.ContainerSchedulingFailureManagedFallbackNoCredit:
-		return "Private compute had no capacity, and the workspace has no credit left for managed fallback."
 	case types.ContainerSchedulingFailureManagedFallbackNoCapacity:
-		// Schedulers of the release before this one still send it.
 		return "Private compute and managed fallback had no compatible capacity."
 	case types.ContainerSchedulingFailureNoOpportunisticCapacity:
 		return "No spare capacity became available for this Spot workload before scheduling timed out. Try again later, or use the shared or performance CPU tier."

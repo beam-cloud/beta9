@@ -32,22 +32,17 @@ func TestNormalizeGPUType(t *testing.T) {
 		"RTX6000":               GPU_RTX6000,
 		"RTX6000Adax8":          GPU_RTX6000_ADA,
 		"RTXPro6000x8_es":       GPU_RTX_PRO6000,
-		// What EC2 calls the GPU of its g7e instances.
-		"RTX PRO Server 6000":  GPU_RTX_PRO6000,
-		"V100_32Gx4":           GPU_V100_32,
-		"V100x8":               GPU_V100,
-		"RTX A4000":            GPU_A4000,
-		"NVIDIA RTX A4000":     GPU_A4000,
-		"NVIDIA A16-16Q":       GPU_A16,
-		"NVIDIA A100 80GB PCI": GPU_A100_80,
-		"A100-SXM4-40GB":       GPU_A100_40,
-		"GeForce RTX 4090":     GPU_RTX4090,
-		"NVIDIA L4 Tensor GPU": GPU_L4,
-		"NVIDIA L40S":          GPU_L40S,
-		"any":                  GPU_ANY,
-		// Not the B200 and B300 their names contain.
-		"GB200":            GpuType("GB200"),
-		"GB300 SXM6 288GB": GpuType("GB300 SXM6 288GB"),
+		"V100_32Gx4":            GPU_V100_32,
+		"V100x8":                GPU_V100,
+		"RTX A4000":             GPU_A4000,
+		"NVIDIA RTX A4000":      GPU_A4000,
+		"NVIDIA A16-16Q":        GPU_A16,
+		"NVIDIA A100 80GB PCI":  GPU_A100_80,
+		"A100-SXM4-40GB":        GPU_A100_40,
+		"GeForce RTX 4090":      GPU_RTX4090,
+		"NVIDIA L4 Tensor GPU":  GPU_L4,
+		"NVIDIA L40S":           GPU_L40S,
+		"any":                   GPU_ANY,
 	}
 
 	for input, want := range tests {

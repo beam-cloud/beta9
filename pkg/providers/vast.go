@@ -187,7 +187,7 @@ func vastCountry(geolocation string) string {
 
 // vastGPU gives a GPU Beam's name for it.
 func vastGPU(name string, memoryMB float64) string {
-	gpu := types.NormalizeGPUType(name)
+	gpu := gpuName(name)
 	switch gpu {
 	case types.GPU_A100:
 		gpu = types.GPU_A100_40

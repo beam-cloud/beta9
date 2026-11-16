@@ -344,7 +344,7 @@ func (t gcpMachineType) machine() (gcpType, bool) {
 	if !strings.HasPrefix(name, "nvidia-") {
 		return gcpType{}, false
 	}
-	gpu := types.NormalizeGPUType(name)
+	gpu := gpuName(name)
 	// Google's name for the A100 with 40 GB does not say so; the one with
 	// 80 GB is called nvidia-a100-80gb.
 	if gpu == types.GPU_A100 {

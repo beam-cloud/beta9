@@ -26,8 +26,14 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 	"github.com/tj/assert"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	typedbatchv1 "k8s.io/client-go/kubernetes/typed/batch/v1"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func testWorkspaceWithStorage() types.Workspace {
@@ -38,6 +44,13 @@ func testWorkspaceWithStorage() types.Workspace {
 // inline runs the scheduler's background work on the calling goroutine, so
 // that a scheduling pass is complete when it returns.
 func inline(fn func()) { fn() }
+
+// run schedules the attempt's request as a batch of one, on the calling
+// goroutine.
+func (a *schedulingAttempt) run() {
+	a.scheduler.spawn = inline
+	a.scheduler.processRequestBatch([]*types.ContainerRequest{a.request}, a.workers)
+}
 
 // selectWorker picks a worker for the request from the workers on record.
 func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker, error) {
@@ -130,10 +143,10 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		eventRepo:             eventRepo,
 		workspaceRepo:         workspaceRepo,
 
-		provisioning:           newProvisioningTracker(nil),
-		workerProvisioningLock: common.NewRedisLock(rdb),
-		growBackoff:            newGrowBackoff(nil),
-		credentials:            newSchedulerCredentialCache(),
+		provisioning:              newProvisioningTracker(),
+		workerProvisioningLock:    common.NewRedisLock(rdb),
+		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
+		credentials:               newSchedulerCredentialCache(),
 	}, nil
 }
 
@@ -417,12 +430,12 @@ func TestBuildPoolControllerPlacement(t *testing.T) {
 		t.Run(poolName, func(t *testing.T) {
 			scheduler := buildPoolSchedulerForTest(poolName)
 			request := &types.ContainerRequest{PoolSelector: poolName}
-			controllers, err := controllersFor(scheduler, request)
+			controllers, err := scheduler.getControllers(request)
 			require.Error(t, err)
 			require.Empty(t, controllers)
 
 			request.PoolSelector = ""
-			controllers, err = controllersFor(scheduler, request)
+			controllers, err = scheduler.getControllers(request)
 			require.NoError(t, err)
 			require.Len(t, controllers, 1)
 			require.Equal(t, "regular", controllers[0].Name())
@@ -432,7 +445,7 @@ func TestBuildPoolControllerPlacement(t *testing.T) {
 			dockerfile := "FROM python:3.12"
 			for _, options := range []types.BuildOptions{{SourceImage: &sourceImage}, {Dockerfile: &dockerfile}, {GitSource: &types.GitSource{}}} {
 				request.BuildOptions = options
-				controllers, err = controllersFor(scheduler, request)
+				controllers, err = scheduler.getControllers(request)
 				require.NoError(t, err)
 				require.Len(t, controllers, 1)
 				require.Equal(t, poolName, controllers[0].Name())
@@ -484,7 +497,7 @@ func TestBuildPoolTakesNoOverflow(t *testing.T) {
 		GPUType: "RTX4090", RequiresPoolSelector: true, AlsoServes: []string{"A10G"},
 	}, &LocalWorkerPoolControllerForTest{name: "build", requiresSelector: true})
 	request := &types.ContainerRequest{Gpu: "A10G", GpuCount: 1}
-	controllers, err := controllersFor(scheduler, request)
+	controllers, err := scheduler.getControllers(request)
 	require.Error(t, err)
 	require.Empty(t, controllers)
 	selected, err := scheduler.selectWorkerFromWorkers([]*types.Worker{gpuWorkerForTest("build-worker", "build", "RTX4090", 1)}, request)
@@ -517,7 +530,7 @@ func TestBuildPoolLeavesOtherRuncPoolsAvailable(t *testing.T) {
 			if test.gpu != "" {
 				request.GpuCount = 1
 			}
-			controllers, err := controllersFor(scheduler, request)
+			controllers, err := scheduler.getControllers(request)
 			require.NoError(t, err)
 			require.Contains(t, controllers, controller)
 
@@ -2057,24 +2070,25 @@ func TestProcessRequestDefaultsGPUCountBeforeScheduling(t *testing.T) {
 
 func schedulerReplicaForTest(source *Scheduler) *Scheduler {
 	return &Scheduler{
-		ctx:                    source.ctx,
-		config:                 source.config,
-		backendRepo:            source.backendRepo,
-		workerRepo:             source.workerRepo,
-		workerPoolRepo:         source.workerPoolRepo,
-		computeRepo:            source.computeRepo,
-		workerPoolManager:      source.workerPoolManager,
-		requestBacklog:         source.requestBacklog,
-		containerRepo:          source.containerRepo,
-		workspaceRepo:          source.workspaceRepo,
-		eventRepo:              source.eventRepo,
-		schedulerUsageMetrics:  source.schedulerUsageMetrics,
-		eventBus:               source.eventBus,
-		provisioning:           newProvisioningTracker(nil),
-		workerProvisioningLock: common.NewRedisLock(source.requestBacklog.rdb),
-		growBackoff:            newGrowBackoff(nil),
-		credentials:            newSchedulerCredentialCache(),
-		pushComputeEvent:       source.pushComputeEvent,
+		ctx:                       source.ctx,
+		config:                    source.config,
+		backendRepo:               source.backendRepo,
+		workerRepo:                source.workerRepo,
+		workerPoolRepo:            source.workerPoolRepo,
+		computeRepo:               source.computeRepo,
+		workerPoolManager:         source.workerPoolManager,
+		requestBacklog:            source.requestBacklog,
+		containerRepo:             source.containerRepo,
+		workspaceRepo:             source.workspaceRepo,
+		eventRepo:                 source.eventRepo,
+		schedulerUsageMetrics:     source.schedulerUsageMetrics,
+		eventBus:                  source.eventBus,
+		provisioning:              newProvisioningTracker(),
+		workerProvisioningLock:    common.NewRedisLock(source.requestBacklog.rdb),
+		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
+		credentials:               newSchedulerCredentialCache(),
+		pushComputeEvent:          source.pushComputeEvent,
+		clock:                     source.clock,
 	}
 }
 
@@ -2495,31 +2509,31 @@ func TestGetController(t *testing.T) {
 
 	t.Run("returns correct controller", func(t *testing.T) {
 		cpuRequest := &types.ContainerRequest{Gpu: ""}
-		defaultController, err := controllersFor(wb, cpuRequest)
+		defaultController, err := wb.getControllers(cpuRequest)
 		if err != nil || defaultController[0].Name() != "default" {
 			t.Errorf("Expected default controller, got %v, error: %v", defaultController, err)
 		}
 
 		noGPURequest := &types.ContainerRequest{Gpu: string(types.NO_GPU)}
-		noGPUController, err := controllersFor(wb, noGPURequest)
+		noGPUController, err := wb.getControllers(noGPURequest)
 		if err != nil || noGPUController[0].Name() != "default" {
 			t.Errorf("Expected default controller for NO_GPU request, got %v, error: %v", noGPUController, err)
 		}
 
 		a10gRequest := &types.ContainerRequest{GpuRequest: []string{"A10G"}}
-		a10gController, err := controllersFor(wb, a10gRequest)
+		a10gController, err := wb.getControllers(a10gRequest)
 		if err != nil || a10gController[0].Name() != "beta9-a10g" {
 			t.Errorf("Expected beta9-a10g controller, got %v, error: %v", a10gController, err)
 		}
 
 		t4Request := &types.ContainerRequest{GpuRequest: []string{"T4"}}
-		t4Controller, err := controllersFor(wb, t4Request)
+		t4Controller, err := wb.getControllers(t4Request)
 		if err != nil || t4Controller[0].Name() != "beta9-t4" {
 			t.Errorf("Expected beta9-t4 controller, got %v, error: %v", t4Controller, err)
 		}
 
 		buildRequest := &types.ContainerRequest{PoolSelector: "beta9-build"}
-		buildController, err := controllersFor(wb, buildRequest)
+		buildController, err := wb.getControllers(buildRequest)
 		if err != nil || buildController[0].Name() != "beta9-build" {
 			t.Errorf("Expected beta9-build controller, got %v, error: %v", buildController, err)
 		}
@@ -2527,7 +2541,7 @@ func TestGetController(t *testing.T) {
 
 	t.Run("returns error if no suitable controller found", func(t *testing.T) {
 		unknownRequest := &types.ContainerRequest{GpuRequest: []string{"UNKNOWN_GPU"}}
-		_, err := controllersFor(wb, unknownRequest)
+		_, err := wb.getControllers(unknownRequest)
 		if err == nil {
 			t.Errorf("Expected error for unknown GPU type, got nil")
 		}
@@ -2583,7 +2597,7 @@ func TestGetControllersRegistersAgentPoolFromRepository(t *testing.T) {
 		Workspace:    testWorkspaceWithStorage(),
 	}
 
-	controllers, err := controllersFor(wb, request)
+	controllers, err := wb.getControllers(request)
 	assert.NoError(t, err)
 	assert.Len(t, controllers, 1)
 	if len(controllers) == 1 {
@@ -3274,12 +3288,12 @@ func TestCheckpointAcceleratorFiltersProvisioningControllers(t *testing.T) {
 			Accelerator:  "NVIDIA GeForce RTX 5090",
 		},
 	}
-	controllers, err := controllersFor(scheduler, request)
+	controllers, err := scheduler.getControllers(request)
 	assert.Nil(t, err)
 	assert.Equal(t, []WorkerPoolController{rtx5090}, controllers)
 
 	request.Checkpoint.Accelerator = ""
-	controllers, err = controllersFor(scheduler, request)
+	controllers, err = scheduler.getControllers(request)
 	assert.Nil(t, err)
 	assert.ElementsMatch(t, []WorkerPoolController{rtx5090, l40s}, controllers)
 }
@@ -3926,7 +3940,8 @@ func TestCPUShareAgentPoolAdmission(t *testing.T) {
 
 func TestCPUShareLocalWorkerKeepsPodCPUPhysical(t *testing.T) {
 	controller := &LocalKubernetesWorkerPoolController{
-		poolIdentity: poolIdentity{name: "shared", workerPoolConfig: types.WorkerPoolConfig{CPUShareMultiplier: 1.5}},
+		name:             "shared",
+		workerPoolConfig: types.WorkerPoolConfig{CPUShareMultiplier: 1.5},
 		config: types.AppConfig{Worker: types.WorkerConfig{
 			JobResourcesEnforced:       true,
 			DefaultWorkerCPURequest:    1000,
@@ -4015,9 +4030,9 @@ func describeRoute(r route) []string {
 	return names
 }
 
-// controllersFor returns the controllers of the pools a request may grow, in
+// getControllers returns the controllers of the pools a request may grow, in
 // route order.
-func controllersFor(s *Scheduler, request *types.ContainerRequest) ([]WorkerPoolController, error) {
+func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoolController, error) {
 	r, err := s.growthRouteFor(request)
 	if err != nil {
 		return nil, err
@@ -4027,6 +4042,14 @@ func controllersFor(s *Scheduler, request *types.ContainerRequest) ([]WorkerPool
 		controllers = append(controllers, pool.Controller)
 	}
 	return controllers, nil
+}
+
+func controllerNames(controllers []WorkerPoolController) []string {
+	names := make([]string, 0, len(controllers))
+	for _, controller := range controllers {
+		names = append(names, controller.Name())
+	}
+	return names
 }
 
 // poolsAccepting returns the names of the pools that accept the request, in
@@ -4787,41 +4810,6 @@ func TestPoolConfigsLeavesOutTheWorkspacesOwnPools(t *testing.T) {
 	}
 }
 
-func TestEnforcementStopsWorkOnASharedPoolThatHasTheNameOfSomeonesOwnPool(t *testing.T) {
-	s, err := NewSchedulerForTest()
-	require.NoError(t, err)
-	ctx := context.Background()
-	rdb := s.requestBacklog.rdb
-	s.backendRepo = &enforcementStubRepo{calls: map[string]int{}}
-	s.creditGate = newCreditGate(types.CreditGateConfig{}, &fakeCreditBackend{decision: creditDecision{OK: false}}, rdb)
-
-	s.workerPoolManager.SetPool("gpu", types.WorkerPoolConfig{Mode: types.PoolModeExternal, GPUType: "A10G"}, nil)
-	ownPool(s.workerPoolManager, "owner", "gpu")
-	for _, worker := range []*types.Worker{
-		{Id: "shared", PoolName: "gpu", PoolSelector: "gpu", WorkspaceId: "admin", ControlPlaneManaged: true, Status: types.WorkerStatusAvailable},
-		{Id: "own", PoolName: "gpu", PoolSelector: "gpu", WorkspaceId: "owner", Status: types.WorkerStatusAvailable},
-	} {
-		require.NoError(t, s.workerRepo.AddWorker(worker))
-	}
-	for _, container := range []types.ContainerState{
-		{ContainerId: "on-shared", WorkspaceId: "customer", WorkerId: "shared"},
-		{ContainerId: "on-own", WorkspaceId: "owner", WorkerId: "own"},
-	} {
-		container.StubId, container.Status, container.ScheduledAt = "customer", types.ContainerStatusRunning, time.Now().Unix()
-		require.NoError(t, s.containerRepo.SetContainerState(container.ContainerId, &container))
-		require.NoError(t, rdb.SAdd(ctx, common.RedisKeys.SchedulerContainerWorkerIndex(container.WorkerId), common.RedisKeys.SchedulerContainerState(container.ContainerId)).Err())
-	}
-
-	require.NoError(t, s.enforceCredits(ctx))
-
-	billed, err := s.containerRepo.GetContainerState("on-shared")
-	require.NoError(t, err)
-	require.Equal(t, types.ContainerStatusStopping, billed.Status, "the shared pool is paid for with credit")
-	exempt, err := s.containerRepo.GetContainerState("on-own")
-	require.NoError(t, err)
-	require.Equal(t, types.ContainerStatusRunning, exempt.Status, "a workspace's own machines are not")
-}
-
 // A request that names its workspace's own pool falls back to the regular
 // pools when its pool has no room for it and its stub allows it. On its own
 // pool the request is exempt from the credit gate and from the managed
@@ -5234,7 +5222,6 @@ func newGrowFixture(t *testing.T) *growFixture {
 
 	fixture := &growFixture{Scheduler: s, clock: clock.NewFake(time.Now()), pools: map[string]*LocalWorkerPoolControllerForTest{}}
 	s.clock = fixture.clock
-	s.growBackoff = newGrowBackoff(fixture.clock)
 	s.workerPoolManager = NewWorkerPoolManager()
 	for i, name := range []string{"a", "b", "c"} {
 		controller := &LocalWorkerPoolControllerForTest{ctx: context.Background(), name: name, config: s.config, workerRepo: s.workerRepo}
@@ -5283,14 +5270,14 @@ func TestChooseGrowth(t *testing.T) {
 		},
 		{
 			name:    "a pool that just failed to add a worker is left alone",
-			setup:   func(f *growFixture) { f.growBackoff.failed("a") },
+			setup:   func(f *growFixture) { f.workerProvisioningBackoff.failed("a", f.now()) },
 			request: asked(nil),
 			want:    "b",
 		},
 		{
 			name: "and is asked again once the delay has passed",
 			setup: func(f *growFixture) {
-				f.growBackoff.failed("a")
+				f.workerProvisioningBackoff.failed("a", f.now())
 				f.clock.Advance(growRetryDelay)
 			},
 			request: asked(nil),
@@ -5320,7 +5307,7 @@ func TestChooseGrowth(t *testing.T) {
 			name: "every pool is being left alone",
 			setup: func(f *growFixture) {
 				for name := range f.pools {
-					f.growBackoff.failed(name)
+					f.workerProvisioningBackoff.failed(name, f.now())
 				}
 			},
 			request: asked(nil),
@@ -5462,7 +5449,7 @@ func TestPoolThatFailedToAddAWorkerIsLeftAloneForAMoment(t *testing.T) {
 	}
 
 	deadline := time.After(time.Second)
-	for !scheduler.growBackoff.leftAlone("beta9-cpu") {
+	for !scheduler.workerProvisioningBackoff.leftAlone("beta9-cpu", scheduler.now()) {
 		select {
 		case <-deadline:
 			t.Fatal("expected provisioning failure to back off add-worker attempts")
@@ -5596,7 +5583,7 @@ func TestEveryReplicaPassesOverAPoolThatCannotAddAWorker(t *testing.T) {
 
 	request := &types.ContainerRequest{Cpu: 8000, Memory: 16 * 1024, Workspace: testWorkspaceWithStorage()}
 	for _, scheduler := range replicas {
-		controllers, err := controllersFor(scheduler, request)
+		controllers, err := scheduler.getControllers(request)
 		assert.Nil(t, err)
 		assert.Equal(t, []string{agent.name, dynamic.name}, controllerNames(controllers))
 		assert.Equal(t, dynamic.name, growthForTest(t, scheduler, request).pool.Name)
@@ -5833,7 +5820,7 @@ func TestPoolLeftAloneAfterAFailureStillPlacesOnItsWorkers(t *testing.T) {
 	newSchedulingAttempt(scheduler, provisionRequest, nil).grow()
 
 	deadline := time.After(time.Second)
-	for !scheduler.growBackoff.leftAlone("beta9-cpu") {
+	for !scheduler.workerProvisioningBackoff.leftAlone("beta9-cpu", scheduler.now()) {
 		select {
 		case <-deadline:
 			t.Fatal("expected add-worker attempt to be backed off")
@@ -5874,7 +5861,6 @@ func TestPoolLeftAloneAfterAFailureStillPlacesOnItsWorkers(t *testing.T) {
 func TestGrowDoesNotReportAHeldLockAsAnError(t *testing.T) {
 	f := newGrowFixture(t)
 	replica := schedulerReplicaForTest(f.Scheduler)
-	replica.growBackoff = newGrowBackoff(f.clock)
 
 	request := &types.ContainerRequest{ContainerId: uuid.NewString(), Cpu: 1000, Memory: 1024, Timestamp: f.clock.Now()}
 	setPendingSchedulerRequests(t, f.Scheduler, request)
@@ -5912,7 +5898,6 @@ type waitingFixture struct {
 func newWaitingFixture(t *testing.T) *waitingFixture {
 	t.Helper()
 	f := newGrowFixture(t)
-	f.provisioning = newProvisioningTracker(f.clock)
 	f.spawn = func(fn func()) { fn() }
 	f.config.Worker.DefaultWorkerCPURequest = 4000
 	f.config.Worker.DefaultWorkerMemoryRequest = 8192
@@ -5972,7 +5957,6 @@ func TestRequestWaitsForAWorkerThatWasJustAdded(t *testing.T) {
 // worker exists. Until the pool answers there is no worker to find missing.
 func TestRequestWaitsWhileItsPoolIsStillAddingTheWorker(t *testing.T) {
 	f := newGrowFixture(t)
-	f.provisioning = newProvisioningTracker(f.clock)
 	pool := f.pools["a"]
 	pool.addWorkerStarted, pool.addWorkerDone = make(chan struct{}, 1), make(chan struct{}, 1)
 	pool.unblockAddWorker = make(chan struct{})
@@ -6013,7 +5997,6 @@ func TestEveryRequestThatWaitedForARemovedWorkerAsksAgain(t *testing.T) {
 // in the same way, and given up on in the same way.
 func TestRequestStopsWaitingForAStartingWorkerItFoundThatWasRemoved(t *testing.T) {
 	f := newGrowFixture(t)
-	f.provisioning = newProvisioningTracker(f.clock)
 	starting := &types.Worker{
 		Id: "starting", PoolName: "a", Status: types.WorkerStatusPending,
 		TotalCpu: 4000, FreeCpu: 4000, TotalMemory: 8192, FreeMemory: 8192, CreatedAt: f.clock.Now().Unix(),
@@ -6031,7 +6014,6 @@ func TestRequestStopsWaitingForAStartingWorkerItFoundThatWasRemoved(t *testing.T
 // it would wait for a worker to start, and then asks again.
 func TestRequestWaitsForARunningWorkerItsPoolAnsweredWith(t *testing.T) {
 	f := newGrowFixture(t)
-	f.provisioning = newProvisioningTracker(f.clock)
 	f.spawn = func(fn func()) { fn() }
 	f.pools["a"].workerStatus = types.WorkerStatusAvailable
 
@@ -6059,7 +6041,6 @@ func TestRequestWaitsForARunningWorkerItsPoolAnsweredWith(t *testing.T) {
 // joins that wait; neither is forgotten.
 func TestRequestsAnsweredWithTheSameWorkerWaitTogether(t *testing.T) {
 	f := newGrowFixture(t)
-	f.provisioning = newProvisioningTracker(f.clock)
 
 	machine := &types.Worker{
 		Id: "machine", PoolName: "a", Status: types.WorkerStatusAvailable,
@@ -6125,7 +6106,7 @@ func TestRequestWhosePoolsAreLeftAloneIsPlannedAgainSoon(t *testing.T) {
 	f := newGrowFixture(t)
 	f.requestBacklog.now = f.clock.Now
 	for name := range f.pools {
-		f.growBackoff.failed(name)
+		f.workerProvisioningBackoff.failed(name, f.now())
 	}
 	request := &types.ContainerRequest{ContainerId: uuid.NewString(), Cpu: 1000, Memory: 1024, Timestamp: f.clock.Now()}
 	setPendingSchedulerRequests(t, f.Scheduler, request)
@@ -6984,4 +6965,446 @@ func TestAMachineWhoseWorkerCouldNotBeWrittenIsNotReportedAsAFailure(t *testing.
 	require.Equal(t, worker.Id, workers[0].Id)
 	require.Equal(t, types.WorkerStatusPending, workers[0].Status)
 	require.Len(t, provisioner.sold, 1, "nothing more was bought")
+}
+
+// A cleanup pass that cannot do its work leaves it for the next pass.
+
+// failingWorkerRepo is a worker repository whose calls fail with the errors
+// that are set.
+type failingWorkerRepo struct {
+	repo.WorkerRepository
+	getWorker, listPool error
+}
+
+func (r *failingWorkerRepo) GetWorkerById(workerId string) (*types.Worker, error) {
+	if r.getWorker != nil {
+		return nil, r.getWorker
+	}
+	return r.WorkerRepository.GetWorkerById(workerId)
+}
+
+func (r *failingWorkerRepo) GetAllWorkersInPool(poolName string) ([]*types.Worker, error) {
+	if r.listPool != nil {
+		return nil, r.listPool
+	}
+	return r.WorkerRepository.GetAllWorkersInPool(poolName)
+}
+
+// cleanerFixture is a cleaner for a pool with one worker Job and its pod.
+type cleanerFixture struct {
+	cleaner *WorkerResourceCleaner
+	kube    *fake.Clientset
+	workers *failingWorkerRepo
+}
+
+func newCleanerFixture(t *testing.T, phase corev1.PodPhase) *cleanerFixture {
+	t.Helper()
+	rdb, err := repo.NewRedisClientForTest()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	job := cleanerTestWorkerJob("worker-default-w1", "w1", "default", "")
+	pod := cleanerTestWorkerPod("worker-default-w1-pod", job.Name, "w1", "default", "", phase)
+	pod.CreationTimestamp = metav1.NewTime(time.Now().Add(-time.Hour))
+	f := &cleanerFixture{
+		kube:    fake.NewSimpleClientset(job, pod),
+		workers: &failingWorkerRepo{WorkerRepository: repo.NewWorkerRedisRepositoryForTest(rdb)},
+	}
+	f.cleaner = &WorkerResourceCleaner{
+		PoolName:   "default",
+		Config:     types.WorkerConfig{Namespace: "beta9", CleanupPendingWorkerAgeLimit: 10 * time.Minute},
+		KubeClient: f.kube,
+		WorkerRepo: f.workers,
+	}
+	return f
+}
+
+// fail makes the cluster refuse a verb on a resource.
+func (f *cleanerFixture) fail(verb, resource string, err error) {
+	f.kube.PrependReactor(verb, resource, func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, err
+	})
+}
+
+// addWorker puts a worker of the pool on record.
+func (f *cleanerFixture) addWorker(t *testing.T, id string) {
+	t.Helper()
+	require.NoError(t, f.workers.AddWorker(cleanerTestWorker(id, "default", "")))
+}
+
+// What a pass leaves undone, it leaves as it found it.
+func TestACleanupPassThatFailsRemovesNothing(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a job stays when it cannot be told whether its worker is on record", func(t *testing.T) {
+		f := newCleanerFixture(t, corev1.PodRunning)
+		f.workers.getWorker = errors.New("redis is down")
+
+		f.cleaner.Clean(ctx)
+
+		_, err := f.kube.BatchV1().Jobs("beta9").Get(ctx, "worker-default-w1", metav1.GetOptions{})
+		require.NoError(t, err)
+	})
+
+	t.Run("a worker stays on record when it cannot be told whether it has a job", func(t *testing.T) {
+		f := newCleanerFixture(t, corev1.PodRunning)
+		f.addWorker(t, "w1")
+		f.addWorker(t, "no-job")
+		f.fail("get", "jobs", errors.New("the cluster said no"))
+
+		f.cleaner.Clean(ctx)
+
+		_, err := f.workers.GetWorkerById("no-job")
+		require.NoError(t, err)
+	})
+
+	t.Run("and goes once it can", func(t *testing.T) {
+		f := newCleanerFixture(t, corev1.PodRunning)
+		f.addWorker(t, "w1")
+		f.addWorker(t, "no-job")
+		logged := captureLog(t)
+
+		f.cleaner.Clean(ctx)
+
+		_, err := f.workers.GetWorkerById("no-job")
+		var notFound *types.ErrWorkerNotFound
+		require.ErrorAs(t, err, &notFound)
+		_, err = f.kube.BatchV1().Jobs("beta9").Get(ctx, "worker-default-w1", metav1.GetOptions{})
+		require.NoError(t, err, "a job whose worker is on record stays")
+		require.NotContains(t, logged.String(), `"level":"error"`, "a pass that does its work reports no failure")
+	})
+}
+
+// Every scheduler replica runs the cleanup tick for a pool. One cleans up
+// after its workers at a time: a replica that finds another at it leaves the
+// pass to that one, which is no failure.
+
+// cleanupFixture is a Kubernetes pool with a finished worker Job to clean
+// up, and the tick that does it.
+type cleanupFixture struct {
+	*cleanerFixture
+	rdb  *common.RedisClient
+	tick func()
+}
+
+func newCleanupFixture(t *testing.T) *cleanupFixture {
+	t.Helper()
+	f := &cleanupFixture{cleanerFixture: newCleanerFixture(t, corev1.PodSucceeded)}
+	rdb, err := repo.NewRedisClientForTest()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+	f.rdb = rdb
+
+	controller := &LocalKubernetesWorkerPoolController{
+		ctx:            context.Background(),
+		name:           f.cleaner.PoolName,
+		workerPoolRepo: repo.NewWorkerPoolRedisRepositoryForTest(rdb),
+	}
+	f.tick = func() { controller.cleanupTick(f.cleaner) }
+	return f
+}
+
+func (f *cleanupFixture) jobCleanedUp(t *testing.T) bool {
+	t.Helper()
+	jobs, err := f.kube.BatchV1().Jobs("beta9").List(context.Background(), metav1.ListOptions{})
+	require.NoError(t, err)
+	return len(jobs.Items) == 0
+}
+
+func TestTheCleanupTickLeavesThePassToTheReplicaThatIsAtIt(t *testing.T) {
+	f := newCleanupFixture(t)
+	other := repo.NewWorkerPoolRedisRepositoryForTest(f.rdb)
+	logged := captureLog(t)
+
+	require.NoError(t, other.WithWorkerPoolCleanerLock(f.cleaner.PoolName, f.tick))
+	require.False(t, f.jobCleanedUp(t))
+	require.Empty(t, logged.String())
+
+	f.tick()
+	require.True(t, f.jobCleanedUp(t))
+}
+
+func TestTheCleanupTickReportsALockItCouldNotAskFor(t *testing.T) {
+	f := newCleanupFixture(t)
+	require.NoError(t, f.rdb.HSet(context.Background(), common.RedisKeys.WorkerPoolCleanerLock(f.cleaner.PoolName), "not", "a lock").Err())
+	logged := captureLog(t)
+
+	f.tick()
+
+	require.False(t, f.jobCleanedUp(t))
+	require.Contains(t, logged.String(), `"level":"error"`)
+	require.Contains(t, logged.String(), `"pool_name":"default"`)
+}
+
+// A Kubernetes pool adds a worker in three steps: a token for the worker, a
+// Job that carries the token, and the worker's record. A worker that is not
+// added must leave no token that still works.
+
+// workerTokens is the part of the database that adding a worker uses.
+type workerTokens struct {
+	repo.BackendRepository
+	// workspaceErr is why the admin workspace cannot be found, if set.
+	workspaceErr error
+
+	mu      sync.Mutex
+	created []string
+	revoked []string
+}
+
+func (b *workerTokens) GetAdminWorkspace(context.Context) (*types.Workspace, error) {
+	if b.workspaceErr != nil {
+		return nil, b.workspaceErr
+	}
+	return &types.Workspace{Id: 1, ExternalId: "admin"}, nil
+}
+
+func (b *workerTokens) CreateWorkerToken(_ context.Context, _ uint, _ string, workerId string) (types.Token, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	id := fmt.Sprintf("token-%d", len(b.created)+1)
+	b.created = append(b.created, id)
+	return types.Token{ExternalId: id, Key: "key-of-" + id, WorkerID: workerId}, nil
+}
+
+func (b *workerTokens) RevokeTokenByExternalId(ctx context.Context, externalId string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.revoked = append(b.revoked, externalId)
+	return "key-of-" + externalId, nil
+}
+
+// unreliableRecords is a worker repository whose AddWorker reports an error,
+// after writing the record if written is set.
+type unreliableRecords struct {
+	repo.WorkerRepository
+	err     error
+	written bool
+}
+
+func (r *unreliableRecords) AddWorker(worker *types.Worker) error {
+	if r.written {
+		if err := r.WorkerRepository.AddWorker(worker); err != nil {
+			return err
+		}
+	}
+	return r.err
+}
+
+// localPoolFixture is a Kubernetes pool, with the cluster, the worker records
+// and the tokens it adds workers to.
+type localPoolFixture struct {
+	controller *LocalKubernetesWorkerPoolController
+	kube       *fake.Clientset
+	tokens     *workerTokens
+	workers    repo.WorkerRepository
+	stop       context.CancelFunc
+}
+
+func newLocalPoolFixture(t *testing.T) *localPoolFixture {
+	t.Helper()
+	rdb, err := repo.NewRedisClientForTest()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	f := &localPoolFixture{
+		kube:    fake.NewSimpleClientset(),
+		tokens:  &workerTokens{},
+		workers: repo.NewWorkerRedisRepositoryForTest(rdb),
+		stop:    cancel,
+	}
+	config := types.AppConfig{}
+	config.Worker.Namespace = "beta9"
+	f.controller = &LocalKubernetesWorkerPoolController{
+		ctx:         ctx,
+		name:        "cpu",
+		config:      config,
+		kubeClient:  f.kube,
+		workerRepo:  f.workers,
+		backendRepo: f.tokens,
+	}
+	return f
+}
+
+func (f *localPoolFixture) jobs(t *testing.T) []batchv1.Job {
+	t.Helper()
+	jobs, err := f.kube.BatchV1().Jobs("beta9").List(context.Background(), metav1.ListOptions{})
+	require.NoError(t, err)
+	return jobs.Items
+}
+
+func (f *localPoolFixture) workersOnRecord(t *testing.T) []*types.Worker {
+	t.Helper()
+	workers, err := f.workers.GetAllWorkersInPool("cpu")
+	require.NoError(t, err)
+	return workers
+}
+
+func TestAWorkerThatIsAddedKeepsItsToken(t *testing.T) {
+	f := newLocalPoolFixture(t)
+
+	worker, err := f.controller.AddWorker(1000, 1024, 0)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"token-1"}, f.tokens.created)
+	require.Empty(t, f.tokens.revoked)
+	require.Len(t, f.jobs(t), 1)
+	onRecord := f.workersOnRecord(t)
+	require.Len(t, onRecord, 1)
+	require.Equal(t, worker.Id, onRecord[0].Id)
+}
+
+func TestAWorkerWhoseJobTheClusterRefusesLeavesNoTokenThatWorks(t *testing.T) {
+	f := newLocalPoolFixture(t)
+	refused := errors.New("exceeded quota")
+	f.kube.PrependReactor("create", "jobs", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, refused
+	})
+
+	// The pool's sizer asks again every second for as long as it is short.
+	for range 3 {
+		_, err := f.controller.AddWorker(1000, 1024, 0)
+		require.ErrorIs(t, err, refused)
+	}
+
+	require.Equal(t, []string{"token-1", "token-2", "token-3"}, f.tokens.created)
+	require.Equal(t, f.tokens.created, f.tokens.revoked)
+	require.Empty(t, f.workersOnRecord(t))
+}
+
+func TestAWorkerThatCannotBePutOnRecordLeavesNoTokenThatWorks(t *testing.T) {
+	f := newLocalPoolFixture(t)
+	redisDown := errors.New("redis is down")
+	f.controller.workerRepo = &unreliableRecords{WorkerRepository: f.workers, err: redisDown}
+
+	_, err := f.controller.AddWorker(1000, 1024, 0)
+
+	require.ErrorIs(t, err, redisDown)
+	require.Equal(t, []string{"token-1"}, f.tokens.revoked)
+	require.Empty(t, f.workersOnRecord(t))
+	// The Job is left to the cleaner, which removes a Job that has no worker
+	// on record.
+	require.Len(t, f.jobs(t), 1)
+}
+
+// Putting a worker on record can report an error after the record is
+// written: when the lock that guards the write cannot be released, say. The
+// scheduler then has a worker to wait for, and the worker has to be able to
+// start.
+func TestAWorkerThatIsOnRecordKeepsItsTokenThoughAddingItReportedAnError(t *testing.T) {
+	f := newLocalPoolFixture(t)
+	lockLost := errors.New("lock was lost")
+	f.controller.workerRepo = &unreliableRecords{WorkerRepository: f.workers, err: lockLost, written: true}
+
+	_, err := f.controller.AddWorker(1000, 1024, 0)
+
+	require.ErrorIs(t, err, lockLost)
+	require.Len(t, f.workersOnRecord(t), 1)
+	require.Empty(t, f.tokens.revoked)
+}
+
+func TestAddingAWorkerSaysWhyTheWorkspaceCouldNotBeFound(t *testing.T) {
+	f := newLocalPoolFixture(t)
+	f.tokens.workspaceErr = errors.New("connection refused")
+
+	_, err := f.controller.AddWorker(1000, 1024, 0)
+
+	require.ErrorIs(t, err, f.tokens.workspaceErr)
+	require.ErrorContains(t, err, "cpu", "the error names the pool")
+	require.Empty(t, f.tokens.created)
+	require.Empty(t, f.jobs(t))
+}
+
+// A pool's sizer and the requests that grow the pool add workers at the same
+// time. Run with -race.
+func TestWorkersAreAddedAtTheSameTime(t *testing.T) {
+	f := newLocalPoolFixture(t)
+	const callers = 8
+
+	var wg sync.WaitGroup
+	errs := make(chan error, callers)
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := f.controller.AddWorker(1000, 1024, 0)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.Len(t, f.jobs(t), callers)
+	require.Len(t, f.workersOnRecord(t), callers)
+}
+
+// silentCluster is a cluster that does not answer when a Job is created,
+// until the caller gives up.
+type silentCluster struct {
+	kubernetes.Interface
+	asked chan context.Context
+}
+
+func (c *silentCluster) BatchV1() typedbatchv1.BatchV1Interface {
+	return &silentBatch{BatchV1Interface: c.Interface.BatchV1(), cluster: c}
+}
+
+type silentBatch struct {
+	typedbatchv1.BatchV1Interface
+	cluster *silentCluster
+}
+
+func (b *silentBatch) Jobs(namespace string) typedbatchv1.JobInterface {
+	return &silentJobs{JobInterface: b.BatchV1Interface.Jobs(namespace), cluster: b.cluster}
+}
+
+type silentJobs struct {
+	typedbatchv1.JobInterface
+	cluster *silentCluster
+}
+
+func (j *silentJobs) Create(ctx context.Context, _ *batchv1.Job, _ metav1.CreateOptions) (*batchv1.Job, error) {
+	j.cluster.asked <- ctx
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestAddingAWorkerDoesNotWaitForeverForTheCluster(t *testing.T) {
+	f := newLocalPoolFixture(t)
+	cluster := &silentCluster{Interface: f.kube, asked: make(chan context.Context, 1)}
+	f.controller.kubeClient = cluster
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := f.controller.AddWorker(1000, 1024, 0)
+		result <- err
+	}()
+
+	// The cluster is given a limited time to answer.
+	var asked context.Context
+	select {
+	case asked = <-cluster.asked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the cluster was not asked for a Job")
+	}
+	deadline, limited := asked.Deadline()
+	require.True(t, limited)
+	require.WithinDuration(t, time.Now().Add(workerJobCreateTimeout), deadline, 5*time.Second)
+
+	// And the wait ends with the pool, however long is left.
+	f.stop()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("adding a worker outlived its pool")
+	}
+	require.Equal(t, []string{"token-1"}, f.tokens.revoked, "the token is revoked though the pool's context has ended")
 }

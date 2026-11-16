@@ -312,9 +312,9 @@ func awsMachine(info ec2types.InstanceTypeInfo) (awsType, bool) {
 	}
 	// EC2 calls both of NVIDIA's A100s "A100", and both V100s "V100".
 	// Their memory tells them apart.
-	name := types.NormalizeGPUType(aws.ToString(gpu.Name))
+	name := gpuName(aws.ToString(gpu.Name))
 	if (name == types.GPU_A100 || name == types.GPU_V100) && gpu.MemoryInfo != nil {
-		name = types.NormalizeGPUType(fmt.Sprintf("%s %dGB", name, aws.ToInt32(gpu.MemoryInfo.SizeInMiB)/1024))
+		name = gpuName(fmt.Sprintf("%s %dGB", name, aws.ToInt32(gpu.MemoryInfo.SizeInMiB)/1024))
 	}
 	return awsType{
 		gpu:       string(name),

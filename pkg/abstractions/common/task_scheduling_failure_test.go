@@ -99,12 +99,3 @@ func TestTaskSchedulingFailureIgnoresStaleContainer(t *testing.T) {
 	require.True(t, handled)
 	require.Equal(t, types.TaskStatusPending, backend.task.Status)
 }
-
-func TestSchedulingFailureMessageExplainsFallbackWithoutCredit(t *testing.T) {
-	message := schedulingFailureMessage(common.ContainerSchedulingFailure{
-		Reason:       types.ContainerSchedulingFailureManagedFallbackNoCredit,
-		PoolSelector: "my-pool",
-	})
-
-	require.Equal(t, "Private compute had no capacity, and the workspace has no credit left for managed fallback.", message)
-}

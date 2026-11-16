@@ -254,17 +254,6 @@ worker:
     # nvidia:
     #   mode: local
     #   gpuType: any
-    #   # Other GPU types whose requests may overflow into this pool once the
-    #   # pools of that type have no room, for example alsoServes: [A10G] on an
-    #   # RTX4090 pool. Pools that also serve a type are tried by priority,
-    #   # then name. A pool with requiresPoolSelector takes overflow too.
-    #   # alsoServes: []
-    #   # Give up on a worker that has not started after this long (the
-    #   # cluster has no node for it). Requests stop waiting for the worker
-    #   # and the pool is not asked for more while it has one, so requests
-    #   # overflow to the next pool that serves them. Unset: requests wait
-    #   # for this pool until the scheduling limit. Kubernetes pools only.
-    #   # stalledAfter: 5m
     #   runtime: nvidia  # Kubernetes RuntimeClass for GPU support
     #   containerRuntime: gvisor  # Pool-specific container runtime: "runc", "gvisor", or "microvm" (Cloud Hypervisor; use_vm sandboxes only, needs /dev/kvm)
     #   containerRuntimeConfig:
@@ -302,30 +291,6 @@ worker:
     #       hostPath: /var/lib/beta9/cache
     #       mountPath: /var/lib/beta9/cache
     #       maxUsagePct: 0.95
-    # A pool that buys its own machines from one provider (see providers
-    # below). It needs no mode. It keeps poolSizing.minFree* free and takes
-    # overflow through alsoServes, like any other pool.
-    # spot-l40s:
-    #   gpuType: L40S
-    #   alsoServes: [A10G]
-    #   provisioning:
-    #     provider: verda
-    #     # Machines the provider may take back, at a lower price. The pool
-    #     # then runs only work that may be interrupted. Unset: on-demand.
-    #     spot: true
-    #     # The most machines the pool holds, counting those still booting.
-    #     maxNodes: 4
-    #     # The most one machine may cost per hour. Unset: any price.
-    #     maxNodeHourlyCents: 150
-    #     # The provider's names for the regions to buy in. Unset: any.
-    #     regions: []
-    #     # A machine with nothing to run for this long is given back, unless
-    #     # it holds the pool's free capacity.
-    #     idleTimeout: 10m
-    #     # A machine that has not joined the pool after this long is deleted.
-    #     bootTimeout: 20m
-    #   poolSizing:
-    #     minFreeGpu: 1
   # global pool attributes
   useHostResolvConf: true
   hostNetwork: false
@@ -455,25 +420,6 @@ cache:
     originFallbackEnabled: true
 
 providers:
-  # What the machines bought for pools (worker.pools.<name>.provisioning) may
-  # cost, all pools together. Unset: no cap.
-  # A machine that would take the hourly total over this is not bought.
-  # maxHourlyCents: 2000
-  # Pools stop buying once this much was spent in the last 24 hours. Machines
-  # that are running keep running.
-  # maxDailyCents: 20000
-  # A provider can be bought from once its credentials are set: vast,
-  # shadeform, hetzner, verda, nebius, aws or gcp.
-  # verda:
-  #   clientId:
-  #   clientSecret:
-  # nebius:
-  #   serviceAccountId:
-  #   publicKeyId:
-  #   privateKey:
-  #   # One project for each region to buy in.
-  #   projects:
-  #   - id:
   hetzner:
     apiToken:
     baseURL: https://api.hetzner.cloud/v1

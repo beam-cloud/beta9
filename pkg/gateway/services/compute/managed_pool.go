@@ -837,24 +837,17 @@ func (s *Service) SetAgentWorkerCordon(ctx context.Context, worker *types.Worker
 	if worker.Id != model.AgentMachineWorkerID(machine.MachineID) {
 		return false, nil
 	}
-	return true, s.setAgentMachineCordon(ctx, machine, cordoned)
-}
-
-// setAgentMachineCordon records a cordon on the machine, where it outlives
-// the machine's worker, and then on the worker.
-func (s *Service) setAgentMachineCordon(ctx context.Context, machine *model.AgentTokenState, cordoned bool) error {
-	workerID := model.AgentMachineWorkerID(machine.MachineID)
 	machine.Cordoned = cordoned
 	if err := s.saveComputeAgentTokenState(ctx, machine); err != nil {
-		return err
+		return true, err
 	}
-	if err := s.workerRepo.SetWorkerCordon(workerID, cordoned); err != nil {
-		return err
+	if err = s.workerRepo.SetWorkerCordon(worker.Id, cordoned); err != nil {
+		return true, err
 	}
-	if err := s.notifyAgentPool(ctx, machine.WorkspaceID, machine.PoolName); err != nil {
-		log.Warn().Err(err).Str("worker_id", workerID).Msg("failed to notify cordoned agent; periodic refresh remains active")
+	if err = s.notifyAgentPool(ctx, machine.WorkspaceID, machine.PoolName); err != nil {
+		log.Warn().Err(err).Str("worker_id", worker.Id).Msg("failed to notify cordoned agent; periodic refresh remains active")
 	}
-	return nil
+	return true, nil
 }
 
 // The gateway's side of machines that are bought for a pool. The provisioner
@@ -926,7 +919,7 @@ func (s *Service) ForgetMachine(ctx context.Context, pool, machineID, tokenHash 
 	if err != nil {
 		return err
 	}
-	if err := s.revokeComputeJoinTokenHash(ctx, tokenHash); err != nil {
+	if err := s.forgetJoinToken(ctx, tokenHash); err != nil {
 		return err
 	}
 	machine, err := s.computeRepo.GetAgentMachineState(ctx, workspaceID, pool, machineID)
@@ -939,6 +932,30 @@ func (s *Service) ForgetMachine(ctx context.Context, pool, machineID, tokenHash 
 		return s.removePrivateMachineWorker(&model.AgentTokenState{WorkspaceID: workspaceID, PoolName: pool, MachineID: machineID})
 	}
 	return s.removePrivateMachine(ctx, machine)
+}
+
+// revokedJoinTokenKept is how long the join token of a machine that was
+// bought stays in Redis once it is revoked: the shortest life the repository
+// gives a token.
+const revokedJoinTokenKept = time.Second
+
+// forgetJoinToken ends the join token of a machine that was bought: it
+// admits nothing from now on, and a moment later it is gone from Redis. The
+// token does not expire, so one that was only marked as revoked would stay
+// for good. A token that is gone already is not an error.
+//
+// The repository cannot delete a token, so it is saved once more: marked as
+// revoked, which every release honours, and to lapse at once.
+func (s *Service) forgetJoinToken(ctx context.Context, tokenHash string) error {
+	if tokenHash == "" {
+		return nil
+	}
+	state, err := s.computeRepo.GetJoinTokenState(ctx, tokenHash)
+	if err != nil || state == nil {
+		return err
+	}
+	state.Revoked = true
+	return s.saveComputeJoinTokenState(ctx, state, revokedJoinTokenKept)
 }
 
 // buyingPoolState returns the state of a pool that buys its machines, as

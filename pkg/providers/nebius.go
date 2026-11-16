@@ -298,7 +298,7 @@ func (c *Nebius) offerOf(advised nebiusAdvice, price nebiusSpotPrice) Offer {
 		Cloud:            nebiusName,
 		InstanceType:     id,
 		Region:           advised.Spec.Region,
-		GPU:              string(types.NormalizeGPUType(price.ProductTitle)),
+		GPU:              string(gpuName(price.ProductTitle)),
 		GPUCount:         uint32(preset.Resources.GPUs),
 		CPUMillicores:    int64(preset.Resources.VCPUs) * 1000,
 		MemoryMB:         int64(preset.Resources.MemoryGiB) * 1024,

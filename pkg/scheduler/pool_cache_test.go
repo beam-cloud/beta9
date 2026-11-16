@@ -56,8 +56,8 @@ func TestWorkerCachePoolCanDisableDiskCache(t *testing.T) {
 func TestWorkerCacheHostPathIsCreatedForLocalPools(t *testing.T) {
 	config, poolConfig := cacheVolumeTestConfig()
 	controller := &LocalKubernetesWorkerPoolController{
-		poolIdentity: poolIdentity{workerPoolConfig: poolConfig},
-		config:       config,
+		config:           config,
+		workerPoolConfig: poolConfig,
 	}
 
 	volume := requireCacheVolume(t, controller.getWorkerVolumes(1024))

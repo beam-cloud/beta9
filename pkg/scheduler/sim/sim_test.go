@@ -1413,10 +1413,9 @@ func (p *Provider) Reclaim(n int) *Provider {
 	return p
 }
 
-// GiveNotice makes the provider tell n of the machines it sold, oldest
-// first, that it is about to take them back. The machines run on. Each one's
-// agent passes the notice on to the gateway, which cordons the machine.
-func (p *Provider) GiveNotice(n int) *Provider {
+// Cordon cordons n of the machines the provider sold, oldest first, as an
+// operator does with a machine that is about to go. The machines run on.
+func (p *Provider) Cordon(n int) *Provider {
 	p.sim.t.Helper()
 	p.sim.discoverMachines()
 	for _, machine := range p.sim.machinesOf(p) {
@@ -1426,11 +1425,11 @@ func (p *Provider) GiveNotice(n int) *Provider {
 		if machine.state != machineJoined || machine.cordoned {
 			continue
 		}
-		machine.notice()
+		machine.cordon()
 		n--
 	}
 	if n > 0 {
-		p.sim.t.Fatalf("schedsim: %s has %d fewer machines in a pool than it was to give notice", p.Name, n)
+		p.sim.t.Fatalf("schedsim: %s has %d fewer machines in a pool than it was to cordon", p.Name, n)
 	}
 	return p
 }
@@ -1883,14 +1882,13 @@ func (m *machine) agentState(joinedAt, now time.Time) *compute.AgentTokenState {
 	return state
 }
 
-// notice is the machine's agent telling the gateway that the machine is
-// about to be taken back, and what the gateway does about it: the cordon
+// cordon is what the gateway does when the machine is cordoned: the cordon
 // goes on the machine's record and on its worker.
-func (m *machine) notice() {
+func (m *machine) cordon() {
 	s := m.sim
 	m.cordoned = true
 	if err := s.computeRepo.SaveAgentTokenState(s.ctx, m.agentState(m.joinedAt, s.Clock.Now()), 0); err != nil {
-		s.t.Fatalf("schedsim: machine %s notice: %v", m.id, err)
+		s.t.Fatalf("schedsim: machine %s record: %v", m.id, err)
 	}
 	if err := s.workerRepo.SetWorkerCordon(m.worker.ID, true); err != nil {
 		s.t.Fatalf("schedsim: machine %s cordon: %v", m.id, err)
@@ -3479,17 +3477,17 @@ func TestRequestQueuedOnAReclaimedMachineReturnsToTheBacklog(t *testing.T) {
 	require.Equal(t, 2, sim.Provider("verda").Bought())
 }
 
-// Reclaim with notice: a machine that is told it is about to be taken back
-// no longer counts as room in its pool, which buys its replacement while the
-// machine is still there. When the provider takes it, nothing is missing.
-func TestMachineGivenNoticeIsReplacedBeforeItIsTaken(t *testing.T) {
+// A machine that is cordoned because it is about to be taken back no longer
+// counts as room in its pool, which buys its replacement while the machine
+// is still there. When the provider takes it, nothing is missing.
+func TestCordonedMachineIsReplacedBeforeItIsTaken(t *testing.T) {
 	sim := New(t, spotPoolWithFloor)
 	verda := sim.Provider("verda")
 	sim.Advance(5 * time.Minute)
 	require.Equal(t, 2, freeGPUs(sim, "spot-l40s"))
 	require.Equal(t, 2, verda.Bought())
 
-	verda.GiveNotice(1)
+	verda.Cordon(1)
 	sim.Advance(20 * time.Second)
 	require.Equal(t, 1, freeGPUs(sim, "spot-l40s"), "the machine that is going is not room")
 	require.Equal(t, 3, verda.Bought(), "its replacement is on the way")
@@ -3506,9 +3504,8 @@ func TestMachineGivenNoticeIsReplacedBeforeItIsTaken(t *testing.T) {
 	require.Equal(t, 3, verda.Bought(), "nothing more had to be bought")
 }
 
-// A machine that is about to be taken back is given no new work, and goes on
-// running what it has.
-func TestMachineGivenNoticeTakesNoNewWork(t *testing.T) {
+// A cordoned machine is given no new work, and goes on running what it has.
+func TestCordonedMachineTakesNoNewWork(t *testing.T) {
 	sim := New(t, spotPool)
 	// One machine has room for two containers.
 	verda := sim.Provider("verda").Machine(2, 16_000, 64*1024)
@@ -3517,7 +3514,7 @@ func TestMachineGivenNoticeTakesNoNewWork(t *testing.T) {
 	require.Equal(t, []string{"spot-l40s"}, sim.PoolsOf(first))
 	going := sim.Pool("spot-l40s").Workers()[0]
 
-	verda.GiveNotice(1)
+	verda.Cordon(1)
 	second := sim.Submit(Endpoint("L40S").For(time.Hour), 1)
 	sim.Advance(3 * time.Minute)
 
@@ -3541,16 +3538,16 @@ func TestMachineGivenNoticeTakesNoNewWork(t *testing.T) {
 	require.Equal(t, 2, verda.Bought())
 }
 
-// The notice is kept on the machine, not only on its worker: a worker that
-// is started again on a machine that is going is given no work either.
-func TestMachineGivenNoticeStaysOutOfUseWhenItsWorkerStartsAgain(t *testing.T) {
+// The cordon is kept on the machine, not only on its worker: a worker that
+// is started again on a cordoned machine is given no work either.
+func TestCordonedMachineStaysOutOfUseWhenItsWorkerStartsAgain(t *testing.T) {
 	sim := New(t, spotPool)
 	verda := sim.Provider("verda").Machine(2, 16_000, 64*1024)
 	sim.Submit(Endpoint("L40S").For(time.Hour), 1)
 	sim.Advance(2 * time.Minute)
 	going := sim.Pool("spot-l40s").Workers()[0]
 
-	verda.GiveNotice(1)
+	verda.Cordon(1)
 	going.LoseRecord()
 	sim.Advance(2 * time.Minute)
 	require.True(t, going.Running(), "the worker is up again")
@@ -4024,4 +4021,77 @@ func (r *randomRun) step() {
 		}
 		require.LessOrEqual(t, now.Sub(since), allowed, "the record of %s has had no machine for %s", record.ID, now.Sub(since))
 	}
+}
+
+// A scenario is deterministic because of what the fake clock promises: timers
+// run in time order, each at its own due time, on the goroutine that moved
+// the clock. The tests below hold the clock to that.
+
+var clockStart = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+func TestFakeClockRunsTimersInTimeOrder(t *testing.T) {
+	c := clock.NewFake(clockStart)
+	var fired []string
+	c.AfterFunc(3*time.Second, func() { fired = append(fired, "c") })
+	c.AfterFunc(time.Second, func() { fired = append(fired, "a") })
+	c.AfterFunc(time.Second, func() { fired = append(fired, "b") })
+
+	c.Advance(2 * time.Second)
+	require.Equal(t, []string{"a", "b"}, fired)
+	require.Equal(t, clockStart.Add(2*time.Second), c.Now())
+
+	c.Advance(time.Second)
+	require.Equal(t, []string{"a", "b", "c"}, fired)
+}
+
+func TestFakeClockTimerSeesItsOwnDueTime(t *testing.T) {
+	c := clock.NewFake(clockStart)
+	var at time.Time
+	c.AfterFunc(time.Second, func() { at = c.Now() })
+	c.Advance(time.Minute)
+	require.Equal(t, clockStart.Add(time.Second), at)
+}
+
+func TestFakeClockEveryTicksUntilCancelled(t *testing.T) {
+	c := clock.NewFake(clockStart)
+	ctx, cancel := context.WithCancel(context.Background())
+	ticks := 0
+	c.Every(ctx, time.Second, func() { ticks++ })
+
+	c.Advance(3500 * time.Millisecond)
+	require.Equal(t, 3, ticks)
+
+	cancel()
+	c.Advance(time.Minute)
+	require.Equal(t, 3, ticks)
+}
+
+func TestFakeClockStop(t *testing.T) {
+	c := clock.NewFake(clockStart)
+	fired := false
+	timer := c.AfterFunc(time.Second, func() { fired = true })
+	require.True(t, timer.Stop())
+	require.False(t, timer.Stop())
+	c.Advance(time.Minute)
+	require.False(t, fired)
+}
+
+func TestFakeClockRunsTimersAddedByCallbacks(t *testing.T) {
+	c := clock.NewFake(clockStart)
+	var fired []time.Duration
+	c.AfterFunc(time.Second, func() {
+		fired = append(fired, c.Now().Sub(clockStart))
+		c.AfterFunc(time.Second, func() { fired = append(fired, c.Now().Sub(clockStart)) })
+	})
+	c.Advance(5 * time.Second)
+	require.Equal(t, []time.Duration{time.Second, 2 * time.Second}, fired)
+}
+
+func TestFakeClockOnStepSeesEveryMove(t *testing.T) {
+	c := clock.NewFake(clockStart)
+	var total time.Duration
+	c.OnStep(func(d time.Duration) { total += d })
+	c.AfterFunc(time.Second, func() {})
+	c.Advance(10 * time.Second)
+	require.Equal(t, 10*time.Second, total)
 }

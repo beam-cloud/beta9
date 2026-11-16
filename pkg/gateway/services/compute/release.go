@@ -46,7 +46,16 @@ func (s *Service) releaseBYOCProviderMachine(ctx context.Context, machine *model
 	if err != nil || state == nil || state.BYOC == nil {
 		return err
 	}
-	return awsBYOCRelease(ctx, state.BYOC, machine)
+	provider, err := byocProviderForState(state)
+	if err != nil {
+		return err
+	}
+	return provider.ReleaseMachine(ctx, byocProviderReleaseMachineInput{
+		WorkspaceID:  machine.WorkspaceID,
+		Pool:         state,
+		ProviderData: state.BYOC,
+		Machine:      machine,
+	})
 }
 
 func (s *Service) reconcileBYOCMachineReleaseFailure(ctx context.Context, machine *model.AgentTokenState, releaseErr error) (bool, error) {

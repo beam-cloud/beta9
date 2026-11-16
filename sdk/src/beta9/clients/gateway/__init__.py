@@ -1800,26 +1800,6 @@ class GetCpuTierCatalogResponse(betterproto.Message):
     """
 
 
-@dataclass(eq=False, repr=False)
-class ReportAgentInterruptionRequest(betterproto.Message):
-    agent_token: str = betterproto.string_field(1)
-    source: str = betterproto.string_field(2)
-    """The provider that gave the notice, as the agent names it: aws, gcp."""
-
-    detail: str = betterproto.string_field(3)
-    """What the provider said, for the machine's events."""
-
-    observed_at_unix_nano: int = betterproto.int64_field(4)
-    expected_at_unix_nano: int = betterproto.int64_field(5)
-    """When the provider takes the machine. Zero if it did not say."""
-
-
-@dataclass(eq=False, repr=False)
-class ReportAgentInterruptionResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    err_msg: str = betterproto.string_field(2)
-
-
 class GatewayServiceStub(SyncServiceStub):
     def authorize(self, authorize_request: "AuthorizeRequest") -> "AuthorizeResponse":
         return self._unary_unary(
@@ -2305,15 +2285,6 @@ class GatewayServiceStub(SyncServiceStub):
             UpdateAgentAvailabilityRequest,
             UpdateAgentAvailabilityResponse,
         )(update_agent_availability_request)
-
-    def report_agent_interruption(
-        self, report_agent_interruption_request: "ReportAgentInterruptionRequest"
-    ) -> "ReportAgentInterruptionResponse":
-        return self._unary_unary(
-            "/gateway.GatewayService/ReportAgentInterruption",
-            ReportAgentInterruptionRequest,
-            ReportAgentInterruptionResponse,
-        )(report_agent_interruption_request)
 
     def stream_agent(
         self, stream_agent_request: "StreamAgentRequest"

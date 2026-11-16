@@ -74,7 +74,6 @@ const (
 	GatewayService_UpdateAgentRouteStatus_FullMethodName          = "/gateway.GatewayService/UpdateAgentRouteStatus"
 	GatewayService_UpdateAgentSSHStatus_FullMethodName            = "/gateway.GatewayService/UpdateAgentSSHStatus"
 	GatewayService_UpdateAgentAvailability_FullMethodName         = "/gateway.GatewayService/UpdateAgentAvailability"
-	GatewayService_ReportAgentInterruption_FullMethodName         = "/gateway.GatewayService/ReportAgentInterruption"
 	GatewayService_StreamAgent_FullMethodName                     = "/gateway.GatewayService/StreamAgent"
 	GatewayService_StreamAgentTelemetry_FullMethodName            = "/gateway.GatewayService/StreamAgentTelemetry"
 	GatewayService_ListMachines_FullMethodName                    = "/gateway.GatewayService/ListMachines"
@@ -160,9 +159,6 @@ type GatewayServiceClient interface {
 	UpdateAgentRouteStatus(ctx context.Context, in *UpdateAgentRouteStatusRequest, opts ...grpc.CallOption) (*UpdateAgentRouteStatusResponse, error)
 	UpdateAgentSSHStatus(ctx context.Context, in *UpdateAgentSSHStatusRequest, opts ...grpc.CallOption) (*UpdateAgentSSHStatusResponse, error)
 	UpdateAgentAvailability(ctx context.Context, in *UpdateAgentAvailabilityRequest, opts ...grpc.CallOption) (*UpdateAgentAvailabilityResponse, error)
-	// A machine's agent passes on its provider's notice that the machine is
-	// about to be taken back.
-	ReportAgentInterruption(ctx context.Context, in *ReportAgentInterruptionRequest, opts ...grpc.CallOption) (*ReportAgentInterruptionResponse, error)
 	StreamAgent(ctx context.Context, in *StreamAgentRequest, opts ...grpc.CallOption) (GatewayService_StreamAgentClient, error)
 	StreamAgentTelemetry(ctx context.Context, opts ...grpc.CallOption) (GatewayService_StreamAgentTelemetryClient, error)
 	// Machines
@@ -733,15 +729,6 @@ func (c *gatewayServiceClient) UpdateAgentAvailability(ctx context.Context, in *
 	return out, nil
 }
 
-func (c *gatewayServiceClient) ReportAgentInterruption(ctx context.Context, in *ReportAgentInterruptionRequest, opts ...grpc.CallOption) (*ReportAgentInterruptionResponse, error) {
-	out := new(ReportAgentInterruptionResponse)
-	err := c.cc.Invoke(ctx, GatewayService_ReportAgentInterruption_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *gatewayServiceClient) StreamAgent(ctx context.Context, in *StreamAgentRequest, opts ...grpc.CallOption) (GatewayService_StreamAgentClient, error) {
 	stream, err := c.cc.NewStream(ctx, &GatewayService_ServiceDesc.Streams[2], GatewayService_StreamAgent_FullMethodName, opts...)
 	if err != nil {
@@ -985,9 +972,6 @@ type GatewayServiceServer interface {
 	UpdateAgentRouteStatus(context.Context, *UpdateAgentRouteStatusRequest) (*UpdateAgentRouteStatusResponse, error)
 	UpdateAgentSSHStatus(context.Context, *UpdateAgentSSHStatusRequest) (*UpdateAgentSSHStatusResponse, error)
 	UpdateAgentAvailability(context.Context, *UpdateAgentAvailabilityRequest) (*UpdateAgentAvailabilityResponse, error)
-	// A machine's agent passes on its provider's notice that the machine is
-	// about to be taken back.
-	ReportAgentInterruption(context.Context, *ReportAgentInterruptionRequest) (*ReportAgentInterruptionResponse, error)
 	StreamAgent(*StreamAgentRequest, GatewayService_StreamAgentServer) error
 	StreamAgentTelemetry(GatewayService_StreamAgentTelemetryServer) error
 	// Machines
@@ -1177,9 +1161,6 @@ func (UnimplementedGatewayServiceServer) UpdateAgentSSHStatus(context.Context, *
 }
 func (UnimplementedGatewayServiceServer) UpdateAgentAvailability(context.Context, *UpdateAgentAvailabilityRequest) (*UpdateAgentAvailabilityResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateAgentAvailability not implemented")
-}
-func (UnimplementedGatewayServiceServer) ReportAgentInterruption(context.Context, *ReportAgentInterruptionRequest) (*ReportAgentInterruptionResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ReportAgentInterruption not implemented")
 }
 func (UnimplementedGatewayServiceServer) StreamAgent(*StreamAgentRequest, GatewayService_StreamAgentServer) error {
 	return status.Errorf(codes.Unimplemented, "method StreamAgent not implemented")
@@ -2242,24 +2223,6 @@ func _GatewayService_UpdateAgentAvailability_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
-func _GatewayService_ReportAgentInterruption_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReportAgentInterruptionRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(GatewayServiceServer).ReportAgentInterruption(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: GatewayService_ReportAgentInterruption_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GatewayServiceServer).ReportAgentInterruption(ctx, req.(*ReportAgentInterruptionRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _GatewayService_StreamAgent_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(StreamAgentRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -2741,10 +2704,6 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateAgentAvailability",
 			Handler:    _GatewayService_UpdateAgentAvailability_Handler,
-		},
-		{
-			MethodName: "ReportAgentInterruption",
-			Handler:    _GatewayService_ReportAgentInterruption_Handler,
 		},
 		{
 			MethodName: "ListMachines",

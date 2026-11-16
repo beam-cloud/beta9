@@ -71,6 +71,8 @@ var errBYOCDirectScaleUnavailable = errors.New("direct BYOC scaling is unavailab
 var errAWSBYOCResourceNotFound = errors.New("AWS BYOC resource not found")
 var errAWSBYOCMachineNotFound = errors.New("AWS BYOC machine not found")
 
+type byocAWSProvider struct{}
+
 type awsBYOCInstanceType struct {
 	CPUMillicores int64
 	MemoryMB      int64
@@ -78,14 +80,21 @@ type awsBYOCInstanceType struct {
 	GPUCount      uint32
 }
 
-// normalizeAWSBYOCPoolRequest fills in what a request for a pool on AWS
-// leaves out, and refuses what AWS, or Beam on AWS, does not have.
-func normalizeAWSBYOCPoolRequest(req byocPoolRequest) (byocPoolRequest, error) {
-	req.poolName = strings.TrimSpace(req.poolName)
-	req.region = strings.TrimSpace(req.region)
-	req.instanceType = strings.TrimSpace(req.instanceType)
-	req.accountID = strings.TrimSpace(req.accountID)
-	req.gpu = strings.TrimSpace(req.gpu)
+func (byocAWSProvider) Source() model.CapacitySource {
+	return model.SourceAWS
+}
+
+func (byocAWSProvider) NormalizePoolRequest(raw byocRawPoolRequest) (byocPoolRequest, error) {
+	req := byocPoolRequest{
+		poolName:     strings.TrimSpace(raw.PoolName),
+		region:       strings.TrimSpace(raw.Region),
+		instanceType: strings.TrimSpace(raw.InstanceType),
+		desiredNodes: raw.DesiredNodes,
+		maxNodes:     raw.MaxNodes,
+		accountID:    strings.TrimSpace(raw.AccountID),
+		gpu:          strings.TrimSpace(raw.GPU),
+		gpuCount:     raw.GPUCount,
+	}
 	if req.poolName == "" {
 		return byocPoolRequest{}, fmt.Errorf("pool name is required")
 	}
@@ -136,6 +145,9 @@ func normalizeAWSBYOCPoolRequest(req byocPoolRequest) (byocPoolRequest, error) {
 }
 
 func normalizeAWSBYOCGPURequest(req *byocPoolRequest, instance awsBYOCInstanceType) error {
+	if req == nil {
+		return fmt.Errorf("request is required")
+	}
 	requestedGPU := types.NormalizeGPUType(req.gpu)
 	if requestedGPU == types.NO_GPU {
 		requestedGPU = ""
@@ -164,9 +176,7 @@ func normalizeAWSBYOCGPURequest(req *byocPoolRequest, instance awsBYOCInstanceTy
 	return nil
 }
 
-// awsBYOCPoolState is what a pool's record keeps of its stack on AWS: where it
-// is, and in its labels what it was asked to be and how Beam may control it.
-func awsBYOCPoolState(workspaceID string, req byocPoolRequest, config types.ManagedComputeConfig) *model.BYOCProviderState {
+func (byocAWSProvider) PoolState(workspaceID string, req byocPoolRequest, config types.ManagedComputeConfig) *model.BYOCProviderState {
 	stackName := awsCloudFormationStackName(workspaceID, req.poolName)
 	stackURL := awsCloudFormationStackURL(req.region, stackName)
 	labels := awsBYOCCapacityLabels(req, config)
@@ -188,7 +198,7 @@ func awsBYOCPoolState(workspaceID string, req byocPoolRequest, config types.Mana
 	}
 }
 
-func validateAWSBYOCSetupConfig(config types.ManagedComputeConfig) error {
+func (byocAWSProvider) ValidateSetupConfig(config types.ManagedComputeConfig) error {
 	if _, err := awsBYOCTemplateURL(config.BYOC.AWS.TemplateURL); err != nil {
 		return err
 	}
@@ -199,38 +209,54 @@ func validateAWSBYOCSetupConfig(config types.ManagedComputeConfig) error {
 	return nil
 }
 
-// awsBYOCSetupURL is the link at which the tenant creates the pool's stack:
-// the CloudFormation console, with the template and its parameters filled in.
-// resource is what the pool's record keeps of the stack.
-func (s *Service) awsBYOCSetupURL(workspaceID, joinToken string, req byocPoolRequest, resource *model.BYOCProviderState) (string, error) {
-	settings := s.appConfig.ManagedCompute.BYOC.AWS
-	templateURL, err := awsBYOCTemplateURL(settings.TemplateURL)
-	if err != nil {
-		return "", err
+func (byocAWSProvider) Setup(_ context.Context, input byocProviderSetupInput) (*byocProviderSetupResult, error) {
+	if input.ProviderData == nil || input.ProviderData.ResourceName == "" {
+		return nil, fmt.Errorf("missing AWS BYOC resource metadata")
 	}
-	return awsCloudFormationConsoleURL(req.region, resource.ResourceName, templateURL, map[string]string{
-		"BeamAutoScalingGroupName":    awsBYOCLabelString(resource.Labels, awsBYOCAutoScalingGroupNameLabel, awsBYOCAutoScalingGroupName(workspaceID, req.poolName)),
-		"BeamControlExternalId":       awsBYOCLabelString(resource.Labels, awsBYOCControlRoleExternalIDLabel, ""),
-		"BeamControlRoleName":         awsBYOCLabelString(resource.Labels, awsBYOCControlRoleNameLabel, ""),
-		"BeamControlRolePrincipalArn": strings.TrimSpace(settings.ControlRolePrincipalARN),
-		"BeamGatewayURL":              strings.TrimRight(s.appConfig.GatewayService.HTTP.GetExternalURL(), "/"),
-		"BeamJoinToken":               joinToken,
-		"BeamPoolName":                req.poolName,
-		"BeamWorkerImage":             agentWorkerImage(s.appConfig),
+	stackName := input.ProviderData.ResourceName
+	stackURL := awsCloudFormationStackURL(input.Request.region, stackName)
+	templateURL, err := awsBYOCTemplateURL(input.Config.BYOC.AWS.TemplateURL)
+	if err != nil {
+		return nil, err
+	}
+	consoleURL := awsCloudFormationConsoleURL(input.Request.region, stackName, templateURL, map[string]string{
+		"BeamAutoScalingGroupName":    awsBYOCLabelString(input.ProviderData.Labels, awsBYOCAutoScalingGroupNameLabel, awsBYOCAutoScalingGroupName(input.WorkspaceID, input.Request.poolName)),
+		"BeamControlExternalId":       awsBYOCLabelString(input.ProviderData.Labels, awsBYOCControlRoleExternalIDLabel, ""),
+		"BeamControlRoleName":         awsBYOCLabelString(input.ProviderData.Labels, awsBYOCControlRoleNameLabel, ""),
+		"BeamControlRolePrincipalArn": strings.TrimSpace(input.Config.BYOC.AWS.ControlRolePrincipalARN),
+		"BeamGatewayURL":              input.GatewayURL,
+		"BeamJoinToken":               input.JoinToken,
+		"BeamPoolName":                input.Request.poolName,
+		"BeamWorkerImage":             input.WorkerImage,
 		"ContainerStartConcurrency":   strconv.FormatUint(uint64(awsBYOCDefaultStartLimit), 10),
-		"DesiredCapacity":             strconv.FormatUint(uint64(req.desiredNodes), 10),
-		"MaxSize":                     strconv.FormatUint(uint64(req.maxNodes), 10),
-		"MinSize":                     strconv.FormatUint(uint64(req.desiredNodes), 10),
+		"DesiredCapacity":             strconv.FormatUint(uint64(input.Request.desiredNodes), 10),
+		"MaxSize":                     strconv.FormatUint(uint64(input.Request.maxNodes), 10),
+		"MinSize":                     strconv.FormatUint(uint64(input.Request.desiredNodes), 10),
 		"NetworkSlots":                strconv.FormatUint(uint64(awsBYOCDefaultNetworkSlots), 10),
-		"NodeGPUCount":                strconv.FormatUint(uint64(req.gpuCount), 10),
-		"NodeInstanceType":            req.instanceType,
+		"NodeGPUCount":                strconv.FormatUint(uint64(input.Request.gpuCount), 10),
+		"NodeInstanceType":            input.Request.instanceType,
 		"RootVolumeSizeGB":            strconv.FormatUint(uint64(awsBYOCDefaultRootVolumeGB), 10),
-		"TargetAWSAccountID":          req.accountID,
-	}), nil
+		"TargetAWSAccountID":          input.Request.accountID,
+	})
+	return &byocProviderSetupResult{
+		SetupURL:     consoleURL,
+		ResourceName: stackName,
+		ResourceURL:  stackURL,
+		EventAttrs: map[string]string{
+			"cloud":         string(model.SourceAWS),
+			"region":        input.Request.region,
+			"instance_type": input.Request.instanceType,
+			"gpu":           input.Request.gpu,
+			"gpu_count":     strconv.FormatUint(uint64(input.Request.gpuCount), 10),
+		},
+	}, nil
 }
 
-// awsBYOCResource reads what a pool's record keeps of its stack.
-func awsBYOCResource(resource *model.BYOCProviderState, config types.ManagedComputeConfig) (*byocProviderResource, error) {
+func (byocAWSProvider) Resource(_ string, state *model.PoolState, config types.ManagedComputeConfig) (*byocProviderResource, error) {
+	if state == nil || state.BYOC == nil {
+		return nil, fmt.Errorf("missing AWS BYOC resource metadata")
+	}
+	resource := state.BYOC
 	if resource.Provider != string(model.SourceAWS) {
 		return nil, fmt.Errorf("pool is not an AWS BYOC pool")
 	}
@@ -264,58 +290,61 @@ func awsBYOCResource(resource *model.BYOCProviderState, config types.ManagedComp
 	}, nil
 }
 
-// The three calls below go to AWS as the role the pool's stack gave Beam. A
-// stack from before stacks gave one has no labels for it, and is answered
-// with errBYOCDirectScaleUnavailable without AWS being called.
-
-// awsBYOCScale sets how many nodes the pool's stack runs.
-func awsBYOCScale(ctx context.Context, resource *model.BYOCProviderState, req byocPoolRequest) error {
-	roleARN, externalID, asgName := awsBYOCControlMetadata(resource.Labels)
+func (byocAWSProvider) Scale(ctx context.Context, input byocProviderScaleInput) error {
+	if input.ProviderData == nil {
+		return fmt.Errorf("missing AWS BYOC resource metadata")
+	}
+	roleARN, externalID, asgName := awsBYOCControlMetadata(input.ProviderData.Labels)
 	if roleARN == "" || externalID == "" || asgName == "" {
 		return errBYOCDirectScaleUnavailable
 	}
 	return awsBYOCScaleAutoScalingGroup(ctx, awsBYOCScaleAutoScalingGroupInput{
-		Region:               resource.Region,
+		Region:               input.ProviderData.Region,
 		RoleARN:              roleARN,
 		ExternalID:           externalID,
 		AutoScalingGroupName: asgName,
-		DesiredNodes:         req.desiredNodes,
-		MaxNodes:             req.maxNodes,
+		DesiredNodes:         input.Request.desiredNodes,
+		MaxNodes:             input.Request.maxNodes,
 	})
 }
 
-// awsBYOCStackDeleted asks AWS whether the pool's stack is gone.
-func awsBYOCStackDeleted(ctx context.Context, resource *model.BYOCProviderState) (bool, error) {
-	roleARN, externalID, _ := awsBYOCControlMetadata(resource.Labels)
-	if roleARN == "" || externalID == "" || resource.ResourceName == "" {
+func (byocAWSProvider) ResourceDeleted(ctx context.Context, input byocProviderResourceInput) (bool, error) {
+	if input.ProviderData == nil {
+		return false, fmt.Errorf("missing AWS BYOC resource metadata")
+	}
+	roleARN, externalID, _ := awsBYOCControlMetadata(input.ProviderData.Labels)
+	if roleARN == "" || externalID == "" || input.ProviderData.ResourceName == "" {
 		return false, errBYOCDirectScaleUnavailable
 	}
 	return awsBYOCResourceDeleted(ctx, awsBYOCResourceDeletedInput{
-		Region:     resource.Region,
+		Region:     input.ProviderData.Region,
 		RoleARN:    roleARN,
 		ExternalID: externalID,
-		StackName:  resource.ResourceName,
+		StackName:  input.ProviderData.ResourceName,
 	})
 }
 
-// awsBYOCRelease terminates the node a machine runs on. The stack starts
-// another in its place.
-func awsBYOCRelease(ctx context.Context, resource *model.BYOCProviderState, machine *model.AgentTokenState) error {
-	roleARN, externalID, asgName := awsBYOCControlMetadata(resource.Labels)
+func (byocAWSProvider) ReleaseMachine(ctx context.Context, input byocProviderReleaseMachineInput) error {
+	if input.ProviderData == nil {
+		return fmt.Errorf("missing AWS BYOC resource metadata")
+	}
+	roleARN, externalID, asgName := awsBYOCControlMetadata(input.ProviderData.Labels)
 	if roleARN == "" || externalID == "" || asgName == "" {
 		return errBYOCDirectScaleUnavailable
 	}
 	return awsBYOCReleaseMachine(ctx, awsBYOCReleaseMachineInput{
-		Region:               resource.Region,
+		Region:               input.ProviderData.Region,
 		RoleARN:              roleARN,
 		ExternalID:           externalID,
 		AutoScalingGroupName: asgName,
-		Machine:              machine,
+		Machine:              input.Machine,
 	})
 }
 
-// updateAWSBYOCScaleState records in the pool what its stack was resized to.
-func updateAWSBYOCScaleState(state *model.PoolState, req byocPoolRequest, config types.ManagedComputeConfig) {
+func (byocAWSProvider) UpdateScaleState(state *model.PoolState, req byocPoolRequest, config types.ManagedComputeConfig) error {
+	if state == nil || state.BYOC == nil {
+		return fmt.Errorf("missing AWS BYOC resource metadata")
+	}
 	if state.BYOC.Labels == nil {
 		state.BYOC.Labels = map[string]string{}
 	}
@@ -325,9 +354,10 @@ func updateAWSBYOCScaleState(state *model.PoolState, req byocPoolRequest, config
 	if state.Config != nil {
 		state.Config.Regions = []string{req.region}
 	}
+	return nil
 }
 
-func validateExistingAWSBYOCPool(existing *model.PoolState, req byocPoolRequest) error {
+func (byocAWSProvider) ValidateExistingPool(existing *model.PoolState, req byocPoolRequest) error {
 	if existing == nil || existing.BYOC == nil {
 		return nil
 	}
@@ -416,6 +446,17 @@ func awsBYOCLabelUint32(labels map[string]string, key string, fallback uint32) u
 		return fallback
 	}
 	return uint32(value)
+}
+
+func awsBYOCLabelInt64(labels map[string]string, key string, fallback int64) int64 {
+	if labels == nil {
+		return fallback
+	}
+	value, err := strconv.ParseInt(strings.TrimSpace(labels[key]), 10, 64)
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 func awsBYOCDirectScaleEnabled(labels map[string]string) bool {

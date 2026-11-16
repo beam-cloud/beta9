@@ -52,11 +52,11 @@ type Scheduler struct {
 	schedulerUsageMetrics SchedulerUsageMetrics
 	eventBus              *common.EventBus
 
-	provisioning           *provisioningTracker
-	workerProvisioningLock *common.RedisLock
-	growBackoff            *growBackoff
-	credentials            *schedulerCredentialCache
-	agentPoolMu            sync.Mutex
+	provisioning              *provisioningTracker
+	workerProvisioningLock    *common.RedisLock
+	workerProvisioningBackoff *workerProvisioningBackoff
+	credentials               *schedulerCredentialCache
+	agentPoolMu               sync.Mutex
 
 	// creditGate is the prepaid-credit check; nil allows everything.
 	creditGate *CreditGate
@@ -179,28 +179,28 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	}
 
 	return &Scheduler{
-		ctx:                    ctx,
-		config:                 config,
-		eventBus:               eventBus,
-		backendRepo:            backendRepo,
-		workerRepo:             workerRepo,
-		workerPoolRepo:         workerPoolRepo,
-		computeRepo:            computeRepo,
-		workerPoolManager:      workerPoolManager,
-		requestBacklog:         requestBacklog,
-		containerRepo:          containerRepo,
-		workspaceRepo:          workspaceRepo,
-		eventRepo:              eventRepo,
-		schedulerUsageMetrics:  schedulerUsage,
-		provisioning:           newProvisioningTracker(seams.clock),
-		workerProvisioningLock: common.NewRedisLock(redisClient),
-		growBackoff:            newGrowBackoff(seams.clock),
-		credentials:            newSchedulerCredentialCache(),
-		pushComputeEvent:       pushPoolMetrics,
-		creditGate:             NewCreditGate(config.GatewayService.CreditGate, config.ManagedCompute.Billing.AuthToken, redisClient),
-		chains:                 chains,
-		clock:                  seams.clock,
-		spawn:                  seams.spawn,
+		ctx:                       ctx,
+		config:                    config,
+		eventBus:                  eventBus,
+		backendRepo:               backendRepo,
+		workerRepo:                workerRepo,
+		workerPoolRepo:            workerPoolRepo,
+		computeRepo:               computeRepo,
+		workerPoolManager:         workerPoolManager,
+		requestBacklog:            requestBacklog,
+		containerRepo:             containerRepo,
+		workspaceRepo:             workspaceRepo,
+		eventRepo:                 eventRepo,
+		schedulerUsageMetrics:     schedulerUsage,
+		provisioning:              newProvisioningTracker(),
+		workerProvisioningLock:    common.NewRedisLock(redisClient),
+		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
+		credentials:               newSchedulerCredentialCache(),
+		pushComputeEvent:          pushPoolMetrics,
+		creditGate:                NewCreditGate(config.GatewayService.CreditGate, config.ManagedCompute.Billing.AuthToken, redisClient),
+		chains:                    chains,
+		clock:                     seams.clock,
+		spawn:                     seams.spawn,
 	}, nil
 }
 

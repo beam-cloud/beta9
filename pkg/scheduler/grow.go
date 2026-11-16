@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/clock"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -88,7 +87,7 @@ func (s *Scheduler) chooseGrowth(route route, request *types.ContainerRequest) g
 		}
 		exhausted = false
 
-		if s.growBackoff.leftAlone(pool.Name) {
+		if s.workerProvisioningBackoff.leftAlone(pool.Name, s.now()) {
 			continue
 		}
 
@@ -201,7 +200,7 @@ func (s *Scheduler) addWorker(request *types.ContainerRequest, pool *WorkerPool,
 	})
 	if err != nil {
 		s.provisioning.release(s, reservationID)
-		s.growBackoff.failed(pool.Name)
+		s.workerProvisioningBackoff.failed(pool.Name, s.now())
 		logAddWorkerFailure(request, err)
 		metrics.RecordSchedulerWorkerWait(s.since(request.Timestamp), request, "add_worker_failed")
 		return
@@ -240,32 +239,32 @@ func logAddWorkerFailure(request *types.ContainerRequest, err error) {
 	requestLog(log.Error(), request).Err(err).Msg("unable to add worker")
 }
 
-// growBackoff remembers the pools whose AddWorker just failed. It is kept
-// per scheduler replica: each replica finds out for itself, once.
-type growBackoff struct {
+// workerProvisioningBackoff remembers the pools whose AddWorker just failed.
+// It is kept per scheduler replica: each replica finds out for itself, once.
+type workerProvisioningBackoff struct {
 	mu    sync.Mutex
-	clock clock.Clock
 	until map[string]time.Time
 }
 
-func newGrowBackoff(c clock.Clock) *growBackoff {
-	return &growBackoff{clock: clock.OrReal(c), until: map[string]time.Time{}}
+func newWorkerProvisioningBackoff() *workerProvisioningBackoff {
+	return &workerProvisioningBackoff{until: map[string]time.Time{}}
 }
 
-func (b *growBackoff) failed(pool string) {
+// failed records that the pool failed to add a worker now.
+func (b *workerProvisioningBackoff) failed(pool string, now time.Time) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.until[pool] = b.clock.Now().Add(growRetryDelay)
+	b.until[pool] = now.Add(growRetryDelay)
 }
 
 // leftAlone reports whether the pool failed to add a worker less than
-// growRetryDelay ago.
-func (b *growBackoff) leftAlone(pool string) bool {
+// growRetryDelay before now.
+func (b *workerProvisioningBackoff) leftAlone(pool string, now time.Time) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	until, failed := b.until[pool]
-	if failed && !b.clock.Now().Before(until) {
+	if failed && !now.Before(until) {
 		delete(b.until, pool)
 		return false
 	}

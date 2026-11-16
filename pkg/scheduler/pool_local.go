@@ -38,16 +38,18 @@ const (
 // A "local" k8s worker pool controller means
 // the pool is local to the control plane / in-cluster
 type LocalKubernetesWorkerPoolController struct {
-	poolIdentity
-	config         types.AppConfig
-	kubeClient     kubernetes.Interface
-	clock          clock.Clock
-	workerRepo     repository.WorkerRepository
-	workerPoolRepo repository.WorkerPoolRepository
-	backendRepo    repository.BackendRepository
-	containerRepo  repository.ContainerRepository
-	eventRepo      repository.EventRepository
-	stall          stallCheck
+	ctx              context.Context
+	name             string
+	config           types.AppConfig
+	kubeClient       kubernetes.Interface
+	clock            clock.Clock
+	workerPoolConfig types.WorkerPoolConfig
+	workerRepo       repository.WorkerRepository
+	workerPoolRepo   repository.WorkerPoolRepository
+	backendRepo      repository.BackendRepository
+	containerRepo    repository.ContainerRepository
+	eventRepo        repository.EventRepository
+	stall            stallCheck
 }
 
 func NewLocalKubernetesWorkerPoolController(opts WorkerPoolControllerOptions) (WorkerPoolController, error) {
@@ -67,15 +69,17 @@ func NewLocalKubernetesWorkerPoolController(opts WorkerPoolControllerOptions) (W
 	workerPoolName := opts.Name
 	workerPoolConfig := opts.Config.Worker.Pools[workerPoolName]
 	wpc := &LocalKubernetesWorkerPoolController{
-		poolIdentity:   poolIdentity{ctx: opts.Context, name: opts.Name, workerPoolConfig: workerPoolConfig},
-		config:         opts.Config,
-		kubeClient:     kubeClient,
-		clock:          clock.OrReal(opts.Clock),
-		workerRepo:     opts.WorkerRepo,
-		backendRepo:    opts.BackendRepo,
-		workerPoolRepo: opts.WorkerPoolRepo,
-		containerRepo:  opts.ContainerRepo,
-		eventRepo:      opts.EventRepo,
+		ctx:              opts.Context,
+		name:             opts.Name,
+		config:           opts.Config,
+		kubeClient:       kubeClient,
+		clock:            clock.OrReal(opts.Clock),
+		workerPoolConfig: workerPoolConfig,
+		workerRepo:       opts.WorkerRepo,
+		backendRepo:      opts.BackendRepo,
+		workerPoolRepo:   opts.WorkerPoolRepo,
+		containerRepo:    opts.ContainerRepo,
+		eventRepo:        opts.EventRepo,
 	}
 
 	MonitorPoolSize(wpc, opts.Config, &workerPoolConfig, wpc.workerPoolRepo, wpc.clock)
@@ -93,8 +97,24 @@ func NewLocalKubernetesWorkerPoolController(opts WorkerPoolControllerOptions) (W
 	return wpc, nil
 }
 
+func (wpc *LocalKubernetesWorkerPoolController) Context() context.Context {
+	return wpc.ctx
+}
+
+func (wpc *LocalKubernetesWorkerPoolController) IsPreemptable() bool {
+	return wpc.workerPoolConfig.Preemptable
+}
+
+func (wpc *LocalKubernetesWorkerPoolController) Name() string {
+	return wpc.name
+}
+
 func (wpc *LocalKubernetesWorkerPoolController) ContainerRuntime() string {
 	return wpc.workerPoolConfig.ContainerRuntime
+}
+
+func (wpc *LocalKubernetesWorkerPoolController) RequiresPoolSelector() bool {
+	return wpc.workerPoolConfig.RequiresPoolSelector
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error) {
@@ -663,7 +683,6 @@ func (wpc *LocalKubernetesWorkerPoolController) monitorAndCleanupWorkers() {
 		EventRepo:   wpc.eventRepo,
 		WorkerRepo:  wpc.workerRepo,
 		BackendRepo: wpc.backendRepo,
-		Now:         wpc.clock.Now,
 	}
 	// Binding lists every Job in the pool, so it stays off the caller's path.
 	go cleaner.BindWorkerTokens(wpc.ctx)

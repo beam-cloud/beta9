@@ -757,6 +757,38 @@ type WorkerPoolConfig struct {
 
 // WorkerPoolProvisioningConfig is where and how a pool buys machines.
 // Provider and MaxNodes are required.
+//
+// A pool that buys up to four spot L40S machines from Verda, keeps one GPU
+// free and takes the overflow of the A10G pools. Below it, what all such
+// pools together may spend, and the credentials of two providers:
+//
+//	worker:
+//	  pools:
+//	    spot-l40s:
+//	      gpuType: L40S
+//	      alsoServes: [A10G]
+//	      provisioning:
+//	        provider: verda
+//	        spot: true
+//	        maxNodes: 4
+//	        maxNodeHourlyCents: 150
+//	        regions: [FIN-01]
+//	        idleTimeout: 10m
+//	        bootTimeout: 20m
+//	      poolSizing:
+//	        minFreeGpu: 1
+//	providers:
+//	  maxHourlyCents: 2000
+//	  maxDailyCents: 20000
+//	  verda:
+//	    clientId:
+//	    clientSecret:
+//	  nebius:
+//	    serviceAccountId:
+//	    publicKeyId:
+//	    privateKey:
+//	    projects:
+//	    - id:
 type WorkerPoolProvisioningConfig struct {
 	// Provider is the key under providers that the machines are bought from.
 	Provider string `key:"provider" json:"provider"`

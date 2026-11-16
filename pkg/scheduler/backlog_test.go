@@ -230,6 +230,66 @@ func TestBacklogHoldsARequestFreeOfTheMachineItWasPlacedOn(t *testing.T) {
 	assert.Equal(t, "machine-1", waiting.MachineId, "the caller chose the machine")
 }
 
+// MachineId means two things: the machine a caller chose, and the machine a
+// request was placed on. Only the second is undone when the request goes
+// back to the backlog.
+func TestContainerRequestMachineAssignment(t *testing.T) {
+	t.Run("placed on a machine, then returned to the backlog", func(t *testing.T) {
+		request := &types.ContainerRequest{}
+		request.AssignMachine("machine-1")
+		if request.MachineId != "machine-1" || !request.MachineAssigned {
+			t.Fatalf("placed request = %q assigned %v", request.MachineId, request.MachineAssigned)
+		}
+		request.ReleaseMachine()
+		if request.MachineId != "" || request.MachineAssigned {
+			t.Fatalf("released request = %q assigned %v, want it free to run anywhere", request.MachineId, request.MachineAssigned)
+		}
+		// Placed again, elsewhere.
+		request.AssignMachine("machine-2")
+		request.ReleaseMachine()
+		if request.MachineId != "" {
+			t.Fatalf("request is bound to %q after its second placement", request.MachineId)
+		}
+	})
+
+	t.Run("pinned by its caller", func(t *testing.T) {
+		request := &types.ContainerRequest{MachineId: "machine-1"}
+		request.AssignMachine("machine-1")
+		if request.MachineId != "machine-1" || request.MachineAssigned {
+			t.Fatalf("pinned request = %q assigned %v", request.MachineId, request.MachineAssigned)
+		}
+		request.ReleaseMachine()
+		if request.MachineId != "machine-1" {
+			t.Fatalf("pinned request lost its machine: %q", request.MachineId)
+		}
+	})
+
+	t.Run("placed on a worker with no machine", func(t *testing.T) {
+		request := &types.ContainerRequest{}
+		request.AssignMachine("")
+		if request.MachineId != "" || request.MachineAssigned {
+			t.Fatalf("request = %q assigned %v", request.MachineId, request.MachineAssigned)
+		}
+	})
+
+	t.Run("the flag survives the queue", func(t *testing.T) {
+		request := &types.ContainerRequest{ContainerId: "c"}
+		request.AssignMachine("machine-1")
+		data, err := json.Marshal(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var queued types.ContainerRequest
+		if err := json.Unmarshal(data, &queued); err != nil {
+			t.Fatal(err)
+		}
+		queued.ReleaseMachine()
+		if queued.MachineId != "" {
+			t.Fatalf("a queued request stayed bound to %q", queued.MachineId)
+		}
+	})
+}
+
 // A pass takes up to requestProcessingBatchSize requests out of the backlog
 // before it reads any of them. One that cannot be read is gone by then, and
 // must not take the rest of the batch with it.

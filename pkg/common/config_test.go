@@ -2,7 +2,7 @@ package common
 
 import (
 	"encoding/json"
-	"regexp"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -79,26 +79,17 @@ func TestEmbeddedDefaultConfigLoads(t *testing.T) {
 	require.NoError(t, manager.GetConfig().Validate())
 }
 
-// The built-in config's example of a pool that buys machines is what gets
-// copied, so it has to load as it is written, without its comment marks.
-func TestSpotPoolExampleInTheDefaultConfigLoads(t *testing.T) {
-	commentedKey := regexp.MustCompile(`^(\s*)# (\s*(- )?[A-Za-z][A-Za-z0-9-]*:( .*)?)$`)
-	example := func(from, to string) string {
-		_, rest, found := strings.Cut(string(defaultConfig), from)
-		require.True(t, found, "the built-in config has no %q", from)
-		body, _, found := strings.Cut(rest, to)
-		require.True(t, found, "the built-in config has no %q", to)
-
-		var lines []string
-		for _, line := range strings.Split(from+body, "\n") {
-			if parts := commentedKey.FindStringSubmatch(line); parts != nil {
-				lines = append(lines, parts[1]+parts[2])
-			}
-		}
-		return strings.Join(lines, "\n")
-	}
-	overlay := "worker:\n  pools:\n" + example("    # spot-l40s:", "  # global pool attributes") +
-		"\nproviders:\n" + example("  # maxHourlyCents:", "  hetzner:")
+// The example in the doc comment of types.WorkerPoolProvisioningConfig is
+// what gets copied into a config file, so it has to load as it is written.
+func TestSpotPoolExampleInTheDocsLoads(t *testing.T) {
+	const first, declaration = "//\tworker:\n", "type WorkerPoolProvisioningConfig struct"
+	source, err := os.ReadFile("../types/config.go")
+	require.NoError(t, err)
+	_, rest, found := strings.Cut(string(source), first)
+	require.True(t, found, "no example in pkg/types/config.go")
+	body, _, found := strings.Cut(rest, declaration)
+	require.True(t, found, "the example is not in the doc comment of WorkerPoolProvisioningConfig")
+	overlay := strings.ReplaceAll(first+body, "//\t", "")
 
 	manager, err := NewConfigManager[types.AppConfig]()
 	require.NoError(t, err)
@@ -113,6 +104,7 @@ func TestSpotPoolExampleInTheDefaultConfigLoads(t *testing.T) {
 	require.True(t, pool.Provisioning.Spot)
 	require.Equal(t, 4, pool.Provisioning.MaxNodes)
 	require.EqualValues(t, 150, pool.Provisioning.MaxNodeHourlyCents)
+	require.Equal(t, []string{"FIN-01"}, pool.Provisioning.Regions)
 	require.Equal(t, 10*time.Minute, pool.Provisioning.IdleAfter())
 	require.Equal(t, 20*time.Minute, pool.Provisioning.BootWithin())
 	require.Equal(t, []string{"A10G"}, pool.AlsoServes)

@@ -15,7 +15,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	"github.com/stretchr/testify/require"
 )
 
 type fakeManagedPoolBackendRepo struct {
@@ -240,33 +239,6 @@ func TestManagedGPUPoolDefaultsToNvidiaRuntime(t *testing.T) {
 	}
 	if config.Runtime != "custom-nvidia" {
 		t.Fatalf("explicit GPU runtime = %q, want custom-nvidia", config.Runtime)
-	}
-}
-
-func TestManagedPoolAlsoServesOtherGPUTypes(t *testing.T) {
-	config, err := normalizeManagedPoolConfig(types.WorkerPoolConfig{
-		Mode:       types.PoolModeExternal,
-		GPUType:    "RTX4090",
-		AlsoServes: []string{"A10G"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !config.Serves("A10G") {
-		t.Fatalf("alsoServes = %v, want A10G kept", config.AlsoServes)
-	}
-
-	for name, config := range map[string]types.WorkerPoolConfig{
-		"cpu pool":     {AlsoServes: []string{"A10G"}},
-		"its own type": {GPUType: "RTX4090", AlsoServes: []string{"RTX4090"}},
-		"any":          {GPUType: "RTX4090", AlsoServes: []string{"any"}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			config.Mode = types.PoolModeExternal
-			if _, err := normalizeManagedPoolConfig(config); err == nil {
-				t.Fatal("alsoServes that cannot route anything was accepted")
-			}
-		})
 	}
 }
 
@@ -1010,53 +982,4 @@ func TestManagedJoinTokenCannotJoinUnmanagedPool(t *testing.T) {
 	if response.Ok || response.ErrMsg != "join token is invalid or expired" {
 		t.Fatalf("JoinAgent() response = %+v", response)
 	}
-}
-
-// A workspace can give a pool of its own the name of a pool that serves
-// everyone. What that pool holds is not this pool's.
-func TestAManagedPoolHoldsOnlyItsOwnWorkers(t *testing.T) {
-	ctx := context.Background()
-	service, _ := buyingTestService(types.AppConfig{})
-	workers := &fakeWorkerRepo{}
-	service.workerRepo = workers
-	_, err := service.CreateManagedPool(ctx, clusterAdminAuth(), "l40s", types.WorkerPoolConfig{GPUType: "L40S"})
-	require.NoError(t, err)
-
-	workers.worker = &types.Worker{Id: "its-own", PoolName: "l40s", WorkspaceId: "admin-workspace", ControlPlaneManaged: true}
-	_, err = service.UpdateManagedPool(ctx, clusterAdminAuth(), "l40s", spotPool())
-	require.ErrorIs(t, err, model.ErrManagedPoolBuysMachines)
-	require.ErrorIs(t, service.DeleteManagedPool(ctx, clusterAdminAuth(), "l40s"), model.ErrManagedPoolInUse)
-
-	workers.worker = &types.Worker{Id: "a-workspaces", PoolName: "l40s", WorkspaceId: "workspace-1"}
-	_, err = service.UpdateManagedPool(ctx, clusterAdminAuth(), "l40s", spotPool())
-	require.NoError(t, err)
-	_, err = service.UpdateManagedPool(ctx, clusterAdminAuth(), "l40s", types.WorkerPoolConfig{GPUType: "L40S"})
-	require.NoError(t, err)
-	require.NoError(t, service.DeleteManagedPool(ctx, clusterAdminAuth(), "l40s"))
-}
-
-// The provisioner gives back what a pool bought. A machine removed by hand
-// would be paid for until the provisioner missed its worker.
-func TestAMachineThatWasBoughtIsNotRemovedByHand(t *testing.T) {
-	ctx := context.Background()
-	service, repo := buyingTestService(types.AppConfig{})
-	_, err := service.CreateManagedPool(ctx, clusterAdminAuth(), "spot-l40s", spotPool())
-	require.NoError(t, err)
-	script, _, err := service.JoinScript(ctx, "spot-l40s", "machine-1")
-	require.NoError(t, err)
-	require.True(t, joinAs(t, service, script, "verda-1").Ok)
-
-	err = service.DeleteManagedMachine(ctx, clusterAdminAuth(), "spot-l40s", "machine-1")
-	require.ErrorIs(t, err, model.ErrManagedPoolBuysMachines)
-	require.ErrorContains(t, err, `"spot-l40s" gives its machines back itself`)
-	machine, err := repo.GetAgentMachineState(ctx, "admin-workspace", "spot-l40s", "machine-1")
-	require.NoError(t, err)
-	require.NotNil(t, machine)
-
-	// One that was joined by hand is.
-	_, byHand := joinedByHand(t, service)
-	require.NoError(t, service.DeleteManagedMachine(ctx, clusterAdminAuth(), "l40s", byHand.MachineID))
-	machine, err = repo.GetAgentMachineState(ctx, "admin-workspace", "l40s", byHand.MachineID)
-	require.NoError(t, err)
-	require.Nil(t, machine)
 }

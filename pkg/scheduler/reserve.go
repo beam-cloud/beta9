@@ -182,7 +182,6 @@ func (a *schedulingAttempt) recordBacklogWait(success bool, reason string) {
 
 type provisioningTracker struct {
 	mu                  sync.Mutex
-	clock               clock.Clock
 	sequence            uint64
 	reservations        map[string]*provisioningReservation
 	requestReservations map[string]string
@@ -219,9 +218,8 @@ func (r *provisioningReservation) gone(workers []*types.Worker, now time.Time) b
 	return !slices.ContainsFunc(workers, func(worker *types.Worker) bool { return worker.Id == r.worker.Id })
 }
 
-func newProvisioningTracker(c clock.Clock) *provisioningTracker {
+func newProvisioningTracker() *provisioningTracker {
 	return &provisioningTracker{
-		clock:               clock.OrReal(c),
 		reservations:        map[string]*provisioningReservation{},
 		requestReservations: map[string]string{},
 	}
@@ -260,7 +258,7 @@ func (p *provisioningTracker) keepWaitingLocked(s *Scheduler, workers []*types.W
 	}
 	reservation, exists := p.reservations[reservationID]
 	switch {
-	case exists && reservation.gone(workers, p.clock.Now()):
+	case exists && reservation.gone(workers, s.now()):
 		// Nothing can wait for it any more.
 		return false, p.releaseLocked(reservationID)
 	case exists && !s.stalled(reservation.worker, s.now()):
@@ -335,7 +333,7 @@ func (p *provisioningTracker) releaseLocked(reservationID string) []string {
 // expireAfterTTL ends a reservation that has lasted as long as a worker may
 // take to start.
 func (p *provisioningTracker) expireAfterTTL(s *Scheduler, reservationID string) {
-	p.clock.AfterFunc(pendingWorkerReservationTTL, func() { p.release(s, reservationID) })
+	clock.OrReal(s.clock).AfterFunc(pendingWorkerReservationTTL, func() { p.release(s, reservationID) })
 }
 
 // handoff gives a reservation to the worker its pool added. A pool of
@@ -353,7 +351,7 @@ func (p *provisioningTracker) handoff(s *Scheduler, reservationID string, worker
 	reservation.worker.MachineId = worker.MachineId
 	reservation.worker.Runtime = worker.Runtime
 	reservation.worker.CreatedAt = worker.CreatedAt
-	reservation.addedAt = p.clock.Now()
+	reservation.addedAt = s.now()
 	takeCapacityOf(reservation.worker, worker)
 	if waiting, ok := p.reservations[worker.Id]; ok {
 		maps.Copy(reservation.requestIDs, waiting.requestIDs)
@@ -422,7 +420,7 @@ func (p *provisioningTracker) trackPendingWorkerLocked(s *Scheduler, worker *typ
 		p.reservations[reservationID] = &provisioningReservation{
 			worker:     worker,
 			requestIDs: map[string]struct{}{},
-			addedAt:    p.clock.Now(),
+			addedAt:    s.now(),
 		}
 		p.expireAfterTTL(s, reservationID)
 	}

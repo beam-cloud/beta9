@@ -63,8 +63,6 @@ func RunJoin(ctx context.Context, opts types.AgentJoinOptions) error {
 	}
 	verbosef(agentStdout, "transport=%s executor=%s fallback=%s\n", res.Bootstrap.Transport, res.Bootstrap.Executor, res.Bootstrap.Fallback)
 
-	go newInterruptionWatcher(grpcClient, res.AgentToken, agentStdout, agentStderr).run(ctx)
-
 	workers := newWorkerRuntimeManager(res.Bootstrap, opts, opts.Stdout, opts.Stderr, agentStdout, agentStderr, telemetry)
 	telemetry.setStatsProvider(workers.stats)
 	defer workers.stopAll()

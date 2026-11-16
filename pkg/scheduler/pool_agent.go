@@ -16,15 +16,17 @@ import (
 // AgentWorkerPoolController manages machines that connect to the control plane
 // through the agent protocol, including private and managed external pools.
 type AgentWorkerPoolController struct {
-	poolIdentity
-	cancel      context.CancelFunc
-	workspaceID string
-	config      types.AppConfig
-	poolState   *compute.PoolState
-	workerRepo  repository.WorkerRepository
-	computeRepo repository.ComputeRepository
-	provisioner Provisioner
-	clock       clock.Clock
+	ctx              context.Context
+	cancel           context.CancelFunc
+	name             string
+	workspaceID      string
+	config           types.AppConfig
+	workerPoolConfig types.WorkerPoolConfig
+	poolState        *compute.PoolState
+	workerRepo       repository.WorkerRepository
+	computeRepo      repository.ComputeRepository
+	provisioner      Provisioner
+	clock            clock.Clock
 }
 
 type AgentWorkerPoolControllerOptions struct {
@@ -114,15 +116,17 @@ func NewAgentWorkerPoolController(opts AgentWorkerPoolControllerOptions) (*Agent
 
 	ctx, cancel := context.WithCancel(opts.Context)
 	wpc := &AgentWorkerPoolController{
-		poolIdentity: poolIdentity{ctx: ctx, name: opts.Name, workerPoolConfig: opts.WorkerPool},
-		cancel:       cancel,
-		workspaceID:  opts.WorkspaceID,
-		config:       opts.Config,
-		poolState:    opts.PoolState,
-		workerRepo:   opts.WorkerRepo,
-		computeRepo:  opts.ComputeRepo,
-		provisioner:  opts.Provisioner,
-		clock:        clock.OrReal(opts.Clock),
+		ctx:              ctx,
+		cancel:           cancel,
+		name:             opts.Name,
+		workspaceID:      opts.WorkspaceID,
+		config:           opts.Config,
+		workerPoolConfig: opts.WorkerPool,
+		poolState:        opts.PoolState,
+		workerRepo:       opts.WorkerRepo,
+		computeRepo:      opts.ComputeRepo,
+		provisioner:      opts.Provisioner,
+		clock:            clock.OrReal(opts.Clock),
 	}
 	// A pool that buys its machines can grow, so it can keep a floor free.
 	// A pool of machines that joined by hand cannot add one.
@@ -152,12 +156,28 @@ func (wpc *AgentWorkerPoolController) close() {
 	}
 }
 
+func (wpc *AgentWorkerPoolController) Context() context.Context {
+	return wpc.ctx
+}
+
+func (wpc *AgentWorkerPoolController) IsPreemptable() bool {
+	return wpc.workerPoolConfig.Preemptable
+}
+
+func (wpc *AgentWorkerPoolController) Name() string {
+	return wpc.name
+}
+
 func (wpc *AgentWorkerPoolController) ContainerRuntime() string {
 	runtime := wpc.workerPoolConfig.ContainerRuntime
 	if runtime == "" {
 		return types.ContainerRuntimeRunc.String()
 	}
 	return runtime
+}
+
+func (wpc *AgentWorkerPoolController) RequiresPoolSelector() bool {
+	return wpc.workerPoolConfig.RequiresPoolSelector
 }
 
 func (wpc *AgentWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error) {

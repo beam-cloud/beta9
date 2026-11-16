@@ -53,15 +53,10 @@ func (s *Scheduler) enforceCredits(ctx context.Context) error {
 		return err
 	}
 
+	privatePools := s.privatePoolNames()
 	containersByWorkspace := map[string][]types.ContainerState{}
 	for _, worker := range workers {
-		if worker == nil {
-			continue
-		}
-		// A workspace's own hardware is exempt. The worker's pool is looked
-		// up for the worker, not by name: a shared pool may have the name of
-		// someone's own.
-		if pool, ok := s.poolOf(worker); ok && pool.Config.Mode == types.PoolModePrivate {
+		if worker == nil || privatePools[worker.PoolName] {
 			continue
 		}
 
@@ -151,4 +146,22 @@ func (s *Scheduler) enforceCredits(ctx context.Context) error {
 		log.Info().Int("stopped", stopped).Msg("credit gate: enforcement sweep complete")
 	}
 	return nil
+}
+
+// privatePoolNames returns the names of pools whose containers are exempt
+// from the credit gate (a workspace's own hardware).
+func (s *Scheduler) privatePoolNames() map[string]bool {
+	names := map[string]bool{}
+	if s.workerPoolManager == nil {
+		return names
+	}
+
+	s.workerPoolManager.poolMap.Range(func(key string, pool *WorkerPool) bool {
+		if pool != nil && pool.Config.Mode == types.PoolModePrivate {
+			names[key] = true
+			names[pool.Name] = true
+		}
+		return true
+	})
+	return names
 }
