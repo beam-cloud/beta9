@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/vm/mirror"
@@ -24,6 +25,7 @@ import (
 	securejoin "github.com/cyphar/filepath-securejoin"
 	"github.com/google/uuid"
 	"github.com/moby/sys/user"
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
 )
@@ -55,6 +57,11 @@ type mirrorMount interface {
 // mirrorLayers serves the mirror generations this worker's VMs are pinned
 // to. A generation never changes, so the VMs pinned to one share a mount
 // when their images have the same homes.
+//
+// Everything the worker does for mirrors is in this file. The rest of the
+// worker reaches it in three places: NewWorker makes the mirrorLayers, spawn
+// calls attachMirror before it sets up a container's overlay, and
+// ContainerArchive asks mirrorArchiveRefusal.
 type mirrorLayers struct {
 	ctx   context.Context
 	root  string
@@ -106,6 +113,7 @@ func newMirrorLayers(ctx context.Context, workerID string, cacheClient *cache.Cl
 	if cacheClient != nil {
 		m.cache = mirrorNodeCache{cacheClient}
 	}
+	go m.run()
 	return m
 }
 
@@ -530,37 +538,85 @@ func imageDesktopUser(root *os.Root) (*user.User, error) {
 	return &accounts[0], nil
 }
 
-// attachMirrorLayer puts the mirror generation a VM is pinned to between
-// its image and everything writable, and returns the home it placed the tree
-// at when the pin names one. The returned release must run after the overlay
-// is unmounted.
-func (s *Worker) attachMirrorLayer(ctx context.Context, request *types.ContainerRequest, overlay *common.ContainerOverlay) (string, func(), error) {
+// openImageFile opens a regular file of an image by its path inside the
+// image, following the image's symlinks no further than its root. It returns
+// nil for a file the image does not have.
+func openImageFile(root *os.Root, name string) (*os.File, error) {
+	path, err := securejoin.SecureJoinVFS(".", name, root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve image %s: %w", name, err)
+	}
+	file, err := root.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open image %s: %w", name, err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		file.Close()
+		return nil, fmt.Errorf("image %s is not a regular file", name)
+	}
+	return file, nil
+}
+
+// attachMirror puts the mirror generation a VM is pinned to between its
+// image and everything writable, and tells the guest where the tree is when
+// the pin names a home. A container without a mirror is left as it is. The
+// returned release must run after the overlay is unmounted.
+func (s *Worker) attachMirror(ctx context.Context, request *types.ContainerRequest, spec *specs.Spec, overlay *common.ContainerOverlay) (release func(), err error) {
 	config := requestStubConfig(request)
 	if config == nil || config.Mirror == nil {
-		return "", func() {}, nil
+		return func() {}, nil
 	}
+	defer func() {
+		if err != nil {
+			log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to attach mirror layer")
+		}
+	}()
 	if s.mirrorLayers == nil {
-		return "", nil, errors.New("this worker cannot mount mirror layers")
+		return nil, errors.New("this worker cannot mount mirror layers")
 	}
 	// The home came from a laptop, by way of the gateway.
 	home := config.Mirror.Home
 	if home != "" && !mirror.ValidHome(home) {
-		return "", nil, errors.New("invalid mirror home")
+		return nil, errors.New("invalid mirror home")
 	}
 	if err := s.ensureDurableDiskSnapshotStorage(ctx, request); err != nil {
-		return "", nil, fmt.Errorf("mirror store credentials: %w", err)
+		return nil, fmt.Errorf("mirror store credentials: %w", err)
 	}
 	placements, err := mirrorPlacements(overlay.RootPath(), home)
 	if err != nil {
-		return "", nil, fmt.Errorf("find the image's home directories: %w", err)
+		return nil, fmt.Errorf("find the image's home directories: %w", err)
 	}
 	path, release, err := s.mirrorLayers.acquire(ctx, request, config.Mirror, placements)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	if err := overlay.SetReadOnlyLayers(path); err != nil {
 		release()
-		return "", nil, err
+		return nil, err
 	}
-	return home, release, nil
+	if home != "" {
+		// Per launch, not in the stub: a guest started without the layer
+		// must not look for the tree.
+		spec.Process.Env = append(spec.Process.Env, "BEAM_VM_MIRROR_HOME="+home)
+	}
+	return release, nil
+}
+
+// mirrorArchiveRefusal is why a container cannot be archived as an image, or
+// empty when it can. The merged root of a VM with a mirror includes the
+// mirror layer, and its writable layer holds every mirrored file the VM
+// changed: either archive would copy mirrored files into the image.
+func mirrorArchiveRefusal(request *types.ContainerRequest) string {
+	if config := requestStubConfig(request); config == nil || config.Mirror == nil {
+		return ""
+	}
+	return "A VM with a mirror cannot be archived as an image: its disk holds the mirrored files it changed"
 }

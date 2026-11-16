@@ -25,6 +25,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
@@ -825,14 +826,22 @@ func TestAttachMirrorLayer(t *testing.T) {
 		return request
 	}
 	worker := &Worker{mirrorLayers: h.layers}
+	// attach returns the environment a launch gets beyond the image's.
+	attach := func(worker *Worker, request *types.ContainerRequest, overlay *common.ContainerOverlay) ([]string, func(), error) {
+		spec := &specs.Spec{Process: &specs.Process{Env: []string{"PATH=/usr/bin"}}}
+		release, err := worker.attachMirror(context.Background(), request, spec, overlay)
+		return spec.Process.Env[1:], release, err
+	}
 
-	// Nothing happens for containers without a mirror.
+	// Nothing happens for containers without a mirror, on any worker.
 	plain := stub(types.StubConfigV1{})
 	overlay := common.NewContainerOverlay(plain, t.TempDir(), t.TempDir())
-	home, release, err := worker.attachMirrorLayer(context.Background(), plain, overlay)
-	require.NoError(t, err)
-	require.Empty(t, home)
-	release()
+	for _, worker := range []*Worker{worker, {}} {
+		env, release, err := attach(worker, plain, overlay)
+		require.NoError(t, err)
+		require.Empty(t, env)
+		release()
+	}
 	require.Empty(t, h.mounts)
 
 	fakeBin := t.TempDir()
@@ -842,9 +851,9 @@ func TestAttachMirrorLayer(t *testing.T) {
 	pinned := stub(types.StubConfigV1{Mirror: pin})
 	image := t.TempDir()
 	overlay = common.NewContainerOverlay(pinned, image, t.TempDir())
-	home, release, err = worker.attachMirrorLayer(context.Background(), pinned, overlay)
+	env, release, err := attach(worker, pinned, overlay)
 	require.NoError(t, err)
-	require.Empty(t, home, "a pin without a home leaves the guest's homes as they are")
+	require.Empty(t, env, "a pin without a home leaves the guest's homes as they are")
 	require.Len(t, h.mounts, 1)
 	require.NoError(t, overlay.Setup())
 	var layer string
@@ -861,9 +870,9 @@ func TestAttachMirrorLayer(t *testing.T) {
 	located := *pin
 	located.Home = "/Users/luke"
 	overlay = common.NewContainerOverlay(pinned, image, t.TempDir())
-	home, release, err = worker.attachMirrorLayer(context.Background(), stub(types.StubConfigV1{Mirror: &located}), overlay)
+	env, release, err = attach(worker, stub(types.StubConfigV1{Mirror: &located}), overlay)
 	require.NoError(t, err)
-	require.Equal(t, "/Users/luke", home)
+	require.Equal(t, []string{"BEAM_VM_MIRROR_HOME=/Users/luke"}, env)
 	require.Len(t, h.mounts, 2)
 	for path, fsys := range h.mounts {
 		if path != layer {
@@ -876,18 +885,19 @@ func TestAttachMirrorLayer(t *testing.T) {
 	// The home came from a laptop: anything but a home is refused.
 	for _, invalid := range []string{"/etc", "/root", "/Users/luke/..", "/Users/../etc", "Users/luke", "/home/a:b"} {
 		located.Home = invalid
-		_, _, err = worker.attachMirrorLayer(context.Background(), stub(types.StubConfigV1{Mirror: &located}), overlay)
+		env, _, err = attach(worker, stub(types.StubConfigV1{Mirror: &located}), overlay)
 		require.ErrorContains(t, err, "invalid mirror home", invalid)
+		require.Empty(t, env)
 	}
 	require.Len(t, h.mounts, 2)
 
 	// A VM whose generation cannot be mounted does not start without it.
 	h.bucket.objects = map[string][]byte{}
 	overlay = common.NewContainerOverlay(pinned, image, t.TempDir())
-	_, _, err = worker.attachMirrorLayer(context.Background(), pinned, overlay)
+	_, _, err = attach(worker, pinned, overlay)
 	require.ErrorContains(t, err, "no longer in the store")
-	_, _, err = (&Worker{}).attachMirrorLayer(context.Background(), pinned, overlay)
-	require.Error(t, err)
+	_, _, err = attach(&Worker{}, pinned, overlay)
+	require.ErrorContains(t, err, "cannot mount mirror layers")
 }
 
 type archiveStream struct {
@@ -906,6 +916,7 @@ func (s *archiveStream) Send(response *pb.ContainerArchiveResponse) error {
 // reads the merged root, and a layered one the writable layer, which holds
 // every mirrored file the VM changed.
 func TestMirroredVMsAreNotArchived(t *testing.T) {
+	require.Empty(t, mirrorArchiveRefusal(&types.ContainerRequest{ContainerId: "plain"}))
 	pin := &types.VMMirror{Name: "laptop", ID: "8a0c1f6e-3d0e-4b39-9a55-0d1c2b3a4f5e", Generation: 1, ManifestDigest: strings.Repeat("ab", 32), ManifestSize: 100, Home: "/Users/luke"}
 	for _, layered := range []bool{false, true} {
 		config, err := json.Marshal(types.StubConfigV1{Mirror: pin})

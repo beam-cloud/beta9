@@ -509,11 +509,8 @@ func (s *ContainerRuntimeServer) ContainerArchive(req *pb.ContainerArchiveReques
 		return stream.Send(&pb.ContainerArchiveResponse{Done: true, Success: false, ErrorMsg: "Container not running"})
 	}
 
-	// The merged root includes the mirror layer, and the writable layer holds
-	// every mirrored file the VM changed: either archive would copy mirrored
-	// files into the image.
-	if config := requestStubConfig(instance.Request); config != nil && config.Mirror != nil {
-		return stream.Send(&pb.ContainerArchiveResponse{Done: true, Success: false, ErrorMsg: "A VM with a mirror cannot be archived as an image: its disk holds the mirrored files it changed"})
+	if refusal := mirrorArchiveRefusal(instance.Request); refusal != "" {
+		return stream.Send(&pb.ContainerArchiveResponse{Done: true, Success: false, ErrorMsg: refusal})
 	}
 
 	// A v1 base has no OCI image to stack a layer on; its snapshot archives the

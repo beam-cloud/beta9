@@ -877,9 +877,6 @@ func (s *Worker) Run() error {
 	go s.manageWorkerCapacity()
 	go s.processStopContainerEvents()
 	go s.pruneIdleImageMounts(s.ctx)
-	if s.mirrorLayers != nil {
-		go s.mirrorLayers.run()
-	}
 
 	lastContainerRequest := time.Now()
 	reconnectDelay := containerRequestStreamInterval
