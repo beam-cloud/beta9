@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,6 +16,22 @@ import (
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
+
+const publicIPv6 = "2000::/3"
+
+// Connecting a UDP socket looks up the route without sending anything.
+var publicIPv6Probe = &net.UDPAddr{IP: net.ParseIP("2001:4860:4860::8888"), Port: 53}
+
+// hostRoutesPublicIPv6 is false behind the unreachable IPv6 guard and on hosts
+// without an IPv6 default route.
+func hostRoutesPublicIPv6() bool {
+	conn, err := net.DialUDP("udp6", nil, publicIPv6Probe)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
 
 func (m *ContainerNetworkManager) registerEgress(id string, request *types.ContainerRequest) error {
 	info, err := m.getContainerNetworkInfo(id)
@@ -67,7 +84,11 @@ type egressRule struct {
 	args         []string
 }
 
-func egressRules(ip, comment string, config types.EgressConfig, restricted bool, resolvers []string) []egressRule {
+// egressRules sends the container's TCP through the egress listeners. TCP to
+// unreachable, a range the host cannot route, is reset instead: the listeners
+// accept before they dial, so it would open and then close, and dual-stack
+// clients such as Chrome do not retry that over IPv4.
+func egressRules(ip, comment string, config types.EgressConfig, restricted bool, resolvers []string, unreachable string) []egressRule {
 	var rules []egressRule
 	add := func(table, chain string, args ...string) {
 		args = append([]string{"-i", containerBridgeLinkName, "-s", ip}, args...)
@@ -96,6 +117,12 @@ func egressRules(ip, comment string, config types.EgressConfig, restricted bool,
 			add("filter", "INPUT", "-p", "tcp", "--dport", strconv.Itoa(port), "-j", "ACCEPT")
 		}
 	}
+	if unreachable != "" {
+		// Filter rules go in at the head of their chain, so the last one runs
+		// first. REDIRECT has already rewritten the destination; conntrack
+		// keeps the original.
+		add("filter", "INPUT", "-p", "tcp", "-m", "conntrack", "--ctorigdst", unreachable, "-j", "REJECT", "--reject-with", "tcp-reset")
+	}
 	return rules
 }
 
@@ -115,16 +142,20 @@ func (m *ContainerNetworkManager) setupEgressRules(id string, request *types.Con
 			resolvers = append(resolvers, fields[1])
 		}
 	}
+	unreachableIPv6 := ""
+	if m.ipt6 != nil && info.ContainerIpv6 != "" && !hostRoutesPublicIPv6() {
+		unreachableIPv6 = publicIPv6
+	}
 	m.iptablesMu.Lock()
 	defer m.iptablesMu.Unlock()
 	for _, family := range []struct {
-		ip  string
-		ipt *iptables.IPTables
-	}{{info.ContainerIp, m.ipt}, {info.ContainerIpv6, m.ipt6}} {
+		ip, unreachable string
+		ipt             *iptables.IPTables
+	}{{info.ContainerIp, "", m.ipt}, {info.ContainerIpv6, unreachableIPv6, m.ipt6}} {
 		if family.ipt == nil || family.ip == "" {
 			continue
 		}
-		rules := egressRules(family.ip, info.Comment, m.config.Worker.Egress, request.NetworkRestricted(), resolvers)
+		rules := egressRules(family.ip, info.Comment, m.config.Worker.Egress, request.NetworkRestricted(), resolvers, family.unreachable)
 		for _, rule := range rules {
 			if rule.table == "nat" {
 				err = family.ipt.AppendUnique(rule.table, rule.chain, rule.args...)
