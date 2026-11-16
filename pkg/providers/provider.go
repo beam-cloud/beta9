@@ -1175,7 +1175,7 @@ func (f *Fake) Create(ctx context.Context, req CreateRequest) (Instance, error) 
 	f.creates = append(f.creates, req)
 	if f.unanswered > 0 {
 		f.unanswered--
-		return Instance{}, fmt.Errorf("%s: create %s: the connection was reset before the answer arrived", f.name, req.Name)
+		return Instance{}, because(errNoAnswer, fmt.Errorf("%s: create %s: the connection was reset before the answer arrived", f.name, req.Name))
 	}
 	return instance.Instance, nil
 }

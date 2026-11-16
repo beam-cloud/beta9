@@ -1453,6 +1453,27 @@ func TestFakeKeepsAnInstanceWhoseDeleteFails(t *testing.T) {
 	require.Equal(t, []string{id, id}, fake.Deletes())
 }
 
+func TestFakeLosesAnAnswerAsAProviderDoes(t *testing.T) {
+	ctx := context.Background()
+	fake := NewFake("fake", testOwner)
+	offer := Offer{ID: "a10g-1x", Cloud: "fake", Region: "us-east"}
+	fake.SetOffers(offer)
+	fake.LoseAnswers(1)
+
+	_, err := fake.Create(ctx, CreateRequest{Offer: offer, Name: "a", Tags: map[string]string{"machine": "m-1"}})
+	require.ErrorContains(t, err, "the connection was reset before the answer arrived")
+	require.True(t, Unanswered(err), "the buyer cannot tell what became of the purchase")
+
+	// The machine was made all the same, and is known by its tags.
+	made, err := fake.List(ctx)
+	require.NoError(t, err)
+	require.Len(t, made, 1)
+	require.Equal(t, "m-1", made[0].Tags["machine"])
+
+	_, err = fake.Create(ctx, CreateRequest{Offer: offer, Name: "b"})
+	require.NoError(t, err, "the next answer arrives")
+}
+
 func TestFakeRefusesCreatesAfterTheOnesItLetsThrough(t *testing.T) {
 	ctx := context.Background()
 	fake := NewFake("fake", testOwner)
