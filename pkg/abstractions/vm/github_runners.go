@@ -157,8 +157,14 @@ func (r *githubRunners) status(c echo.Context) error {
 type runnerJobPage struct {
 	Data  []types.GitHubRunnerJob `json:"data"`
 	Total int                     `json:"total"`
+	// Every repository with jobs, whatever the filters.
+	Repositories []string `json:"repositories"`
 }
 
+// jobs returns a page of the workspace's jobs, newest first. They can be
+// narrowed to a repository, to statuses and conclusions, which are lists
+// separated by commas, and with ?q= to those whose name, workflow or
+// repository contains some text.
 func (r *githubRunners) jobs(c echo.Context) error {
 	ctx, info := requestContext(c)
 	limit, offset, err := pageParams(c)
@@ -166,20 +172,28 @@ func (r *githubRunners) jobs(c echo.Context) error {
 		return err
 	}
 
-	jobs, total, err := r.s.repo.ListGitHubRunnerJobs(ctx, info.Workspace.Id, limit, offset)
+	filter := types.GitHubRunnerJobFilter{Limit: limit, Offset: offset, Search: c.QueryParam("q"), Repository: c.QueryParam("repository")}
+	if status := c.QueryParam("status"); status != "" {
+		filter.Statuses = strings.Split(status, ",")
+	}
+	if conclusion := c.QueryParam("conclusion"); conclusion != "" {
+		filter.Conclusions = strings.Split(conclusion, ",")
+	}
+
+	page, err := r.s.repo.ListGitHubRunnerJobs(ctx, info.Workspace.Id, filter)
 	if err != nil {
 		return err
 	}
 
 	// A job's error says why it has no runner. Once it runs on one, what is
 	// left is about an earlier attempt, or about replacing the runner it took.
-	for i := range jobs {
-		if jobs[i].RunnerName != "" {
-			jobs[i].Error = ""
+	for i := range page.Jobs {
+		if page.Jobs[i].RunnerName != "" {
+			page.Jobs[i].Error = ""
 		}
 	}
 
-	return c.JSON(http.StatusOK, runnerJobPage{Data: jobs, Total: total})
+	return c.JSON(http.StatusOK, runnerJobPage{Data: page.Jobs, Total: page.Total, Repositories: page.Repositories})
 }
 
 // disconnect stops running the account's jobs. Its runners are deleted as
@@ -200,19 +214,34 @@ func (r *githubRunners) disconnect(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
+// runnerAccount is a GitHub account that has the App installed.
+type runnerAccount struct {
+	InstallationID int64  `json:"installation_id"`
+	Account        string `json:"account"`
+	AccountType    string `json:"account_type"`
+}
+
 // runnerConnection is a step in connecting a GitHub account: where the user
 // goes next, or that the account is connected.
 type runnerConnection struct {
-	URL       string `json:"url,omitempty"`
-	Connected bool   `json:"connected"`
+	URL string `json:"url,omitempty"`
+	// The accounts the user can connect without going to GitHub again, and
+	// the state to connect one with. URL then installs the App on another.
+	Accounts  []runnerAccount `json:"accounts,omitempty"`
+	State     string          `json:"state,omitempty"`
+	Connected bool            `json:"connected"`
 }
 
-// connect takes a workspace through connecting a GitHub account, which needs
-// two trips to GitHub: one to install the App on the account, and one to
-// authorize it, which says who the user is, so that their ownership of the
-// account can be checked. The dashboard posts the query parameters each trip
-// comes back with, and sends the user to the URL it is given, until it is
-// told that the account is connected.
+// connect takes a workspace through connecting a GitHub account. The user
+// first authorizes the App, which says who they are, so that their ownership
+// of an account can be checked. They then choose an account of theirs that
+// has the App installed, or go to GitHub once more to install it on one.
+// GitHub would have them change an installation to come back from it, so one
+// that is already there is connected from here.
+//
+// The dashboard posts the query parameters each trip to GitHub comes back
+// with, or the installation the user chose, and sends the user to the URL it
+// is given, until it is told that the account is connected.
 func (r *githubRunners) connect(c echo.Context) error {
 	if err := r.ready(); err != nil {
 		return err
@@ -230,36 +259,46 @@ func (r *githubRunners) connect(c echo.Context) error {
 
 	expires := time.Now().Add(runnerConnectTime).Unix()
 	if req.State == "" {
-		return c.JSON(http.StatusOK, runnerConnection{URL: r.github.installURL(r.state(info, 0, expires))})
+		return c.JSON(http.StatusOK, runnerConnection{URL: r.github.authorizeURL(r.state(info, "", expires))})
 	}
 
-	installation, err := r.verify(info, req.State)
+	login, err := r.verify(info, req.State)
 	if err != nil {
 		return err
 	}
 
-	// Back from installing the App: the state does not name an installation.
-	if installation == 0 {
-		if req.InstallationID == 0 {
-			return echo.NewHTTPError(http.StatusBadRequest, "GitHub did not say what was installed; connect again")
+	// Back from authorizing the App: the state does not name a user.
+	if login == "" {
+		if req.Code == "" {
+			return echo.NewHTTPError(http.StatusBadRequest, "GitHub did not say who authorized it; connect again")
 		}
 
-		return c.JSON(http.StatusOK, runnerConnection{URL: r.github.authorizeURL(r.state(info, req.InstallationID, expires))})
+		login, token, err := r.github.authorizedUser(ctx, req.Code)
+		if err != nil || login == "" {
+			return echo.NewHTTPError(http.StatusBadRequest, "GitHub authorization failed; connect again")
+		}
+
+		accounts, err := r.ownedAccounts(ctx, login, token)
+		if err != nil {
+			return err
+		}
+
+		state := r.state(info, login, expires)
+		return c.JSON(http.StatusOK, runnerConnection{URL: r.github.installURL(state), Accounts: accounts, State: state})
 	}
 
-	// Back from authorizing it.
-	login, err := r.github.authorizedUser(ctx, req.Code)
-	if err != nil || login == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "GitHub authorization failed; connect again")
+	// The user chose an account, or is back from installing the App on one.
+	if req.InstallationID == 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "GitHub did not say what was installed; connect again")
 	}
 
-	account, err := r.ownedAccount(ctx, installation, login)
+	account, err := r.ownedAccount(ctx, req.InstallationID, login)
 	if err != nil {
 		return err
 	}
 
 	err = r.s.repo.SaveGitHubRunnerInstallation(ctx, &types.GitHubRunnerInstallation{
-		ID: installation, WorkspaceID: info.Workspace.Id, TokenID: info.Token.ExternalId,
+		ID: req.InstallationID, WorkspaceID: info.Workspace.Id, TokenID: info.Token.ExternalId,
 		Account: account.Login, AccountType: account.Type,
 	})
 	if errors.Is(err, repository.ErrGitHubRunnerConflict) {
@@ -272,29 +311,42 @@ func (r *githubRunners) connect(c echo.Context) error {
 	return c.JSON(http.StatusOK, runnerConnection{Connected: true})
 }
 
-// A connect state carries the installation being connected through GitHub's
-// redirects. It is valid for a few minutes, and only for the token that
-// started connecting.
-func (r *githubRunners) state(info *auth.AuthInfo, installation, expires int64) string {
+// A connect state carries the GitHub user who is connecting, once they have
+// authorized the App, through GitHub's redirects. It is valid for a few
+// minutes, and only for the token that started connecting.
+func (r *githubRunners) state(info *auth.AuthInfo, login string, expires int64) string {
 	mac := hmac.New(sha256.New, []byte(r.config.ClientSecret))
-	fmt.Fprintf(mac, "%d.%s.%d.%d", info.Workspace.Id, info.Token.ExternalId, installation, expires)
-	return fmt.Sprintf("%d.%d.%x", installation, expires, mac.Sum(nil))
+	fmt.Fprintf(mac, "%d\n%s\n%s\n%d", info.Workspace.Id, info.Token.ExternalId, login, expires)
+	return fmt.Sprintf("%s.%d.%x", login, expires, mac.Sum(nil))
 }
 
-func (r *githubRunners) verify(info *auth.AuthInfo, state string) (int64, error) {
-	var installation, expires int64
-	_, err := fmt.Sscanf(state, "%d.%d.", &installation, &expires)
-	if err != nil || !hmac.Equal([]byte(state), []byte(r.state(info, installation, expires))) || time.Now().Unix() > expires {
-		return 0, echo.NewHTTPError(http.StatusBadRequest, "GitHub connection expired; connect again")
+func (r *githubRunners) verify(info *auth.AuthInfo, state string) (string, error) {
+	login, rest, _ := strings.Cut(state, ".")
+	var expires int64
+	_, err := fmt.Sscanf(rest, "%d.", &expires)
+	if err != nil || !hmac.Equal([]byte(state), []byte(r.state(info, login, expires))) || time.Now().Unix() > expires {
+		return "", echo.NewHTTPError(http.StatusBadRequest, "GitHub connection expired; connect again")
 	}
 
-	return installation, nil
+	return login, nil
+}
+
+// owns reports whether a user owns the account an installation is on. A
+// workspace pays for the jobs of the account it connects, and its runners see
+// their code and secrets, so only the user themselves or an owner of the
+// organization may connect one.
+func (r *githubRunners) owns(ctx context.Context, installation *githubInstallation, login string) (bool, error) {
+	account := installation.Account
+	if account.Type != "Organization" {
+		return account.Type == "User" && strings.EqualFold(account.Login, login), nil
+	}
+
+	role, err := r.github.organizationRole(ctx, installation.ID, account.Login, login)
+	return role == "admin", err
 }
 
 // ownedAccount returns the account an installation is on, if the user owns
-// it. A workspace pays for the jobs of the account it connects, and its
-// runners see their code and secrets, so only the user themselves or an owner
-// of the organization may connect one.
+// it.
 func (r *githubRunners) ownedAccount(ctx context.Context, id int64, login string) (*githubAccount, error) {
 	installation, err := r.github.installation(ctx, id)
 	if githubStatus(err) == http.StatusNotFound {
@@ -308,22 +360,51 @@ func (r *githubRunners) ownedAccount(ctx context.Context, id int64, login string
 		return nil, echo.NewHTTPError(http.StatusForbidden, "the GitHub App installation is suspended")
 	}
 
-	account := installation.Account
-	owner := account.Type == "User" && strings.EqualFold(account.Login, login)
-	if account.Type == "Organization" {
-		role, err := r.github.organizationRole(ctx, id, account.Login, login)
-		if err != nil {
-			return nil, err
-		}
-
-		owner = role == "admin"
+	installation.ID = id
+	owner, err := r.owns(ctx, installation, login)
+	if err != nil {
+		return nil, err
 	}
 
 	if !owner {
-		return nil, echo.NewHTTPError(http.StatusForbidden, "only an owner of "+account.Login+" can connect it")
+		return nil, echo.NewHTTPError(http.StatusForbidden, "only an owner of "+installation.Account.Login+" can connect it")
 	}
 
-	return &account, nil
+	return &installation.Account, nil
+}
+
+// ownedAccounts returns the accounts with the App installed that a user
+// owns, by name. An account whose owner can't be checked is left out rather
+// than failing the rest. Installing the App on it again still connects it,
+// or says why it can't be.
+func (r *githubRunners) ownedAccounts(ctx context.Context, login, token string) ([]runnerAccount, error) {
+	installations, err := r.github.userInstallations(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+
+	accounts := []runnerAccount{}
+	for i := range installations {
+		installation := &installations[i]
+		if installation.SuspendedAt != nil {
+			continue
+		}
+
+		owner, err := r.owns(ctx, installation, login)
+		if err != nil {
+			log.Warn().Err(err).Int64("github_installation_id", installation.ID).Msg("check GitHub account owner")
+			continue
+		}
+
+		if owner {
+			accounts = append(accounts, runnerAccount{InstallationID: installation.ID, Account: installation.Account.Login, AccountType: installation.Account.Type})
+		}
+	}
+
+	slices.SortFunc(accounts, func(a, b runnerAccount) int {
+		return strings.Compare(strings.ToLower(a.Account), strings.ToLower(b.Account))
+	})
+	return accounts, nil
 }
 
 // runnerEvent is a webhook delivery, as far as runners read one.

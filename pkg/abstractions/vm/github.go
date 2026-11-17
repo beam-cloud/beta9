@@ -50,6 +50,7 @@ type githubAccount struct {
 }
 
 type githubInstallation struct {
+	ID          int64         `json:"id"`
 	Account     githubAccount `json:"account"`
 	SuspendedAt *time.Time    `json:"suspended_at"`
 }
@@ -129,20 +130,45 @@ func (g *githubApp) authorizeURL(state string) string {
 }
 
 // authorizedUser returns the login of the user who authorized the App, from
-// the code GitHub sent them back with. It is empty for a code GitHub rejects.
-func (g *githubApp) authorizedUser(ctx context.Context, code string) (string, error) {
+// the code GitHub sent them back with, and a token that acts for them. Both
+// are empty for a code GitHub rejects.
+func (g *githubApp) authorizedUser(ctx context.Context, code string) (login, token string, err error) {
 	var grant struct {
 		AccessToken string `json:"access_token"`
 	}
-	_, err := g.call(ctx, http.MethodPost, g.webURL+"/login/oauth/access_token", "",
+	_, err = g.call(ctx, http.MethodPost, g.webURL+"/login/oauth/access_token", "",
 		map[string]string{"client_id": g.clientID, "client_secret": g.clientSecret, "code": code}, &grant)
 	if err != nil || grant.AccessToken == "" {
-		return "", err
+		return "", "", err
 	}
 
 	var user githubAccount
-	_, err = g.call(ctx, http.MethodGet, g.apiURL+"/user", grant.AccessToken, nil, &user)
-	return user.Login, err
+	if _, err = g.call(ctx, http.MethodGet, g.apiURL+"/user", grant.AccessToken, nil, &user); err != nil {
+		return "", "", err
+	}
+
+	return user.Login, grant.AccessToken, nil
+}
+
+// userInstallations returns the installations of the App that a user can
+// reach, which are those on their own account and on organizations they
+// belong to. GitHub lists them a page at a time.
+func (g *githubApp) userInstallations(ctx context.Context, token string) ([]githubInstallation, error) {
+	var installations []githubInstallation
+	for page := g.apiURL + "/user/installations?per_page=100"; page != ""; {
+		var listed struct {
+			Installations []githubInstallation `json:"installations"`
+		}
+		header, err := g.call(ctx, http.MethodGet, page, token, nil, &listed)
+		if err != nil {
+			return nil, err
+		}
+
+		installations = append(installations, listed.Installations...)
+		page = nextPage(header.Get("Link"))
+	}
+
+	return installations, nil
 }
 
 func (g *githubApp) installation(ctx context.Context, id int64) (*githubInstallation, error) {

@@ -742,9 +742,13 @@ func TestVMGitHubRunnersIntegration(t *testing.T) {
 			URL: "https://github.com/acme/repo/actions/runs/1/job/1", Label: "beam-4vcpu-ubuntu-2404", Status: status, RunnerName: runner,
 			CreatedAt: time.Now().UTC().Truncate(time.Second)}
 	}
-	stored := func(id int64) types.GitHubRunnerJob {
-		jobs, _, err := repo.ListGitHubRunnerJobs(ctx, ws, 100, 0)
+	list := func(ws uint, filter types.GitHubRunnerJobFilter) ([]types.GitHubRunnerJob, int) {
+		page, err := repo.ListGitHubRunnerJobs(ctx, ws, filter)
 		require.NoError(t, err)
+		return page.Jobs, page.Total
+	}
+	stored := func(id int64) types.GitHubRunnerJob {
+		jobs, _ := list(ws, types.GitHubRunnerJobFilter{Limit: 100})
 		index := slices.IndexFunc(jobs, func(job types.GitHubRunnerJob) bool { return job.ID == id })
 		require.GreaterOrEqual(t, index, 0)
 		return jobs[index]
@@ -824,22 +828,18 @@ func TestVMGitHubRunnersIntegration(t *testing.T) {
 	require.Equal(t, types.VMStateRunning, vm.Status)
 
 	// History is newest first.
-	jobs, total, err := repo.ListGitHubRunnerJobs(ctx, ws, 1, 0)
-	require.NoError(t, err)
+	jobs, total := list(ws, types.GitHubRunnerJobFilter{Limit: 1})
 	require.Equal(t, 2, total)
 	require.Len(t, jobs, 1)
 	require.Equal(t, id+1, jobs[0].ID)
-	jobs, _, err = repo.ListGitHubRunnerJobs(ctx, ws, 1, 1)
-	require.NoError(t, err)
+	jobs, _ = list(ws, types.GitHubRunnerJobFilter{Limit: 1, Offset: 1})
 	require.Equal(t, id, jobs[0].ID)
 	for _, page := range [][2]int{{0, 0}, {1, 2}} {
-		jobs, total, err = repo.ListGitHubRunnerJobs(ctx, ws, page[0], page[1])
-		require.NoError(t, err)
+		jobs, total = list(ws, types.GitHubRunnerJobFilter{Limit: page[0], Offset: page[1]})
 		require.Equal(t, 2, total)
 		require.Empty(t, jobs)
 	}
-	_, total, err = repo.ListGitHubRunnerJobs(ctx, other, 1, 0)
-	require.NoError(t, err)
+	_, total = list(other, types.GitHubRunnerJobFilter{Limit: 1})
 	require.Zero(t, total)
 
 	// Disconnecting starts nothing more. Nothing reports how the jobs it
@@ -855,17 +855,56 @@ func TestVMGitHubRunnersIntegration(t *testing.T) {
 	require.False(t, runner.Connected, "its runners are still known, to be deleted")
 	require.NoError(t, repo.SaveGitHubRunnerJob(ctx, job(id+2, types.GitHubJobQueued, "")))
 	require.False(t, isDue(id+2), "jobs of a disconnected account are not due")
-	jobs, total, err = repo.ListGitHubRunnerJobs(ctx, ws, 100, 0)
-	require.NoError(t, err)
+	jobs, total = list(ws, types.GitHubRunnerJobFilter{Limit: 100})
 	require.Equal(t, 1, total)
 	require.Len(t, jobs, 1)
 	require.Equal(t, id+1, jobs[0].ID)
 
 	// Connecting again shows them, without starting what was given up.
 	require.NoError(t, repo.SaveGitHubRunnerInstallation(ctx, &installation))
-	_, total, err = repo.ListGitHubRunnerJobs(ctx, ws, 0, 0)
-	require.NoError(t, err)
+	_, total = list(ws, types.GitHubRunnerJobFilter{})
 	require.Equal(t, 3, total)
 	require.Nil(t, stored(id).ProvisionAt)
 	require.False(t, isDue(id))
+
+	// The filter narrows the jobs and their total, and never the
+	// repositories to choose from. The jobs so far are of acme/repo: id is
+	// queued, id+1 completed and id+2 queued.
+	deploy := job(id+3, types.GitHubJobCompleted, "ghr-c")
+	deploy.Repository, deploy.Workflow, deploy.Name, deploy.Conclusion = "acme/100%_site", "Deploy", "build", "failure"
+	require.NoError(t, repo.SaveGitHubRunnerJob(ctx, deploy))
+	for _, tc := range []struct {
+		filter types.GitHubRunnerJobFilter
+		ids    []int64
+	}{
+		{types.GitHubRunnerJobFilter{}, []int64{id + 3, id + 2, id + 1, id}},
+		{types.GitHubRunnerJobFilter{Repository: "acme/repo"}, []int64{id + 2, id + 1, id}},
+		{types.GitHubRunnerJobFilter{Repository: "acme"}, []int64{}},
+		{types.GitHubRunnerJobFilter{Search: "DEPLOY"}, []int64{id + 3}},
+		{types.GitHubRunnerJobFilter{Search: "0%_s"}, []int64{id + 3}},
+		{types.GitHubRunnerJobFilter{Search: "%"}, []int64{id + 3}},
+		{types.GitHubRunnerJobFilter{Search: "_"}, []int64{id + 3}},
+		{types.GitHubRunnerJobFilter{Search: "tes"}, []int64{id + 2, id + 1, id}},
+		{types.GitHubRunnerJobFilter{Search: "acme/"}, []int64{id + 3, id + 2, id + 1, id}},
+		{types.GitHubRunnerJobFilter{Statuses: []string{types.GitHubJobQueued}}, []int64{id + 2, id}},
+		{types.GitHubRunnerJobFilter{Statuses: []string{types.GitHubJobQueued, types.GitHubJobInProgress}, Repository: "acme/100%_site"}, []int64{}},
+		{types.GitHubRunnerJobFilter{Conclusions: []string{"failure", "timed_out"}}, []int64{id + 3}},
+		{types.GitHubRunnerJobFilter{Statuses: []string{types.GitHubJobCompleted}, Search: "ci"}, []int64{id + 1}},
+	} {
+		tc.filter.Limit = 100
+		page, err := repo.ListGitHubRunnerJobs(ctx, ws, tc.filter)
+		require.NoError(t, err)
+		listed := []int64{}
+		for _, job := range page.Jobs {
+			listed = append(listed, job.ID)
+		}
+		require.Equal(t, tc.ids, listed, "%+v", tc.filter)
+		require.Equal(t, len(tc.ids), page.Total, "%+v", tc.filter)
+		require.Equal(t, []string{"acme/100%_site", "acme/repo"}, page.Repositories, "%+v", tc.filter)
+	}
+	page, err := repo.ListGitHubRunnerJobs(ctx, ws, types.GitHubRunnerJobFilter{Limit: 1, Offset: 1, Repository: "acme/repo"})
+	require.NoError(t, err)
+	require.Equal(t, 3, page.Total)
+	require.Len(t, page.Jobs, 1)
+	require.Equal(t, id+1, page.Jobs[0].ID)
 }
