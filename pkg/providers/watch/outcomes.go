@@ -37,9 +37,6 @@ const (
 const (
 	// ResultInterrupted: its provider took a spot machine back.
 	ResultInterrupted = "interrupted"
-	// ResultPricedOut: a spot machine was given back because its provider's
-	// spot price rose above what the machine was billed at.
-	ResultPricedOut = "priced_out"
 	// ResultFailed: its provider says it failed.
 	ResultFailed = "failed"
 	// ResultGone: its provider no longer has it, and nobody here deleted it.

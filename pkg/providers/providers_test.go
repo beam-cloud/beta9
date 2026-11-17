@@ -995,28 +995,6 @@ func TestAWSSaysWhatEachRegionLacksWhenNoneCanBeRead(t *testing.T) {
 	require.ErrorContains(t, err, "AWS region us-west-2: it has no default subnets")
 }
 
-// A provider that takes a price limit ends a spot machine that comes to cost
-// more by itself, and Hetzner sells none. Only the ones that take no limit
-// are asked what a spot machine costs now.
-func TestOnlyAProviderThatTakesNoPriceLimitIsAskedWhatASpotMachineCosts(t *testing.T) {
-	for name, tc := range map[string]struct {
-		provider Provider
-		asked    bool
-	}{
-		"gcp":       {&GCP{}, true},
-		"verda":     {&Verda{}, true},
-		"shadeform": {&Shadeform{}, true},
-		"aws":       {&AWS{}, false},
-		"nebius":    {&Nebius{}, false},
-		"vast":      {&Vast{}, false},
-		"hetzner":   {&Hetzner{}, false},
-		"fake":      {NewFake("fake", testOwner), false},
-	} {
-		_, asked := tc.provider.(SpotPricer)
-		require.Equal(t, tc.asked, asked, name)
-	}
-}
-
 func TestGCPOffersTheRegionsItCanRead(t *testing.T) {
 	for name, tc := range map[string]struct {
 		change func(*gcpAPI, *types.GCPProviderConfig)
@@ -3855,41 +3833,6 @@ func TestGCPReadsARegionOnceAnHour(t *testing.T) {
 	require.Equal(t, 20, api.sent("POST", "/regions/us-central1/advice/capacityHistory"))
 }
 
-// Google takes no price limit for a Spot VM, which costs whatever the Spot
-// price comes to. The buyer asks what that is.
-func TestGCPSaysWhatASpotVMCostsNow(t *testing.T) {
-	api := newGCPAPI(t)
-	client := api.client(testOwner)
-	ctx := context.Background()
-
-	price, err := client.SpotPrice(ctx, gcpL4InA)
-	require.NoError(t, err)
-	require.Equal(t, gcpL4InA.HourlyCostMicros, price, "it is priced as the offer was, with its disk")
-
-	// The price rises. It is read with the rest of the region, once an hour.
-	api.set(func() {
-		history := api.prices["us-central1"]["g2-standard-4"]
-		api.prices["us-central1"]["g2-standard-4"] = append(history, gcpMoney(0.61, "2026-11-13T07:00:00Z"))
-	})
-	price, err = client.SpotPrice(ctx, gcpL4InA)
-	require.NoError(t, err)
-	require.Equal(t, gcpL4InA.HourlyCostMicros, price)
-
-	api.after(time.Hour)
-	price, err = client.SpotPrice(ctx, gcpL4InA)
-	require.NoError(t, err)
-	require.Equal(t, int64(610_000+gcpTestDisk), price)
-
-	// A machine type that is no longer sold as a Spot VM has no price, and
-	// is not said to cost nothing.
-	_, err = client.SpotPrice(ctx, gcpOffer("us-central1-b", "a3-highgpu-8g", "H100", 8, 208, 1872, 0))
-	require.ErrorContains(t, err, "GCP has no Spot price for a3-highgpu-8g in us-central1")
-	_, err = client.SpotPrice(ctx, Offer{ID: "g2-standard-4", Region: "us-central1"})
-	require.ErrorContains(t, err, "a GCP offer needs a zone, a machine type and a region")
-	_, err = client.SpotPrice(ctx, gcpOffer("asia-east1-a", "g2-standard-4", "L4", 1, 4, 16, 0))
-	require.ErrorContains(t, err, `providers.gcp.regions does not name "asia-east1"`)
-}
-
 // A question that Google cannot answer is not the same as a machine type
 // without a price: the region's offers are not known, and are not made up.
 // Asked for that region alone, the client says what it could not learn.
@@ -6277,66 +6220,6 @@ func TestShadeformBuysASpotOfferAsSpot(t *testing.T) {
 	require.NotContains(t, api.lastCreate(), "rental_type")
 }
 
-// Shadeform takes no price limit for a spot machine, which costs whatever
-// the spot price comes to. The buyer asks what that is, of a machine it has
-// whether or not Shadeform has another to sell.
-func TestShadeformSaysWhatASpotMachineCostsNow(t *testing.T) {
-	api := newShadeformAPI(t)
-	api.now = time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
-	client := api.client(testOwner)
-	client.now = api.clock
-	ctx := context.Background()
-	b200 := Offer{ID: "B200_sxm5x8_NVLINK", Cloud: "nebius", Region: "kansascity-usa-3", Spot: true}
-
-	price, err := client.SpotPrice(ctx, b200)
-	require.NoError(t, err)
-	require.Equal(t, int64(44_000_000), price)
-
-	// The price rises, and the region sells out. Its entry is still priced.
-	// The catalogue is read once for every machine that is asked about.
-	catalogue := func(spotPrice string) string {
-		return `{"instance_types": [{
-			"cloud": "nebius", "shade_instance_type": "B200_sxm5x8_NVLINK", "deployment_type": "vm", "hourly_price": 7600,
-			"configuration": {"gpu_type": "B200", "num_gpus": 8, "vcpus": 160, "memory_in_gb": 1792, "storage_in_gb": 1250},
-			"availability": [
-				{"region": "kansascity-usa-3", "available": false, "rental_type": "on_demand"},
-				{"region": "kansascity-usa-3", "available": false, "rental_type": "spot", "hourly_price": "` + spotPrice + `"}
-			]
-		}, {
-			"cloud": "crusoe", "shade_instance_type": "B200_sxm5x8_NVLINK", "deployment_type": "vm", "hourly_price": 7000,
-			"configuration": {"gpu_type": "B200", "num_gpus": 8, "vcpus": 160, "memory_in_gb": 1792, "storage_in_gb": 1250},
-			"availability": [{"region": "kansascity-usa-3", "available": true, "rental_type": "spot", "hourly_price": "12"}]
-		}]}`
-	}
-	api.catalogue = catalogue("61.5")
-	for range 3 {
-		price, err = client.SpotPrice(ctx, b200)
-		require.NoError(t, err)
-		require.Equal(t, int64(44_000_000), price)
-	}
-	require.Equal(t, 1, api.sent("GET", "/instances/types"))
-
-	api.after(shadeformPricesFor)
-	price, err = client.SpotPrice(ctx, b200)
-	require.NoError(t, err)
-	require.Equal(t, int64(61_500_000), price, "the price of its own cloud, in stock or not")
-	require.Equal(t, 2, api.sent("GET", "/instances/types"))
-
-	// What Shadeform no longer prices as spot has no price, and is not said
-	// to cost what the machine does on demand, or nothing.
-	api.catalogue = catalogue("")
-	api.after(shadeformPricesFor)
-	_, err = client.SpotPrice(ctx, b200)
-	require.ErrorContains(t, err, "Shadeform has no spot price for B200_sxm5x8_NVLINK from nebius in kansascity-usa-3")
-
-	// Offers are read anew each time, as they were.
-	_, err = client.Offers(ctx, OfferFilter{})
-	require.NoError(t, err)
-	_, err = client.Offers(ctx, OfferFilter{})
-	require.NoError(t, err)
-	require.Equal(t, 5, api.sent("GET", "/instances/types"))
-}
-
 func TestShadeformCreateFitsTheNameIntoFiftyCharacters(t *testing.T) {
 	api := newShadeformAPI(t)
 	long := "beam-a-pool-with-a-very-long-name-that-goes-on-and-on-a1b2c3d4"
@@ -8102,51 +7985,6 @@ func TestVerdaReadsTheCatalogueRarelyAndTheStockEveryTime(t *testing.T) {
 	_, err := client.Offers(context.Background(), OfferFilter{})
 	require.NoError(t, err)
 	require.Equal(t, 2, api.sent("GET", "/instance-types"))
-}
-
-// Verda takes no price limit for a spot machine, which costs whatever the
-// spot price comes to. The buyer asks what that is, of a machine it has
-// whether or not Verda has another to sell.
-func TestVerdaSaysWhatASpotMachineCostsNow(t *testing.T) {
-	api := newVerdaAPI(t)
-	client := api.client(testOwner)
-	ctx := context.Background()
-	const disk = 54_795
-
-	// The L40S is in stock as spot in FIN-01 only, and is priced in FIN-02
-	// all the same.
-	for _, location := range []string{"FIN-01", "FIN-02"} {
-		price, err := client.SpotPrice(ctx, verdaOffer("1L40S.20V", location, "L40S", 20, 60, 0, true))
-		require.NoError(t, err)
-		require.Equal(t, int64(999_000+disk), price, "it is priced as an offer is, with its disk")
-	}
-	require.Zero(t, api.sent("GET", "/instance-availability"), "what Verda has in stock is not asked")
-
-	// The price rises. The catalogue is read as rarely as it is for offers.
-	api.catalogue = `[{
-		"instance_type": "1L40S.20V", "price_per_hour": "1.998", "spot_price": "1.50",
-		"location_prices": [{"location_code": "FIN-02", "price_per_hour": "1.998", "spot_price": "1.75"}]
-	}, {
-		"instance_type": "1A100.22V", "price_per_hour": "2.374", "spot_price": ""
-	}]`
-	price, err := client.SpotPrice(ctx, verdaOffer("1L40S.20V", "FIN-02", "L40S", 20, 60, 0, true))
-	require.NoError(t, err)
-	require.Equal(t, int64(999_000+disk), price)
-
-	api.after(verdaCatalogueFor)
-	price, err = client.SpotPrice(ctx, verdaOffer("1L40S.20V", "FIN-02", "L40S", 20, 60, 0, true))
-	require.NoError(t, err)
-	require.Equal(t, int64(1_750_000+disk), price, "the location's own price")
-	price, err = client.SpotPrice(ctx, verdaOffer("1L40S.20V", "FIN-01", "L40S", 20, 60, 0, true))
-	require.NoError(t, err)
-	require.Equal(t, int64(1_500_000+disk), price)
-
-	// What Verda no longer prices as spot, or no longer sells, has no price,
-	// and is not said to cost nothing.
-	_, err = client.SpotPrice(ctx, verdaOffer("1A100.22V", "FIN-03", "A100-80", 22, 120, 0, true))
-	require.ErrorContains(t, err, "Verda has no spot price for 1A100.22V in FIN-03")
-	_, err = client.SpotPrice(ctx, verdaOffer("1V100.4V", "FIN-01", "V100", 4, 18, 0, true))
-	require.ErrorContains(t, err, `Verda has no instance type "1V100.4V"`)
 }
 
 // A token can stop being good before its hour is up. The call that finds out

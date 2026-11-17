@@ -259,25 +259,6 @@ func (c *Verda) Offers(ctx context.Context, filter OfferFilter) ([]Offer, error)
 	return filter.matching(offers), nil
 }
 
-// SpotPrice is what a spot machine of the offer's instance type costs an
-// hour now in the offer's location, with its disk. It is read from the
-// catalogue, which prices a type whether or not Verda has any.
-func (c *Verda) SpotPrice(ctx context.Context, offer Offer) (int64, error) {
-	catalogue, err := c.knownCatalogue(ctx)
-	if err != nil {
-		return 0, err
-	}
-	at := slices.IndexFunc(catalogue.types, func(t verdaInstanceType) bool { return t.InstanceType == offer.ID })
-	if at < 0 {
-		return 0, fmt.Errorf("Verda has no instance type %q", offer.ID)
-	}
-	price := catalogue.types[at].price(offer.Region, true)
-	if price <= 0 {
-		return 0, fmt.Errorf("Verda has no spot price for %s in %s", offer.ID, offer.Region)
-	}
-	return price + catalogue.diskMicros, nil
-}
-
 type verdaCreate struct {
 	InstanceType    string        `json:"instance_type"`
 	Image           string        `json:"image"`

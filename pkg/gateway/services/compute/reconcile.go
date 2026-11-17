@@ -29,13 +29,11 @@ const (
 	reconcileReasonMachineReleased      = "machine_released"
 	reconcileReasonProviderFailed       = "provider_failed"
 	reconcileReasonReservationExpired   = "expired"
-	reconcileReasonSpotPrice            = "spot_price_exceeded"
 
 	instanceGoneMessage   = "the provider no longer has this machine"
 	instanceFailedMessage = "the provider failed to start this machine"
 
 	instanceInterruptedMessage = "the provider took this machine back"
-	instancePricedOutMessage   = "this machine's spot price rose above the price it was reserved at"
 )
 
 func (s *Service) runReconciler(ctx context.Context) {
@@ -742,15 +740,6 @@ func (s *Service) reconcileReservationStatus(ctx context.Context, workspaceID st
 	// Any other status is one the provider's client does not know, and says
 	// nothing about the machine: the reservation keeps the status it had.
 
-	// A spot machine is billed at the price it was reserved at, and costs
-	// what its provider's spot price has come to. A provider that takes a
-	// price limit takes the machine back when it costs more than its tenant
-	// pays. For one that takes none, that is done here.
-	if s.spotPriceOver(ctx, workspaceID, state.Name, *reservation) {
-		s.terminateReservation(ctx, workspaceID, state, reservation, reconcileReasonSpotPrice, instancePricedOutMessage, now)
-		return true
-	}
-
 	// What the provider does not say of where the machine is stays as it
 	// was.
 	reservation.LastStatusMessage = instance.StatusDetail
@@ -767,44 +756,6 @@ func (s *Service) reconcileReservationStatus(ctx context.Context, workspaceID st
 	if changed {
 		s.emitComputeEvent(types.EventComputePool, computeReservationEvent(workspaceID, state, *reservation, types.EventComputeActionReservationStatusUpdated, string(reservation.Status)))
 	}
-	return true
-}
-
-// spotPriceOver reports whether a reservation's spot machine has come to
-// cost more an hour than its limit. It asks only a provider that cannot be
-// held to a price limit, and so says what its spot price is now.
-//
-// A price that cannot be learnt says nothing of the machine, which is kept.
-func (s *Service) spotPriceOver(ctx context.Context, workspaceID, poolName string, reservation model.Reservation) bool {
-	offer := reservationOffer(reservation)
-	limit := s.spotPriceLimitMicros(offer)
-	if limit <= 0 {
-		return false
-	}
-	provider, ok := s.providers.Get(reservation.Provider)
-	if !ok {
-		return false
-	}
-	priced, ok := provider.(providers.SpotPricer)
-	if !ok {
-		return false
-	}
-	price, err := priced.SpotPrice(ctx, offer)
-	if err == nil && price <= limit {
-		return false
-	}
-	event := log.Warn().
-		Str("workspace_id", workspaceID).
-		Str("pool_name", poolName).
-		Str("reservation_id", reservation.ID).
-		Str("machine_id", reservation.MachineID).
-		Str("provider", reservation.Provider).
-		Int64("limit_micros", limit)
-	if err != nil {
-		event.Err(err).Msg("could not learn what a spot machine costs now; it is kept, at a price that is not known")
-		return false
-	}
-	event.Int64("price_micros", price).Msg("a spot machine costs more than its reservation is billed; giving it back")
 	return true
 }
 
@@ -895,10 +846,9 @@ func (s *Service) terminateReservation(ctx context.Context, workspaceID string, 
 		// back without having sold it as spot, stays listed as failed until
 		// the tenant dismisses it.
 		reservation.Status = model.ReservationFailed
-	case reconcileReasonInterrupted, reconcileReasonSpotPrice:
+	case reconcileReasonInterrupted:
 		// A spot machine its provider took back stays listed too, so that
-		// the tenant sees where it went. So does one that was given back
-		// for its price: its tenant lost it on the same terms.
+		// the tenant sees where it went.
 		reservation.Status = model.ReservationInterrupted
 		action = types.EventComputeActionReservationInterrupted
 	}
@@ -922,10 +872,10 @@ func (s *Service) recordEnd(reservation model.Reservation, result string, now ti
 	s.outcomes.Record(reservationOutcome(reservation).Ended(result, now.Sub(reservation.CreatedAt)))
 }
 
-// reservationOffer is the offer a reservation's machine was bought from, as
-// far as the reservation records it.
-func reservationOffer(reservation model.Reservation) providers.Offer {
-	return providers.Offer{
+// reservationOutcome is what the market's history is told of a reserved
+// machine: what it was bought as, where, and for how much.
+func reservationOutcome(reservation model.Reservation) watch.Outcome {
+	outcome := watch.OutcomeOf(providers.Offer{
 		ID:               reservation.OfferID,
 		Provider:         reservation.Provider,
 		Cloud:            reservation.Cloud,
@@ -935,27 +885,18 @@ func reservationOffer(reservation model.Reservation) providers.Offer {
 		GPUCount:         reservation.GPUCount,
 		HourlyCostMicros: reservation.HourlyCostMicros,
 		Spot:             reservation.Spot,
-	}
-}
-
-// reservationOutcome is what the market's history is told of a reserved
-// machine: what it was bought as, where, and for how much.
-func reservationOutcome(reservation model.Reservation) watch.Outcome {
-	outcome := watch.OutcomeOf(reservationOffer(reservation))
+	})
 	outcome.Source = watch.SourceReservation
 	return outcome
 }
 
 // reservationEnd is how the market's history names the end of a reservation
-// that ended for reason. Only what its provider did to the machine, or to
-// its price, says anything of the provider: the rest is the tenant, or Beam,
-// giving it back.
+// that ended for reason. Only what its provider did to the machine says
+// anything of the provider: the rest is the tenant, or Beam, giving it back.
 func reservationEnd(reason string) string {
 	switch reason {
 	case reconcileReasonInterrupted:
 		return watch.ResultInterrupted
-	case reconcileReasonSpotPrice:
-		return watch.ResultPricedOut
 	case reconcileReasonProviderFailed:
 		return watch.ResultFailed
 	case reconcileReasonReservationExpired:

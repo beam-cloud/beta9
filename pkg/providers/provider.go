@@ -149,24 +149,11 @@ type CreateRequest struct {
 	// machine, where the provider can be held to it. AWS and Nebius take a
 	// price limit and are given this one. GCP, Verda and Shadeform take
 	// none: a spot machine there pays the provider's spot price whatever it
-	// rises to, and this is not looked at. They are SpotPricers, for a
-	// buyer to hold to a limit itself. Nor is it looked at on Vast, where
-	// the price bid is the price paid: Vast is bid the host's price of the
+	// rises to, and this is not looked at. Nor is it on Vast, where the
+	// price bid is the price paid: Vast is bid the host's price of the
 	// moment, and rents nothing that has come to cost more than the offer
 	// said. Zero means no limit.
 	MaxHourlyCostMicros int64
-}
-
-// SpotPricer is a provider that takes no price limit for a spot machine:
-// GCP, Verda and Shadeform. A machine bought there costs the provider's spot
-// price, whatever that comes to. A buyer that must not pay more than a limit
-// asks what the price is now, and gives the machine back when it is over.
-type SpotPricer interface {
-	// SpotPrice is what a spot machine bought from the offer costs an hour
-	// now, in micros, whether or not the provider has one left to sell. It
-	// is priced as the provider's offers are, with the disk where an offer
-	// counts it. It fails when the provider no longer prices such a machine.
-	SpotPrice(ctx context.Context, offer Offer) (int64, error)
 }
 
 // Instance is what a provider says about a machine that was bought.
