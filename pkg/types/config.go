@@ -1546,11 +1546,11 @@ type VMConfig struct {
 // GitHub App. An empty AppID disables it; with one, every other field is
 // required.
 //
-// The App needs Actions (read) and Administration (write) on repositories,
-// Members (read) on organizations, and Workflow job events sent to the
-// gateway's /api/v1/vm/github-runners/webhook. Its setup URL, with redirect on
-// update, and its callback URL are both the dashboard's /vms page; leave
-// "Request user authorization (OAuth) during installation" off.
+// The App needs Actions (write, to cancel runs) and Administration (write) on
+// repositories, Members (read) on organizations, and Workflow job events sent
+// to the gateway's /api/v1/vm/github-runners/webhook. Its setup URL, with
+// redirect on update, and its callback URL are both the dashboard's /vms
+// page; leave "Request user authorization (OAuth) during installation" off.
 type GitHubRunnerConfig struct {
 	AppID   string `key:"appID" json:"app_id"`
 	AppSlug string `key:"appSlug" json:"app_slug"` // as in github.com/apps/<slug>

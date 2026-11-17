@@ -380,13 +380,15 @@ const (
 
 // GitHubRunnerInstallation connects a GitHub account, through an installation
 // of the GitHub App, to the workspace that runs its jobs and is billed for
-// them. Runners launch with the Beam token that connected it.
+// them. Runners launch with the Beam token that connected it. No runner
+// starts while it is paused, which leaves its jobs queued on GitHub.
 type GitHubRunnerInstallation struct {
 	ID          int64     `db:"id" json:"id"`
 	WorkspaceID uint      `db:"workspace_id" json:"-"`
 	TokenID     string    `db:"token_id" json:"-"`
 	Account     string    `db:"account" json:"account"`
 	AccountType string    `db:"account_type" json:"account_type"`
+	Paused      bool      `db:"paused" json:"paused"`
 	CreatedAt   time.Time `db:"created_at" json:"created_at"`
 }
 
@@ -397,8 +399,13 @@ type GitHubRunnerInstallation struct {
 // started for another job with the same label. ProvisionAt is when to start
 // the job's runner, and is unset once there is nothing left to start. Error
 // is why the last attempt to start it failed.
+//
+// RunID is the workflow run the job is part of, which is what GitHub cancels,
+// and is zero for a job recorded before runs were. Waiting is not stored: it
+// tells a user what a queued job that no runner has taken waits for.
 type GitHubRunnerJob struct {
 	ID             int64      `db:"id" json:"id"`
+	RunID          int64      `db:"run_id" json:"run_id,omitempty"`
 	InstallationID int64      `db:"installation_id" json:"-"`
 	WorkspaceID    uint       `db:"workspace_id" json:"-"`
 	Repository     string     `db:"repository" json:"repository"`
@@ -416,6 +423,15 @@ type GitHubRunnerJob struct {
 	Attempts       int        `db:"attempts" json:"-"`
 	ProvisionAt    *time.Time `db:"provision_at" json:"-"`
 	Error          string     `db:"error" json:"error,omitempty"`
+	Waiting        string     `db:"-" json:"waiting,omitempty"`
+}
+
+// GitHubRunnerRun is a workflow run with jobs that asked for a Beam runner,
+// in the repository and account that it is cancelled in.
+type GitHubRunnerRun struct {
+	InstallationID int64  `db:"installation_id"`
+	Repository     string `db:"repository"`
+	RunID          int64  `db:"run_id"`
 }
 
 // GitHubRunnerJobFilter selects one page of a workspace's jobs, newest first.

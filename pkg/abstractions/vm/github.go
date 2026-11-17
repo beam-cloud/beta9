@@ -258,6 +258,23 @@ func (g *githubApp) removeRunner(ctx context.Context, installation int64, reposi
 	return err == nil, err
 }
 
+// cancelRun cancels a workflow run, and with it every job of the run, as
+// GitHub cancels no job on its own. A run that has already finished, which
+// GitHub refuses to cancel, is as cancelled as it can be.
+func (g *githubApp) cancelRun(ctx context.Context, installation int64, repository string, run int64) error {
+	token, err := g.installationToken(ctx, installation)
+	if err != nil {
+		return err
+	}
+
+	_, err = g.call(ctx, http.MethodPost, fmt.Sprintf("%s/repos/%s/actions/runs/%d/cancel", g.apiURL, repository, run), token, nil, nil)
+	if githubStatus(err) == http.StatusConflict {
+		return nil
+	}
+
+	return err
+}
+
 // deliveries returns a page of the App's webhook deliveries, newest first,
 // and the URL of the page after it, if there is one. An empty URL asks for
 // the first page.

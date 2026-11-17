@@ -42,9 +42,12 @@ type VMRepository interface {
 	GetGitHubRunnerInstallation(context.Context, uint) (*types.GitHubRunnerInstallation, error)
 	GetGitHubRunnerInstallationById(context.Context, int64) (*types.GitHubRunnerInstallation, error)
 	SaveGitHubRunnerInstallation(context.Context, *types.GitHubRunnerInstallation) error
+	PauseGitHubRunnerInstallation(context.Context, uint, bool) (*types.GitHubRunnerInstallation, error)
 	DeleteGitHubRunnerInstallation(context.Context, int64) error
 	SaveGitHubRunnerJob(context.Context, *types.GitHubRunnerJob) error
+	GetGitHubRunnerJob(context.Context, uint, int64) (*types.GitHubRunnerJob, error)
 	ListGitHubRunnerJobs(context.Context, uint, types.GitHubRunnerJobFilter) (*types.GitHubRunnerJobPage, error)
+	ListActiveGitHubRunnerRuns(context.Context, uint, string) ([]types.GitHubRunnerRun, int, error)
 	ListDueGitHubRunnerJobs(context.Context) ([]types.GitHubRunnerJob, error)
 	ClaimGitHubRunnerJob(context.Context, *types.GitHubRunnerJob, string) (bool, error)
 	FinishGitHubRunnerJob(context.Context, int64, string) error
@@ -656,8 +659,8 @@ func (r *PostgresBackendRepository) TryLockVM(ctx context.Context, id string) (f
 var ErrGitHubRunnerConflict = errors.New("GitHub runner connection conflict")
 
 const (
-	githubRunnerInstallationColumns = `id, workspace_id, token_id, account, account_type, created_at`
-	githubRunnerJobColumns          = `id, installation_id, workspace_id, repository, workflow, name, url, label, status,
+	githubRunnerInstallationColumns = `id, workspace_id, token_id, account, account_type, paused, created_at`
+	githubRunnerJobColumns          = `id, run_id, installation_id, workspace_id, repository, workflow, name, url, label, status,
 	conclusion, runner_name, created_at, started_at, completed_at, vm, attempts, provision_at, error`
 )
 
@@ -686,7 +689,9 @@ func (r *PostgresBackendRepository) getGitHubRunnerInstallation(ctx context.Cont
 
 // SaveGitHubRunnerInstallation connects an installation to a workspace.
 // Connecting it again refreshes the token its runners launch with; an
-// installation never moves to another workspace.
+// installation never moves to another workspace. A new connection is not
+// paused, and connecting again leaves a paused one paused, as whoever paused
+// it has not asked for its runners to start again.
 func (r *PostgresBackendRepository) SaveGitHubRunnerInstallation(ctx context.Context, installation *types.GitHubRunnerInstallation) error {
 	query := `
 	INSERT INTO github_runner_installation (id, workspace_id, token_id, account, account_type)
@@ -719,6 +724,15 @@ func (r *PostgresBackendRepository) SaveGitHubRunnerInstallation(ctx context.Con
 	return nil
 }
 
+// PauseGitHubRunnerInstallation pauses or resumes the account a workspace has
+// connected, and returns it as it then is.
+func (r *PostgresBackendRepository) PauseGitHubRunnerInstallation(ctx context.Context, workspaceId uint, paused bool) (*types.GitHubRunnerInstallation, error) {
+	query := `
+	UPDATE github_runner_installation SET paused = $2 WHERE workspace_id = $1
+	RETURNING ` + githubRunnerInstallationColumns + `;`
+	return r.getGitHubRunnerInstallation(ctx, query, workspaceId, paused)
+}
+
 // DeleteGitHubRunnerInstallation disconnects an installation. Its jobs are
 // kept, but the runners they still wait for are not started.
 func (r *PostgresBackendRepository) DeleteGitHubRunnerInstallation(ctx context.Context, installationId int64) error {
@@ -737,25 +751,52 @@ func (r *PostgresBackendRepository) DeleteGitHubRunnerInstallation(ctx context.C
 
 // SaveGitHubRunnerJob records a delivery of a workflow job. A job is due for
 // a runner when it is first seen. Deliveries repeat and arrive out of order,
-// so a job's status never moves backwards.
+// so a job's status never moves backwards, and a delivery that does not name
+// the job's run leaves the one that is known.
 func (r *PostgresBackendRepository) SaveGitHubRunnerJob(ctx context.Context, job *types.GitHubRunnerJob) error {
 	query := `
 	INSERT INTO github_runner_job (
 		id, installation_id, workspace_id, repository, workflow, name, url, label, status,
-		conclusion, runner_name, created_at, started_at, completed_at, provision_at
+		conclusion, runner_name, created_at, started_at, completed_at, run_id, provision_at
 	)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
 	ON CONFLICT (id) DO UPDATE
 	SET status = EXCLUDED.status, conclusion = EXCLUDED.conclusion, runner_name = EXCLUDED.runner_name,
-		started_at = EXCLUDED.started_at, completed_at = EXCLUDED.completed_at
+		started_at = EXCLUDED.started_at, completed_at = EXCLUDED.completed_at,
+		run_id = COALESCE(NULLIF(EXCLUDED.run_id, 0), github_runner_job.run_id)
 	WHERE github_runner_job.workspace_id = EXCLUDED.workspace_id
 		AND array_position(ARRAY['queued', 'in_progress', 'completed'], github_runner_job.status)
 			<= array_position(ARRAY['queued', 'in_progress', 'completed'], EXCLUDED.status);
 	`
 
 	_, err := r.client.ExecContext(ctx, query, job.ID, job.InstallationID, job.WorkspaceID, job.Repository, job.Workflow,
-		job.Name, job.URL, job.Label, job.Status, job.Conclusion, job.RunnerName, job.CreatedAt, job.StartedAt, job.CompletedAt)
+		job.Name, job.URL, job.Label, job.Status, job.Conclusion, job.RunnerName, job.CreatedAt, job.StartedAt, job.CompletedAt, job.RunID)
 	return err
+}
+
+// GetGitHubRunnerJob returns a job of a workspace that its history shows, so
+// not one that a disconnected account left unfinished: an unfinished job is
+// always of the account the workspace has connected.
+func (r *PostgresBackendRepository) GetGitHubRunnerJob(ctx context.Context, workspaceId uint, jobId int64) (*types.GitHubRunnerJob, error) {
+	query := `
+	SELECT ` + githubRunnerJobColumns + `
+	FROM github_runner_job j
+	WHERE workspace_id = $1 AND id = $2 AND (
+		status = 'completed'
+		OR EXISTS (SELECT 1 FROM github_runner_installation i WHERE i.id = j.installation_id AND i.workspace_id = j.workspace_id)
+	);
+	`
+
+	var job types.GitHubRunnerJob
+	err := r.client.GetContext(ctx, &job, query, workspaceId, jobId)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	return &job, nil
 }
 
 // ListGitHubRunnerJobs returns a page of a workspace's jobs, newest first,
@@ -817,14 +858,51 @@ func (r *PostgresBackendRepository) ListGitHubRunnerJobs(ctx context.Context, wo
 	return page, nil
 }
 
+// ListActiveGitHubRunnerRuns returns the workflow runs that have a queued or
+// running job of the account a workspace has connected, in one repository
+// or, given none, in all of them. A job recorded before runs were is in none
+// of them. It returns the oldest hundred, as GitHub limits how much an
+// account changes in a minute, with how many there are in all.
+func (r *PostgresBackendRepository) ListActiveGitHubRunnerRuns(ctx context.Context, workspaceId uint, repository string) ([]types.GitHubRunnerRun, int, error) {
+	query := `
+	SELECT installation_id, repository, run_id, COUNT(*) OVER () AS total
+	FROM github_runner_job j
+	WHERE workspace_id = $1 AND status IN ('queued', 'in_progress') AND run_id <> 0
+		AND ($2 = '' OR repository = $2)
+		AND EXISTS (SELECT 1 FROM github_runner_installation i WHERE i.id = j.installation_id AND i.workspace_id = j.workspace_id)
+	GROUP BY installation_id, repository, run_id
+	ORDER BY run_id
+	LIMIT 100;
+	`
+
+	var rows []struct {
+		types.GitHubRunnerRun
+		Total int `db:"total"`
+	}
+	if err := r.client.SelectContext(ctx, &rows, query, workspaceId, repository); err != nil {
+		return nil, 0, err
+	}
+
+	runs, total := []types.GitHubRunnerRun{}, 0
+	for _, row := range rows {
+		runs, total = append(runs, row.GitHubRunnerRun), row.Total
+	}
+
+	return runs, total, nil
+}
+
 // ListDueGitHubRunnerJobs returns the jobs of connected accounts that are due
-// for a runner, longest due first.
+// for a runner, longest due first. The jobs of a paused account stay as they
+// are, so that they are due, in the same order, once it resumes.
 func (r *PostgresBackendRepository) ListDueGitHubRunnerJobs(ctx context.Context) ([]types.GitHubRunnerJob, error) {
 	query := `
 	SELECT ` + githubRunnerJobColumns + `
 	FROM github_runner_job j
 	WHERE provision_at <= NOW()
-		AND EXISTS (SELECT 1 FROM github_runner_installation i WHERE i.id = j.installation_id AND i.workspace_id = j.workspace_id)
+		AND EXISTS (
+			SELECT 1 FROM github_runner_installation i
+			WHERE i.id = j.installation_id AND i.workspace_id = j.workspace_id AND NOT i.paused
+		)
 	ORDER BY provision_at
 	LIMIT 100;
 	`
@@ -840,12 +918,14 @@ func (r *PostgresBackendRepository) ListDueGitHubRunnerJobs(ctx context.Context)
 // ClaimGitHubRunnerJob gives a due job to one caller, to start its runner.
 // The claim names that runner before it exists, so that a crash cannot leave
 // one no job refers to, and makes the job due again later, for an attempt
-// that fails or never finishes.
+// that fails or never finishes. No job of a paused account is claimed, so
+// that the jobs listed as due before it paused start no runner after it.
 func (r *PostgresBackendRepository) ClaimGitHubRunnerJob(ctx context.Context, job *types.GitHubRunnerJob, vmName string) (bool, error) {
 	query := `
-	UPDATE github_runner_job
+	UPDATE github_runner_job j
 	SET vm = $3, attempts = attempts + 1, provision_at = NOW() + (attempts + 1) * INTERVAL '1 minute'
-	WHERE id = $1 AND attempts = $2 AND provision_at <= NOW();
+	WHERE id = $1 AND attempts = $2 AND provision_at <= NOW()
+		AND NOT EXISTS (SELECT 1 FROM github_runner_installation i WHERE i.id = j.installation_id AND i.paused);
 	`
 
 	result, err := r.client.ExecContext(ctx, query, job.ID, job.Attempts, vmName)

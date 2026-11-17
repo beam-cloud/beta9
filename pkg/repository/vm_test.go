@@ -788,9 +788,30 @@ func TestVMGitHubRunnersIntegration(t *testing.T) {
 	require.Empty(t, finished.Error)
 	require.Equal(t, "ghr-a", finished.VM)
 
+	// A job is found in its workspace only. Its run is recorded by the first
+	// delivery that names it, and kept by one that does not.
+	found, err := repo.GetGitHubRunnerJob(ctx, ws, id)
+	require.NoError(t, err)
+	require.Equal(t, finished, *found)
+	for _, missing := range []struct {
+		workspace uint
+		job       int64
+	}{{other, id}, {ws, id + 1}} {
+		found, err = repo.GetGitHubRunnerJob(ctx, missing.workspace, missing.job)
+		require.NoError(t, err)
+		require.Nil(t, found)
+	}
+	for _, run := range []int64{70, 0} {
+		queued.RunID = run
+		require.NoError(t, repo.SaveGitHubRunnerJob(ctx, queued))
+		require.EqualValues(t, 70, stored(id).RunID)
+	}
+	require.Equal(t, "ghr-a", stored(id).VM)
+
 	// GitHub ran another job on this job's runner. That job is due when it
 	// is first seen, whatever its status, and a late delivery changes nothing.
 	ran := job(id+1, types.GitHubJobInProgress, "ghr-a")
+	ran.RunID = 71
 	require.NoError(t, repo.SaveGitHubRunnerJob(ctx, ran))
 	require.True(t, isDue(id+1))
 	require.NoError(t, repo.FinishGitHubRunnerJob(ctx, id+1, ""))
@@ -827,6 +848,32 @@ func TestVMGitHubRunnersIntegration(t *testing.T) {
 	require.Equal(t, types.VMStateDeleted, vm.DesiredState)
 	require.Equal(t, types.VMStateRunning, vm.Status)
 
+	// The jobs of a paused account stay as they are, and none is listed as
+	// due or claimed until it resumes. Connecting it again does not resume it.
+	none, err = repo.PauseGitHubRunnerInstallation(ctx, other, true)
+	require.NoError(t, err)
+	require.Nil(t, none)
+	saved, err = repo.PauseGitHubRunnerInstallation(ctx, ws, true)
+	require.NoError(t, err)
+	installation.Paused = true
+	require.Equal(t, &installation, saved)
+	require.False(t, isDue(id))
+	waiting := stored(id)
+	claimed, err = repo.ClaimGitHubRunnerJob(ctx, &waiting, "ghr-b")
+	require.NoError(t, err)
+	require.False(t, claimed)
+	require.Equal(t, waiting, stored(id))
+	require.NoError(t, repo.SaveGitHubRunnerInstallation(ctx, &installation))
+	saved, err = repo.GetGitHubRunnerInstallation(ctx, ws)
+	require.NoError(t, err)
+	require.True(t, saved.Paused)
+	saved, err = repo.PauseGitHubRunnerInstallation(ctx, ws, false)
+	require.NoError(t, err)
+	installation.Paused = false
+	require.Equal(t, &installation, saved)
+	require.True(t, isDue(id))
+	require.Equal(t, waiting, stored(id))
+
 	// History is newest first.
 	jobs, total := list(ws, types.GitHubRunnerJobFilter{Limit: 1})
 	require.Equal(t, 2, total)
@@ -843,8 +890,12 @@ func TestVMGitHubRunnersIntegration(t *testing.T) {
 	require.Zero(t, total)
 
 	// Disconnecting starts nothing more. Nothing reports how the jobs it
-	// leaves unfinished end, so the history is the ones that finished.
+	// leaves unfinished end, so the history is the ones that finished, and
+	// no other is found.
 	require.NoError(t, repo.SaveGitHubRunnerJob(ctx, job(id+1, types.GitHubJobCompleted, "ghr-a")))
+	require.EqualValues(t, 71, stored(id+1).RunID)
+	_, err = repo.PauseGitHubRunnerInstallation(ctx, ws, true)
+	require.NoError(t, err)
 	require.NoError(t, repo.DeleteGitHubRunnerInstallation(ctx, id))
 	require.False(t, isDue(id))
 	none, err = repo.GetGitHubRunnerInstallation(ctx, ws)
@@ -859,9 +910,18 @@ func TestVMGitHubRunnersIntegration(t *testing.T) {
 	require.Equal(t, 1, total)
 	require.Len(t, jobs, 1)
 	require.Equal(t, id+1, jobs[0].ID)
+	for jobID, listed := range map[int64]bool{id: false, id + 1: true} {
+		found, err = repo.GetGitHubRunnerJob(ctx, ws, jobID)
+		require.NoError(t, err)
+		require.Equal(t, listed, found != nil)
+	}
 
-	// Connecting again shows them, without starting what was given up.
+	// Connecting again shows them, without starting what was given up. The
+	// account was paused when it disconnected, and is not when it is back.
 	require.NoError(t, repo.SaveGitHubRunnerInstallation(ctx, &installation))
+	saved, err = repo.GetGitHubRunnerInstallation(ctx, ws)
+	require.NoError(t, err)
+	require.False(t, saved.Paused)
 	_, total = list(ws, types.GitHubRunnerJobFilter{})
 	require.Equal(t, 3, total)
 	require.Nil(t, stored(id).ProvisionAt)
@@ -907,4 +967,46 @@ func TestVMGitHubRunnersIntegration(t *testing.T) {
 	require.Equal(t, 3, page.Total)
 	require.Len(t, page.Jobs, 1)
 	require.Equal(t, id+1, page.Jobs[0].ID)
+
+	// The runs to cancel are those of the jobs that have not finished, each
+	// of them once, in one repository or in all of them. A job recorded
+	// without its run has none: id+1 completed, and id+2 names no run.
+	again, elsewhere := job(id+4, types.GitHubJobInProgress, "ghr-d"), job(id+5, types.GitHubJobQueued, "")
+	again.RunID, elsewhere.RunID, elsewhere.Repository = 70, 72, "acme/100%_site"
+	require.NoError(t, repo.SaveGitHubRunnerJob(ctx, again))
+	require.NoError(t, repo.SaveGitHubRunnerJob(ctx, elsewhere))
+	for repository, runs := range map[string][]types.GitHubRunnerRun{
+		"":               {{InstallationID: id, Repository: "acme/repo", RunID: 70}, {InstallationID: id, Repository: "acme/100%_site", RunID: 72}},
+		"acme/100%_site": {{InstallationID: id, Repository: "acme/100%_site", RunID: 72}},
+		"acme":           {},
+	} {
+		active, total, err := repo.ListActiveGitHubRunnerRuns(ctx, ws, repository)
+		require.NoError(t, err)
+		require.Equal(t, runs, active, repository)
+		require.Equal(t, len(runs), total, repository)
+	}
+
+	// A hundred of them at most are returned, the oldest, with how many
+	// there are.
+	for run := int64(100); run < 200; run++ {
+		more := job(id+run, types.GitHubJobQueued, "")
+		more.RunID = run
+		require.NoError(t, repo.SaveGitHubRunnerJob(ctx, more))
+	}
+	active, total, err := repo.ListActiveGitHubRunnerRuns(ctx, ws, "")
+	require.NoError(t, err)
+	require.Equal(t, 102, total)
+	require.Len(t, active, 100)
+	require.EqualValues(t, 70, active[0].RunID)
+	require.EqualValues(t, 197, active[99].RunID)
+
+	active, total, err = repo.ListActiveGitHubRunnerRuns(ctx, other, "")
+	require.NoError(t, err)
+	require.Empty(t, active)
+	require.Zero(t, total)
+	require.NoError(t, repo.DeleteGitHubRunnerInstallation(ctx, id))
+	active, total, err = repo.ListActiveGitHubRunnerRuns(ctx, ws, "")
+	require.NoError(t, err)
+	require.Empty(t, active, "the runs of a disconnected account are not the workspace's to cancel")
+	require.Zero(t, total)
 }

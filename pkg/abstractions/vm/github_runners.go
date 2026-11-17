@@ -14,8 +14,10 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -40,6 +42,7 @@ const (
 	runnerIdle        = 5 * time.Minute
 	runnerLifetime    = 24 * time.Hour
 	runnerConnectTime = 10 * time.Minute
+	runnerCancelTime  = 30 * time.Second
 )
 
 // runnerSize is a size of runner, which a job asks for by its label, as in
@@ -98,9 +101,13 @@ func (s *Service) initGitHubRunners(api *echo.Group) error {
 	group := api.Group("/github-runners")
 	group.POST("/webhook", r.webhook)
 	group.GET("/:workspaceId", auth.WithStrictWorkspaceAuth(r.status))
+	group.PATCH("/:workspaceId", auth.WithStrictWorkspaceAuth(r.update))
 	group.DELETE("/:workspaceId", auth.WithStrictWorkspaceAuth(r.disconnect))
 	group.POST("/:workspaceId/connect", auth.WithStrictWorkspaceAuth(r.connect))
+	group.POST("/:workspaceId/cancel", auth.WithStrictWorkspaceAuth(r.cancelAll))
 	group.GET("/:workspaceId/jobs", auth.WithStrictWorkspaceAuth(r.jobs))
+	group.POST("/:workspaceId/jobs/:jobId/cancel", auth.WithStrictWorkspaceAuth(r.cancelJob))
+	group.POST("/:workspaceId/jobs/:jobId/stop", auth.WithStrictWorkspaceAuth(r.stopJob))
 	if r.config.AppID == "" {
 		return nil
 	}
@@ -154,6 +161,45 @@ func (r *githubRunners) status(c echo.Context) error {
 	return c.JSON(http.StatusOK, runnerStatus{Enabled: r.github != nil, Installation: installation, Sizes: runnerSizes})
 }
 
+// update changes the settings of the workspace's account that a request
+// names, and answers as status does. An account that is paused starts no
+// runner, which leaves its jobs queued on GitHub until it resumes. The jobs
+// that run and the runners that exist are left alone.
+func (r *githubRunners) update(c echo.Context) error {
+	ctx, info := requestContext(c)
+	var req struct {
+		Paused *bool `json:"paused"`
+	}
+	if err := decode(c, &req); err != nil {
+		return err
+	}
+
+	var installation *types.GitHubRunnerInstallation
+	var err error
+	if req.Paused == nil {
+		installation, err = r.s.repo.GetGitHubRunnerInstallation(ctx, info.Workspace.Id)
+	} else {
+		installation, err = r.s.repo.PauseGitHubRunnerInstallation(ctx, info.Workspace.Id, *req.Paused)
+	}
+	if err != nil {
+		return err
+	}
+
+	if installation == nil {
+		return echo.NewHTTPError(http.StatusConflict, "no GitHub account is connected")
+	}
+
+	// The jobs that waited are due, so the loop need not wait for its tick.
+	if req.Paused != nil && !installation.Paused {
+		select {
+		case r.wake <- struct{}{}:
+		default:
+		}
+	}
+
+	return c.JSON(http.StatusOK, runnerStatus{Enabled: r.github != nil, Installation: installation, Sizes: runnerSizes})
+}
+
 type runnerJobPage struct {
 	Data  []types.GitHubRunnerJob `json:"data"`
 	Total int                     `json:"total"`
@@ -185,15 +231,218 @@ func (r *githubRunners) jobs(c echo.Context) error {
 		return err
 	}
 
+	installation, err := r.s.repo.GetGitHubRunnerInstallation(ctx, info.Workspace.Id)
+	if err != nil {
+		return err
+	}
+
 	// A job's error says why it has no runner. Once it runs on one, what is
 	// left is about an earlier attempt, or about replacing the runner it took.
+	paused := installation != nil && installation.Paused
 	for i := range page.Jobs {
 		if page.Jobs[i].RunnerName != "" {
 			page.Jobs[i].Error = ""
 		}
+
+		page.Jobs[i].Waiting = runnerWaiting(page.Jobs[i], paused)
 	}
 
 	return c.JSON(http.StatusOK, runnerJobPage{Data: page.Jobs, Total: page.Total, Repositories: page.Repositories})
+}
+
+// runnerWaiting says what a queued job that no runner has taken waits for,
+// in words that a user is shown as they are. It says nothing of a job that
+// no runner is started for any more, as its error says why: its runs-on
+// matches no size, or every attempt failed. Nor does it of a job that had
+// no runner yet when its account disconnected, which gets none.
+func runnerWaiting(job types.GitHubRunnerJob, paused bool) string {
+	_, sized := runnerSizeFor(job.Label)
+	switch {
+	case job.Status != types.GitHubJobQueued || job.RunnerName != "":
+		return ""
+	case !sized || job.ProvisionAt == nil && (job.Error != "" || job.VM == ""):
+		return ""
+	case paused:
+		return "Runners are paused"
+	case job.Error != "":
+		return "Retrying"
+	}
+
+	return "Starting a runner"
+}
+
+// job returns the job of the workspace that a request names.
+func (r *githubRunners) job(c echo.Context) (*types.GitHubRunnerJob, error) {
+	ctx, info := requestContext(c)
+	id, err := strconv.ParseInt(c.Param("jobId"), 10, 64)
+	if err != nil {
+		return nil, echo.NewHTTPError(http.StatusNotFound, "job not found")
+	}
+
+	job, err := r.s.repo.GetGitHubRunnerJob(ctx, info.Workspace.Id, id)
+	if err != nil {
+		return nil, err
+	}
+
+	if job == nil {
+		return nil, echo.NewHTTPError(http.StatusNotFound, "job not found")
+	}
+
+	return job, nil
+}
+
+// cancelJob cancels the workflow run of a job, and so the run's other jobs
+// too, as GitHub cancels no job on its own. The runner of a job that ran is
+// deleted as every runner is, once GitHub reports the job completed.
+func (r *githubRunners) cancelJob(c echo.Context) error {
+	if err := r.ready(); err != nil {
+		return err
+	}
+
+	job, err := r.job(c)
+	if err != nil {
+		return err
+	}
+
+	switch {
+	case job.Status == types.GitHubJobCompleted:
+		return echo.NewHTTPError(http.StatusConflict, "the job has already completed")
+	case job.RunID == 0:
+		return echo.NewHTTPError(http.StatusConflict, "the job was recorded without its workflow run; cancel the run on GitHub")
+	}
+
+	ctx, _ := requestContext(c)
+	err = r.github.cancelRun(ctx, job.InstallationID, job.Repository, job.RunID)
+	if githubStatus(err) == http.StatusForbidden {
+		return echo.NewHTTPError(http.StatusForbidden, "The GitHub App needs the Actions permission set to read and write; accept the updated permissions on GitHub")
+	}
+	if err != nil {
+		return err
+	}
+
+	return c.NoContent(http.StatusAccepted)
+}
+
+// stopJob deletes the runner that a job runs on, for a job that hangs, or
+// one of an account that has not let the App cancel its runs. GitHub reports
+// the job failed once it finds the runner gone.
+func (r *githubRunners) stopJob(c echo.Context) error {
+	if err := r.ready(); err != nil {
+		return err
+	}
+
+	job, err := r.job(c)
+	if err != nil {
+		return err
+	}
+
+	ctx, info := requestContext(c)
+	elsewhere := echo.NewHTTPError(http.StatusConflict, "the job is not running on a runner of this workspace")
+	if job.Status != types.GitHubJobInProgress || job.RunnerName == "" {
+		return elsewhere
+	}
+
+	// GitHub says which runner a job runs on by its name, which anyone can
+	// give a runner of their own, so it is ours only if it started as one.
+	runner, err := r.s.repo.GetGitHubRunner(ctx, info.Workspace.Id, job.RunnerName)
+	if err != nil {
+		return err
+	}
+
+	if runner == nil {
+		return elsewhere
+	}
+
+	v, unlock, err := r.s.lockedVM(ctx, info.Workspace.Id, job.RunnerName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return elsewhere
+	}
+	if err != nil {
+		return err
+	}
+
+	defer unlock()
+	if v.DesiredState == types.VMStateDeleted {
+		return echo.NewHTTPError(http.StatusConflict, "the job's runner is already being deleted")
+	}
+
+	// GitHub refuses to unregister a runner that it gave a job, which spares
+	// the runner in reconcileRunner. Here its VM is deleted whatever GitHub
+	// answers, and GitHub fails the job.
+	if _, err := r.github.removeRunner(ctx, runner.InstallationID, runner.Repository, v.Name); err != nil {
+		log.Warn().Err(err).Str("vm_id", v.ID).Msg("unregister GitHub runner")
+	}
+
+	v.DesiredState = types.VMStateDeleted
+	if err := r.s.repo.SaveVM(ctx, v); err != nil {
+		return err
+	}
+
+	if err := r.s.stopOrDelete(ctx, v); err != nil {
+		return err
+	}
+
+	return c.NoContent(http.StatusAccepted)
+}
+
+// runnerCancellation counts the workflow runs that a request cancelled, and
+// those that could not be.
+type runnerCancellation struct {
+	Cancelled int `json:"cancelled"`
+	Failed    int `json:"failed"`
+}
+
+// cancelAll cancels every workflow run of the workspace that has a queued or
+// running job, or those of one repository, each of them once however many
+// of its jobs asked for a runner. A run that can't be cancelled does not
+// stop the others.
+//
+// A request cancels the oldest hundred runs, a few at a time and for no
+// longer than runnerCancelTime, which keeps it within GitHub's rate limits.
+// The runs it leaves count as not cancelled, and asking again cancels them.
+func (r *githubRunners) cancelAll(c echo.Context) error {
+	if err := r.ready(); err != nil {
+		return err
+	}
+
+	ctx, info := requestContext(c)
+	var req struct {
+		Repository string `json:"repository"`
+	}
+	if err := decode(c, &req); err != nil {
+		return err
+	}
+
+	runs, total, err := r.s.repo.ListActiveGitHubRunnerRuns(ctx, info.Workspace.Id, req.Repository)
+	if err != nil {
+		return err
+	}
+
+	op, cancel := context.WithTimeout(ctx, runnerCancelTime)
+	defer cancel()
+	var cancelled atomic.Int64
+	var cancellations sync.WaitGroup
+	slots := make(chan struct{}, 4)
+	for _, run := range runs {
+		slots <- struct{}{}
+		cancellations.Go(func() {
+			defer func() { <-slots }()
+
+			if err := r.github.cancelRun(op, run.InstallationID, run.Repository, run.RunID); err != nil {
+				log.Warn().Err(err).Str("github_repository", run.Repository).Int64("github_run_id", run.RunID).Msg("cancel GitHub workflow run")
+				return
+			}
+
+			cancelled.Add(1)
+		})
+	}
+
+	cancellations.Wait()
+	if left := total - len(runs); left > 0 {
+		log.Warn().Int64("github_installation_id", runs[0].InstallationID).Int("runs", left).Msg("GitHub workflow runs left to cancel")
+	}
+
+	return c.JSON(http.StatusOK, runnerCancellation{Cancelled: int(cancelled.Load()), Failed: total - int(cancelled.Load())})
 }
 
 // disconnect stops running the account's jobs. Its runners are deleted as
@@ -418,6 +667,7 @@ type runnerEvent struct {
 	} `json:"repository"`
 	Job struct {
 		ID          int64      `json:"id"`
+		RunID       int64      `json:"run_id"`
 		Name        string     `json:"name"`
 		Workflow    string     `json:"workflow_name"`
 		URL         string     `json:"html_url"`
@@ -498,6 +748,7 @@ func (r *githubRunners) jobChanged(ctx context.Context, event runnerEvent) error
 
 	err = r.s.repo.SaveGitHubRunnerJob(ctx, &types.GitHubRunnerJob{
 		ID:             event.Job.ID,
+		RunID:          event.Job.RunID,
 		InstallationID: installation.ID,
 		WorkspaceID:    installation.WorkspaceID,
 		Repository:     event.Repository.FullName,
