@@ -504,6 +504,8 @@ func TestGitHubRunnerProvisionsOnce(t *testing.T) {
 	ctx := context.Background()
 	calls := fakeGitHub(t, r, map[string]string{
 		"POST /repos/acme/repo/actions/runners/generate-jitconfig": `201 {"encoded_jit_config":"jit-secret"}`,
+		"GET /repos/acme/repo/actions/runners":                     `200 {"runners":[{"id":9}]}`,
+		"DELETE /repos/acme/repo/actions/runners/9":                `204 {}`,
 	})
 	require.NoError(t, store.SaveGitHubRunnerJob(ctx, queuedJob(1)))
 	due, err := store.ListDueGitHubRunnerJobs(ctx, 0)
@@ -551,11 +553,12 @@ func TestGitHubRunnerProvisionsOnce(t *testing.T) {
 	require.Nil(t, job.ProvisionAt)
 
 	// A runner that stops before it takes a job is replaced, after the time
-	// that a job waits to be tried again.
+	// that a job waits to be tried again, and GitHub is told to forget it.
 	delete(runtime.containers.states, v.ContainerID)
 	require.NoError(t, r.s.reconcileVM(ctx, v))
 	require.Equal(t, types.VMStateDeleted, v.Status)
 	require.Contains(t, job.Error, "stopped before it took a job")
+	require.Equal(t, []string{"GET /repos/acme/repo/actions/runners", "DELETE /repos/acme/repo/actions/runners/9"}, calls()[1:])
 	require.WithinDuration(t, time.Now().Add(5*time.Second), *job.ProvisionAt, time.Second)
 	require.NoError(t, r.provision(ctx, *job))
 	require.Len(t, runtime.requests, 1, "a runner that stops every time is not started without a pause")
@@ -743,11 +746,11 @@ func TestGitHubRunnerVMLifecycle(t *testing.T) {
 			assign("in_progress")(v, store, r)
 			exit(v, store, r)
 		}, deleted: true},
-		"exited before a job": {setup: exit, deleted: true, replaced: true},
+		"exited before a job": {setup: exit, deregister: "204", deleted: true, replaced: true},
 		"failed to launch": {setup: func(v *types.VM, store *runnerStore, r *githubRunners) {
 			exit(v, store, r)
 			v.ContainerID, v.Status, v.LaunchAttempts = "", types.VMStateError, 5
-		}, deleted: true, replaced: true},
+		}, deregister: "204", deleted: true, replaced: true},
 		"idle":                 {setup: idle, deregister: "204", deleted: true},
 		"idle but just busy":   {setup: idle, deregister: "422"},
 		"disconnected":         {setup: func(_ *types.VM, store *runnerStore, _ *githubRunners) { store.installation = nil }, deleted: true},
@@ -1986,6 +1989,8 @@ func TestGitHubRunnerJobTimeline(t *testing.T) {
 	ctx := context.Background()
 	fakeGitHub(t, r, map[string]string{
 		"POST /repos/acme/repo/actions/runners/generate-jitconfig": `201 {"encoded_jit_config":"jit-secret"}`,
+		"GET /repos/acme/repo/actions/runners":                     `200 {"runners":[{"id":9}]}`,
+		"DELETE /repos/acme/repo/actions/runners/9":                `204 {}`,
 	})
 	timeline := func(id int64) map[string]string {
 		t.Helper()
@@ -2059,6 +2064,10 @@ func TestGitHubRunnerJobTimeline(t *testing.T) {
 func TestGitHubRunnerJobWaitsForCapacity(t *testing.T) {
 	r, store, _, runtime := runnerFixture(t)
 	ctx := context.Background()
+	fakeGitHub(t, r, map[string]string{
+		"GET /repos/acme/repo/actions/runners":      `200 {"runners":[{"id":9}]}`,
+		"DELETE /repos/acme/repo/actions/runners/9": `204 {}`,
+	})
 	store.jobs[1] = queuedJob(1)
 	store.jobs[1].VM, store.jobs[1].Attempts = "ghr-test", 1
 	job := store.jobs[1]
@@ -2092,6 +2101,50 @@ func TestGitHubRunnerJobWaitsForCapacity(t *testing.T) {
 	require.Equal(t, "no worker had capacity for the runner", job.Error)
 	require.WithinDuration(t, time.Now().Add(5*time.Second), *job.ProvisionAt, time.Second)
 	require.Empty(t, runtime.requests, "runners never restart")
+}
+
+// A runner that the workspace's concurrency limit has no room for waits for
+// room, and its job says so. It is not replaced: another would be refused
+// too, at the price of one more runner registered with GitHub.
+func TestGitHubRunnerWaitsForRoomInTheWorkspaceLimit(t *testing.T) {
+	r, store, _, runtime := runnerFixture(t)
+	ctx := context.Background()
+	calls := fakeGitHub(t, r, map[string]string{
+		"GET /repos/acme/repo/actions/runners":      `200 {"runners":[{"id":9}]}`,
+		"DELETE /repos/acme/repo/actions/runners/9": `204 {}`,
+	})
+	store.jobs[1] = queuedJob(1)
+	store.jobs[1].VM, store.jobs[1].Attempts = "ghr-test", 1
+	job := store.jobs[1]
+	refused := (&types.ThrottledByConcurrencyLimitError{Reason: "cpu quota exceeded"}).Error()
+	v := &types.VM{ID: "vm-runner", Name: "ghr-test", WorkspaceID: 7, TokenID: "token", DesiredState: types.VMStateRunning,
+		Status: types.VMStateError, Error: refused, LaunchAttempts: 5, StubID: "stub",
+		CreatedAt: time.Now(), UpdatedAt: time.Now(), LastActiveAt: time.Now()}
+	runtime.diskName = rootDisk(v)
+	store.rows[v.ID] = v
+
+	// However often it was refused, it stays, and it asks again at once:
+	// it starts as soon as there is room.
+	require.NoError(t, r.s.reconcileVM(ctx, v))
+	require.Equal(t, types.VMStateRunning, v.DesiredState)
+	require.Equal(t, "Workspace CPU limit reached", runnerWaiting(*job, false, false))
+	require.Nil(t, job.ProvisionAt, "no runner is started in its place")
+	require.Equal(t, 1, job.Attempts)
+	require.Empty(t, job.Error)
+	require.Len(t, runtime.requests, 1)
+	require.Empty(t, calls(), "GitHub keeps the runner")
+	require.Equal(t, runtime.requests[0], v.ContainerID)
+	runtime.containers.states[v.ContainerID] = &types.ContainerState{ContainerId: v.ContainerID, Status: types.ContainerStatusPending, WorkerId: "worker"}
+	require.NoError(t, r.s.reconcileVM(ctx, v))
+	require.Equal(t, "Starting a runner", runnerWaiting(*job, false, false))
+	require.Equal(t, types.VMStateRunning, v.DesiredState)
+
+	// A runner that fails to start for any other reason is given up on.
+	delete(runtime.containers.states, v.ContainerID)
+	v.ContainerID, v.Status, v.Error, v.LaunchAttempts = "", types.VMStateError, "no image", 5
+	require.NoError(t, r.s.reconcileVM(ctx, v))
+	require.Equal(t, types.VMStateDeleted, v.Status)
+	require.NotNil(t, job.ProvisionAt)
 }
 
 // The gateways see the same webhook deliveries, so one of them sweeps at a

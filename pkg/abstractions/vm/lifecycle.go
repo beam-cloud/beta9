@@ -662,7 +662,14 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 	}
 
 	info.Token = token
-	if v.Status == types.VMStateError && (v.LaunchAttempts >= 5 || time.Since(v.UpdatedAt) < 30*time.Second) {
+	pause := 30 * time.Second
+	if runner && throttled(v) {
+		// Room in the workspace's limit comes at any moment, and to be
+		// refused again costs nothing.
+		pause = 0
+	}
+
+	if v.Status == types.VMStateError && (v.LaunchAttempts >= 5 || time.Since(v.UpdatedAt) < pause) {
 		return nil
 	}
 

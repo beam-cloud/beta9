@@ -62,6 +62,7 @@ const (
 	waitingLimit    = "Waiting for a free runner"
 	waitingGitHub   = "GitHub is limiting requests"
 	waitingCapacity = "Waiting for capacity"
+	waitingQuota    = "Workspace CPU limit reached"
 	waitingRetry    = "Retrying"
 	waitingStart    = "Starting a runner"
 )
@@ -1165,6 +1166,12 @@ func (s *Service) reconcileRunner(ctx context.Context, v *types.VM) (bool, error
 	}
 
 	waiting := runner.JobStatus == ""
+	// The workspace's limit has no room for this runner, and would have none
+	// for one in its place. It keeps asking: room comes as runners finish.
+	if waiting && throttled(v) {
+		v.LaunchAttempts = 0
+	}
+
 	exited := state == nil && v.ContainerID != "" || v.Status == types.VMStateError && v.LaunchAttempts >= 5
 	if exited && waiting {
 		// Some queued job still counts on this runner.
@@ -1175,6 +1182,15 @@ func (s *Service) reconcileRunner(ctx context.Context, v *types.VM) (bool, error
 
 		if err := r.s.repo.ReplaceGitHubRunner(ctx, v.WorkspaceID, v.Name, cmp.Or(v.Error, reason), waits); err != nil {
 			return true, err
+		}
+
+		// GitHub keeps a runner that never came online for a day. Many of
+		// them are many runners for an account to look through, so this one
+		// is taken off its list now, if GitHub will.
+		if r.github != nil && runner.Connected {
+			if _, err := r.github.removeRunner(ctx, runner.InstallationID, runner.Repository, v.Name); err != nil {
+				log.Debug().Err(err).Str("vm_id", v.ID).Msg("remove a replaced GitHub runner")
+			}
 		}
 
 		v.DesiredState = types.VMStateDeleted
@@ -1219,6 +1235,14 @@ func (s *Service) reconcileRunner(ctx context.Context, v *types.VM) (bool, error
 	return true, s.repo.SaveVM(ctx, v)
 }
 
+// throttled reports whether a VM's last launch was refused because its
+// workspace runs as much as its concurrency limit allows.
+func throttled(v *types.VM) bool {
+	return v.Status == types.VMStateError && v.ContainerID == "" && strings.Contains(v.Error, concurrencyLimitError)
+}
+
+var concurrencyLimitError = (&types.ThrottledByConcurrencyLimitError{}).Error()
+
 // unplaced reports whether the scheduler gave up on finding a VM a worker to
 // start on.
 func (s *Service) unplaced(v *types.VM) bool {
@@ -1228,7 +1252,8 @@ func (s *Service) unplaced(v *types.VM) bool {
 
 // observe tells the job that a runner was started for what its VM is found
 // to be doing, when that changes: that the job waits for capacity while the
-// VM has no worker to start on, and when the VM was ready. The worker says
+// VM has no worker to start on, or for room in the workspace's limit, and
+// when the VM was ready. The worker says
 // when it started, to the second, which is nearer than when a pass finds it
 // running, some seconds later. No runner is held up for what its job is told.
 func (r *githubRunners) observe(ctx context.Context, v *types.VM, runner *types.GitHubRunner, state *types.ContainerState) {
@@ -1236,6 +1261,10 @@ func (r *githubRunners) observe(ctx context.Context, v *types.VM, runner *types.
 	pending := state != nil && state.Status == types.ContainerStatusPending && state.WorkerId == ""
 	if runner.JobStatus == "" && pending && time.Since(v.CreatedAt) > runnerPlacement {
 		waits = waitingCapacity
+	}
+
+	if runner.JobStatus == "" && throttled(v) {
+		waits = waitingQuota
 	}
 
 	var ready *time.Time
