@@ -152,13 +152,23 @@ func (g *githubApp) authorizedUser(ctx context.Context, code string) (login, tok
 
 // userInstallations returns the installations of the App that a user can
 // reach, which are those on their own account and on organizations they
-// belong to. A user has far fewer than the hundred a page holds.
+// belong to. GitHub lists them a page at a time.
 func (g *githubApp) userInstallations(ctx context.Context, token string) ([]githubInstallation, error) {
-	var page struct {
-		Installations []githubInstallation `json:"installations"`
+	var installations []githubInstallation
+	for page := g.apiURL + "/user/installations?per_page=100"; page != ""; {
+		var listed struct {
+			Installations []githubInstallation `json:"installations"`
+		}
+		header, err := g.call(ctx, http.MethodGet, page, token, nil, &listed)
+		if err != nil {
+			return nil, err
+		}
+
+		installations = append(installations, listed.Installations...)
+		page = nextPage(header.Get("Link"))
 	}
-	_, err := g.call(ctx, http.MethodGet, g.apiURL+"/user/installations?per_page=100", token, nil, &page)
-	return page.Installations, err
+
+	return installations, nil
 }
 
 func (g *githubApp) installation(ctx context.Context, id int64) (*githubInstallation, error) {

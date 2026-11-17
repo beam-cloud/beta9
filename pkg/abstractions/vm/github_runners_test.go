@@ -662,6 +662,41 @@ func TestGitHubRunnerConnectInstalledAccount(t *testing.T) {
 	require.Equal(t, &types.GitHubRunnerInstallation{ID: 43, WorkspaceID: 7, TokenID: info.Token.ExternalId, Account: "Alice", AccountType: "User"}, store.installation)
 }
 
+// An account the user owns can be on any page of their installations.
+func TestGitHubRunnerConnectReadsEveryPageOfInstallations(t *testing.T) {
+	r, _, _, _ := runnerFixture(t)
+	var mu sync.Mutex
+	var served []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		mu.Lock()
+		served = append(served, req.Method+" "+req.URL.RequestURI()+" "+req.Header.Get("Authorization"))
+		mu.Unlock()
+		pages := fmt.Sprintf("http://%s/user/installations?per_page=100&page=", req.Host)
+		switch req.URL.Query().Get("page") {
+		case "":
+			w.Header().Set("Link", fmt.Sprintf(`<%s2>; rel="next", <%s2>; rel="last"`, pages, pages))
+			fmt.Fprint(w, `{"total_count":2,"installations":[{"id":47,"account":{"login":"bob","type":"User"}}]}`)
+		case "2":
+			w.Header().Set("Link", fmt.Sprintf(`<%s1>; rel="prev", <%s1>; rel="first"`, pages, pages))
+			fmt.Fprint(w, `{"total_count":2,"installations":[{"id":43,"account":{"login":"Alice","type":"User"}}]}`)
+		default:
+			t.Errorf("read past the last page: %s", req.URL)
+		}
+	}))
+	t.Cleanup(server.Close)
+	r.github.apiURL = server.URL
+
+	accounts, err := r.ownedAccounts(context.Background(), "alice", "user-token")
+	require.NoError(t, err)
+	require.Equal(t, []runnerAccount{{InstallationID: 43, Account: "Alice", AccountType: "User"}}, accounts)
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []string{
+		"GET /user/installations?per_page=100 Bearer user-token",
+		"GET /user/installations?per_page=100&page=2 Bearer user-token",
+	}, served)
+}
+
 func TestGitHubRunnerConnectState(t *testing.T) {
 	r, _, info, _ := runnerFixture(t)
 	for _, login := range []string{"", "alice"} {
