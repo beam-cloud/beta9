@@ -1,6 +1,6 @@
-// Package market keeps a record of what the providers sell: the price and
-// the stock of every kind of machine, at every provider, sampled at an
-// interval.
+// Package watch watches the market the providers make: it keeps a record of
+// the price and the stock of every kind of machine, at every provider,
+// sampled at an interval.
 //
 // One gateway samples at a time, the one that holds the sampler's lock. What
 // the providers last answered is kept in Redis, where every gateway reads it.
@@ -23,7 +23,7 @@
 // Reader (reader.go), which answers what is for sale now (now.go) and what a
 // GPU sold for over time (series.go). Log (log.go) is the history, which
 // pkg/repository keeps in S2, and Shared (shared.go) is the state in Redis.
-package market
+package watch
 
 import (
 	"cmp"

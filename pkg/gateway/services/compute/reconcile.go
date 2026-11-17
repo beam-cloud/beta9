@@ -10,7 +10,7 @@ import (
 
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/providers"
-	"github.com/beam-cloud/beta9/pkg/providers/market"
+	"github.com/beam-cloud/beta9/pkg/providers/watch"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 )
@@ -730,7 +730,7 @@ func (s *Service) reconcileReservationStatus(ctx context.Context, workspaceID st
 		// The machine went without Beam deleting it: the provider took it
 		// back, its own deletion timer fired, or someone removed it.
 		s.revokeReservationJoinToken(ctx, reservation)
-		s.outcomes.Record(reservationOutcome(*reservation).Ended(market.ResultGone, now.Sub(reservation.CreatedAt)))
+		s.outcomes.Record(reservationOutcome(*reservation).Ended(watch.ResultGone, now.Sub(reservation.CreatedAt)))
 		reservation.Status = model.ReservationDeleted
 		reservation.LastStatusMessage = firstNonEmpty(instance.StatusDetail, instanceGoneMessage)
 		reservation.LastError = ""
@@ -864,8 +864,8 @@ func (s *Service) terminateReservation(ctx context.Context, workspaceID string, 
 
 // reservationOutcome is what the market's history is told of a reserved
 // machine: what it was bought as, where, and for how much.
-func reservationOutcome(reservation model.Reservation) market.Outcome {
-	outcome := market.OutcomeOf(providers.Offer{
+func reservationOutcome(reservation model.Reservation) watch.Outcome {
+	outcome := watch.OutcomeOf(providers.Offer{
 		ID:               reservation.OfferID,
 		Provider:         reservation.Provider,
 		Cloud:            reservation.Cloud,
@@ -876,7 +876,7 @@ func reservationOutcome(reservation model.Reservation) market.Outcome {
 		HourlyCostMicros: reservation.HourlyCostMicros,
 		Spot:             reservation.Spot,
 	})
-	outcome.Source = market.SourceReservation
+	outcome.Source = watch.SourceReservation
 	return outcome
 }
 
@@ -886,13 +886,13 @@ func reservationOutcome(reservation model.Reservation) market.Outcome {
 func reservationEnd(reason string) string {
 	switch reason {
 	case reconcileReasonInterrupted:
-		return market.ResultInterrupted
+		return watch.ResultInterrupted
 	case reconcileReasonProviderFailed:
-		return market.ResultFailed
+		return watch.ResultFailed
 	case reconcileReasonReservationExpired:
-		return market.ResultExpired
+		return watch.ResultExpired
 	}
-	return market.ResultReleased
+	return watch.ResultReleased
 }
 
 func (s *Service) reconcileStaleMachines(ctx context.Context, workspaceID string, state *model.PoolState, now time.Time) bool {

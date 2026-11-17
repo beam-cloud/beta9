@@ -13,7 +13,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/providers"
-	"github.com/beam-cloud/beta9/pkg/providers/market"
+	"github.com/beam-cloud/beta9/pkg/providers/watch"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
@@ -278,8 +278,8 @@ func (s *Service) createPlanReservations(ctx context.Context, workspaceID string
 			})
 			// How the purchase went is the only word on the stock of a
 			// provider that lists a price and not what it has.
-			bought, took := market.OutcomeOf(purchase.Offer), time.Since(now)
-			bought.Source = market.SourceReservation
+			bought, took := watch.OutcomeOf(purchase.Offer), time.Since(now)
+			bought.Source = watch.SourceReservation
 			s.outcomes.Record(bought.Bought(err, took))
 			if err == nil && instance.Status == providers.StatusActive {
 				// It is recorded as running, so the reconciler will not see

@@ -16,7 +16,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/providers"
-	"github.com/beam-cloud/beta9/pkg/providers/market"
+	"github.com/beam-cloud/beta9/pkg/providers/watch"
 	"github.com/beam-cloud/beta9/pkg/types"
 	s2pb "github.com/s2-streamstore/s2-sdk-go/generated"
 	"github.com/s2-streamstore/s2-sdk-go/s2"
@@ -186,12 +186,12 @@ func TestTheMarketsHistoryIsReadFromS2ByTime(t *testing.T) {
 	log, fake := newMarketTestLog(t)
 	fake.batch = 100
 	ctx := context.Background()
-	samples := market.Stream{Name: "series/a10g/1m", Keep: 14 * 24 * time.Hour}
+	samples := watch.Stream{Name: "series/a10g/1m", Keep: 14 * 24 * time.Hour}
 
 	// A day and a half of samples, a minute apart.
-	var records []market.Record
+	var records []watch.Record
 	for minute := range 36 * 60 {
-		records = append(records, market.Record{At: marketTestNoon.Add(time.Duration(minute) * time.Minute), Body: []byte(strconv.Itoa(minute))})
+		records = append(records, watch.Record{At: marketTestNoon.Add(time.Duration(minute) * time.Minute), Body: []byte(strconv.Itoa(minute))})
 	}
 	for batch := range slices.Chunk(records, 500) {
 		require.NoError(t, log.Append(ctx, samples, batch...))
@@ -200,7 +200,7 @@ func TestTheMarketsHistoryIsReadFromS2ByTime(t *testing.T) {
 	read, err := log.Read(ctx, samples, marketTestNoon.Add(time.Hour), marketTestNoon.Add(7*time.Hour))
 	require.NoError(t, err)
 	require.Len(t, read, 360, "from the start, until the end, however many a read returns at once")
-	assert.Equal(t, market.Record{At: marketTestNoon.Add(time.Hour), Body: []byte("60")}, read[0])
+	assert.Equal(t, watch.Record{At: marketTestNoon.Add(time.Hour), Body: []byte("60")}, read[0])
 	assert.Equal(t, []byte("419"), read[359].Body)
 
 	// The end of the stream, and what is past it.
@@ -216,7 +216,7 @@ func TestTheMarketsHistoryIsReadFromS2ByTime(t *testing.T) {
 
 	// A stream that was never written to holds nothing, and is not made by
 	// being read.
-	read, err = log.Read(ctx, market.Stream{Name: "series/h100/1m"}, marketTestNoon, marketTestNoon.Add(time.Hour))
+	read, err = log.Read(ctx, watch.Stream{Name: "series/h100/1m"}, marketTestNoon, marketTestNoon.Add(time.Hour))
 	require.NoError(t, err)
 	assert.Empty(t, read)
 	assert.Equal(t, []string{"events/market/series/a10g/1m"}, fake.names())
@@ -225,11 +225,11 @@ func TestTheMarketsHistoryIsReadFromS2ByTime(t *testing.T) {
 func TestAStreamIsMadeToKeepItsRecordsForAsLongAsItSays(t *testing.T) {
 	log, fake := newMarketTestLog(t)
 	ctx := context.Background()
-	record := market.Record{At: marketTestNoon, Body: []byte("{}")}
+	record := watch.Record{At: marketTestNoon, Body: []byte("{}")}
 
-	require.NoError(t, log.Append(ctx, market.Stream{Name: "series/a10g/1m", Keep: 14 * 24 * time.Hour}, record))
-	require.NoError(t, log.Append(ctx, market.Stream{Name: "series/a10g/1m", Keep: 14 * 24 * time.Hour}, record))
-	require.NoError(t, log.Append(ctx, market.Stream{Name: "series/a10g/1h"}, record))
+	require.NoError(t, log.Append(ctx, watch.Stream{Name: "series/a10g/1m", Keep: 14 * 24 * time.Hour}, record))
+	require.NoError(t, log.Append(ctx, watch.Stream{Name: "series/a10g/1m", Keep: 14 * 24 * time.Hour}, record))
+	require.NoError(t, log.Append(ctx, watch.Stream{Name: "series/a10g/1h"}, record))
 
 	samples := fake.stream("events/market/series/a10g/1m")
 	require.NotNil(t, samples)
@@ -246,12 +246,12 @@ func TestAStreamIsMadeToKeepItsRecordsForAsLongAsItSays(t *testing.T) {
 	assert.Equal(t, 2, fake.made, "a stream is made once, not before every append")
 
 	// A change of how long it is kept reaches a stream that exists.
-	require.NoError(t, log.Append(ctx, market.Stream{Name: "series/a10g/1m", Keep: 30 * 24 * time.Hour}, record))
+	require.NoError(t, log.Append(ctx, watch.Stream{Name: "series/a10g/1m", Keep: 30 * 24 * time.Hour}, record))
 	assert.Equal(t, int64(30*24*3600), *fake.stream("events/market/series/a10g/1m").config.RetentionPolicy.Age)
 
 	// A stream that was deleted is made again as it should be.
 	fake.delete("events/market/series/a10g/1h")
-	require.NoError(t, log.Append(ctx, market.Stream{Name: "series/a10g/1h"}, record))
+	require.NoError(t, log.Append(ctx, watch.Stream{Name: "series/a10g/1h"}, record))
 	hours = fake.stream("events/market/series/a10g/1h")
 	require.NotNil(t, hours)
 	assert.NotNil(t, hours.config.RetentionPolicy.Infinite)
@@ -261,7 +261,7 @@ func TestAStreamIsMadeToKeepItsRecordsForAsLongAsItSays(t *testing.T) {
 func TestARecordThatS2WouldRefuseIsNotSent(t *testing.T) {
 	log, fake := newMarketTestLog(t)
 
-	err := log.Append(context.Background(), market.Stream{Name: "snapshots/vast"}, market.Record{At: marketTestNoon, Body: make([]byte, s2MaxRecordBytes+1)})
+	err := log.Append(context.Background(), watch.Stream{Name: "snapshots/vast"}, watch.Record{At: marketTestNoon, Body: make([]byte, s2MaxRecordBytes+1)})
 
 	require.ErrorContains(t, err, "more than s2 stream")
 	assert.Empty(t, fake.names())
@@ -269,12 +269,12 @@ func TestARecordThatS2WouldRefuseIsNotSent(t *testing.T) {
 
 func TestManyRecordsAreAppendedInAsManyBatchesAsS2Takes(t *testing.T) {
 	log, fake := newMarketTestLog(t)
-	var records []market.Record
+	var records []watch.Record
 	for i := range 5 {
-		records = append(records, market.Record{At: marketTestNoon.Add(time.Duration(i) * time.Second), Body: make([]byte, 400_000)})
+		records = append(records, watch.Record{At: marketTestNoon.Add(time.Duration(i) * time.Second), Body: make([]byte, 400_000)})
 	}
 
-	require.NoError(t, log.Append(context.Background(), market.Stream{Name: "outcomes"}, records...))
+	require.NoError(t, log.Append(context.Background(), watch.Stream{Name: "outcomes"}, records...))
 
 	stream := fake.stream("events/market/outcomes")
 	require.Len(t, stream.records, 5)
@@ -293,7 +293,7 @@ func TestS2IsNotUsedForTheMarketUnlessItIsConfigured(t *testing.T) {
 
 	log, err = NewS2MarketLog(types.S2Config{ApiKey: "key", Basin: "basin", StreamPrefix: "/staging/"})
 	require.NoError(t, err)
-	assert.Equal(t, s2.StreamName("staging/market/outcomes"), log.name(market.Stream{Name: "outcomes"}))
+	assert.Equal(t, s2.StreamName("staging/market/outcomes"), log.name(watch.Stream{Name: "outcomes"}))
 }
 
 // The sampler writes to S2 and the reader draws a chart from what it wrote:
@@ -309,7 +309,7 @@ func TestAChartIsDrawnFromWhatTheSamplerWroteToS2(t *testing.T) {
 	seller := providers.NewFake("shadeform", "test")
 	registry := providers.RegistryOf(seller)
 	clock := common.NewFakeClock(marketTestNoon)
-	sampler := market.NewSampler(market.Options{Providers: registry, Redis: rdb, Log: log, Clock: clock, ID: "gw-1"})
+	sampler := watch.NewSampler(watch.Options{Providers: registry, Redis: rdb, Log: log, Clock: clock, ID: "gw-1"})
 	ctx := context.Background()
 	// The price rises by a cent a minute, for two hours and a half.
 	for minute := range 151 {
@@ -327,11 +327,11 @@ func TestAChartIsDrawnFromWhatTheSamplerWroteToS2(t *testing.T) {
 	assert.Len(t, fake.stream("events/market/series/a10g/1h").records, 2, "one for each hour that has ended")
 	assert.NotNil(t, fake.stream("events/market/series/a10g/1h").config.RetentionPolicy.Infinite)
 
-	reader := market.NewReader(market.ReaderOptions{Providers: registry, Redis: rdb, Log: log, Clock: clock})
-	answer, err := reader.Series(ctx, market.SeriesRequest{GPU: "A10G", Start: marketTestNoon})
+	reader := watch.NewReader(watch.ReaderOptions{Providers: registry, Redis: rdb, Log: log, Clock: clock})
+	answer, err := reader.Series(ctx, watch.SeriesRequest{GPU: "A10G", Start: marketTestNoon})
 	require.NoError(t, err)
 	require.Len(t, answer.Series, 1)
-	assert.Equal(t, market.TierMinute, answer.Tier)
+	assert.Equal(t, watch.TierMinute, answer.Tier)
 	points := answer.Series[0].Points
 	require.Len(t, points, 151)
 	assert.JSONEq(t, asJSON([]any{marketTestNoon.UnixMilli(), 1_000_000, 1_000_000, 1_000_000, nil, 1, 1}), asJSON(points[0]))
@@ -339,9 +339,9 @@ func TestAChartIsDrawnFromWhatTheSamplerWroteToS2(t *testing.T) {
 
 	// A week is drawn from the hours: the two that ended, and the one that
 	// has not, from its samples.
-	answer, err = reader.Series(ctx, market.SeriesRequest{GPU: "A10G", Start: marketTestNoon.Add(-7 * 24 * time.Hour)})
+	answer, err = reader.Series(ctx, watch.SeriesRequest{GPU: "A10G", Start: marketTestNoon.Add(-7 * 24 * time.Hour)})
 	require.NoError(t, err)
-	assert.Equal(t, market.TierHour, answer.Tier)
+	assert.Equal(t, watch.TierHour, answer.Tier)
 	points = answer.Series[0].Points
 	require.Len(t, points, 3)
 	assert.JSONEq(t, asJSON([]any{marketTestNoon.UnixMilli(), 1_590_000, 1_000_000, 1_590_000, nil, 1, 1}), asJSON(points[0]))

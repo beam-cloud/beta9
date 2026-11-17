@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/providers/market"
+	"github.com/beam-cloud/beta9/pkg/providers/watch"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/s2-streamstore/s2-sdk-go/s2"
 )
@@ -23,7 +23,7 @@ const (
 )
 
 // S2MarketLog keeps the market's history in S2: what the providers sold,
-// sampled at an interval, in the streams that pkg/providers/market names.
+// sampled at an interval, in the streams that pkg/providers/watch names.
 //
 // A stream is made before it is first written to, keeping its records for
 // as long as the stream says. Left to be made by its first append, it would
@@ -58,11 +58,11 @@ func newS2MarketLog(basin *s2.BasinClient, prefix string) *S2MarketLog {
 	}
 }
 
-func (l *S2MarketLog) name(stream market.Stream) s2.StreamName {
+func (l *S2MarketLog) name(stream watch.Stream) s2.StreamName {
 	return s2.StreamName(l.prefix + stream.Name)
 }
 
-func (l *S2MarketLog) Append(ctx context.Context, stream market.Stream, records ...market.Record) error {
+func (l *S2MarketLog) Append(ctx context.Context, stream watch.Stream, records ...watch.Record) error {
 	if len(records) == 0 {
 		return nil
 	}
@@ -156,14 +156,14 @@ func (l *S2MarketLog) forget(name s2.StreamName) {
 	l.mu.Unlock()
 }
 
-func (l *S2MarketLog) Read(ctx context.Context, stream market.Stream, from, to time.Time) ([]market.Record, error) {
+func (l *S2MarketLog) Read(ctx context.Context, stream watch.Stream, from, to time.Time) ([]watch.Record, error) {
 	name := l.name(stream)
 	start, end := uint64(max(from.UnixMilli(), 0)), uint64(max(to.UnixMilli(), 0))
 	if end <= start {
 		return nil, nil
 	}
 
-	var records []market.Record
+	var records []watch.Record
 	// The first read finds its place by time. The rest go on from where the
 	// one before them stopped: a read returns no more than S2 gives at once.
 	opts := &s2.ReadOptions{Timestamp: &start, Until: &end}
@@ -183,7 +183,7 @@ func (l *S2MarketLog) Read(ctx context.Context, stream market.Stream, from, to t
 			if record.Timestamp >= end {
 				return records, nil
 			}
-			records = append(records, market.Record{At: time.UnixMilli(int64(record.Timestamp)).UTC(), Body: record.Body})
+			records = append(records, watch.Record{At: time.UnixMilli(int64(record.Timestamp)).UTC(), Body: record.Body})
 		}
 		next := batch.Records[len(batch.Records)-1].SeqNum + 1
 		opts = &s2.ReadOptions{SeqNum: &next, Until: &end}

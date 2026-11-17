@@ -9,7 +9,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	computesvc "github.com/beam-cloud/beta9/pkg/gateway/services/compute"
 	"github.com/beam-cloud/beta9/pkg/providers"
-	"github.com/beam-cloud/beta9/pkg/providers/market"
+	"github.com/beam-cloud/beta9/pkg/providers/watch"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -21,9 +21,9 @@ import (
 // All of it is nil on a cluster that does not sample its providers, and each
 // part does nothing then.
 type providerMarket struct {
-	sampler  *market.Sampler
-	reader   *market.Reader
-	outcomes *market.Recorder
+	sampler  *watch.Sampler
+	reader   *watch.Reader
+	outcomes *watch.Recorder
 }
 
 // newProviderMarket puts the market together from the config. The market is
@@ -37,7 +37,7 @@ func newProviderMarket(config types.AppConfig, registry *providers.Registry, red
 	}
 
 	// A dry run writes nothing, so it is given nowhere to write.
-	var history market.Log
+	var history watch.Log
 	if !sampled.DryRun {
 		kept, err := repository.NewS2MarketLog(config.Database.S2)
 		switch {
@@ -54,13 +54,13 @@ func newProviderMarket(config types.AppConfig, registry *providers.Registry, red
 	// they would be billed.
 	reserved := computesvc.ReservationProviders(config.ManagedCompute, registry)
 	return providerMarket{
-		sampler: market.NewSampler(market.Options{
+		sampler: watch.NewSampler(watch.Options{
 			Providers: registry,
 			Redis:     redisClient,
 			Log:       history,
 			Config:    sampled,
 		}),
-		reader: market.NewReader(market.ReaderOptions{
+		reader: watch.NewReader(watch.ReaderOptions{
 			Providers: registry,
 			Redis:     redisClient,
 			Log:       history,
@@ -68,7 +68,7 @@ func newProviderMarket(config types.AppConfig, registry *providers.Registry, red
 			Sells:     func(provider string) bool { return slices.Contains(reserved, provider) },
 			Bill:      func(micros int64) int64 { return computesvc.BillableMicros(config.ManagedCompute, micros) },
 		}),
-		outcomes: market.NewRecorder(history, market.StreamsOf(sampled), nil),
+		outcomes: watch.NewRecorder(history, watch.StreamsOf(sampled), nil),
 	}
 }
 

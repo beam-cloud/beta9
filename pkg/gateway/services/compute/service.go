@@ -9,7 +9,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/providers"
-	"github.com/beam-cloud/beta9/pkg/providers/market"
+	"github.com/beam-cloud/beta9/pkg/providers/watch"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -41,7 +41,7 @@ type Service struct {
 	billing              managedComputeBillingClient
 	tailscale            *network.Tailscale
 	sampledOffers        SampledOffers
-	outcomes             *market.Recorder
+	outcomes             *watch.Recorder
 	routePrewarm         routePrewarmer
 	reconcileOnce        sync.Once
 	managedPoolSyncMu    sync.Mutex
@@ -71,7 +71,7 @@ type Options struct {
 	SampledOffers SampledOffers
 	// Outcomes takes note of what becomes of the machines that are
 	// reserved. Nil means nobody does.
-	Outcomes *market.Recorder
+	Outcomes *watch.Recorder
 }
 
 // SampledOffers is what the providers were last heard to sell, by whoever

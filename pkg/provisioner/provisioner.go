@@ -35,7 +35,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/providers"
-	"github.com/beam-cloud/beta9/pkg/providers/market"
+	"github.com/beam-cloud/beta9/pkg/providers/watch"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/redislock"
@@ -113,7 +113,7 @@ type Options struct {
 	NewID func() string
 	// Outcomes takes note of what becomes of the machines that are bought.
 	// Nil means nobody does.
-	Outcomes *market.Recorder
+	Outcomes *watch.Recorder
 }
 
 type Provisioner struct {
@@ -124,7 +124,7 @@ type Provisioner struct {
 	limits       Limits
 	clock        common.Clock
 	newID        func() string
-	outcomes     *market.Recorder
+	outcomes     *watch.Recorder
 
 	// What this replica knows. The tick keeps it fresh, and CanProvision
 	// answers from it without asking anyone.
@@ -632,8 +632,8 @@ func newMachine(id, pool string, offer providers.Offer, now time.Time) Machine {
 
 // outcome is what the market's history is told became of the machine at
 // now: what it was bought as, where, and for how much.
-func (m Machine) outcome(now time.Time) market.Outcome {
-	outcome := market.OutcomeOf(providers.Offer{
+func (m Machine) outcome(now time.Time) watch.Outcome {
+	outcome := watch.OutcomeOf(providers.Offer{
 		ID:               m.OfferID,
 		Provider:         m.Provider,
 		Cloud:            m.Cloud,
@@ -644,7 +644,7 @@ func (m Machine) outcome(now time.Time) market.Outcome {
 		HourlyCostMicros: m.HourlyMicros,
 		Spot:             m.Spot,
 	})
-	outcome.Source = market.SourcePool
+	outcome.Source = watch.SourcePool
 	outcome.At = now
 	return outcome
 }
@@ -1324,9 +1324,9 @@ var lostStatus = map[providers.Status]string{
 // lostEnd is how the market's history names the end of a machine whose
 // provider reports it in this status.
 var lostEnd = map[providers.Status]string{
-	providers.StatusDeleted:     market.ResultGone,
-	providers.StatusInterrupted: market.ResultInterrupted,
-	providers.StatusFailed:      market.ResultFailed,
+	providers.StatusDeleted:     watch.ResultGone,
+	providers.StatusInterrupted: watch.ResultInterrupted,
+	providers.StatusFailed:      watch.ResultFailed,
 }
 
 // atProvider returns why the machine's provider no longer runs it, and how
@@ -1340,7 +1340,7 @@ func atProvider(m *Machine, s sighting) (reason, end string) {
 			// There was no machine, so none ended.
 			return "its provider never created it", ""
 		}
-		return "its provider no longer has it", market.ResultGone
+		return "its provider no longer has it", watch.ResultGone
 	case present:
 		if m.InstanceID == "" {
 			m.InstanceID = s.instance.ID
@@ -1348,7 +1348,7 @@ func atProvider(m *Machine, s sighting) (reason, end string) {
 		// A machine that failed after it had run was started: what it was
 		// bought as can be run.
 		if s.instance.Status == providers.StatusFailed && m.ReadyAt.IsZero() {
-			return failedToStart, market.ResultFailed
+			return failedToStart, watch.ResultFailed
 		}
 		return lostStatus[s.instance.Status], lostEnd[s.instance.Status]
 	}
@@ -1369,14 +1369,14 @@ func withoutWorker(m *Machine, s sighting) (reason, end string) {
 		m.DownSince = time.Time{}
 	case m.ReadyAt.IsZero():
 		if s.now.Sub(m.CreatedAt) >= timeout {
-			return fmt.Sprintf("it did not join its pool within %s", timeout), market.ResultNeverUp
+			return fmt.Sprintf("it did not join its pool within %s", timeout), watch.ResultNeverUp
 		}
 	case heldBack(s.worker):
 		m.DownSince = time.Time{}
 	case m.DownSince.IsZero():
 		m.DownSince = s.now
 	case s.now.Sub(m.DownSince) >= timeout:
-		return fmt.Sprintf("it has had no worker for %s", timeout), market.ResultLost
+		return fmt.Sprintf("it has had no worker for %s", timeout), watch.ResultLost
 	}
 	return "", ""
 }
@@ -1390,7 +1390,7 @@ func withoutPool(m *Machine, s sighting) *Release {
 	case m.PoolGoneSince.IsZero():
 		m.PoolGoneSince = s.now
 	case s.now.Sub(m.PoolGoneSince) >= poolGoneGrace:
-		return &Release{Reason: "its pool no longer buys machines", End: market.ResultReleased, DrainUntil: s.now.Add(drainFor)}
+		return &Release{Reason: "its pool no longer buys machines", End: watch.ResultReleased, DrainUntil: s.now.Add(drainFor)}
 	}
 	return nil
 }
@@ -1466,7 +1466,7 @@ func (p *Provisioner) releaseIfIdle(machine Machine, s sighting) Machine {
 	case idle:
 		machine.Release = &Release{
 			Reason: fmt.Sprintf("it had nothing to run for %s", s.pool.Provisioning.IdleAfter()),
-			End:    market.ResultReleased,
+			End:    watch.ResultReleased,
 		}
 	default:
 		machine.IdleSince = time.Time{}

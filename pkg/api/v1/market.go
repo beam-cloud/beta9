@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/providers/market"
+	"github.com/beam-cloud/beta9/pkg/providers/watch"
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog/log"
 )
@@ -22,12 +22,12 @@ import (
 // costs.
 type MarketGroup struct {
 	routerGroup *echo.Group
-	reader      *market.Reader
+	reader      *watch.Reader
 }
 
 // NewMarketGroup serves the market from reader. A nil reader is a cluster
 // that does not sample the market.
-func NewMarketGroup(g *echo.Group, reader *market.Reader) *MarketGroup {
+func NewMarketGroup(g *echo.Group, reader *watch.Reader) *MarketGroup {
 	group := &MarketGroup{routerGroup: g, reader: reader}
 
 	g.GET("/now", auth.WithAuth(group.Now))
@@ -38,7 +38,7 @@ func NewMarketGroup(g *echo.Group, reader *market.Reader) *MarketGroup {
 
 // marketNow is what is for sale, and whether the asker was told as an admin.
 type marketNow struct {
-	*market.Now
+	*watch.Now
 	Admin bool `json:"admin"`
 }
 
@@ -91,15 +91,15 @@ func (g *MarketGroup) Series(ctx echo.Context) error {
 	query.Admin = isClusterAdmin(authInfoFromContext(cc))
 
 	answer, err := g.reader.Series(ctx.Request().Context(), query)
-	var wrong *market.RequestError
+	var wrong *watch.RequestError
 	switch {
 	case err == nil:
 		return ctx.JSON(http.StatusOK, answer)
 	case errors.As(err, &wrong):
 		return HTTPBadRequest(wrong.What)
-	case errors.Is(err, market.ErrAdminOnly):
+	case errors.Is(err, watch.ErrAdminOnly):
 		return HTTPForbidden("Which provider sells what is for cluster admins only")
-	case errors.Is(err, market.ErrNoHistory):
+	case errors.Is(err, watch.ErrNoHistory):
 		return NewHTTPError(http.StatusServiceUnavailable, "The market's history is not kept on this cluster")
 	case IsRequestCanceled(ctx, err):
 		return HTTPClientClosedRequest(ctx)
@@ -108,8 +108,8 @@ func (g *MarketGroup) Series(ctx echo.Context) error {
 	return HTTPInternalServerError("Failed to read the market's history")
 }
 
-func marketSeriesRequest(ctx echo.Context) (market.SeriesRequest, error) {
-	query := market.SeriesRequest{
+func marketSeriesRequest(ctx echo.Context) (watch.SeriesRequest, error) {
+	query := watch.SeriesRequest{
 		GPU:       ctx.QueryParam("gpu"),
 		Geos:      listParam(ctx, "geo"),
 		Pricing:   strings.ToLower(strings.TrimSpace(ctx.QueryParam("pricing"))),
@@ -120,7 +120,7 @@ func marketSeriesRequest(ctx echo.Context) (market.SeriesRequest, error) {
 	for _, value := range listParam(ctx, "gpu_count") {
 		count, err := strconv.ParseUint(value, 10, 32)
 		if err != nil || count == 0 {
-			return query, &market.RequestError{What: "gpu_count must be whole numbers, not " + strconv.Quote(value)}
+			return query, &watch.RequestError{What: "gpu_count must be whole numbers, not " + strconv.Quote(value)}
 		}
 		query.Counts = append(query.Counts, uint32(count))
 	}
@@ -137,7 +137,7 @@ func marketSeriesRequest(ctx echo.Context) (market.SeriesRequest, error) {
 	if value := strings.TrimSpace(ctx.QueryParam("raw")); value != "" {
 		raw, err := strconv.ParseBool(value)
 		if err != nil {
-			return query, &market.RequestError{What: "raw must be true or false, not " + strconv.Quote(value)}
+			return query, &watch.RequestError{What: "raw must be true or false, not " + strconv.Quote(value)}
 		}
 		query.Raw = raw
 	}
@@ -178,7 +178,7 @@ func timeParam(ctx echo.Context, name string) (time.Time, error) {
 	}
 	at, err := time.Parse(time.RFC3339, value)
 	if err != nil {
-		return time.Time{}, &market.RequestError{What: name + " must be a time as RFC 3339 or in milliseconds, not " + strconv.Quote(value)}
+		return time.Time{}, &watch.RequestError{What: name + " must be a time as RFC 3339 or in milliseconds, not " + strconv.Quote(value)}
 	}
 	return at.UTC(), nil
 }

@@ -13,7 +13,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/providers"
-	"github.com/beam-cloud/beta9/pkg/providers/market"
+	"github.com/beam-cloud/beta9/pkg/providers/watch"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
@@ -43,15 +43,15 @@ func newMarketGroup(t *testing.T, history bool) *MarketGroup {
 	aws.SetOffers(providers.Offer{ID: "us-east-1b/g5.xlarge", InstanceType: "g5.xlarge", Region: "us-east-1", GPU: "A10G", GPUCount: 1, HourlyCostMicros: 380_000, Spot: true})
 	registry := providers.RegistryOf(shadeform, aws)
 
-	var log market.Log
+	var log watch.Log
 	if history {
-		log = market.NewMemoryLog()
+		log = watch.NewMemoryLog()
 	}
 	clock := common.NewFakeClock(marketNoon)
-	market.NewSampler(market.Options{Providers: registry, Redis: rdb, Log: log, Clock: clock, ID: "gw-1"}).Sample(context.Background(), marketNoon)
+	watch.NewSampler(watch.Options{Providers: registry, Redis: rdb, Log: log, Clock: clock, ID: "gw-1"}).Sample(context.Background(), marketNoon)
 	clock.Advance(time.Minute)
 
-	reader := market.NewReader(market.ReaderOptions{
+	reader := watch.NewReader(watch.ReaderOptions{
 		Providers: registry, Redis: rdb, Log: log, Clock: clock,
 		Bill: func(micros int64) int64 { return micros * 11 / 10 },
 	})

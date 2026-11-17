@@ -24,7 +24,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/providers"
-	"github.com/beam-cloud/beta9/pkg/providers/market"
+	"github.com/beam-cloud/beta9/pkg/providers/watch"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -9369,21 +9369,21 @@ func TestOffersAreListedFromWhatTheSamplerLastHeardAndBoughtFromTheProviderItsel
 
 // outcomesOf is what the service told the market's history became of its
 // machines.
-func outcomesOf(t *testing.T, service *Service, log *market.MemoryLog) []market.Outcome {
+func outcomesOf(t *testing.T, service *Service, log *watch.MemoryLog) []watch.Outcome {
 	t.Helper()
 	service.outcomes.Flush(context.Background())
-	var outcomes []market.Outcome
+	var outcomes []watch.Outcome
 	for _, record := range log.All("outcomes") {
-		var outcome market.Outcome
+		var outcome watch.Outcome
 		require.NoError(t, json.Unmarshal(record.Body, &outcome))
 		outcomes = append(outcomes, outcome)
 	}
 	return outcomes
 }
 
-func recordOutcomes(service *Service) *market.MemoryLog {
-	log := market.NewMemoryLog()
-	service.outcomes = market.NewRecorder(log, market.Streams{}, nil)
+func recordOutcomes(service *Service) *watch.MemoryLog {
+	log := watch.NewMemoryLog()
+	service.outcomes = watch.NewRecorder(log, watch.Streams{}, nil)
 	return log
 }
 
@@ -9409,16 +9409,16 @@ func TestEveryPurchaseIsWrittenToTheMarketsHistoryWithHowItWent(t *testing.T) {
 	outcomes := outcomesOf(t, service, log)
 	require.Len(t, outcomes, 2)
 	bought, refused := outcomes[0], outcomes[1]
-	require.Equal(t, market.OutcomeCreate, bought.Event)
-	require.Equal(t, market.ResultOK, bought.Result)
-	require.Equal(t, market.SourceReservation, bought.Source)
+	require.Equal(t, watch.OutcomeCreate, bought.Event)
+	require.Equal(t, watch.ResultOK, bought.Result)
+	require.Equal(t, watch.SourceReservation, bought.Source)
 	require.Equal(t, "aws", bought.Provider)
 	require.Equal(t, spotA10GOffer.Region, bought.Region)
-	require.Equal(t, market.Geo(spotA10GOffer.Region), bought.Geo)
+	require.Equal(t, watch.Geo(spotA10GOffer.Region), bought.Geo)
 	require.Equal(t, "A10G", bought.GPU)
 	require.True(t, bought.Spot)
 	require.Equal(t, spotA10GOffer.HourlyCostMicros, bought.HourlyMicros, "what the provider charges, not what the tenant pays")
-	require.Equal(t, market.ResultOutOfStock, refused.Result)
+	require.Equal(t, watch.ResultOutOfStock, refused.Result)
 	require.Contains(t, refused.Err, "no spot capacity")
 }
 
@@ -9447,10 +9447,10 @@ func TestWhatBecomesOfAReservedMachineIsWrittenToTheMarketsHistory(t *testing.T)
 	outcomes := outcomesOf(t, m.service, log)
 	require.Len(t, outcomes, 2, "each is written once")
 	up, ended := outcomes[0], outcomes[1]
-	require.Equal(t, market.OutcomeActive, up.Event)
+	require.Equal(t, watch.OutcomeActive, up.Event)
 	require.Equal(t, time.Hour+2*time.Minute, up.Took, "from when it was bought")
-	require.Equal(t, market.OutcomeEnd, ended.Event)
-	require.Equal(t, market.ResultInterrupted, ended.Result)
+	require.Equal(t, watch.OutcomeEnd, ended.Event)
+	require.Equal(t, watch.ResultInterrupted, ended.Result)
 	require.Equal(t, time.Hour+13*time.Minute, ended.Took)
 	require.Equal(t, "shadeform", ended.Provider)
 	require.Equal(t, "us-east", ended.Geo)
@@ -9461,12 +9461,12 @@ func TestWhatBecomesOfAReservedMachineIsWrittenToTheMarketsHistory(t *testing.T)
 
 func TestAMachineATenantGivesBackIsNotHeldAgainstItsProvider(t *testing.T) {
 	for reason, result := range map[string]string{
-		reconcileReasonInterrupted:        market.ResultInterrupted,
-		reconcileReasonProviderFailed:     market.ResultFailed,
-		reconcileReasonReservationExpired: market.ResultExpired,
-		reconcileReasonMachineReleased:    market.ResultReleased,
-		reconcileReasonLaunchFailed:       market.ResultReleased,
-		reconcileReasonCreditExhausted:    market.ResultReleased,
+		reconcileReasonInterrupted:        watch.ResultInterrupted,
+		reconcileReasonProviderFailed:     watch.ResultFailed,
+		reconcileReasonReservationExpired: watch.ResultExpired,
+		reconcileReasonMachineReleased:    watch.ResultReleased,
+		reconcileReasonLaunchFailed:       watch.ResultReleased,
+		reconcileReasonCreditExhausted:    watch.ResultReleased,
 	} {
 		require.Equal(t, result, reservationEnd(reason), reason)
 	}
