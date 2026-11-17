@@ -908,8 +908,18 @@ func (s *Service) terminateReservation(ctx context.Context, workspaceID string, 
 			reservationFailed(workspaceID, state.Name, reservation, "delete SSH state", fmt.Errorf("delete SSH state: %w", err))
 		}
 	}
-	s.outcomes.Record(reservationOutcome(*reservation).Ended(reservationEnd(reason), now.Sub(reservation.CreatedAt)))
+	s.recordEnd(*reservation, reservationEnd(reason), now)
 	s.emitComputeEvent(types.EventComputePool, computeReservationEvent(workspaceID, state, *reservation, action, reason))
+}
+
+// recordEnd writes to the market's history that a reservation's machine is
+// gone at its provider, and how it ended. A reservation whose provider
+// never made a machine has none that ended.
+func (s *Service) recordEnd(reservation model.Reservation, result string, now time.Time) {
+	if computeReservationInstanceID(reservation) == "" {
+		return
+	}
+	s.outcomes.Record(reservationOutcome(reservation).Ended(result, now.Sub(reservation.CreatedAt)))
 }
 
 // reservationOffer is the offer a reservation's machine was bought from, as

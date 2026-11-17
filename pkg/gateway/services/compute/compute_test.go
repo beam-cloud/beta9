@@ -9615,6 +9615,105 @@ func TestWhatBecomesOfAReservedMachineIsWrittenToTheMarketsHistory(t *testing.T)
 	require.Equal(t, int64(1_000_000), ended.HourlyMicros)
 }
 
+// eventsOf is the outcomes of one event, in the order they were written.
+func eventsOf(outcomes []watch.Outcome, event string) []watch.Outcome {
+	var of []watch.Outcome
+	for _, outcome := range outcomes {
+		if outcome.Event == event {
+			of = append(of, outcome)
+		}
+	}
+	return of
+}
+
+// A purchase is written to the market's history when it is made, before
+// the launch it is part of is known to succeed. A machine that the launch
+// gives back when it fails is written as given back: the history has no
+// machine that was bought and never ended.
+func TestAMachineThatAFailedLaunchGivesBackHasAnEndInTheMarketsHistory(t *testing.T) {
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	shadeform.RefuseCreatesAfter(1, fmt.Errorf("%w: none left in us-east", providers.ErrOutOfStock))
+	service := launchService(&fakeComputeRepo{}, shadeform)
+	log := recordOutcomes(service)
+
+	res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), service, 2)
+	require.False(t, res.Ok)
+	require.Empty(t, shadeform.Everything(), "the machine that was bought is deleted again")
+
+	outcomes := outcomesOf(t, service, log)
+	purchases := eventsOf(outcomes, watch.OutcomeCreate)
+	require.Len(t, purchases, 2)
+	require.Equal(t, watch.ResultOK, purchases[0].Result)
+	require.Equal(t, watch.ResultOutOfStock, purchases[1].Result)
+
+	ends := eventsOf(outcomes, watch.OutcomeEnd)
+	require.Len(t, ends, 1, "the machine that was bought ended, and the one that was refused never was")
+	ended := ends[0]
+	require.Equal(t, watch.ResultReleased, ended.Result, "it is not held against its provider")
+	require.Equal(t, watch.SourceReservation, ended.Source)
+	require.GreaterOrEqual(t, ended.Took, time.Duration(0))
+	ended.At, ended.Event, ended.Result, ended.Took = purchases[0].At, purchases[0].Event, purchases[0].Result, purchases[0].Took
+	require.Equal(t, purchases[0], ended, "it says the same of what the machine was bought as")
+}
+
+// A machine whose purchase went unanswered was made all the same, and is
+// given back like any other.
+func TestAMachineWhosePurchaseWentUnansweredHasAnEndOnceItIsGivenBack(t *testing.T) {
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	shadeform.LoseAnswers(1)
+	service := launchService(&fakeComputeRepo{}, shadeform)
+	log := recordOutcomes(service)
+
+	res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), service, 1)
+	require.False(t, res.Ok)
+	require.Len(t, shadeform.Deletes(), 1)
+
+	outcomes := outcomesOf(t, service, log)
+	require.Equal(t, watch.ResultUnanswered, eventsOf(outcomes, watch.OutcomeCreate)[0].Result)
+	ends := eventsOf(outcomes, watch.OutcomeEnd)
+	require.Len(t, ends, 1)
+	require.Equal(t, watch.ResultReleased, ends[0].Result)
+}
+
+// A machine that a failed launch cannot give back is left to the
+// reconciler, which writes its end when it has deleted it: once.
+func TestAMachineAFailedLaunchCouldNotGiveBackEndsWhenItIsDeleted(t *testing.T) {
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	shadeform.RefuseCreatesAfter(1, fmt.Errorf("%w: none left in us-east", providers.ErrOutOfStock))
+	shadeform.FailDeletes(errors.New("provider is down"))
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, shadeform)
+	log := recordOutcomes(service)
+
+	res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), service, 2)
+	require.False(t, res.Ok)
+	require.Len(t, shadeform.Everything(), 1)
+	require.Empty(t, eventsOf(outcomesOf(t, service, log), watch.OutcomeEnd), "it is still there")
+
+	shadeform.FailDeletes(nil)
+	left := repo.pools["workspace-1"][0].Reservations[0]
+	require.NoError(t, service.reconcileManagedComputeAt(context.Background(), left.CreatedAt.Add(time.Minute)))
+	require.NoError(t, service.reconcileManagedComputeAt(context.Background(), left.CreatedAt.Add(2*time.Minute)))
+	require.Empty(t, shadeform.Everything())
+
+	ends := eventsOf(outcomesOf(t, service, log), watch.OutcomeEnd)
+	require.Len(t, ends, 1)
+	require.Equal(t, watch.ResultReleased, ends[0].Result)
+	require.Equal(t, time.Minute, ends[0].Took)
+}
+
+// A purchase that its provider never made a machine for has nothing to end,
+// whether that is known at once or only after the provider has had its
+// time to list one.
+func TestAPurchaseThatMadeNoMachineHasNoEndInTheMarketsHistory(t *testing.T) {
+	p := launchUnanswered(t)
+	log := recordOutcomes(p.service)
+
+	require.Equal(t, model.ReservationDeleted, p.reconcile(t, providers.LaunchGrace).Status)
+	require.Empty(t, p.provider.Deletes(), "the provider made none")
+	require.Empty(t, outcomesOf(t, p.service, log))
+}
+
 func TestAMachineATenantGivesBackIsNotHeldAgainstItsProvider(t *testing.T) {
 	for reason, result := range map[string]string{
 		reconcileReasonInterrupted:        watch.ResultInterrupted,

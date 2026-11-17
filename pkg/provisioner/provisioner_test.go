@@ -3471,3 +3471,141 @@ func TestHowAMachineEndedIsWrittenToTheMarketsHistory(t *testing.T) {
 		require.Equal(t, watch.ResultReleased, outcomes[2].Result)
 	})
 }
+
+// endOf is the end the market's history has of a machine, if it has one.
+func endOf(t *testing.T, told *recorded) (watch.Outcome, bool) {
+	t.Helper()
+	var ends []watch.Outcome
+	for _, outcome := range told.outcomes(t) {
+		if outcome.Event == watch.OutcomeEnd {
+			ends = append(ends, outcome)
+		}
+	}
+	require.LessOrEqual(t, len(ends), 1, "a machine ends once")
+	if len(ends) == 0 {
+		return watch.Outcome{}, false
+	}
+	return ends[0], true
+}
+
+// A machine that is given back is had, and paid for, until its provider
+// has deleted it. That is when the market's history says it ended, and not
+// when it was decided to give it back.
+func TestAMachineThatIsGivenBackEndsWhenItHasBeenDeleted(t *testing.T) {
+	t.Run("after its work was waited for", func(t *testing.T) {
+		w, told := recordingOutcomes(t)
+		w.Tick(w.ctx)
+		machine := w.buy("spot-l40s")
+		w.workers.join(machine)
+		w.workers.work(machine, true)
+		w.after(tickInterval)
+
+		// Its pool is deleted, and its work is waited for.
+		w.control.set(func(c *fakeControl) { delete(c.pools, "spot-l40s") })
+		w.every(time.Minute, poolGoneGrace+time.Minute)
+		require.NotNil(t, w.record(machine.ID).Release)
+		w.every(time.Minute, 5*time.Minute)
+		_, ended := endOf(t, told)
+		require.False(t, ended, "it is still running, and still has its work")
+
+		w.workers.work(machine, false)
+		w.after(time.Minute)
+		w.gone(machine)
+		end, ended := endOf(t, told)
+		require.True(t, ended)
+		require.Equal(t, watch.ResultReleased, end.Result)
+		require.Equal(t, w.clock.Now(), end.At)
+		require.Equal(t, w.clock.Now().Sub(bought), end.Took, "how long it was had, with the time its work was waited for")
+	})
+
+	t.Run("however long its provider takes to delete it", func(t *testing.T) {
+		w, told := recordingOutcomes(t)
+		w.Tick(w.ctx)
+		machine := w.buy("spot-l40s")
+		w.workers.join(machine)
+		w.workers.work(machine, false)
+		w.verda.FailDeletes(errors.New("the provider is down"))
+		w.every(time.Minute, 30*time.Minute)
+		require.NotNil(t, w.record(machine.ID).Release)
+		_, ended := endOf(t, told)
+		require.False(t, ended, "its provider still has it")
+
+		w.verda.FailDeletes(nil)
+		w.after(time.Minute)
+		w.gone(machine)
+		end, ended := endOf(t, told)
+		require.True(t, ended)
+		require.Equal(t, watch.ResultReleased, end.Result)
+		require.Equal(t, w.clock.Now(), end.At)
+		require.Equal(t, w.clock.Now().Sub(bought), end.Took)
+
+		w.every(time.Minute, 10*time.Minute)
+		endOf(t, told)
+	})
+
+	t.Run("that never joined its pool", func(t *testing.T) {
+		w, told := recordingOutcomes(t)
+		w.Tick(w.ctx)
+		machine := w.buy("spot-l40s")
+		w.verda.FailDeletes(errors.New("the provider is down"))
+		w.every(time.Minute, time.Hour)
+		require.NotNil(t, w.record(machine.ID).Release)
+		_, ended := endOf(t, told)
+		require.False(t, ended)
+
+		w.verda.FailDeletes(nil)
+		w.after(time.Minute)
+		end, ended := endOf(t, told)
+		require.True(t, ended)
+		require.Equal(t, watch.ResultNeverUp, end.Result)
+		require.Equal(t, w.clock.Now(), end.At)
+	})
+}
+
+// A machine its provider took back ended when that was seen, however long
+// what is left of it takes to delete.
+func TestAMachineItsProviderTookBackEndedWhenThatWasSeen(t *testing.T) {
+	w, told := recordingOutcomes(t)
+	w.Tick(w.ctx)
+	machine := w.buy("spot-l40s")
+	w.workers.join(machine)
+	w.workers.work(machine, true)
+	w.every(tickInterval, time.Hour)
+
+	w.verda.SetStatus(machine.InstanceID, providers.StatusInterrupted, "preempted")
+	w.verda.FailDeletes(errors.New("the provider is down"))
+	w.after(tickInterval)
+	seen := w.clock.Now()
+	end, ended := endOf(t, told)
+	require.True(t, ended)
+	require.Equal(t, watch.ResultInterrupted, end.Result)
+	require.Equal(t, seen, end.At)
+	require.Equal(t, seen.Sub(bought), end.Took)
+
+	w.every(time.Minute, 20*time.Minute)
+	w.verda.FailDeletes(nil)
+	w.after(time.Minute)
+	w.gone(machine)
+	end, _ = endOf(t, told)
+	require.Equal(t, seen, end.At, "it is written once")
+}
+
+// Only what a provider did to a machine ended it before it was given back.
+func TestOnlyAMachineItsProviderEndedHasEndedBeforeItIsDeleted(t *testing.T) {
+	for end, atProvider := range map[string]bool{
+		watch.ResultInterrupted: true,
+		watch.ResultFailed:      true,
+		watch.ResultGone:        true,
+		watch.ResultNeverUp:     false,
+		watch.ResultLost:        false,
+		watch.ResultReleased:    false,
+		"":                      false,
+	} {
+		require.Equal(t, atProvider, endedAtProvider(end), end)
+	}
+	// Whatever a provider's status makes of a machine is its provider's
+	// doing.
+	for status, end := range lostEnd {
+		require.True(t, endedAtProvider(end), status)
+	}
+}

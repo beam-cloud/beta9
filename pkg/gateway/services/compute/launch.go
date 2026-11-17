@@ -455,13 +455,21 @@ func (s *Service) extendInstance(ctx context.Context, reservation model.Reservat
 // and is looked for by its tag. A provider that does not list it made none,
 // unless the purchase went unanswered: then the provider may yet come to
 // list the machine, which is left for the reconciler like the others.
+//
+// Each purchase was written to the market's history as it was made, so a
+// machine that is deleted here is written as given back. The reconciler
+// writes the end of the ones that are left to it.
 func (s *Service) deleteLaunchedInstances(ctx context.Context, workspaceID, poolName string, reservations []model.Reservation, unanswered bool) ([]model.Reservation, []string) {
 	left := []model.Reservation{}
 	failures := []string{}
 	now := time.Now()
 	for _, reservation := range reservations {
 		err := s.deleteInstance(ctx, &reservation, now)
-		if err == nil || errors.Is(err, errNotListed) && !unanswered {
+		if err == nil {
+			s.recordEnd(reservation, watch.ResultReleased, now)
+			continue
+		}
+		if errors.Is(err, errNotListed) && !unanswered {
 			continue
 		}
 		reservationFailed(workspaceID, poolName, &reservation, "delete machine", err)

@@ -1329,6 +1329,18 @@ var lostEnd = map[providers.Status]string{
 	providers.StatusFailed:      watch.ResultFailed,
 }
 
+// endedAtProvider reports whether a machine that ended this way had ended
+// by the time it was found: its provider took it back, failed it, or no
+// longer had it. Any other machine is given back while it runs, and ends
+// when its provider has deleted it.
+func endedAtProvider(end string) bool {
+	switch end {
+	case watch.ResultGone, watch.ResultInterrupted, watch.ResultFailed:
+		return true
+	}
+	return false
+}
+
 // atProvider returns why the machine's provider no longer runs it, and how
 // the market's history names that end, or "". A purchase whose answer never
 // arrived is known by its tag: its instance is recorded first, whatever
@@ -1482,8 +1494,11 @@ func (p *Provisioner) announceRelease(ctx context.Context, machine Machine, s si
 		giving = giving.Str("status_detail", s.instance.StatusDetail)
 	}
 	giving.Msg("provisioner: giving a machine back")
-	if machine.Release.End != "" {
-		p.outcomes.Record(machine.outcome(s.now).Ended(machine.Release.End, s.now.Sub(machine.CreatedAt)))
+	if endedAtProvider(machine.Release.End) {
+		// It ended when its provider ended it, which is no later than now.
+		// What is left of it is still to be deleted, which says nothing of
+		// how long it was had.
+		p.recordEnd(machine, s.now)
 	}
 	if machine.Release.SoldOut {
 		// The next machine is bought as something else, if anything else is
@@ -1503,10 +1518,24 @@ func (m *Machine) take(found Machine) {
 	}
 }
 
+// recordEnd writes to the market's history that the machine ended at now,
+// and how. A machine that was never made has no end.
+func (p *Provisioner) recordEnd(machine Machine, now time.Time) {
+	if machine.Release.End == "" {
+		return
+	}
+	p.outcomes.Record(machine.outcome(now).Ended(machine.Release.End, now.Sub(machine.CreatedAt)))
+}
+
 // finishRelease gives a machine back: the gateway forgets it, its provider
 // deletes it, and its record is removed. Each step can be repeated, and the
 // record stays until the provider has confirmed the machine gone, so a step
 // that fails is tried again on the next pass.
+//
+// A machine that was given back while it ran is had, and paid for, until
+// this is done: its work may be waited for first, and its provider may not
+// delete it at once. Its end is written to the market's history with its
+// record's removal, which happens once.
 func (p *Provisioner) finishRelease(ctx context.Context, machine Machine, now time.Time) {
 	if now.Before(machine.Release.DrainUntil) && p.stillWorking(machine) {
 		return
@@ -1529,6 +1558,10 @@ func (p *Provisioner) finishRelease(ctx context.Context, machine Machine, now ti
 	// for until the record goes: there is no telling since when it is gone.
 	if err := p.store.Remove(ctx, machine.ID, now); err != nil {
 		machineLog(log.Warn(), machine).Err(err).Msg("provisioner: could not remove the record of a machine that is gone")
+		return
+	}
+	if !endedAtProvider(machine.Release.End) {
+		p.recordEnd(machine, now)
 	}
 }
 
