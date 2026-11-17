@@ -177,6 +177,10 @@ type HourRow struct {
 	// Open and Close are the first and the last price of the hour. Mean
 	// weighs each price by how long it stood.
 	Open, Close, Min, Max, Mean int64
+	// InStockAtClose is whether the listing could still be had for Close
+	// when the hour ended: it was in stock the last time its provider
+	// answered. One that sold out before then keeps the price it last had.
+	InStockAtClose bool
 	// InStock is the share of the provider's answers in which the listing
 	// was in stock.
 	InStock float64
@@ -189,7 +193,7 @@ type HourRow struct {
 	Offer string
 }
 
-var hourColumns = []string{"provider", "cloud", "region", "geo", "spot", "gpus", "avail_kind", "open", "close", "min", "max", "mean", "in_stock", "min_avail", "max_avail", "polls", "offer"}
+var hourColumns = []string{"provider", "cloud", "region", "geo", "spot", "gpus", "avail_kind", "open", "close", "min", "max", "mean", "in_stock", "min_avail", "max_avail", "polls", "offer", "in_stock_at_close"}
 
 func (h Hourly) MarshalJSON() ([]byte, error) {
 	rows := make([][]any, 0, len(h.Rows))
@@ -197,6 +201,7 @@ func (h Hourly) MarshalJSON() ([]byte, error) {
 		rows = append(rows, []any{
 			row.Provider, row.Cloud, row.Region, row.Geo, btoi(row.Spot), row.GPUs, row.Kind,
 			row.Open, row.Close, row.Min, row.Max, row.Mean, row.InStock, row.MinStock, row.MaxStock, row.Answers, row.Offer,
+			btoi(row.InStockAtClose),
 		})
 	}
 	return json.Marshal(wire[PollHour, any]{
@@ -229,6 +234,8 @@ func (h *Hourly) UnmarshalJSON(data []byte) error {
 			MaxStock: uint32(c.int("max_avail")),
 			Answers:  int(c.int("polls")),
 			Offer:    c.str("offer"),
+
+			InStockAtClose: c.int("in_stock_at_close") != 0,
 		})
 	}
 	return nil

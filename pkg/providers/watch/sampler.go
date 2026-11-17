@@ -41,7 +41,8 @@ const (
 	// writeConcurrency is how many streams are written to at once.
 	writeConcurrency = 8
 	// rollUpAtMost is how many hours of a GPU's samples are put together
-	// at once, when the sampler has been away.
+	// with one sample. A sampler that has been away for longer has more
+	// behind it, and goes on with the next sample.
 	rollUpAtMost = 24
 
 	// shownError is how much of a provider's error a record keeps.
@@ -91,6 +92,9 @@ type Sampler struct {
 	// writes every provider's offers in full.
 	written       map[string]writtenSnapshot
 	rolledThrough time.Time
+	// placed are the GPU types this gateway knows to have a place among
+	// the hours that are put together.
+	placed map[string]bool
 }
 
 // writtenSnapshot is the offers of a provider that were last written in
@@ -120,6 +124,7 @@ func NewSampler(opts Options) *Sampler {
 		askGrace:  askGrace,
 		asking:    map[string]bool{},
 		written:   map[string]writtenSnapshot{},
+		placed:    map[string]bool{},
 	}
 }
 
@@ -165,6 +170,7 @@ func (s *Sampler) lead(ctx context.Context) (err error) {
 		Msg("market: this gateway samples what the providers sell")
 	s.written = map[string]writtenSnapshot{}
 	s.rolledThrough = time.Time{}
+	s.placed = map[string]bool{}
 	for {
 		now := s.clock.Now()
 		next := now.Truncate(s.interval).Add(s.interval)
@@ -545,9 +551,24 @@ func (s *Sampler) report(answers []answer, samples []Sample, writes []pendingWri
 
 // rollUp puts the samples of every hour that has ended together, once, for
 // every GPU type. It reads the samples back from their stream, so a gateway
-// that takes the sampling over picks up where the last one stopped.
+// that takes the sampling over picks up where the last one stopped, however
+// long ago that was: it starts with the oldest hour that was left, and
+// passes over none that may still have samples.
 func (s *Sampler) rollUp(ctx context.Context, at time.Time, samples []Sample) {
 	ended := at.Truncate(time.Hour)
+	// A GPU type that is sampled for the first time has no hour put
+	// together yet. The hour of this sample is its first: saying so now is
+	// what lets a gateway that samples later know where to start.
+	for _, sample := range samples {
+		if s.placed[sample.GPU] {
+			continue
+		}
+		if err := s.shared.StartRollUps(ctx, sample.GPU, ended.Add(-time.Hour)); err != nil {
+			log.Warn().Err(err).Str("gpu", sample.GPU).Msg("market: could not record where a GPU type's hours begin")
+			continue
+		}
+		s.placed[sample.GPU] = true
+	}
 	if !ended.After(s.rolledThrough) {
 		return
 	}
@@ -556,29 +577,29 @@ func (s *Sampler) rollUp(ctx context.Context, at time.Time, samples []Sample) {
 		log.Warn().Err(err).Msg("market: could not read which hours have been put together")
 		return
 	}
-	gpus := map[string]bool{}
-	for _, sample := range samples {
-		gpus[sample.GPU] = true
-	}
-	for gpu := range done {
-		gpus[gpu] = true
+	// Samples older than they are kept for are gone, and so are the hours
+	// that could have been put together from them.
+	var oldest time.Time
+	if kept := s.streams.SamplesFor; kept > 0 {
+		oldest = at.Add(-kept).Truncate(time.Hour)
 	}
 
 	var failed error
+	behind := false
 	var mu sync.Mutex
 	var group errgroup.Group
 	group.SetLimit(writeConcurrency)
-	for gpu := range gpus {
+	for gpu, last := range done {
 		group.Go(func() error {
-			// A GPU type that is new starts with the hour that just ended.
-			from := ended.Add(-time.Hour)
-			if last, ok := done[gpu]; ok {
-				from = last.Add(time.Hour)
+			from := last.Add(time.Hour)
+			if from.Before(oldest) {
+				from = oldest
 			}
-			if earliest := ended.Add(-rollUpAtMost * time.Hour); from.Before(earliest) {
-				from = earliest
+			until := ended
+			if most := from.Add(rollUpAtMost * time.Hour); most.Before(until) {
+				until = most
 			}
-			for hour := from; hour.Before(ended); hour = hour.Add(time.Hour) {
+			for hour := from; hour.Before(until); hour = hour.Add(time.Hour) {
 				if err := s.rollUpHour(ctx, gpu, hour); err != nil {
 					mu.Lock()
 					failed = err
@@ -586,12 +607,21 @@ func (s *Sampler) rollUp(ctx context.Context, at time.Time, samples []Sample) {
 					return nil
 				}
 			}
+			if until.Before(ended) {
+				mu.Lock()
+				behind = true
+				mu.Unlock()
+			}
 			return nil
 		})
 	}
 	_ = group.Wait()
 	if failed != nil {
 		log.Warn().Err(failed).Msg("market: could not put an hour of samples together; it is tried again")
+		return
+	}
+	if behind {
+		// The next sample goes on from here.
 		return
 	}
 	s.rolledThrough = ended

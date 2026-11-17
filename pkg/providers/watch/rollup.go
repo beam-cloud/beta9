@@ -69,11 +69,15 @@ func RollUp(gpu string, hour time.Time, samples []Sample) Hourly {
 		weighted float64
 		weight   float64
 		counted  bool
+		// lastIn is the last sample in which the listing was in stock.
+		lastIn int
 	}
 	end := hour.Add(time.Hour)
 	listings := map[Listing]*sums{}
 	asked := map[string]*PollHour{}
 	took := map[string]int64{}
+	// lastAnswer is the last sample in which each provider answered.
+	lastAnswer := map[string]int{}
 
 	for i, sample := range samples {
 		// A price stands until the next sample.
@@ -96,15 +100,17 @@ func RollUp(gpu string, hour time.Time, samples []Sample) Hourly {
 			if poll.OK {
 				tally.Answered++
 				took[provider] += poll.MS
+				lastAnswer[provider] = i
 			}
 		}
 
 		for _, row := range sample.Rows {
 			sum, ok := listings[row.Listing]
 			if !ok {
-				sum = &sums{row: HourRow{Listing: row.Listing, MinStock: math.MaxUint32}}
+				sum = &sums{row: HourRow{Listing: row.Listing, MinStock: math.MaxUint32}, lastIn: -1}
 				listings[row.Listing] = sum
 			}
+			lastAnswer[row.Provider] = i
 			sum.row.Kind = row.Kind
 			if row.Kind == StockCounted {
 				sum.counted = true
@@ -118,6 +124,7 @@ func RollUp(gpu string, hour time.Time, samples []Sample) Hourly {
 				sum.row.Open, sum.row.Min, sum.row.Max = row.Min, row.Min, row.Min
 			}
 			sum.listed++
+			sum.lastIn = i
 			sum.row.Close = row.Min
 			sum.row.Min = min(sum.row.Min, row.Min)
 			sum.row.Max = max(sum.row.Max, row.Min)
@@ -138,6 +145,8 @@ func RollUp(gpu string, hour time.Time, samples []Sample) Hourly {
 		sum := listings[listing]
 		row := sum.row
 		row.Answers = out.Polls[listing.Provider].Answered
+		// What became of it after its provider last answered is not known.
+		row.InStockAtClose = sum.lastIn >= 0 && sum.lastIn == lastAnswer[listing.Provider]
 		if !sum.counted {
 			row.MinStock = 0
 		}

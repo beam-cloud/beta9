@@ -258,6 +258,146 @@ func TestALongTimeIsDrawnFromWhatItsHoursCameTo(t *testing.T) {
 	assertPoints(t, [][]any{point(noon, 1_200_000, 990_000, 1_200_000, nil, 1, 1)}, seriesOf(t, answer, "on_demand"))
 }
 
+// The price an hour ended at is of what could still be had when it ended.
+// The cheapest listing of a series that sold out in the middle of the hour
+// is how low the price was, and not where it ended.
+func TestAnHourEndsAtThePriceOfWhatWasStillInStock(t *testing.T) {
+	vast := providers.NewFake("vast", "test")
+	vast.SetOffers(a10g("501/1", "US", 1, 300_000, stock(1)))
+	shadeform := providers.NewFake("shadeform", "test")
+	shadeform.SetOffers(a10g("A10G_1x", "newyork-usa-1", 1, 1_000_000))
+	market := newTestMarket(t, vast, shadeform)
+	sampler := market.sampler("gw-1")
+	// The cheap machine is rented at 12:30. The hour is put together at
+	// 13:00, and the next has five minutes of samples.
+	for minute := 0; minute <= 65; minute++ {
+		if minute == 30 {
+			vast.SetOffers()
+		}
+		market.sample(sampler, noon.Add(time.Duration(minute)*time.Minute))
+	}
+	require.Len(t, market.hours("A10G"), 1)
+
+	answer, err := market.reader().Series(context.Background(), SeriesRequest{GPU: "A10G", Start: noon.Add(-10 * 24 * time.Hour)})
+	require.NoError(t, err)
+	require.Equal(t, TierHour, answer.Tier)
+	assertPoints(t, [][]any{
+		point(noon, 1_000_000, 300_000, 1_000_000, 1, 1, 1),
+		point(noon.Add(time.Hour), 1_000_000, 1_000_000, 1_000_000, 0, 1, 1),
+	}, seriesOf(t, answer, "on_demand"))
+
+	// A series of nothing but the machine that was rented has no price to
+	// end at, and still says how low it was.
+	answer, err = market.reader().Series(context.Background(), SeriesRequest{
+		GPU: "A10G", Start: noon.Add(-10 * 24 * time.Hour), Admin: true, Group: []string{ByProvider},
+	})
+	require.NoError(t, err)
+	assertPoints(t, [][]any{
+		point(noon, nil, 300_000, 300_000, 1, 0.5, 1),
+		point(noon.Add(time.Hour), nil, nil, nil, 0, 0, 1),
+	}, seriesOf(t, answer, "vast"))
+}
+
+// risesAt is a market whose only listing costs a dollar until a time, and
+// two from then on, sampled every minute from noon through its last sample.
+func risesAt(t *testing.T, rises, last time.Time) *testMarket {
+	t.Helper()
+	fake := providers.NewFake("shadeform", "test")
+	market := newTestMarket(t, fake)
+	sampler := market.sampler("gw-1")
+	for at := noon; !at.After(last); at = at.Add(time.Minute) {
+		price := int64(1_000_000)
+		if !at.Before(rises) {
+			price = 2_000_000
+		}
+		fake.SetOffers(a10g("A10G_1x", "newyork-usa-1", 1, price))
+		market.sample(sampler, at)
+	}
+	return market
+}
+
+// A long time is drawn from hours, and may end in the middle of one. What
+// happened in the rest of that hour is not part of the answer.
+func TestALongTimeThatEndsInTheMiddleOfAnHourSaysNothingOfTheRestOfIt(t *testing.T) {
+	ends := noon.Add(75 * time.Minute)
+	question := SeriesRequest{GPU: "A10G", Start: noon.Add(-10 * 24 * time.Hour), End: ends}
+	// The price doubles a minute after the time asked about ends.
+	rises := ends.Add(time.Minute)
+	want := [][]any{
+		point(noon, 1_000_000, 1_000_000, 1_000_000, nil, 1, 1),
+		point(noon.Add(time.Hour), 1_000_000, 1_000_000, 1_000_000, nil, 1, 1),
+	}
+
+	t.Run("in the hour that has not ended", func(t *testing.T) {
+		market := risesAt(t, rises, noon.Add(105*time.Minute))
+		answer, err := market.reader().Series(context.Background(), question)
+		require.NoError(t, err)
+		require.Equal(t, TierHour, answer.Tier)
+		assertPoints(t, want, seriesOf(t, answer, "on_demand"))
+	})
+
+	t.Run("in an hour that has been put together", func(t *testing.T) {
+		market := risesAt(t, rises, noon.Add(210*time.Minute))
+		require.Len(t, market.hours("A10G"), 3)
+		answer, err := market.reader().Series(context.Background(), question)
+		require.NoError(t, err)
+		assertPoints(t, want, seriesOf(t, answer, "on_demand"))
+	})
+
+	t.Run("in an hour whose samples are no longer kept", func(t *testing.T) {
+		market := risesAt(t, rises, noon.Add(210*time.Minute))
+		market.config.SeriesRetention = 24 * time.Hour
+		market.clock.Advance(48 * time.Hour)
+		answer, err := market.reader().Series(context.Background(), question)
+		require.NoError(t, err)
+		// What the hour came to as a whole is all that is left of it.
+		assertPoints(t, [][]any{
+			point(noon, 1_000_000, 1_000_000, 1_000_000, nil, 1, 1),
+			point(noon.Add(time.Hour), 2_000_000, 1_000_000, 2_000_000, nil, 1, 1),
+		}, seriesOf(t, answer, "on_demand"))
+	})
+
+	t.Run("in an hour of which nothing is left but what it came to", func(t *testing.T) {
+		market := newTestMarket(t, providers.NewFake("shadeform", "test"))
+		listing := Listing{Provider: "shadeform", Cloud: "shadeform", Region: "newyork-usa-1", Geo: "us-east", GPUs: 1}
+		for _, hour := range []time.Time{noon, noon.Add(time.Hour)} {
+			body, err := json.Marshal(Hourly{
+				At: hour, GPU: "A10G", Polls: map[string]PollHour{"shadeform": {Polls: 60, Answered: 60}},
+				Rows: []HourRow{{
+					Listing: listing, Kind: StockListed, Open: 1_000_000, Close: 2_000_000, Min: 1_000_000, Max: 2_000_000,
+					InStockAtClose: true, InStock: 1, Answers: 60,
+				}},
+			})
+			require.NoError(t, err)
+			require.NoError(t, market.log.Append(context.Background(), Streams{}.Series("A10G", TierHour), Record{At: hour, Body: body}))
+		}
+		market.clock.Advance(210 * time.Minute)
+		answer, err := market.reader().Series(context.Background(), question)
+		require.NoError(t, err)
+		assertPoints(t, [][]any{
+			point(noon, 2_000_000, 1_000_000, 2_000_000, nil, 1, 1),
+			point(noon.Add(time.Hour), 2_000_000, 1_000_000, 2_000_000, nil, 1, 1),
+		}, seriesOf(t, answer, "on_demand"))
+	})
+
+	t.Run("and is not answered with what was kept for a time that ends later", func(t *testing.T) {
+		market := risesAt(t, rises, noon.Add(105*time.Minute))
+		reader := market.reader()
+		later := question
+		later.End = noon.Add(105 * time.Minute)
+		answer, err := reader.Series(context.Background(), later)
+		require.NoError(t, err)
+		assertPoints(t, [][]any{
+			point(noon, 1_000_000, 1_000_000, 1_000_000, nil, 1, 1),
+			point(noon.Add(time.Hour), 2_000_000, 1_000_000, 2_000_000, nil, 1, 1),
+		}, seriesOf(t, answer, "on_demand"))
+
+		answer, err = reader.Series(context.Background(), question)
+		require.NoError(t, err)
+		assertPoints(t, want, seriesOf(t, answer, "on_demand"))
+	})
+}
+
 func TestSeriesAreToldApartByWhatTheQuestionGroupsBy(t *testing.T) {
 	market := fourSellers(t)
 	market.clock.Advance(time.Minute)

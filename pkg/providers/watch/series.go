@@ -164,10 +164,13 @@ func (q *SeriesRequest) normalize(now time.Time) error {
 	return nil
 }
 
+// cacheKey names the answer to the question. The end is told apart to the
+// minute, whatever the step: a time that ends earlier in a step has a
+// different last point than one that ends later in it.
 func (q SeriesRequest) cacheKey(step time.Duration) string {
 	return fmt.Sprintf("series:%s|%v|%v|%s|%v|%d|%d|%t|%v|%v|%v|%t",
 		q.GPU, q.Counts, q.Geos, q.Pricing, q.Group,
-		q.Start.Truncate(step).Unix(), q.End.Truncate(max(step, time.Minute)).Unix(),
+		q.Start.Truncate(step).Unix(), q.End.Truncate(time.Minute).Unix(),
 		q.Admin, q.Providers, q.Clouds, q.Regions, q.Raw)
 }
 
@@ -220,8 +223,7 @@ func (q SeriesRequest) seriesOf(listing Listing) Series {
 // enough to have them, and the hours beyond that.
 func (r *Reader) tierOf(q SeriesRequest, now time.Time) (Tier, time.Duration) {
 	span := q.End.Sub(q.Start)
-	kept := r.streams.SamplesFor
-	if span <= minuteSpan && (kept == 0 || q.Start.After(now.Add(-kept).Add(time.Hour))) {
+	if span <= minuteSpan && r.keepsSamplesSince(q.Start, now) {
 		for _, step := range minuteSteps {
 			if step >= r.interval && span <= minutePoints*step {
 				return TierMinute, step
@@ -235,6 +237,13 @@ func (r *Reader) tierOf(q SeriesRequest, now time.Time) (Tier, time.Duration) {
 		}
 	}
 	return TierHour, hourSteps[len(hourSteps)-1]
+}
+
+// keepsSamplesSince reports whether the samples taken since a time are all
+// still kept, with an hour to spare.
+func (r *Reader) keepsSamplesSince(at, now time.Time) bool {
+	kept := r.streams.SamplesFor
+	return kept == 0 || at.After(now.Add(-kept).Add(time.Hour))
 }
 
 // Series answers what a GPU type sold for over a time.
@@ -339,9 +348,12 @@ func (r *Reader) samples(ctx context.Context, gpu string, from, to time.Time) ([
 	})
 }
 
-// hours reads what the hours of a time came to. The hour that has not ended
-// and the one that may not have been put together yet are worked out from
-// their samples.
+// hours reads what the hours of a time came to, and nothing of what came
+// after it. Three hours may have to be worked out from their samples: the
+// one that has not ended, the one before it, which may not have been put
+// together yet, and the one the time ends in the middle of, of which only
+// the part before the end is asked about. That last one is given whole when
+// it has no samples left: what it came to is all that is known of it.
 func (r *Reader) hours(ctx context.Context, gpu string, from, to, now time.Time) ([]Hourly, error) {
 	stream := r.streams.Series(gpu, TierHour)
 	from = from.Truncate(time.Hour)
@@ -351,23 +363,43 @@ func (r *Reader) hours(ctx context.Context, gpu string, from, to, now time.Time)
 	if err != nil {
 		return nil, err
 	}
-	have := map[int64]bool{}
-	for _, hour := range hours {
-		have[hour.At.Unix()] = true
+	saved := map[int64]int{}
+	for i, hour := range hours {
+		saved[hour.At.Unix()] = i
 	}
+
 	current := now.UTC().Truncate(time.Hour)
-	for _, hour := range []time.Time{current.Add(-time.Hour), current} {
-		if have[hour.Unix()] || hour.Before(from) || !hour.Before(to) {
+	fromSamples := []time.Time{current.Add(-time.Hour), current}
+	last := to.Truncate(time.Hour)
+	cut := last.Before(to) && r.keepsSamplesSince(last, now)
+	if cut && !slices.Contains(fromSamples, last) {
+		fromSamples = append(fromSamples, last)
+	}
+	for _, hour := range fromSamples {
+		if hour.Before(from) || !hour.Before(to) {
 			continue
 		}
-		samples, err := readSamples(ctx, r.log, r.streams.Series(gpu, TierMinute), gpu, hour, hour.Add(time.Hour))
+		at, have := saved[hour.Unix()]
+		if have && !(cut && hour.Equal(last)) {
+			continue
+		}
+		until := hour.Add(time.Hour)
+		if to.Before(until) {
+			until = to
+		}
+		samples, err := readSamples(ctx, r.log, r.streams.Series(gpu, TierMinute), gpu, hour, until)
 		if err != nil {
 			return nil, err
 		}
-		if len(samples) > 0 {
+		switch {
+		case len(samples) == 0:
+		case have:
+			hours[at] = RollUp(gpu, hour, samples)
+		default:
 			hours = append(hours, RollUp(gpu, hour, samples))
 		}
 	}
+	slices.SortFunc(hours, func(a, b Hourly) int { return a.At.Compare(b.At) })
 	return hours, nil
 }
 
@@ -476,8 +508,9 @@ func linesOfSamples(q SeriesRequest, wants func(Listing) bool, samples []Sample)
 // An hour keeps each listing's prices, and not how the listings stood to
 // each other from one sample to the next. What several of them came to
 // together is worked out from that as well as it can be: the lowest they
-// reached is exact, and the highest the cheapest of them reached is taken
-// from the listings that were in stock throughout.
+// reached is exact, the highest the cheapest of them reached is taken from
+// the listings that were in stock throughout, and the price they ended at
+// is the cheapest of those that were still in stock when the hour ended.
 func linesOfHours(q SeriesRequest, wants func(Listing) bool, hours []Hourly) (map[string]*line, map[string]PollHour) {
 	type sums struct {
 		seen
@@ -514,7 +547,9 @@ func linesOfHours(q SeriesRequest, wants func(Listing) bool, hours []Hourly) (ma
 				continue
 			}
 			sum.unlisted = false
-			sum.price = lowest(sum.price, row.Close)
+			if row.InStockAtClose {
+				sum.price = lowest(sum.price, row.Close)
+			}
 			sum.low = lowest(sum.low, row.Min)
 			sum.anyHigh = max(sum.anyHigh, row.Max)
 			if row.InStock >= 0.999 {

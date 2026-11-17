@@ -229,6 +229,13 @@ func (s *Shared) RolledUp(ctx context.Context) (map[string]time.Time, error) {
 	return hours, nil
 }
 
+// StartRollUps records, for a GPU type of which no hour has been put
+// together, the hour before the first that is to be. It changes nothing for
+// a GPU type that has one already.
+func (s *Shared) StartRollUps(ctx context.Context, gpu string, before time.Time) error {
+	return s.rdb.HSetNX(ctx, common.RedisKeys.MarketRollups(), gpu, before.Unix()).Err()
+}
+
 // SetRolledUp records the hour of a GPU's samples that was last put
 // together.
 func (s *Shared) SetRolledUp(ctx context.Context, gpu string, hour time.Time) error {
