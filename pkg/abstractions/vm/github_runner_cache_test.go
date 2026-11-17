@@ -28,20 +28,31 @@ func (r *runnerStore) SetGitHubRunnerEnhancedCache(ctx context.Context, ws uint,
 	return installation, nil
 }
 
-// current is the cache disk of a workspace that is not retired.
-func (r *runnerStore) current(ws uint) *types.GitHubRunnerCache {
+// current is the cache disk of a repository of a workspace that is not
+// retired.
+func (r *runnerStore) current(ws uint, repository string) *types.GitHubRunnerCache {
 	for _, cache := range r.caches {
-		if cache.WorkspaceID == ws && cache.RetiredAt == nil {
+		if cache.WorkspaceID == ws && cache.Repository == repository && cache.RetiredAt == nil {
 			return cache
 		}
 	}
 	return nil
 }
 
-func (r *runnerStore) CurrentGitHubRunnerCache(_ context.Context, ws uint, name string) (*types.GitHubRunnerCache, error) {
-	cache := r.current(ws)
+// disk is the cache disk named name, retired or not.
+func (r *runnerStore) disk(ws uint, name string) *types.GitHubRunnerCache {
+	for _, cache := range r.caches {
+		if cache.WorkspaceID == ws && cache.DiskName == name {
+			return cache
+		}
+	}
+	return nil
+}
+
+func (r *runnerStore) CurrentGitHubRunnerCache(_ context.Context, ws uint, repository, name string) (*types.GitHubRunnerCache, error) {
+	cache := r.current(ws, repository)
 	if cache == nil {
-		cache = &types.GitHubRunnerCache{WorkspaceID: ws, DiskName: name, CreatedAt: time.Now()}
+		cache = &types.GitHubRunnerCache{WorkspaceID: ws, Repository: repository, DiskName: name, CreatedAt: time.Now()}
 		r.caches = append(r.caches, cache)
 	}
 	found := *cache
@@ -49,8 +60,8 @@ func (r *runnerStore) CurrentGitHubRunnerCache(_ context.Context, ws uint, name 
 }
 
 func (r *runnerStore) ClaimGitHubRunnerCachePublisher(_ context.Context, ws uint, disk string, wait time.Duration) (bool, error) {
-	cache := r.current(ws)
-	if cache == nil || cache.DiskName != disk || cache.PublisherAt != nil && time.Since(*cache.PublisherAt) < wait {
+	cache := r.disk(ws, disk)
+	if cache == nil || cache.RetiredAt != nil || cache.PublisherAt != nil && time.Since(*cache.PublisherAt) < wait {
 		return false, nil
 	}
 	cache.PublisherAt = at(time.Now())
@@ -58,8 +69,10 @@ func (r *runnerStore) ClaimGitHubRunnerCachePublisher(_ context.Context, ws uint
 }
 
 func (r *runnerStore) RetireGitHubRunnerCache(_ context.Context, ws uint, age time.Duration) error {
-	if cache := r.current(ws); cache != nil && time.Since(cache.CreatedAt) >= age {
-		cache.RetiredAt = at(time.Now())
+	for _, cache := range r.caches {
+		if cache.WorkspaceID == ws && cache.RetiredAt == nil && time.Since(cache.CreatedAt) >= age {
+			cache.RetiredAt = at(time.Now())
+		}
 	}
 	return nil
 }
@@ -69,16 +82,16 @@ func (r *runnerStore) RetireGitHubRunnerCache(_ context.Context, ws uint, age ti
 func (r *runnerStore) ListGitHubRunnerCacheCandidates(context.Context) ([]types.GitHubRunnerCacheCandidate, error) {
 	candidates := []types.GitHubRunnerCacheCandidate{}
 	for _, published := range r.published {
-		cache, v := r.current(published.WorkspaceID), r.vm(published.WorkspaceID, published.Runner)
-		if cache == nil || v == nil || v.Spec.RootLayer == nil || published.withdrawn != "" || time.Since(published.CreatedAt) > time.Hour {
+		cache, v := r.disk(published.WorkspaceID, published.DiskName), r.vm(published.WorkspaceID, published.Runner)
+		if cache == nil || cache.RetiredAt != nil || v == nil || v.Spec.RootLayer == nil || published.withdrawn != "" || time.Since(published.CreatedAt) > time.Hour {
 			continue
 		}
 		layer := v.Spec.RootLayer
-		if published.DiskName != cache.DiskName || layer.DiskName != cache.DiskName || layer.SnapshotID != cache.SnapshotID || published.SnapshotID == cache.SnapshotID {
+		if layer.DiskName != cache.DiskName || layer.SnapshotID != cache.SnapshotID || published.SnapshotID == cache.SnapshotID {
 			continue
 		}
 		candidate := published.GitHubRunnerCacheCandidate
-		candidate.Parent = cache.SnapshotID
+		candidate.Repository, candidate.Parent = cache.Repository, cache.SnapshotID
 		candidates = append(candidates, candidate)
 	}
 	slices.SortFunc(candidates, func(a, b types.GitHubRunnerCacheCandidate) int { return a.CreatedAt.Compare(b.CreatedAt) })
@@ -86,8 +99,8 @@ func (r *runnerStore) ListGitHubRunnerCacheCandidates(context.Context) ([]types.
 }
 
 func (r *runnerStore) PromoteGitHubRunnerCache(_ context.Context, candidate types.GitHubRunnerCacheCandidate) (bool, error) {
-	cache := r.current(candidate.WorkspaceID)
-	if cache == nil || cache.DiskName != candidate.DiskName || cache.SnapshotID != candidate.Parent {
+	cache := r.disk(candidate.WorkspaceID, candidate.DiskName)
+	if cache == nil || cache.RetiredAt != nil || cache.SnapshotID != candidate.Parent {
 		return false, nil
 	}
 	cache.SnapshotID, cache.PublisherAt = candidate.SnapshotID, nil
@@ -155,10 +168,10 @@ func startRunner(t *testing.T, r *githubRunners, store *runnerStore, id int64, d
 	return v
 }
 
-// Every runner of an account that has the cache starts on its workspace's
+// Every runner of an account that has the cache starts on its repository's
 // cache disk, and one at a time, of those started for a job on a default
 // branch, keeps what its job adds to it.
-func TestGitHubRunnerStartsOnItsWorkspacesCache(t *testing.T) {
+func TestGitHubRunnerStartsOnItsRepositorysCache(t *testing.T) {
 	r, store, _, _ := runnerFixture(t)
 	fakeGitHub(t, r, map[string]string{registersRunner: `201 {"encoded_jit_config":"jit-secret"}`})
 
@@ -183,6 +196,55 @@ func TestGitHubRunnerStartsOnItsWorkspacesCache(t *testing.T) {
 	store.caches[0].SnapshotID = "generation-1"
 	require.Equal(t, "generation-1", startRunner(t, r, store, 5, false).Spec.RootLayer.SnapshotID)
 	require.Len(t, store.caches, 1)
+}
+
+// Each repository of a workspace has a cache of its own: what the jobs of
+// one leave is never in front of the jobs of another, as a public repository
+// would otherwise be given what a private one's jobs downloaded.
+func TestGitHubRunnerCacheIsTheRepositorys(t *testing.T) {
+	r, store, info, _ := runnerFixture(t)
+	ctx := context.Background()
+	fakeGitHub(t, r, map[string]string{
+		registersRunner: `201 {"encoded_jit_config":"jit-secret"}`,
+		"POST /repos/Acme/Repo/actions/runners/generate-jitconfig": `201 {"encoded_jit_config":"jit-secret"}`,
+		"POST /repos/acme/site/actions/runners/generate-jitconfig": `201 {"encoded_jit_config":"jit-secret"}`,
+	})
+	start := func(id int64, repository string) *types.VM {
+		t.Helper()
+		job := queuedJob(id)
+		job.Repository, job.RunID, job.DefaultBranch = repository, 100+id, true
+		require.Equal(t, 202, deliver(t, r, "workflow_job", "queued", beamLabels, job, true))
+		store.jobs[id].Repository = repository
+		require.NoError(t, r.provision(ctx, *store.jobs[id]))
+		v := store.vm(7, store.jobs[id].VM)
+		require.NotNil(t, v)
+		return v
+	}
+
+	repo, site := start(1, "acme/repo"), start(2, "acme/site")
+	require.NotEqual(t, repo.Spec.RootLayer.DiskName, site.Spec.RootLayer.DiskName)
+	require.True(t, repo.Spec.RootLayer.Publish)
+	require.True(t, site.Spec.RootLayer.Publish, "one runner at a time adds to each repository's cache")
+	require.Equal(t, repo.Spec.RootLayer.DiskName, start(3, "Acme/Repo").Spec.RootLayer.DiskName, "a repository is the same in any case")
+	require.Len(t, store.caches, 2)
+
+	// GitHub gives a runner the jobs of its own repository only. Were one
+	// to run another's, what it left would not be kept.
+	ran := *store.jobs[1]
+	ran.Status, ran.Conclusion, ran.RunnerName = "completed", "success", site.Name
+	require.Equal(t, 202, deliver(t, r, "workflow_job", "completed", beamLabels, &ran, true))
+	store.published = append(store.published, &publishedCache{GitHubRunnerCacheCandidate: types.GitHubRunnerCacheCandidate{
+		WorkspaceID: 7, DiskName: site.Spec.RootLayer.DiskName, SnapshotID: "generation-1", Runner: site.Name, CreatedAt: time.Now()}})
+	r.promoteCaches(ctx)
+	require.Empty(t, store.current(7, "acme/site").SnapshotID)
+	require.Equal(t, "the job of the runner was of another repository", store.published[0].withdrawn)
+
+	// The switch is the workspace's, and turns the cache of every
+	// repository off.
+	code, response := runnerRequest(t, info, r.update, "", `{"enhanced_cache":false}`)
+	require.Equal(t, http.StatusOK, code, response)
+	require.Nil(t, store.current(7, "acme/repo"))
+	require.Nil(t, store.current(7, "acme/site"))
 }
 
 // A cache starts empty again when it is a week old, and the old one is
@@ -377,7 +439,7 @@ func TestGitHubRunnerCacheJudgesTheJobThatRan(t *testing.T) {
 	require.Equal(t, "generation-1", store.caches[0].SnapshotID)
 	require.Empty(t, store.published[2].withdrawn, "it is left to be deleted with its disk")
 
-	// A generation of a disk that is not the workspace's cache any more is
+	// A generation of a disk that is not the repository's cache any more is
 	// no candidate.
 	require.NoError(t, store.RetireGitHubRunnerCache(ctx, 7, 0))
 	store.published[1].SnapshotID = "late"
@@ -421,7 +483,7 @@ func TestGitHubRunnerCacheSwitch(t *testing.T) {
 	// An account that disconnects leaves no cache for the next one.
 	code, response = runnerRequest(t, info, r.disconnect, "", "")
 	require.Equal(t, http.StatusNoContent, code, response)
-	require.Nil(t, store.current(7))
+	require.Nil(t, store.current(7, "acme/repo"))
 	c, rec := actionContext(info, "", "", "")
 	require.NoError(t, r.status(c))
 	require.NotContains(t, rec.Body.String(), "enhanced_cache", "no account is connected to have the setting")
@@ -429,9 +491,9 @@ func TestGitHubRunnerCacheSwitch(t *testing.T) {
 	// As does an account that removes the App.
 	store.installation = &types.GitHubRunnerInstallation{ID: 42, WorkspaceID: 7, TokenID: info.Token.ExternalId, Account: "acme", EnhancedCache: true}
 	startRunner(t, r, store, 4, false)
-	require.NotNil(t, store.current(7))
+	require.NotNil(t, store.current(7, "acme/repo"))
 	require.Equal(t, 202, deliver(t, r, "installation", "deleted", nil, queuedJob(0), true))
-	require.Nil(t, store.current(7))
+	require.Nil(t, store.current(7, "acme/repo"))
 }
 
 // The webhook says which branch a job is on, which is kept from when the

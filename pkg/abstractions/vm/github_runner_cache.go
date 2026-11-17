@@ -13,20 +13,25 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// The enhanced cache of a workspace is a disk that every runner of the
-// workspace starts with under its image, read-only (types.RootLayer). It
+// The enhanced cache of a repository is a disk that every runner of the
+// repository starts with under its image, read-only (types.RootLayer). It
 // holds the cache directories of the tools that jobs run, so a job finds
 // there what an earlier job downloaded or built, and neither fetches nor
 // builds it again. Nothing in a workflow changes for it.
 //
-// A job reads the cache whatever it is, and only the right job adds to it:
-// one that GitHub started for a push to its repository's default branch, or
-// on that branch's schedule, and that succeeded. Code that reached a default
-// branch is code the account already runs, so nothing that a pull request or
-// a fork could change ends up in what every other job of the workspace is
-// given.
+// A workspace has one switch for it, and each of its repositories its own
+// disk. The tools trust what they find in their caches, so a cache is as
+// trusted as the code its jobs build: what a job of one repository leaves
+// is never given to the jobs of another, whoever may push to either.
 //
-// One runner at a time is started to add to the cache. Its worker publishes
+// A job reads its repository's cache whatever it is, and only the right job
+// adds to it: one that GitHub started for a push to the repository's
+// default branch, or on that branch's schedule, and that succeeded. Code
+// that reached the default branch is code the repository already runs, so
+// nothing that a pull request or a fork could change ends up in what its
+// other jobs are given.
+//
+// One runner at a time is started to add to a cache. Its worker publishes
 // what its job wrote as a new generation of the disk, which is a candidate:
 // no runner gets it until promoteCaches finds that the job which ran on that
 // runner was the right kind. A runner takes any job with its label, so the
@@ -49,25 +54,29 @@ const (
 )
 
 // runnerCachePaths are the directories of a runner that the cache holds:
-// where Go, npm, pip and apt keep what they downloaded or built, on a
-// runner as on one of GitHub's. Each names its entries by their content or
-// by a version that never changes, so an entry is right for any job that
-// looks for it, and one that a job does not look for costs it nothing.
+// where Go, npm and pip keep what they downloaded or built, on a runner as
+// on one of GitHub's. Each names its entries by their content or by a
+// version that never changes, so an entry is right for any job that looks
+// for it, and one that a job does not look for costs it nothing.
+//
+// apt is not among them: the image's apt removes each archive once it is
+// installed, so there is nothing of it to keep.
 var runnerCachePaths = []string{
 	"/home/runner/.cache/go-build",
 	"/home/runner/go/pkg/mod",
 	"/home/runner/.npm/_cacache",
 	"/home/runner/.cache/pip",
-	"/var/cache/apt/archives",
 }
 
-// cacheLayer is the cache that the runner of a job starts with, or nil when
-// its account has the cache turned off. The cache is a new one when the
-// workspace has none, or when its last became too old. The runner keeps
-// what its job adds if the job is on a default branch and no other runner
-// is doing so.
+// cacheLayer is the cache that the runner of a job starts with, which is
+// its repository's, or nil when its account has the cache turned off. The
+// cache is a new one when the repository has none, or when its last became
+// too old. The runner keeps what its job adds if the job is on a default
+// branch and no other runner of the repository is doing so.
 func (r *githubRunners) cacheLayer(ctx context.Context, installation *types.GitHubRunnerInstallation, job types.GitHubRunnerJob) (*types.RootLayer, error) {
-	if !installation.EnhancedCache {
+	// GitHub's names differ in case only by how they are written.
+	repository := strings.ToLower(job.Repository)
+	if !installation.EnhancedCache || repository == "" {
 		return nil, nil
 	}
 
@@ -75,7 +84,7 @@ func (r *githubRunners) cacheLayer(ctx context.Context, installation *types.GitH
 		return nil, err
 	}
 
-	cache, err := r.s.repo.CurrentGitHubRunnerCache(ctx, job.WorkspaceID, types.RootLayerDiskPrefix+randomHexID()[:16])
+	cache, err := r.s.repo.CurrentGitHubRunnerCache(ctx, job.WorkspaceID, repository, types.RootLayerDiskPrefix+randomHexID()[:16])
 	if err != nil || cache == nil {
 		return nil, err
 	}
@@ -89,7 +98,7 @@ func (r *githubRunners) cacheLayer(ctx context.Context, installation *types.GitH
 	return layer, err
 }
 
-// promoteCaches gives the runners of each workspace the generation of its
+// promoteCaches gives the runners of each repository the generation of its
 // cache that a runner left, once the job that ran on that runner is known
 // to be one whose additions can be trusted. A candidate of any other job is
 // withdrawn.
@@ -137,8 +146,8 @@ func (r *githubRunners) settle(ctx context.Context, candidate types.GitHubRunner
 }
 
 // trusts reports whether what a candidate adds to its cache can be given to
-// every runner of the workspace, or why not. It reports neither while GitHub
-// may yet say how the job of the candidate's runner went.
+// every runner of the cache's repository, or why not. It reports neither
+// while GitHub may yet say how the job of the candidate's runner went.
 func (r *githubRunners) trusts(ctx context.Context, candidate types.GitHubRunnerCacheCandidate) (bool, string, error) {
 	job, err := r.s.repo.GetGitHubRunnerJobByRunner(ctx, candidate.WorkspaceID, candidate.Runner)
 	if err != nil {
@@ -153,6 +162,10 @@ func (r *githubRunners) trusts(ctx context.Context, candidate types.GitHubRunner
 		}
 
 		return false, "", nil
+	case !strings.EqualFold(job.Repository, candidate.Repository):
+		// GitHub gives a runner the jobs of the repository it is registered
+		// with. A cache is not left to depend on that.
+		return false, "the job of the runner was of another repository", nil
 	case job.Conclusion != "success":
 		return false, "the job of the runner did not succeed", nil
 	case !job.DefaultBranch || job.RunID == 0:

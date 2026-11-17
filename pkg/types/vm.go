@@ -111,7 +111,7 @@ type VMSpec struct {
 	// GitHub runners turn it off; the API does not accept it.
 	CaptureExitSnapshot *bool `json:"capture_exit_snapshot,omitempty"`
 	// RootLayer goes under the VM's image (see RootLayer). GitHub runners
-	// have their workspace's cache there; the API does not accept it.
+	// have their repository's cache there; the API does not accept it.
 	RootLayer *RootLayer `json:"root_layer,omitempty"`
 }
 
@@ -390,7 +390,8 @@ const (
 // of the GitHub App, to the workspace that runs its jobs and is billed for
 // them. Runners launch with the Beam token that connected it. No runner
 // starts while it is paused, which leaves its jobs queued on GitHub.
-// EnhancedCache gives its runners the workspace's cache (GitHubRunnerCache).
+// EnhancedCache gives its runners their repository's cache
+// (GitHubRunnerCache).
 type GitHubRunnerInstallation struct {
 	ID            int64     `db:"id" json:"id"`
 	WorkspaceID   uint      `db:"workspace_id" json:"-"`
@@ -402,20 +403,26 @@ type GitHubRunnerInstallation struct {
 	CreatedAt     time.Time `db:"created_at" json:"created_at"`
 }
 
-// GitHubRunnerCache is the disk that holds what the jobs of a workspace
-// download and build again and again: the standard cache directories of
-// their tools, whose entries are named by their content or their version.
-// Every runner of the workspace starts with SnapshotID of it under its
-// image, read-only (RootLayer), so a job finds the entries there instead of
-// fetching or building them.
+// GitHubRunnerCache is the disk that holds what the jobs of one repository
+// of a workspace download and build again and again: the standard cache
+// directories of their tools, whose entries are named by their content or
+// their version. Every runner of the repository starts with SnapshotID of
+// it under its image, read-only (RootLayer), so a job finds the entries
+// there instead of fetching or building them.
+//
+// A repository has its own disk, so nothing that a job of one repository
+// leaves is ever in front of the jobs of another. Repository is its full
+// name in lower case.
 //
 // SnapshotID is the generation runners get, and is empty until there is
-// one. It moves only to a generation that a job on a default branch left
-// (GitHubRunnerCacheCandidate). One runner at a time is started to leave
-// one, and PublisherAt is when the last was. A workspace has one disk that
-// is not retired. A retired one is deleted, with everything stored for it.
+// one. It moves only to a generation that a job on the repository's default
+// branch left (GitHubRunnerCacheCandidate). One runner at a time is started
+// to leave one, and PublisherAt is when the last was. A repository has one
+// disk that is not retired. A retired one is deleted, with everything
+// stored for it.
 type GitHubRunnerCache struct {
 	WorkspaceID uint       `db:"workspace_id"`
+	Repository  string     `db:"repository"`
 	DiskName    string     `db:"disk_name"`
 	SnapshotID  string     `db:"snapshot_id"`
 	CreatedAt   time.Time  `db:"created_at"`
@@ -423,14 +430,15 @@ type GitHubRunnerCache struct {
 	RetiredAt   *time.Time `db:"retired_at"`
 }
 
-// GitHubRunnerCacheCandidate is a generation of a workspace's cache that no
+// GitHubRunnerCacheCandidate is a generation of a repository's cache that no
 // runner gets yet: SnapshotID, which the worker of the runner VM named
 // Runner published. That runner started on Parent, which is the generation
 // runners get now, so the candidate is Parent and what the runner's job
-// added. It becomes the generation runners get if that job is one whose
-// code a default branch holds.
+// added. It becomes the generation runners get if that job is one of the
+// repository whose code its default branch holds.
 type GitHubRunnerCacheCandidate struct {
 	WorkspaceID uint      `db:"workspace_id"`
+	Repository  string    `db:"repository"`
 	DiskName    string    `db:"disk_name"`
 	Parent      string    `db:"parent"`
 	SnapshotID  string    `db:"snapshot_id"`

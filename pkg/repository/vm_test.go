@@ -1489,18 +1489,18 @@ func TestGitHubRunnerCacheStatements(t *testing.T) {
 	created := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
 	columns := strings.Split(strings.ReplaceAll(githubRunnerCacheColumns, " ", ""), ",")
 
-	// A workspace's cache is the one it has, or a new one.
-	mock.ExpectQuery(statement(`INSERT INTO github_runner_cache (workspace_id, disk_name) VALUES ($1, $2)`, `ON CONFLICT DO NOTHING`,
-		`UNION ALL`, `WHERE workspace_id = $1 AND retired_at IS NULL`, `LIMIT 1;`)).
-		WithArgs(uint(8), disk).
-		WillReturnRows(sqlmock.NewRows(columns).AddRow(8, disk, "generation-1", created, nil, nil))
-	cache, err := r.CurrentGitHubRunnerCache(ctx, 8, disk)
+	// A repository's cache is the one it has, or a new one.
+	mock.ExpectQuery(statement(`INSERT INTO github_runner_cache (workspace_id, repository, disk_name) VALUES ($1, $2, $3)`, `ON CONFLICT DO NOTHING`,
+		`UNION ALL`, `WHERE workspace_id = $1 AND repository = $2 AND retired_at IS NULL`, `LIMIT 1;`)).
+		WithArgs(uint(8), "acme/repo", disk).
+		WillReturnRows(sqlmock.NewRows(columns).AddRow(8, "acme/repo", disk, "generation-1", created, nil, nil))
+	cache, err := r.CurrentGitHubRunnerCache(ctx, 8, "acme/repo", disk)
 	require.NoError(t, err)
-	require.Equal(t, &types.GitHubRunnerCache{WorkspaceID: 8, DiskName: disk, SnapshotID: "generation-1", CreatedAt: created}, cache)
+	require.Equal(t, &types.GitHubRunnerCache{WorkspaceID: 8, Repository: "acme/repo", DiskName: disk, SnapshotID: "generation-1", CreatedAt: created}, cache)
 
-	// Another gateway made the workspace's disk in the meantime.
-	mock.ExpectQuery(statement(`INSERT INTO github_runner_cache`)).WithArgs(uint(8), disk).WillReturnRows(sqlmock.NewRows(columns))
-	cache, err = r.CurrentGitHubRunnerCache(ctx, 8, disk)
+	// Another gateway made the repository's disk in the meantime.
+	mock.ExpectQuery(statement(`INSERT INTO github_runner_cache`)).WithArgs(uint(8), "acme/repo", disk).WillReturnRows(sqlmock.NewRows(columns))
+	cache, err = r.CurrentGitHubRunnerCache(ctx, 8, "acme/repo", disk)
 	require.NoError(t, err)
 	require.Nil(t, cache)
 
@@ -1520,18 +1520,18 @@ func TestGitHubRunnerCacheStatements(t *testing.T) {
 
 	// A candidate is a generation that the VM it was published for started
 	// on what runners get now, as the VM's own record says.
-	mock.ExpectQuery(statement(`FROM github_runner_cache c`, `JOIN disk_snapshot s ON s.workspace_id = c.workspace_id AND s.disk_name = c.disk_name`,
+	mock.ExpectQuery(statement(`SELECT c.workspace_id, c.repository, c.disk_name`, `FROM github_runner_cache c`, `JOIN disk_snapshot s ON s.workspace_id = c.workspace_id AND s.disk_name = c.disk_name`,
 		`s.status = 'available' AND s.deleted_at IS NULL AND s.created_at > NOW() - INTERVAL '1 hour'`,
 		`JOIN stub st ON st.id = s.stub_id AND st.name LIKE 'vm/%'`,
 		`JOIN persistent_vm v ON v.workspace_id = c.workspace_id AND v.id = SUBSTRING(st.name FROM 4)`,
 		`WHERE c.retired_at IS NULL AND s.external_id::text <> c.snapshot_id`,
 		`AND v.data->'spec'->'root_layer'->>'disk_name' = c.disk_name`,
 		`AND COALESCE(v.data->'spec'->'root_layer'->>'snapshot_id', '') = c.snapshot_id`, `ORDER BY s.created_at`)).
-		WillReturnRows(sqlmock.NewRows([]string{"workspace_id", "disk_name", "parent", "snapshot_id", "runner", "created_at"}).
-			AddRow(8, disk, "generation-1", "generation-2", "ghr-a", created))
+		WillReturnRows(sqlmock.NewRows([]string{"workspace_id", "repository", "disk_name", "parent", "snapshot_id", "runner", "created_at"}).
+			AddRow(8, "acme/repo", disk, "generation-1", "generation-2", "ghr-a", created))
 	candidates, err := r.ListGitHubRunnerCacheCandidates(ctx)
 	require.NoError(t, err)
-	candidate := types.GitHubRunnerCacheCandidate{WorkspaceID: 8, DiskName: disk, Parent: "generation-1", SnapshotID: "generation-2", Runner: "ghr-a", CreatedAt: created}
+	candidate := types.GitHubRunnerCacheCandidate{WorkspaceID: 8, Repository: "acme/repo", DiskName: disk, Parent: "generation-1", SnapshotID: "generation-2", Runner: "ghr-a", CreatedAt: created}
 	require.Equal(t, []types.GitHubRunnerCacheCandidate{candidate}, candidates)
 
 	// It takes the place of the generation it was made from, and of no other.
@@ -1564,10 +1564,10 @@ func TestGitHubRunnerCacheStatements(t *testing.T) {
 	retiredAt := created.Add(time.Hour)
 	mock.ExpectQuery(statement(`FROM github_runner_cache`, `WHERE retired_at <= NOW() - $1 * INTERVAL '1 second'`, `ORDER BY retired_at`)).
 		WithArgs(float64(25 * 3600)).
-		WillReturnRows(sqlmock.NewRows(columns).AddRow(8, disk, "generation-1", created, nil, retiredAt))
+		WillReturnRows(sqlmock.NewRows(columns).AddRow(8, "acme/repo", disk, "generation-1", created, nil, retiredAt))
 	retired, err := r.ListRetiredGitHubRunnerCaches(ctx, 25*time.Hour)
 	require.NoError(t, err)
-	require.Equal(t, []types.GitHubRunnerCache{{WorkspaceID: 8, DiskName: disk, SnapshotID: "generation-1", CreatedAt: created, RetiredAt: &retiredAt}}, retired)
+	require.Equal(t, []types.GitHubRunnerCache{{WorkspaceID: 8, Repository: "acme/repo", DiskName: disk, SnapshotID: "generation-1", CreatedAt: created, RetiredAt: &retiredAt}}, retired)
 
 	mock.ExpectExec(statement(`DELETE FROM github_runner_cache`,
 		`WHERE workspace_id = $1 AND disk_name = $2 AND retired_at IS NOT NULL AND disk_name LIKE $3`,
