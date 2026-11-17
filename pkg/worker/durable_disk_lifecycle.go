@@ -184,6 +184,7 @@ func (s *Worker) detachFinalQcowDurableDisks(request *types.ContainerRequest) er
 		mount := &request.Mounts[i]
 		if isQcowDurableDiskMount(mount) {
 			errs = errors.Join(errs, s.detachQcowDurableDiskMount(ctx, request, mount))
+			s.removeUncapturedQcowDurableDisk(request, mount)
 		}
 	}
 	return errs

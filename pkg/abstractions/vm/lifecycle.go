@@ -108,6 +108,8 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 			Filesystem:       "ext4",
 			Driver:           "qcow",
 			SourceSnapshotId: v.Spec.SourceSnapshotID,
+			// Left unset unless the spec sets it, as stubs made before it are.
+			CaptureExitSnapshot: v.Spec.CaptureExitSnapshot,
 		}},
 	}
 	if v.Spec.GPU != "" {
@@ -264,6 +266,12 @@ func (s *Service) launchStatus(v *types.VM) (string, error) {
 }
 
 func (s *Service) snapshotRoot(ctx context.Context, v *types.VM) error {
+	// The worker uploads nothing of a root that is not captured, so there
+	// is no snapshot to commit, or to take a template or a fork from.
+	if !types.CapturesExitSnapshot(v.Spec.CaptureExitSnapshot) {
+		return errRootNotCaptured
+	}
+
 	if v.ContainerID == "" {
 		if v.RootSnapshotID == "" {
 			return fmt.Errorf("VM has no committed root snapshot")
@@ -409,8 +417,10 @@ func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
 				return fmt.Errorf("VM exited with a finalization error; inspect worker logs before restarting")
 			}
 
+			// A root that is not captured has no final snapshot to confirm:
+			// its worker removed it instead.
 			latest, err := s.backend.GetLatestDiskSnapshot(ctx, v.WorkspaceID, rootDisk(v))
-			if err != nil && v.EverRunning {
+			if err != nil && v.EverRunning && types.CapturesExitSnapshot(v.Spec.CaptureExitSnapshot) {
 				return fmt.Errorf("unable to confirm final root snapshot: %w", err)
 			}
 
@@ -637,6 +647,11 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 
 	if token == nil || !token.Active || token.DisabledByClusterAdmin {
 		v.DesiredState = types.VMStateStopped
+		// Stopping a VM whose root is not captured would leave nothing to
+		// start, so it is removed instead.
+		if !types.CapturesExitSnapshot(v.Spec.CaptureExitSnapshot) {
+			v.DesiredState = types.VMStateDeleted
+		}
 		if err := s.repo.SaveVM(ctx, v); err != nil {
 			return err
 		}
@@ -667,7 +682,9 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 				}
 			}
 
-			if v.Spec.IdleTimeout > 0 && time.Since(v.LastActiveAt) >= time.Duration(v.Spec.IdleTimeout)*time.Second {
+			// A VM whose root is not captured cannot start again, so it is
+			// never stopped or paused for being idle.
+			if v.Spec.IdleTimeout > 0 && types.CapturesExitSnapshot(v.Spec.CaptureExitSnapshot) && time.Since(v.LastActiveAt) >= time.Duration(v.Spec.IdleTimeout)*time.Second {
 				active, err := s.hasActivity(ctx, v.ID)
 				if err != nil {
 					return err
@@ -700,8 +717,9 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 				}
 			}
 
-			// Runner disks are discarded with their single job.
-			if !runner && time.Since(v.UpdatedAt) >= time.Minute {
+			// Runner disks are discarded with their single job, as is any
+			// root that is not captured.
+			if !runner && types.CapturesExitSnapshot(v.Spec.CaptureExitSnapshot) && time.Since(v.UpdatedAt) >= time.Minute {
 				if err := s.snapshotRoot(ctx, v); err != nil {
 					return err
 				}

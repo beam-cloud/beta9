@@ -5,15 +5,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/disk"
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 )
 
 func TestTerminalMicroVMCheckpointKeepsItsSealedDiskGeneration(t *testing.T) {
@@ -63,6 +69,147 @@ func TestFailedBlockRootRestoreKeepsPairedDisks(t *testing.T) {
 			require.Equal(t, int(types.ContainerExitCodeStartupFailed), code, "unused paired disks must not require another snapshot")
 		}
 	}
+}
+
+// fakeVMDiskHost stands in for the tools that attach a VM's disk: qemu-img
+// leaves an image behind, the daemon its pidfile and export socket, and
+// formatting succeeds.
+func fakeVMDiskHost(_ context.Context, name string, args ...string) ([]byte, error) {
+	switch name {
+	case "qemu-img":
+		if args[0] == "create" {
+			return nil, os.WriteFile(args[len(args)-2], []byte("qcow2-stub"), 0o600)
+		}
+		if args[0] == "convert" {
+			return nil, os.WriteFile(args[len(args)-1], []byte("qcow2-stub"), 0o600)
+		}
+	case "qemu-storage-daemon":
+		for i, arg := range args {
+			if arg == "--pidfile" {
+				if err := os.WriteFile(args[i+1], []byte("4242\n"), 0o600); err != nil {
+					return nil, err
+				}
+			}
+			if _, socket, ok := strings.Cut(arg, "addr.path="); ok && strings.HasPrefix(arg, "type=vhost-user-blk,") {
+				socket, _, _ = strings.Cut(socket, ",")
+				if err := os.WriteFile(socket, nil, 0o600); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	return nil, nil
+}
+
+// diskPublications counts what publishing a disk asks of the object store
+// and of the backend.
+type diskPublications struct {
+	*fakeBackendRepoClient
+	storeRequests, snapshotLookups atomic.Int32
+}
+
+func (p *diskPublications) GetLatestDiskSnapshot(ctx context.Context, in *pb.GetLatestDiskSnapshotRequest, opts ...grpc.CallOption) (*pb.GetLatestDiskSnapshotResponse, error) {
+	p.snapshotLookups.Add(1)
+	return p.fakeBackendRepoClient.GetLatestDiskSnapshot(ctx, in, opts...)
+}
+
+// attachedVMRoot is a running VM whose root disk is attached on its worker.
+func attachedVMRoot(t *testing.T, skipExitSnapshot bool) (*Worker, *types.ContainerRequest, *diskPublications) {
+	t.Helper()
+	publications := &diskPublications{fakeBackendRepoClient: &fakeBackendRepoClient{}}
+	store := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { publications.storeRequests.Add(1) }))
+	t.Cleanup(store.Close)
+	id, endpoint, region, credential, bucket := uint(1), store.URL, "us-east-1", "test", "test"
+	request := &types.ContainerRequest{
+		ContainerId: "vm-stub-12345678",
+		WorkspaceId: "workspace",
+		Workspace: types.Workspace{Name: "test", Storage: &types.WorkspaceStorage{
+			Id: &id, EndpointUrl: &endpoint, Region: &region, AccessKey: &credential, SecretKey: &credential, BucketName: &bucket,
+		}},
+		Mounts: []types.Mount{{
+			LocalPath: filepath.Join(t.TempDir(), "vm-root"),
+			MountPath: types.DurableDiskRootMountPath,
+			MountType: types.StorageModeDurableDisk,
+			DurableDisk: &types.DurableDiskMountConfig{
+				Name: "vm-root", Size: "1Gi", Driver: types.DurableDiskDriverQcow, SkipExitSnapshot: skipExitSnapshot,
+			},
+		}},
+	}
+	worker := newContainerFinalizationTestWorker(request, &fakeContainerRepoClient{}, NewMockRuntime("microvm", runtime.Capabilities{BlockRoot: true}))
+	worker.backendRepoClient = publications
+	root := t.TempDir()
+	worker.diskManager = disk.NewManager(disk.Config{
+		Root: filepath.Join(root, "disks"), SysBlockPath: filepath.Join(root, "sys"), DevPath: filepath.Join(root, "dev"), Runner: fakeVMDiskHost,
+	})
+	_, err := worker.diskManager.Attach(context.Background(), disk.AttachSpec{
+		Key: worker.qcowVolumeKey(request, &request.Mounts[0]), VirtualSizeBytes: 1 << 30, Export: disk.ExportVhostUser, Owner: request.ContainerId,
+	}, nil)
+	require.NoError(t, err)
+	return worker, request, publications
+}
+
+func localQcowLayers(t *testing.T, worker *Worker) []string {
+	t.Helper()
+	var layers []string
+	require.NoError(t, filepath.WalkDir(worker.diskManager.Root(), func(path string, entry os.DirEntry, err error) error {
+		if err == nil && !entry.IsDir() && strings.HasSuffix(path, ".qcow2") {
+			layers = append(layers, path)
+		}
+		return err
+	}))
+	return layers
+}
+
+// A root that is not captured goes with its VM: nothing is asked of the
+// object store or the backend, and the local volume, which pruning never
+// reclaims because nothing in it was published, is removed. A captured root
+// still has to publish, and keeps its local layers for the next attachment.
+func TestExitDiscardsARootThatIsNotCaptured(t *testing.T) {
+	for _, skipExitSnapshot := range []bool{true, false} {
+		t.Run(fmt.Sprintf("skip=%v", skipExitSnapshot), func(t *testing.T) {
+			worker, request, publications := attachedVMRoot(t, skipExitSnapshot)
+			require.Len(t, localQcowLayers(t, worker), 1)
+
+			code, reported := worker.finalizeDurableDiskMountsWithContext(context.Background(), request.ContainerId, request, int(types.ContainerExitCodeUser), true)
+
+			_, attached := worker.diskManager.Volume(worker.qcowVolumeKey(request, &request.Mounts[0]))
+			require.False(t, attached, "the disk is detached either way")
+			if !skipExitSnapshot {
+				require.Equal(t, int(types.ContainerExitCodeUnknownError), code, "a captured root must publish, and this daemon cannot seal it")
+				require.False(t, reported)
+				require.Positive(t, publications.storeRequests.Load())
+				require.EqualValues(t, 1, publications.snapshotLookups.Load())
+				require.Len(t, localQcowLayers(t, worker), 1)
+				return
+			}
+			require.Equal(t, int(types.ContainerExitCodeUser), code)
+			require.True(t, reported)
+			require.Zero(t, publications.storeRequests.Load())
+			require.Zero(t, publications.snapshotLookups.Load())
+			require.Empty(t, localQcowLayers(t, worker))
+		})
+	}
+}
+
+// Nothing else publishes such a root either. A snapshot leaves it attached
+// and as it was, and the memory of its VM is not saved at all: there would
+// be no disk to resume it on.
+func TestNoBoundaryPublishesARootThatIsNotCaptured(t *testing.T) {
+	worker, request, publications := attachedVMRoot(t, true)
+	for _, mode := range []durableDiskSyncMode{durableDiskSyncExplicit, durableDiskSyncMemoryCheckpoint} {
+		snapshots, err := worker.syncDurableDiskMounts(context.Background(), request, mode)
+		require.NoError(t, err)
+		require.Empty(t, snapshots)
+	}
+	err := worker.createCheckpoint(context.Background(), &CreateCheckpointOpts{Request: request, CheckpointId: "memory", TerminateAfterCheckpoint: true})
+	require.ErrorContains(t, err, "vm-root is not captured")
+
+	_, attached := worker.diskManager.Volume(worker.qcowVolumeKey(request, &request.Mounts[0]))
+	require.True(t, attached)
+	require.Len(t, localQcowLayers(t, worker), 1)
+	require.Zero(t, publications.storeRequests.Load())
+	require.Zero(t, publications.snapshotLookups.Load())
+	require.Zero(t, publications.createCalls, "a refused checkpoint leaves no record behind")
 }
 
 func TestDurableDiskCleanupContextIgnoresWorkerCancellation(t *testing.T) {

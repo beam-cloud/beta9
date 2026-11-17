@@ -757,6 +757,7 @@ func TestPrepareForcesCPUVMAndIndependentRoot(t *testing.T) {
 	require.Equal(t, rootDisk(v), gateway.stub.Disks[0].Name)
 	require.Equal(t, "/", gateway.stub.Disks[0].MountPath)
 	require.Equal(t, "source-root", gateway.stub.Disks[0].SourceSnapshotId)
+	require.Nil(t, gateway.stub.Disks[0].CaptureExitSnapshot, "an ordinary VM's stub stays as it was before the setting")
 	require.Contains(t, gateway.stub.Env, "BEAM_VM_SYSTEMD=1")
 	require.Contains(t, gateway.stub.Env, "BEAM_VM_ID="+v.ID)
 }

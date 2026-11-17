@@ -89,6 +89,66 @@ func TestPruneDetachedRemovesAdoptedSpareIndexAndRecoversDeletion(t *testing.T) 
 	require.NoDirExists(t, filepath.Dir(leftover))
 }
 
+// A copy whose writes were never published is kept however old it gets, so
+// the volume of a disk that is discarded has to be removed outright.
+func TestRemoveDeletesTheUnpublishedVolumeThatPruningKeeps(t *testing.T) {
+	m := NewManager(Config{Root: t.TempDir()})
+	m.run = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		path := args[len(args)-1]
+		if args[0] == "info" {
+			return json.Marshal(qcowInfo{VirtualSize: 4096, BackingFile: filepath.Join(filepath.Dir(path), "seed.qcow2")})
+		}
+		return []byte(`[{"start":0,"length":4096,"depth":0,"present":true}]`), nil
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	keys := []string{"never-published", "seeded", "attaching"}
+	for _, key := range keys {
+		dir := m.volumeDir(key)
+		require.NoError(t, os.MkdirAll(dir, 0700))
+		state := &volumeState{Key: key, VirtualSizeBytes: 4096, HeadPath: filepath.Join(dir, "head.qcow2")}
+		if key == "seeded" {
+			state.Chain = []stateLayer{{SnapshotID: "seed", Path: filepath.Join(dir, "seed.qcow2")}}
+		}
+		require.NoError(t, os.WriteFile(state.HeadPath, []byte("guest writes"), 0600))
+		require.NoError(t, saveVolumeState(dir, state))
+		require.NoError(t, os.Chtimes(filepath.Join(dir, stateFileName), old, old))
+	}
+	m.volumes["attaching"] = nil
+
+	pruned, _, err := m.PruneDetachedWithBudget(context.Background(), time.Now().Add(-time.Hour), 1<<30)
+	require.NoError(t, err)
+	require.Zero(t, pruned, "neither age nor disk pressure reclaims unpublished writes")
+	for _, key := range keys {
+		require.DirExists(t, m.volumeDir(key))
+		require.NoError(t, m.Remove(key))
+	}
+	require.NoDirExists(t, m.volumeDir("never-published"))
+	require.NoDirExists(t, m.volumeDir("seeded"))
+	require.DirExists(t, m.volumeDir("attaching"), "a volume that is being attached is not this caller's to remove")
+	entries, err := os.ReadDir(m.root)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "nothing is left behind beside the volumes directory")
+
+	require.NoError(t, m.Remove("never-published"), "a volume that is already gone is not an error")
+	for _, key := range []string{"", ".", "..", "a/b", sparePrefix + "pooled"} {
+		require.Error(t, m.Remove(key), key)
+	}
+	require.DirExists(t, m.volumeDir("attaching"))
+}
+
+func TestRemoveDeletesAnAdoptedSpareAndItsIndex(t *testing.T) {
+	m := NewManager(Config{Root: t.TempDir()})
+	dir := m.volumeDir(".spare-adopted")
+	require.NoError(t, os.MkdirAll(dir, 0700))
+	require.NoError(t, saveVolumeState(dir, &volumeState{Key: "vm-root", HeadPath: filepath.Join(dir, "head.qcow2")}))
+	require.NoError(t, os.Symlink(filepath.Base(dir), m.volumeDir("vm-root")))
+
+	require.NoError(t, m.Remove("vm-root"))
+	require.NoDirExists(t, dir)
+	_, err := os.Lstat(m.volumeDir("vm-root"))
+	require.True(t, errors.Is(err, os.ErrNotExist))
+}
+
 func TestPruneDetachedDoesNotRemoveStateChangedDuringProbe(t *testing.T) {
 	m := NewManager(Config{Root: t.TempDir()})
 	dir := m.volumeDir("volume")

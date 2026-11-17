@@ -25,6 +25,10 @@ var validName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,23}$`)
 var validEnvKey = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 var errVMPreempted = echo.NewHTTPError(http.StatusConflict, "Spot VM was preempted; call start() to restart")
 
+// errRootNotCaptured refuses what a VM needs its root kept for: its worker
+// discards a root that is not captured when the VM exits.
+var errRootNotCaptured = echo.NewHTTPError(http.StatusConflict, "this VM's disk is not kept when it exits, so nothing would be left to start it from; it cannot be stopped, paused, snapshotted or forked, only deleted")
+
 func normalizeDiskSize(size string) (string, error) {
 	if size == "" {
 		size = strconv.FormatInt(types.DefaultVMRootSizeBytes, 10)
@@ -105,6 +109,11 @@ func validate(spec *types.VMSpec) error {
 			return fmt.Errorf("microVM disks require ext4")
 		}
 
+		// Stop and pause count on every additional disk being kept.
+		if disk.CaptureExitSnapshot != nil {
+			return fmt.Errorf("capture_exit_snapshot is not a disk option")
+		}
+
 		disk.Driver, disk.Filesystem = "qcow", "ext4"
 		disk.Size, err = normalizeDiskSize(disk.Size)
 		if err != nil {
@@ -157,6 +166,11 @@ func validate(spec *types.VMSpec) error {
 
 	if spec.Headless && (spec.Desktop || spec.Kiosk != nil || spec.SSH) {
 		return fmt.Errorf("a headless VM has no desktop, kiosk or SSH")
+	}
+
+	// Each of these stops a VM so that it can start again from its root.
+	if !types.CapturesExitSnapshot(spec.CaptureExitSnapshot) && (spec.IdleTimeout > 0 || spec.IdleAction != "" || spec.AutoResume || spec.CPUTier.Borrows()) {
+		return fmt.Errorf("a VM whose disk is not kept has no idle timeout, idle action, auto-resume or Spot tier")
 	}
 
 	for _, env := range spec.Env {

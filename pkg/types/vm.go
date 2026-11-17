@@ -105,6 +105,11 @@ type VMSpec struct {
 	// one finds the machine it expects. GitHub runners are headless; the API
 	// does not accept it.
 	Headless bool `json:"headless,omitempty"`
+	// Whether the root disk outlives the VM's container. Unset means true
+	// (see CapturesExitSnapshot). A VM that turns it off leaves nothing to
+	// start it from again, so it can be deleted but not stopped or paused.
+	// GitHub runners turn it off; the API does not accept it.
+	CaptureExitSnapshot *bool `json:"capture_exit_snapshot,omitempty"`
 }
 
 // VMCreateOptions carries parsed inputs for creation and forks.

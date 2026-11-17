@@ -410,6 +410,14 @@ class DurableDisk(betterproto.Message):
     source_snapshot_id: str = betterproto.string_field(7)
     """Snapshot used to initialize a disk with no snapshot history."""
 
+    capture_exit_snapshot: Optional[bool] = betterproto.bool_field(8, optional=True)
+    """
+    Whether the disk outlives its container. Unset means true. A disk that
+     is not captured is never uploaded, and its worker removes it when the
+     container exits: it belongs to a machine that is never started again.
+     Only a qcow disk can opt out; the snapshot driver always captures.
+    """
+
 
 @dataclass(eq=False, repr=False)
 class PersistentRoot(betterproto.Message):

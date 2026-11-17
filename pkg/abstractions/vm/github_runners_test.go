@@ -398,6 +398,12 @@ func TestGitHubRunnerProvisionsOnce(t *testing.T) {
 	require.True(t, v.Spec.Headless)
 	require.Empty(t, v.Spec.Ports, "a runner takes no port of its machine")
 	require.Contains(t, r.s.gateway.(*vmGateway).stub.Env, "BEAM_VM_HEADLESS=1")
+	require.False(t, types.CapturesExitSnapshot(v.Spec.CaptureExitSnapshot), "a runner's disk is not uploaded when it exits")
+	root := r.s.gateway.(*vmGateway).stub.Disks[0]
+	require.Equal(t, rootDisk(v), root.Name)
+	require.NotNil(t, root.CaptureExitSnapshot)
+	require.False(t, *root.CaptureExitSnapshot)
+	require.True(t, types.NewDurableDiskMountConfigFromProto(root).SkipExitSnapshot)
 	require.Empty(t, r.s.response(v).TerminalURL)
 	require.Equal(t, "runner-image", v.Spec.ImageID)
 	require.Equal(t, map[string]string{"github.repository": "acme/repo"}, v.Metadata)

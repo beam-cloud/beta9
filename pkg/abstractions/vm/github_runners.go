@@ -910,6 +910,7 @@ func (r *githubRunners) launch(ctx context.Context, job types.GitHubRunnerJob, s
 	}
 
 	info := &auth.AuthInfo{Workspace: workspace, Token: token}
+	captureExitSnapshot := false
 	_, err = r.s.createVM(auth.ContextWithAuthInfo(ctx, info), info, types.VMCreateOptions{
 		Name: job.VM,
 		Spec: types.VMSpec{
@@ -921,6 +922,9 @@ func (r *githubRunners) launch(ctx context.Context, job types.GitHubRunnerJob, s
 			// A job finds no port of its machine taken, as on GitHub's.
 			Headless: true,
 			Env:      []string{"BEAM_GITHUB_JIT_CONFIG=" + config},
+			// A runner is deleted with its job and never starts again, so
+			// nothing of its disk is worth uploading when it exits.
+			CaptureExitSnapshot: &captureExitSnapshot,
 		},
 		Metadata: map[string]string{"github.repository": job.Repository},
 	})

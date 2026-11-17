@@ -33,7 +33,8 @@ func (m *Manager) PruneDetachedWithBudget(ctx context.Context, cutoff time.Time,
 	}
 	m.cachePruneMu.Lock()
 	defer m.cachePruneMu.Unlock()
-	// Interrupted deletions contain only copies already proven recoverable.
+	// Interrupted deletions contain only copies already proven recoverable,
+	// or ones their owner discarded with Remove.
 	leftovers, err := os.ReadDir(m.root)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return 0, 0, err
@@ -137,6 +138,50 @@ func (m *Manager) PruneDetachedWithBudget(ctx context.Context, cutoff time.Time,
 		freed += size
 	}
 	return pruned, freed, nil
+}
+
+// Remove deletes the local copy of a detached volume. PruneDetached never
+// reclaims a copy that holds writes it cannot find in a published chain, so
+// the copy of a disk that is discarded rather than published would otherwise
+// stay on the node for good. A volume that is attached, or is being attached,
+// is left alone.
+func (m *Manager) Remove(key string) error {
+	if key == "" || key == "." || key == ".." || key != filepath.Base(key) || isSpareKey(key) {
+		return fmt.Errorf("invalid volume key %q", key)
+	}
+	m.mu.Lock()
+	if _, attached := m.volumes[key]; attached {
+		m.mu.Unlock()
+		return nil
+	}
+	keyDir := m.volumeDir(key)
+	dir, err := m.resolveVolumeDir(key)
+	if err == nil {
+		_, err = os.Stat(dir)
+	}
+	if err != nil {
+		m.mu.Unlock()
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	// As in PruneDetached: rename while admission is excluded, then remove
+	// the files without holding the mutex. A pass of it finishes a removal
+	// that was interrupted.
+	tombstone, err := os.MkdirTemp(m.root, ".evict-volume-")
+	if err == nil {
+		err = os.Rename(dir, filepath.Join(tombstone, "volume"))
+	}
+	if err == nil && keyDir != dir {
+		// Adopted spares keep their physical directory and index it by key.
+		err = os.Remove(keyDir)
+	}
+	m.mu.Unlock()
+	if tombstone == "" {
+		return err
+	}
+	return errors.Join(err, os.RemoveAll(tombstone))
 }
 
 func detachedCacheCandidate(state *volumeState) bool {
