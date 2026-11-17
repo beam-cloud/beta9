@@ -7,6 +7,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/market"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/providers"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -39,6 +40,8 @@ type Service struct {
 	telemetryCredentials telemetryCredentialIssuer
 	billing              managedComputeBillingClient
 	tailscale            *network.Tailscale
+	sampledOffers        SampledOffers
+	outcomes             *market.Recorder
 	routePrewarm         routePrewarmer
 	reconcileOnce        sync.Once
 	managedPoolSyncMu    sync.Mutex
@@ -62,6 +65,21 @@ type Options struct {
 	KeyEventManager *common.KeyEventManager
 	RedisClient     *common.RedisClient
 	Tailscale       *network.Tailscale
+	// SampledOffers is what the market's sampler last heard each provider
+	// sells. Nil means that a provider is asked every time its offers are
+	// listed.
+	SampledOffers SampledOffers
+	// Outcomes takes note of what becomes of the machines that are
+	// reserved. Nil means nobody does.
+	Outcomes *market.Recorder
+}
+
+// SampledOffers is what the providers were last heard to sell, by whoever
+// asks them all at an interval.
+type SampledOffers interface {
+	// Offers returns everything the provider sold when it was last asked,
+	// and whether that is recent enough to stand for what it sells now.
+	Offers(ctx context.Context, provider string) ([]providers.Offer, bool)
 }
 
 func New(opts Options) *Service {
@@ -82,6 +100,8 @@ func New(opts Options) *Service {
 		redisClient:          opts.RedisClient,
 		billing:              newRoutedManagedComputeBillingClient(opts.Config.ManagedCompute.Billing),
 		tailscale:            opts.Tailscale,
+		sampledOffers:        opts.SampledOffers,
+		outcomes:             opts.Outcomes,
 		routePrewarm:         routePrewarmer{activeTargets: map[string]struct{}{}},
 		managedPoolInstances: map[string]string{},
 	}

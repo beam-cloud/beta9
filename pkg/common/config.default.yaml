@@ -420,6 +420,16 @@ cache:
     originFallbackEnabled: true
 
 providers:
+  # Every provider is asked what it sells at this interval, by one gateway at
+  # a time. What they answer is kept in Redis for the gateways, and as history
+  # in S2 when database.s2 is configured.
+  market:
+    enabled: true
+    interval: 1m
+    # Sample and log how much there is to write, and write no history.
+    dryRun: false
+    snapshotRetention: 2160h
+    seriesRetention: 336h
   hetzner:
     apiToken:
     baseURL: https://api.hetzner.cloud/v1

@@ -144,6 +144,17 @@ var (
 	computeProviderOwner        string = "compute:provider_owner"
 )
 
+// What the gateways share about the market: what every provider was last
+// seen to sell.
+var (
+	marketSamplerLock string = "market:sampler"
+	marketOffers      string = "market:offers:%s"
+	marketPolls       string = "market:polls"
+	marketTick        string = "market:tick:%d"
+	marketSeen        string = "market:seen"
+	marketRollups     string = "market:rollups"
+)
+
 var (
 	thunderClientEnrollment      string = "thunder:{client_enrollments}:client:%s"
 	thunderClientEnrollmentIndex string = "thunder:{client_enrollments}:clients"
@@ -462,6 +473,39 @@ func (rk *redisKeys) ComputeAgentSlot(workspaceID, poolName, machineID, workerID
 
 func (rk *redisKeys) ComputeAgentSlotIndex(workspaceID, poolName, machineID string) string {
 	return fmt.Sprintf(computeAgentSlotIndex, workspaceID, poolName, machineID)
+}
+
+// MarketSamplerLock is held by the one gateway that samples what the
+// providers sell.
+func (rk *redisKeys) MarketSamplerLock() string {
+	return marketSamplerLock
+}
+
+// MarketOffers holds what a provider sold when it was last asked.
+func (rk *redisKeys) MarketOffers(provider string) string {
+	return fmt.Sprintf(marketOffers, provider)
+}
+
+// MarketPolls holds how each provider answered when it was last asked, by
+// provider.
+func (rk *redisKeys) MarketPolls() string {
+	return marketPolls
+}
+
+// MarketTick marks a sample as taken, by the time it is of, so that a gateway
+// that takes the sampling over does not take the same sample again.
+func (rk *redisKeys) MarketTick(at int64) string {
+	return fmt.Sprintf(marketTick, at)
+}
+
+// MarketSeen holds what has been seen for sale, and when it last was.
+func (rk *redisKeys) MarketSeen() string {
+	return marketSeen
+}
+
+// MarketRollups holds the last hour whose samples were put together, by GPU.
+func (rk *redisKeys) MarketRollups() string {
+	return marketRollups
 }
 
 // ComputeProvisionedMachines holds the record of every machine bought for a

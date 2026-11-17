@@ -12,6 +12,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	model "github.com/beam-cloud/beta9/pkg/compute"
+	"github.com/beam-cloud/beta9/pkg/market"
 	"github.com/beam-cloud/beta9/pkg/providers"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -24,7 +25,10 @@ func (s *Service) ListPoolOffers(ctx context.Context, in *pb.ListPoolOffersReque
 		return &pb.ListPoolOffersResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 
-	offers, err := s.collectPoolOffers(ctx, pool)
+	// What is for sale is listed far more often than it is bought, and is
+	// listed from what the market's sampler last heard. A purchase asks the
+	// provider itself.
+	offers, err := s.collectPoolOffers(ctx, pool, s.sampledOffers)
 	if err != nil {
 		return &pb.ListPoolOffersResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -65,7 +69,7 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 		}
 	}
 
-	offers, err := s.collectPoolOffers(ctx, pool)
+	offers, err := s.collectPoolOffers(ctx, pool, nil)
 	if err != nil {
 		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -267,6 +271,16 @@ func (s *Service) createPlanReservations(ctx context.Context, workspaceID string
 				Until:               now.Add(pool.TTL).Add(reservationDeletionGrace),
 				MaxHourlyCostMicros: s.spotPriceLimitMicros(purchase.Offer),
 			})
+			// How the purchase went is the only word on the stock of a
+			// provider that lists a price and not what it has.
+			bought, took := market.OutcomeOf(purchase.Offer), time.Since(now)
+			bought.Source = market.SourceReservation
+			s.outcomes.Record(bought.Bought(err, took))
+			if err == nil && instance.Status == providers.StatusActive {
+				// It is recorded as running, so the reconciler will not see
+				// it come up.
+				s.outcomes.Record(bought.CameUp(took))
+			}
 			if err != nil {
 				_ = s.revokeComputeJoinTokenHash(ctx, hashComputeToken(registrationToken))
 				if errors.Is(err, providers.ErrOutOfStock) || errors.Is(err, providers.ErrQuota) {
@@ -657,10 +671,17 @@ func computeReservationInstanceID(reservation model.Reservation) string {
 // configured for pools to buy their own machines from, and that the config's
 // list leaves out, sells nothing to a tenant.
 func (s *Service) reservationProviders() []string {
-	if named := s.appConfig.ManagedCompute.Reservations.Providers; len(named) > 0 {
+	return ReservationProviders(s.appConfig.ManagedCompute, s.providers)
+}
+
+// ReservationProviders names the providers of a registry that a tenant can
+// reserve machines from under the config: the ones the config lists, or
+// every one when it lists none.
+func ReservationProviders(config types.ManagedComputeConfig, registry *providers.Registry) []string {
+	if named := config.Reservations.Providers; len(named) > 0 {
 		return named
 	}
-	return s.providers.Names()
+	return registry.Names()
 }
 
 // collectPoolOffers asks the pool's providers, or every provider that sells
@@ -670,7 +691,11 @@ func (s *Service) reservationProviders() []string {
 //
 // A provider that cannot be asked is passed over, so that it does not hide
 // what the others sell. It is an error only when none of them answered.
-func (s *Service) collectPoolOffers(ctx context.Context, pool model.Pool) ([]providers.Offer, error) {
+//
+// With sampled, a provider that was heard from lately is not asked: what it
+// sold then is what it is taken to sell. One that was not is asked, as all
+// of them are without sampled.
+func (s *Service) collectPoolOffers(ctx context.Context, pool model.Pool, sampled SampledOffers) ([]providers.Offer, error) {
 	selling := s.reservationProviders()
 	sellers := map[string]providers.Provider{}
 	for _, name := range selling {
@@ -702,6 +727,12 @@ func (s *Service) collectPoolOffers(ctx context.Context, pool model.Pool) ([]pro
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			if sampled != nil {
+				if offers, fresh := sampled.Offers(ctx, provider.Name()); fresh {
+					listed[i] = offers
+					return
+				}
+			}
 			listed[i], errs[i] = s.offersOf(ctx, provider, filter)
 		}()
 	}

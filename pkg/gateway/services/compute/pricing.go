@@ -10,7 +10,13 @@ import (
 const microRoundingEpsilon = 1e-6
 
 func (s *Service) billableMicros(providerMicros int64) int64 {
-	return billableMicros(providerMicros, s.appConfig.ManagedCompute.BillableMarginPctOrDefault())
+	return BillableMicros(s.appConfig.ManagedCompute, providerMicros)
+}
+
+// BillableMicros is what a tenant is billed an hour, under the config, for
+// what costs its provider's price.
+func BillableMicros(config types.ManagedComputeConfig, providerMicros int64) int64 {
+	return billableMicros(providerMicros, config.BillableMarginPctOrDefault())
 }
 
 func (s *Service) providerBudgetMicros(billableMaxMicros int64) int64 {

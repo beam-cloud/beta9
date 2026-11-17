@@ -34,6 +34,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/compute"
+	"github.com/beam-cloud/beta9/pkg/market"
 	"github.com/beam-cloud/beta9/pkg/providers"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -110,6 +111,9 @@ type Options struct {
 	Clock common.Clock
 	// NewID returns the ID of the next machine. Nil means a random one.
 	NewID func() string
+	// Outcomes takes note of what becomes of the machines that are bought.
+	// Nil means nobody does.
+	Outcomes *market.Recorder
 }
 
 type Provisioner struct {
@@ -120,6 +124,7 @@ type Provisioner struct {
 	limits       Limits
 	clock        common.Clock
 	newID        func() string
+	outcomes     *market.Recorder
 
 	// What this replica knows. The tick keeps it fresh, and CanProvision
 	// answers from it without asking anyone.
@@ -183,6 +188,7 @@ func New(opts Options) *Provisioner {
 		limits:       opts.Limits,
 		clock:        common.ClockOrReal(opts.Clock),
 		newID:        newID,
+		outcomes:     opts.Outcomes,
 		offers:       map[string]offerList{},
 		soldOut:      map[offerKey]time.Time{},
 		backoff:      map[string]time.Time{},
@@ -249,7 +255,10 @@ func (p *Provisioner) Provision(ctx context.Context, pool string, need scheduler
 	}
 	// The machine was chosen from what this provider was seen to sell.
 	provider, _ := p.providers.Get(machine.Provider)
+	asked := p.clock.Now()
 	instance, err := provider.Create(ctx, request)
+	answered := p.clock.Now()
+	p.outcomes.Record(machine.outcome(answered).Bought(err, answered.Sub(asked)))
 	if err != nil {
 		p.refused(ctx, machine, err)
 		return nil, fmt.Errorf("pool %q: buy %s in %s: %w", pool, machine.OfferID, machine.Region, err)
@@ -554,7 +563,12 @@ type Machine struct {
 	// TokenHash names the credential the machine joins with.
 	TokenHash string `json:"token_hash,omitempty"`
 
+	// InstanceType is what its provider calls a machine of its kind, where
+	// that is not the offer's ID.
+	InstanceType string `json:"instance_type,omitempty"`
+
 	// What it has, and costs.
+	GPU           string `json:"gpu,omitempty"`
 	GPUCount      uint32 `json:"gpu_count,omitempty"`
 	CPUMillicores int64  `json:"cpu_millicores"`
 	MemoryMB      int64  `json:"memory_mb"`
@@ -588,6 +602,9 @@ type Machine struct {
 // Release is why a machine is given back, and how.
 type Release struct {
 	Reason string `json:"reason"`
+	// End is how the market's history names this end of a machine: one of
+	// its results. It is empty for a machine that was never made.
+	End string `json:"end,omitempty"`
 	// DrainUntil is how long the machine's work is waited for before it is
 	// given back anyway. Zero means it is given back at once.
 	DrainUntil time.Time `json:"drain_until,omitzero"`
@@ -603,12 +620,33 @@ func newMachine(id, pool string, offer providers.Offer, now time.Time) Machine {
 		ID:            id,
 		Pool:          pool,
 		offerKey:      keyOf(offer),
+		InstanceType:  offer.InstanceType,
+		GPU:           offer.GPU,
 		GPUCount:      offer.GPUCount,
 		CPUMillicores: offer.CPUMillicores,
 		MemoryMB:      offer.MemoryMB,
 		HourlyMicros:  offer.HourlyCostMicros,
 		CreatedAt:     now,
 	}
+}
+
+// outcome is what the market's history is told became of the machine at
+// now: what it was bought as, where, and for how much.
+func (m Machine) outcome(now time.Time) market.Outcome {
+	outcome := market.OutcomeOf(providers.Offer{
+		ID:               m.OfferID,
+		Provider:         m.Provider,
+		Cloud:            m.Cloud,
+		InstanceType:     m.InstanceType,
+		Region:           m.Region,
+		GPU:              m.GPU,
+		GPUCount:         m.GPUCount,
+		HourlyCostMicros: m.HourlyMicros,
+		Spot:             m.Spot,
+	})
+	outcome.Source = market.SourcePool
+	outcome.At = now
+	return outcome
 }
 
 // machineLog adds what tells the machine apart to a log event.
@@ -1250,15 +1288,15 @@ func decide(m Machine, s sighting) (next Machine, releaseIfIdle bool) {
 	if s.provider == gone && s.now.Sub(m.CreatedAt) < launchGrace {
 		return m, false // its provider may yet come to know of it
 	}
-	if reason := atProvider(&m, s); reason != "" {
-		m.Release = &Release{Reason: reason, SoldOut: reason == failedToStart}
+	if reason, end := atProvider(&m, s); reason != "" {
+		m.Release = &Release{Reason: reason, End: end, SoldOut: reason == failedToStart}
 		return m, false
 	}
 	if m.InstanceID == "" {
 		return m, false // nothing is known to have been bought
 	}
-	if reason := withoutWorker(&m, s); reason != "" {
-		m.Release = &Release{Reason: reason}
+	if reason, end := withoutWorker(&m, s); reason != "" {
+		m.Release = &Release{Reason: reason, End: end}
 		return m, false
 	}
 	if s.pool == nil {
@@ -1283,17 +1321,26 @@ var lostStatus = map[providers.Status]string{
 	providers.StatusFailed:      "its provider says it failed",
 }
 
-// atProvider returns why the machine's provider no longer runs it, or "".
-// A purchase whose answer never arrived is known by its tag: its instance is
-// recorded first, whatever state it is in, so that giving the machine back
-// deletes it.
-func atProvider(m *Machine, s sighting) string {
+// lostEnd is how the market's history names the end of a machine whose
+// provider reports it in this status.
+var lostEnd = map[providers.Status]string{
+	providers.StatusDeleted:     market.ResultGone,
+	providers.StatusInterrupted: market.ResultInterrupted,
+	providers.StatusFailed:      market.ResultFailed,
+}
+
+// atProvider returns why the machine's provider no longer runs it, and how
+// the market's history names that end, or "". A purchase whose answer never
+// arrived is known by its tag: its instance is recorded first, whatever
+// state it is in, so that giving the machine back deletes it.
+func atProvider(m *Machine, s sighting) (reason, end string) {
 	switch s.provider {
 	case gone:
 		if m.InstanceID == "" {
-			return "its provider never created it"
+			// There was no machine, so none ended.
+			return "its provider never created it", ""
 		}
-		return "its provider no longer has it"
+		return "its provider no longer has it", market.ResultGone
 	case present:
 		if m.InstanceID == "" {
 			m.InstanceID = s.instance.ID
@@ -1301,16 +1348,17 @@ func atProvider(m *Machine, s sighting) string {
 		// A machine that failed after it had run was started: what it was
 		// bought as can be run.
 		if s.instance.Status == providers.StatusFailed && m.ReadyAt.IsZero() {
-			return failedToStart
+			return failedToStart, market.ResultFailed
 		}
-		return lostStatus[s.instance.Status]
+		return lostStatus[s.instance.Status], lostEnd[s.instance.Status]
 	}
-	return ""
+	return "", ""
 }
 
 // withoutWorker keeps ReadyAt and DownSince, and returns why a machine that
-// did not join its pool, or did not stay, is given back, or "".
-func withoutWorker(m *Machine, s sighting) string {
+// did not join its pool, or did not stay, is given back, and how the
+// market's history names that end, or "".
+func withoutWorker(m *Machine, s sighting) (reason, end string) {
 	timeout := s.bootTimeout()
 	switch {
 	case !s.workersKnown:
@@ -1321,16 +1369,16 @@ func withoutWorker(m *Machine, s sighting) string {
 		m.DownSince = time.Time{}
 	case m.ReadyAt.IsZero():
 		if s.now.Sub(m.CreatedAt) >= timeout {
-			return fmt.Sprintf("it did not join its pool within %s", timeout)
+			return fmt.Sprintf("it did not join its pool within %s", timeout), market.ResultNeverUp
 		}
 	case heldBack(s.worker):
 		m.DownSince = time.Time{}
 	case m.DownSince.IsZero():
 		m.DownSince = s.now
 	case s.now.Sub(m.DownSince) >= timeout:
-		return fmt.Sprintf("it has had no worker for %s", timeout)
+		return fmt.Sprintf("it has had no worker for %s", timeout), market.ResultLost
 	}
-	return ""
+	return "", ""
 }
 
 // withoutPool keeps PoolGoneSince for a machine that no pool of this replica
@@ -1342,7 +1390,7 @@ func withoutPool(m *Machine, s sighting) *Release {
 	case m.PoolGoneSince.IsZero():
 		m.PoolGoneSince = s.now
 	case s.now.Sub(m.PoolGoneSince) >= poolGoneGrace:
-		return &Release{Reason: "its pool no longer buys machines", DrainUntil: s.now.Add(drainFor)}
+		return &Release{Reason: "its pool no longer buys machines", End: market.ResultReleased, DrainUntil: s.now.Add(drainFor)}
 	}
 	return nil
 }
@@ -1394,6 +1442,9 @@ func (p *Provisioner) reconcileMachine(ctx context.Context, machine Machine, s s
 			return
 		}
 	}
+	if machine.ReadyAt.IsZero() && !next.ReadyAt.IsZero() {
+		p.outcomes.Record(next.outcome(s.now).CameUp(next.ReadyAt.Sub(next.CreatedAt)))
+	}
 	if next.Release == nil {
 		return
 	}
@@ -1413,7 +1464,10 @@ func (p *Provisioner) releaseIfIdle(machine Machine, s sighting) Machine {
 	case err != nil:
 		machineLog(log.Warn(), machine).Err(err).Msg("provisioner: could not check whether a machine is idle")
 	case idle:
-		machine.Release = &Release{Reason: fmt.Sprintf("it had nothing to run for %s", s.pool.Provisioning.IdleAfter())}
+		machine.Release = &Release{
+			Reason: fmt.Sprintf("it had nothing to run for %s", s.pool.Provisioning.IdleAfter()),
+			End:    market.ResultReleased,
+		}
 	default:
 		machine.IdleSince = time.Time{}
 	}
@@ -1428,6 +1482,9 @@ func (p *Provisioner) announceRelease(ctx context.Context, machine Machine, s si
 		giving = giving.Str("status_detail", s.instance.StatusDetail)
 	}
 	giving.Msg("provisioner: giving a machine back")
+	if machine.Release.End != "" {
+		p.outcomes.Record(machine.outcome(s.now).Ended(machine.Release.End, s.now.Sub(machine.CreatedAt)))
+	}
 	if machine.Release.SoldOut {
 		// The next machine is bought as something else, if anything else is
 		// on offer.

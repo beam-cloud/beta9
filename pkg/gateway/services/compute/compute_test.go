@@ -23,6 +23,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/common"
 	model "github.com/beam-cloud/beta9/pkg/compute"
+	"github.com/beam-cloud/beta9/pkg/market"
 	"github.com/beam-cloud/beta9/pkg/providers"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
@@ -3055,7 +3056,7 @@ func TestAReservationIsOnDemandUnlessThePoolAsksForSpot(t *testing.T) {
 	require.Contains(t, res.ErrMsg, `pricing must be on_demand, spot or any, not "preemptible"`)
 
 	// These are the offers a launch chooses from.
-	chosen, err := service.collectPoolOffers(context.Background(), model.Pool{})
+	chosen, err := service.collectPoolOffers(context.Background(), model.Pool{}, nil)
 	require.NoError(t, err)
 	require.Len(t, chosen, 1)
 	require.False(t, chosen[0].Spot)
@@ -6928,7 +6929,7 @@ func TestProvidersAreAskedWhatTheySellAtTheSameTime(t *testing.T) {
 
 	done := make(chan []providers.Offer, 1)
 	go func() {
-		offers, err := service.collectPoolOffers(context.Background(), model.Pool{})
+		offers, err := service.collectPoolOffers(context.Background(), model.Pool{}, nil)
 		require.NoError(t, err)
 		done <- offers
 	}()
@@ -9298,4 +9299,155 @@ func TestAMachineThatWasBoughtIsNotRemovedByHand(t *testing.T) {
 	machine, err = repo.GetAgentMachineState(ctx, "admin-workspace", "l40s", byHand.MachineID)
 	require.NoError(t, err)
 	require.Nil(t, machine)
+}
+
+// heardOffers is what the market's sampler last heard the providers sell,
+// by provider. A provider it has not heard from lately is not in it.
+type heardOffers map[string][]providers.Offer
+
+func (h heardOffers) Offers(ctx context.Context, provider string) ([]providers.Offer, bool) {
+	offers, fresh := h[provider]
+	return offers, fresh
+}
+
+// What is for sale is listed from what the sampler last heard, so that a
+// page of offers does not wait for seven providers. A provider the sampler
+// has not heard from lately is asked. A purchase asks the provider itself:
+// it buys what is for sale now, at the price it is for sale at now.
+func TestOffersAreListedFromWhatTheSamplerLastHeardAndBoughtFromTheProviderItself(t *testing.T) {
+	now := a10gOffer
+	now.HourlyCostMicros = 2 * a10gOffer.HourlyCostMicros
+	shadeform := &faultyProvider{Fake: fakeProvider("shadeform", now)}
+	verda := &faultyProvider{Fake: fakeProvider("verda", a10gOffer)}
+	heard := a10gOffer
+	heard.Provider = "shadeform"
+	other := a10gOffer
+	other.ID, other.InstanceType, other.GPU, other.Provider = "H100", "H100", "H100", "shadeform"
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, shadeform, verda)
+	service.sampledOffers = heardOffers{"shadeform": {heard, other}}
+
+	res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{Gpu: []string{"A10G"}}})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Len(t, res.Offers, 2, "what was heard is put through what the pool asks for, like what a provider answers")
+	listed := map[string]int64{}
+	for _, offer := range res.Offers {
+		listed[offer.Provider] = offer.HourlyCostMicros
+	}
+	require.Equal(t, service.billableMicros(a10gOffer.HourlyCostMicros), listed["shadeform"], "the price the sampler heard, and not the one the provider has now")
+	require.Equal(t, service.billableMicros(a10gOffer.HourlyCostMicros), listed["verda"], "a provider the sampler has not heard from is asked")
+
+	launched, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		Pool: &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Providers: []string{"shadeform"}, Nodes: 1, Ttl: "1h", MaxSpend: 5},
+	})
+	require.NoError(t, err)
+	require.True(t, launched.Ok, launched.ErrMsg)
+	require.Len(t, shadeform.Creates(), 1)
+	require.Equal(t, now.HourlyCostMicros, shadeform.Creates()[0].Offer.HourlyCostMicros, "the machine is bought at the price it is for sale at now")
+}
+
+// outcomesOf is what the service told the market's history became of its
+// machines.
+func outcomesOf(t *testing.T, service *Service, log *market.MemoryLog) []market.Outcome {
+	t.Helper()
+	service.outcomes.Flush(context.Background())
+	var outcomes []market.Outcome
+	for _, record := range log.All("outcomes") {
+		var outcome market.Outcome
+		require.NoError(t, json.Unmarshal(record.Body, &outcome))
+		outcomes = append(outcomes, outcome)
+	}
+	return outcomes
+}
+
+func recordOutcomes(service *Service) *market.MemoryLog {
+	log := market.NewMemoryLog()
+	service.outcomes = market.NewRecorder(log, market.Streams{}, nil)
+	return log
+}
+
+// A provider that gives a price and no word on its stock is known to have
+// had a machine, or not, only from being asked for one. Every purchase is
+// written to the market's history with how it went.
+func TestEveryPurchaseIsWrittenToTheMarketsHistoryWithHowItWent(t *testing.T) {
+	provider := &faultyProvider{Fake: fakeProvider("aws", spotA10GOffer)}
+	service := launchService(&fakeComputeRepo{}, provider)
+	log := recordOutcomes(service)
+	launch := func() *pb.LaunchPoolCapacityResponse {
+		res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+			Pool: &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Pricing: "spot", Nodes: 1, Ttl: "1h", MaxSpend: 5},
+		})
+		require.NoError(t, err)
+		return res
+	}
+
+	require.True(t, launch().Ok)
+	provider.RefuseCreates(fmt.Errorf("%w: no spot capacity", providers.ErrOutOfStock))
+	require.False(t, launch().Ok)
+
+	outcomes := outcomesOf(t, service, log)
+	require.Len(t, outcomes, 2)
+	bought, refused := outcomes[0], outcomes[1]
+	require.Equal(t, market.OutcomeCreate, bought.Event)
+	require.Equal(t, market.ResultOK, bought.Result)
+	require.Equal(t, market.SourceReservation, bought.Source)
+	require.Equal(t, "aws", bought.Provider)
+	require.Equal(t, spotA10GOffer.Region, bought.Region)
+	require.Equal(t, market.Geo(spotA10GOffer.Region), bought.Geo)
+	require.Equal(t, "A10G", bought.GPU)
+	require.True(t, bought.Spot)
+	require.Equal(t, spotA10GOffer.HourlyCostMicros, bought.HourlyMicros, "what the provider charges, not what the tenant pays")
+	require.Equal(t, market.ResultOutOfStock, refused.Result)
+	require.Contains(t, refused.Err, "no spot capacity")
+}
+
+// What became of a machine after it was bought is written too: how long it
+// took to come up, and how it ended. That a spot machine was taken back is
+// what tells how long one is kept.
+func TestWhatBecomesOfAReservedMachineIsWrittenToTheMarketsHistory(t *testing.T) {
+	m := boughtMachineAt(time.Now().UTC().Truncate(time.Second), providers.StatusPending, 6*time.Hour)
+	m.state.Reservations[0].Spot = true
+	m.state.Reservations[0].GPU, m.state.Reservations[0].GPUCount = "A10G", 1
+	m.state.Reservations[0].Region = "newyork-usa-1"
+	m.state.Reservations[0].BillingCursorAt = m.now
+	m.service.billing = &fakeManagedBilling{balanceDecision: healthyBalance}
+	log := recordOutcomes(m.service)
+
+	m.check(t, time.Minute)
+	require.Empty(t, outcomesOf(t, m.service, log), "it is still booting")
+
+	m.provider.SetStatus(m.instance, providers.StatusActive, "")
+	m.check(t, time.Minute)
+	m.check(t, time.Minute)
+	m.provider.SetStatus(m.instance, providers.StatusInterrupted, "")
+	m.check(t, 10*time.Minute)
+	m.check(t, 10*time.Minute)
+
+	outcomes := outcomesOf(t, m.service, log)
+	require.Len(t, outcomes, 2, "each is written once")
+	up, ended := outcomes[0], outcomes[1]
+	require.Equal(t, market.OutcomeActive, up.Event)
+	require.Equal(t, time.Hour+2*time.Minute, up.Took, "from when it was bought")
+	require.Equal(t, market.OutcomeEnd, ended.Event)
+	require.Equal(t, market.ResultInterrupted, ended.Result)
+	require.Equal(t, time.Hour+13*time.Minute, ended.Took)
+	require.Equal(t, "shadeform", ended.Provider)
+	require.Equal(t, "us-east", ended.Geo)
+	require.Equal(t, "A10G", ended.GPU)
+	require.True(t, ended.Spot)
+	require.Equal(t, int64(1_000_000), ended.HourlyMicros)
+}
+
+func TestAMachineATenantGivesBackIsNotHeldAgainstItsProvider(t *testing.T) {
+	for reason, result := range map[string]string{
+		reconcileReasonInterrupted:        market.ResultInterrupted,
+		reconcileReasonProviderFailed:     market.ResultFailed,
+		reconcileReasonReservationExpired: market.ResultExpired,
+		reconcileReasonMachineReleased:    market.ResultReleased,
+		reconcileReasonLaunchFailed:       market.ResultReleased,
+		reconcileReasonCreditExhausted:    market.ResultReleased,
+	} {
+		require.Equal(t, result, reservationEnd(reason), reason)
+	}
 }

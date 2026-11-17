@@ -9,6 +9,7 @@ import (
 	"time"
 
 	model "github.com/beam-cloud/beta9/pkg/compute"
+	"github.com/beam-cloud/beta9/pkg/market"
 	"github.com/beam-cloud/beta9/pkg/providers"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
@@ -704,6 +705,9 @@ func (s *Service) reconcileReservationStatus(ctx context.Context, workspaceID st
 	case providers.StatusPending:
 		reservation.Status = model.ReservationPending
 	case providers.StatusActive:
+		if reservation.Status == model.ReservationPending {
+			s.outcomes.Record(reservationOutcome(*reservation).CameUp(now.Sub(reservation.CreatedAt)))
+		}
 		reservation.Status = model.ReservationActive
 	case providers.StatusFailed:
 		// The machine will never work, and the provider may go on charging
@@ -726,6 +730,7 @@ func (s *Service) reconcileReservationStatus(ctx context.Context, workspaceID st
 		// The machine went without Beam deleting it: the provider took it
 		// back, its own deletion timer fired, or someone removed it.
 		s.revokeReservationJoinToken(ctx, reservation)
+		s.outcomes.Record(reservationOutcome(*reservation).Ended(market.ResultGone, now.Sub(reservation.CreatedAt)))
 		reservation.Status = model.ReservationDeleted
 		reservation.LastStatusMessage = firstNonEmpty(instance.StatusDetail, instanceGoneMessage)
 		reservation.LastError = ""
@@ -853,7 +858,41 @@ func (s *Service) terminateReservation(ctx context.Context, workspaceID string, 
 			reservationFailed(workspaceID, state.Name, reservation, "delete SSH state", fmt.Errorf("delete SSH state: %w", err))
 		}
 	}
+	s.outcomes.Record(reservationOutcome(*reservation).Ended(reservationEnd(reason), now.Sub(reservation.CreatedAt)))
 	s.emitComputeEvent(types.EventComputePool, computeReservationEvent(workspaceID, state, *reservation, action, reason))
+}
+
+// reservationOutcome is what the market's history is told of a reserved
+// machine: what it was bought as, where, and for how much.
+func reservationOutcome(reservation model.Reservation) market.Outcome {
+	outcome := market.OutcomeOf(providers.Offer{
+		ID:               reservation.OfferID,
+		Provider:         reservation.Provider,
+		Cloud:            reservation.Cloud,
+		InstanceType:     reservation.InstanceType,
+		Region:           reservation.Region,
+		GPU:              reservation.GPU,
+		GPUCount:         reservation.GPUCount,
+		HourlyCostMicros: reservation.HourlyCostMicros,
+		Spot:             reservation.Spot,
+	})
+	outcome.Source = market.SourceReservation
+	return outcome
+}
+
+// reservationEnd is how the market's history names the end of a reservation
+// that ended for reason. Only what its provider did to the machine says
+// anything of the provider: the rest is the tenant, or Beam, giving it back.
+func reservationEnd(reason string) string {
+	switch reason {
+	case reconcileReasonInterrupted:
+		return market.ResultInterrupted
+	case reconcileReasonProviderFailed:
+		return market.ResultFailed
+	case reconcileReasonReservationExpired:
+		return market.ResultExpired
+	}
+	return market.ResultReleased
 }
 
 func (s *Service) reconcileStaleMachines(ctx context.Context, workspaceID string, state *model.PoolState, now time.Time) bool {
