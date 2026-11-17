@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,8 +36,11 @@ type githubApp struct {
 	apiURL       string
 	webURL       string
 
-	tokenLock sync.Mutex
+	// What is remembered of each installation: the token that authenticates
+	// as it, and when GitHub next takes its calls, if it was told to wait.
+	lock      sync.Mutex
 	tokens    map[int64]githubToken
+	notBefore map[int64]time.Time
 }
 
 type githubToken struct {
@@ -86,6 +90,17 @@ func githubStatus(err error) int {
 	return 0
 }
 
+// githubLimit is a call that GitHub refused, or that was not made, because
+// GitHub limits how much an installation asks of it. Until is when it takes
+// the installation's calls again.
+type githubLimit struct {
+	Until time.Time
+}
+
+func (e *githubLimit) Error() string {
+	return "GitHub is limiting requests until " + e.Until.UTC().Format(time.RFC3339)
+}
+
 var errAppKey = errors.New("privateKey must be the App's private key, PEM encoded")
 
 func newGitHubApp(config types.GitHubRunnerConfig) (*githubApp, error) {
@@ -115,6 +130,7 @@ func newGitHubApp(config types.GitHubRunnerConfig) (*githubApp, error) {
 		apiURL:       "https://api.github.com",
 		webURL:       "https://github.com",
 		tokens:       map[int64]githubToken{},
+		notBefore:    map[int64]time.Time{},
 	}, nil
 }
 
@@ -198,7 +214,7 @@ func (g *githubApp) organizationRole(ctx context.Context, installation int64, or
 		Role  string `json:"role"`
 	}
 	endpoint := g.apiURL + "/orgs/" + url.PathEscape(organization) + "/memberships/" + url.PathEscape(login)
-	_, err = g.call(ctx, http.MethodGet, endpoint, token, nil, &membership)
+	_, err = g.ask(ctx, installation, http.MethodGet, endpoint, token, nil, &membership)
 	if githubStatus(err) == http.StatusNotFound || err == nil && membership.State != "active" {
 		return "", nil
 	}
@@ -222,7 +238,7 @@ func (g *githubApp) registerRunner(ctx context.Context, installation int64, repo
 	var runner struct {
 		Config string `json:"encoded_jit_config"`
 	}
-	_, err = g.call(ctx, http.MethodPost, g.apiURL+"/repos/"+repository+"/actions/runners/generate-jitconfig", token,
+	_, err = g.ask(ctx, installation, http.MethodPost, g.apiURL+"/repos/"+repository+"/actions/runners/generate-jitconfig", token,
 		map[string]any{"name": name, "runner_group_id": 1, "labels": []string{label}, "work_folder": runnerWorkFolder}, &runner)
 	return runner.Config, err
 }
@@ -241,9 +257,9 @@ func (g *githubApp) removeRunner(ctx context.Context, installation int64, reposi
 		} `json:"runners"`
 	}
 	endpoint := g.apiURL + "/repos/" + repository + "/actions/runners"
-	_, err = g.call(ctx, http.MethodGet, endpoint+"?name="+url.QueryEscape(name), token, nil, &registered)
+	_, err = g.ask(ctx, installation, http.MethodGet, endpoint+"?name="+url.QueryEscape(name), token, nil, &registered)
 	for _, runner := range registered.Runners {
-		if _, err = g.call(ctx, http.MethodDelete, fmt.Sprintf("%s/%d", endpoint, runner.ID), token, nil, nil); err != nil {
+		if _, err = g.ask(ctx, installation, http.MethodDelete, fmt.Sprintf("%s/%d", endpoint, runner.ID), token, nil, nil); err != nil {
 			break
 		}
 	}
@@ -267,7 +283,7 @@ func (g *githubApp) cancelRun(ctx context.Context, installation int64, repositor
 		return err
 	}
 
-	_, err = g.call(ctx, http.MethodPost, fmt.Sprintf("%s/repos/%s/actions/runs/%d/cancel", g.apiURL, repository, run), token, nil, nil)
+	_, err = g.ask(ctx, installation, http.MethodPost, fmt.Sprintf("%s/repos/%s/actions/runs/%d/cancel", g.apiURL, repository, run), token, nil, nil)
 	if githubStatus(err) == http.StatusConflict {
 		return nil
 	}
@@ -339,9 +355,9 @@ func (g *githubApp) jwt() (string, error) {
 // installationToken returns a token that authenticates as an installation,
 // which GitHub issues for an hour.
 func (g *githubApp) installationToken(ctx context.Context, installation int64) (string, error) {
-	g.tokenLock.Lock()
+	g.lock.Lock()
 	cached := g.tokens[installation]
-	g.tokenLock.Unlock()
+	g.lock.Unlock()
 	if time.Until(cached.ExpiresAt) > 5*time.Minute {
 		return cached.Token, nil
 	}
@@ -352,23 +368,105 @@ func (g *githubApp) installationToken(ctx context.Context, installation int64) (
 	}
 
 	var token githubToken
-	if _, err := g.call(ctx, http.MethodPost, fmt.Sprintf("%s/app/installations/%d/access_tokens", g.apiURL, installation), jwt, nil, &token); err != nil {
+	header, err := g.call(ctx, http.MethodPost, fmt.Sprintf("%s/app/installations/%d/access_tokens", g.apiURL, installation), jwt, nil, &token)
+	if err := g.heed(installation, header, err); err != nil {
 		return "", err
 	}
 
-	g.tokenLock.Lock()
+	g.lock.Lock()
 	g.tokens[installation] = token
-	g.tokenLock.Unlock()
+	g.lock.Unlock()
 	return token.Token, nil
 }
 
-// forget drops the token of an installation that is gone.
+// forget drops what is remembered of an installation that is gone.
 func (g *githubApp) forget(installation int64) {
-	g.tokenLock.Lock()
+	g.lock.Lock()
 	delete(g.tokens, installation)
-	g.tokenLock.Unlock()
+	delete(g.notBefore, installation)
+	g.lock.Unlock()
 }
 
+// ask calls GitHub as an installation, with its token. GitHub limits how much
+// an installation asks of it, and says when one that asked too much may ask
+// again. Nothing is asked for it until then, as GitHub counts what it is
+// asked meanwhile against the installation too.
+func (g *githubApp) ask(ctx context.Context, installation int64, method, endpoint, token string, input, output any) (http.Header, error) {
+	if until, limited := g.limited(installation); limited {
+		return nil, &githubLimit{Until: until}
+	}
+
+	header, err := g.call(ctx, method, endpoint, token, input, output)
+
+	// GitHub no longer takes the token, so the next call asks for another.
+	if githubStatus(err) == http.StatusUnauthorized {
+		g.lock.Lock()
+		delete(g.tokens, installation)
+		g.lock.Unlock()
+	}
+
+	return header, g.heed(installation, header, err)
+}
+
+// limited reports whether GitHub has told an installation to wait, and until
+// when.
+func (g *githubApp) limited(installation int64) (time.Time, bool) {
+	g.lock.Lock()
+	until := g.notBefore[installation]
+	g.lock.Unlock()
+	return until, time.Now().Before(until)
+}
+
+// heed remembers when GitHub next takes the calls of an installation, if the
+// response to one says so. A call that GitHub refused for that reason fails
+// as limited, whatever its status, so that it is made again and not taken
+// for a refusal that stands.
+func (g *githubApp) heed(installation int64, header http.Header, err error) error {
+	var refusal *githubError
+	errors.As(err, &refusal)
+	until := githubWait(header, refusal)
+	if until.IsZero() {
+		return err
+	}
+
+	g.lock.Lock()
+	g.notBefore[installation] = until
+	g.lock.Unlock()
+	if refusal == nil {
+		return err
+	}
+
+	return &githubLimit{Until: until}
+}
+
+// githubWait reads from a response when GitHub next takes a call, and
+// returns the zero time for a response that sets no limit. GitHub says how
+// long to wait in Retry-After, or that a response is the last before the
+// time its limit resets. A refusal that says neither asks for a minute.
+func githubWait(header http.Header, refusal *githubError) time.Time {
+	if seconds, err := strconv.Atoi(header.Get("Retry-After")); err == nil {
+		return time.Now().Add(time.Duration(seconds) * time.Second)
+	}
+
+	if reset, err := strconv.ParseInt(header.Get("X-RateLimit-Reset"), 10, 64); err == nil && header.Get("X-RateLimit-Remaining") == "0" {
+		return time.Unix(reset, 0)
+	}
+
+	if refusal == nil {
+		return time.Time{}
+	}
+
+	// GitHub refuses with 403 for other reasons too, and then says which.
+	limited := refusal.Status == http.StatusForbidden && strings.Contains(strings.ToLower(refusal.Message), "rate limit")
+	if limited || refusal.Status == http.StatusTooManyRequests {
+		return time.Now().Add(time.Minute)
+	}
+
+	return time.Time{}
+}
+
+// call makes a request of GitHub and returns the headers of its response,
+// also of one that GitHub refused.
 func (g *githubApp) call(ctx context.Context, method, endpoint, token string, input, output any) (http.Header, error) {
 	var body io.Reader
 	if input != nil {
@@ -404,12 +502,12 @@ func (g *githubApp) call(ctx context.Context, method, endpoint, token string, in
 			Message string `json:"message"`
 		}
 		_ = response.Decode(&refusal)
-		return nil, &githubError{Status: resp.StatusCode, Message: refusal.Message}
+		return resp.Header, &githubError{Status: resp.StatusCode, Message: refusal.Message}
 	}
 
 	if output != nil {
 		if err := response.Decode(output); err != nil {
-			return nil, err
+			return resp.Header, err
 		}
 	}
 

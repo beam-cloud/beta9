@@ -21,6 +21,10 @@ type VMRepository interface {
 	// ContainerExits delivers the ID of each VM container whose state is
 	// removed from now on. An exit can be missed.
 	ContainerExits(ctx context.Context) <-chan string
+	// SweepGitHubWebhooks runs a sweep of GitHub's webhook deliveries, unless
+	// another gateway is running one, or one started less than recent ago.
+	// It reports whether the sweep ran.
+	SweepGitHubWebhooks(ctx context.Context, recent time.Duration, sweep func(context.Context) error) (bool, error)
 }
 
 type ICESession struct {

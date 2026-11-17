@@ -406,8 +406,18 @@ type GitHubRunnerInstallation struct {
 // is why the last attempt to start it failed.
 //
 // RunID is the workflow run the job is part of, which is what GitHub cancels,
-// and is zero for a job recorded before runs were. Waiting is not stored: it
-// tells a user what a queued job that no runner has taken waits for.
+// and is zero for a job recorded before runs were.
+//
+// Waiting tells a user what a queued job that no runner has taken waits for.
+// What is stored is why its runner starts later than at once, and is empty
+// while one is being started. The API completes it with what the row does
+// not say, as that the account is paused.
+//
+// ReceivedAt, RegisteredAt and VMReadyAt are when the steps that get the job
+// its runner were done: the gateway first heard of the job, VM was registered
+// with GitHub, and VM could run commands. The last two are of VM, and are
+// unset again when another runner is started for the job. Timeline is how
+// the API returns the three, and is not stored.
 type GitHubRunnerJob struct {
 	ID             int64      `db:"id" json:"id"`
 	RunID          int64      `db:"run_id" json:"run_id,omitempty"`
@@ -428,7 +438,21 @@ type GitHubRunnerJob struct {
 	Attempts       int        `db:"attempts" json:"-"`
 	ProvisionAt    *time.Time `db:"provision_at" json:"-"`
 	Error          string     `db:"error" json:"error,omitempty"`
-	Waiting        string     `db:"-" json:"waiting,omitempty"`
+	Waiting        string     `db:"waiting" json:"waiting,omitempty"`
+	ReceivedAt     *time.Time `db:"received_at" json:"-"`
+	RegisteredAt   *time.Time `db:"registered_at" json:"-"`
+	VMReadyAt      *time.Time `db:"vm_ready_at" json:"-"`
+
+	Timeline GitHubRunnerTimeline `db:"-" json:"timeline,omitzero"`
+}
+
+// GitHubRunnerTimeline is when each step that got a job its runner was done,
+// as RFC 3339 with milliseconds. A step that was not reached, or not timed,
+// is empty.
+type GitHubRunnerTimeline struct {
+	ReceivedAt   string `json:"received_at,omitempty"`
+	RegisteredAt string `json:"registered_at,omitempty"`
+	VMReadyAt    string `json:"vm_ready_at,omitempty"`
 }
 
 // GitHubRunnerRun is a workflow run with jobs that asked for a Beam runner,
@@ -460,10 +484,14 @@ type GitHubRunnerJobPage struct {
 
 // GitHubRunner is what the lifecycle of a runner VM depends on: where it is
 // registered, whether that account is still connected, and the status of the
-// job GitHub gave it, which is empty while it waits for one.
+// job GitHub gave it, which is empty while it waits for one. Waiting and
+// Ready are what the job it was started for has been told of it: what that
+// job waits for, and whether the runner's VM was found ready.
 type GitHubRunner struct {
 	InstallationID int64  `db:"installation_id"`
 	Repository     string `db:"repository"`
 	Connected      bool   `db:"connected"`
 	JobStatus      string `db:"job_status"`
+	Waiting        string `db:"waiting"`
+	Ready          bool   `db:"ready"`
 }

@@ -1564,6 +1564,10 @@ type GitHubRunnerConfig struct {
 	WebhookSecret string `key:"webhookSecret" json:"webhook_secret"`
 	// ImageID is printed by `beam vm image build docker/github-runner`.
 	ImageID string `key:"imageID" json:"image_id"`
+	// RunnerLimit is the most runners a workspace has at once. The jobs past
+	// it stay queued on GitHub, and get theirs as runners finish, the jobs
+	// that have waited longest first. Zero or less sets no limit.
+	RunnerLimit int `key:"runnerLimit" json:"runner_limit"`
 }
 
 // VMWebRTCConfig bounds authenticated kiosk media on the shared TCP gateway.

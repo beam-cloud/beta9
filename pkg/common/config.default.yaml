@@ -516,3 +516,8 @@ abstractions:
       keyFile: ""
       serviceProxyTarget: beta9-gateway:1995
       serviceProxyVerify: false
+  vm:
+    githubRunners:
+      # The most GitHub runners a workspace has at once. The jobs past it stay
+      # queued on GitHub until a runner finishes. 0 sets no limit.
+      runnerLimit: 100

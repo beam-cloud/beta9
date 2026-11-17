@@ -48,12 +48,17 @@ type VMRepository interface {
 	GetGitHubRunnerJob(context.Context, uint, int64) (*types.GitHubRunnerJob, error)
 	ListGitHubRunnerJobs(context.Context, uint, types.GitHubRunnerJobFilter) (*types.GitHubRunnerJobPage, error)
 	ListActiveGitHubRunnerRuns(context.Context, uint, string) ([]types.GitHubRunnerRun, int, error)
-	ListDueGitHubRunnerJobs(context.Context) ([]types.GitHubRunnerJob, error)
-	ClaimGitHubRunnerJob(context.Context, *types.GitHubRunnerJob, string) (bool, error)
+	ListDueGitHubRunnerJobs(context.Context, int) ([]types.GitHubRunnerJob, error)
+	ClaimGitHubRunnerJob(context.Context, *types.GitHubRunnerJob, string, int) (bool, error)
 	FinishGitHubRunnerJob(context.Context, int64, string) error
-	FailGitHubRunnerJob(context.Context, int64, string) error
+	FailGitHubRunnerJob(context.Context, int64, string, string) error
+	WaitGitHubRunnerJob(context.Context, int64, string, time.Time) error
+	MarkGitHubRunnerRegistered(context.Context, int64) error
+	CountGitHubRunners(context.Context, uint) (int, error)
 	GetGitHubRunner(context.Context, uint, string) (*types.GitHubRunner, error)
-	ReplaceGitHubRunner(context.Context, uint, string, string) error
+	ObserveGitHubRunner(context.Context, uint, string, string, *time.Time) error
+	IsSurplusGitHubRunner(context.Context, uint, string) (bool, error)
+	ReplaceGitHubRunner(context.Context, uint, string, string, string) error
 }
 
 // PublicVMRepository is required only when public VM networking is enabled.
@@ -661,8 +666,47 @@ var ErrGitHubRunnerConflict = errors.New("GitHub runner connection conflict")
 const (
 	githubRunnerInstallationColumns = `id, workspace_id, token_id, account, account_type, paused, created_at`
 	githubRunnerJobColumns          = `id, run_id, installation_id, workspace_id, repository, workflow, name, url, label, status,
-	conclusion, runner_name, created_at, started_at, completed_at, vm, attempts, provision_at, error`
+	conclusion, runner_name, created_at, started_at, completed_at, vm, attempts, provision_at, error, waiting,
+	received_at, registered_at, vm_ready_at`
+
+	// githubRunnerRetry is when a job is due again after its runner could not
+	// be started, or stopped before it took a job: five seconds later at
+	// first, twice as long with each attempt, and never more than a minute,
+	// for as long as it takes.
+	githubRunnerRetry = `NOW() + LEAST(60, 5 * POWER(2, LEAST(attempts, 5) - 1)) * INTERVAL '1 second'`
 )
+
+// githubRunnerCount is the SQL that counts the runners of the workspace of a
+// row j: the runner VMs that exist, and the runners that a claim has named
+// and is starting, which have no VM yet. A job that waits to try again says
+// what for, and is starting none. No more VMs are counted than most, which
+// is the placeholder of a number, or NULL for all of them.
+//
+// Nothing tells the planner how few of a workspace's VMs exist, and on its
+// own it reads every VM the workspace ever had, or the name of every runner.
+// Asked for the VMs in the order of their names, it reads them from the
+// index of those that exist, and whether each is a runner is asked of each.
+func githubRunnerCount(most string) string {
+	return `(
+		(
+			SELECT COUNT(*) FROM (
+				SELECT v.name FROM persistent_vm v
+				WHERE v.workspace_id = j.workspace_id AND v.data->>'desired_state' <> 'deleted'
+					AND (
+						SELECT TRUE FROM github_runner_job r
+						WHERE r.workspace_id = v.workspace_id AND r.vm = v.name AND r.vm <> ''
+						LIMIT 1
+					)
+				ORDER BY v.name
+				LIMIT ` + most + `
+			) runners
+		) + (
+			SELECT COUNT(*) FROM github_runner_job r
+			WHERE r.workspace_id = j.workspace_id AND r.provision_at > NOW() AND r.vm <> '' AND r.waiting = ''
+				AND NOT EXISTS (SELECT 1 FROM persistent_vm v WHERE v.workspace_id = r.workspace_id AND v.name = r.vm)
+		)
+	)`
+}
 
 func (r *PostgresBackendRepository) GetGitHubRunnerInstallation(ctx context.Context, workspaceId uint) (*types.GitHubRunnerInstallation, error) {
 	query := `SELECT ` + githubRunnerInstallationColumns + ` FROM github_runner_installation WHERE workspace_id = $1;`
@@ -750,16 +794,17 @@ func (r *PostgresBackendRepository) DeleteGitHubRunnerInstallation(ctx context.C
 }
 
 // SaveGitHubRunnerJob records a delivery of a workflow job. A job is due for
-// a runner when it is first seen. Deliveries repeat and arrive out of order,
-// so a job's status never moves backwards, and a delivery that does not name
-// the job's run leaves the one that is known.
+// a runner when it is first seen, which is also when it was received.
+// Deliveries repeat and arrive out of order, so a job's status never moves
+// backwards, and a delivery that does not name the job's run leaves the one
+// that is known.
 func (r *PostgresBackendRepository) SaveGitHubRunnerJob(ctx context.Context, job *types.GitHubRunnerJob) error {
 	query := `
 	INSERT INTO github_runner_job (
 		id, installation_id, workspace_id, repository, workflow, name, url, label, status,
-		conclusion, runner_name, created_at, started_at, completed_at, run_id, provision_at
+		conclusion, runner_name, created_at, started_at, completed_at, run_id, provision_at, received_at
 	)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW())
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())
 	ON CONFLICT (id) DO UPDATE
 	SET status = EXCLUDED.status, conclusion = EXCLUDED.conclusion, runner_name = EXCLUDED.runner_name,
 		started_at = EXCLUDED.started_at, completed_at = EXCLUDED.completed_at,
@@ -893,22 +938,30 @@ func (r *PostgresBackendRepository) ListActiveGitHubRunnerRuns(ctx context.Conte
 
 // ListDueGitHubRunnerJobs returns the jobs of connected accounts that are due
 // for a runner, longest due first. The jobs of a paused account stay as they
-// are, so that they are due, in the same order, once it resumes.
-func (r *PostgresBackendRepository) ListDueGitHubRunnerJobs(ctx context.Context) ([]types.GitHubRunnerJob, error) {
+// are, so that they are due, in the same order, once it resumes. So do those
+// of a workspace that has as many runners as limit allows, until one of its
+// runners is gone. Zero or less allows any number.
+func (r *PostgresBackendRepository) ListDueGitHubRunnerJobs(ctx context.Context, limit int) ([]types.GitHubRunnerJob, error) {
 	query := `
-	SELECT ` + githubRunnerJobColumns + `
-	FROM github_runner_job j
-	WHERE provision_at <= NOW()
-		AND EXISTS (
-			SELECT 1 FROM github_runner_installation i
-			WHERE i.id = j.installation_id AND i.workspace_id = j.workspace_id AND NOT i.paused
-		)
-	ORDER BY provision_at
+	WITH due AS (
+		SELECT ` + githubRunnerJobColumns + `
+		FROM github_runner_job j
+		WHERE provision_at <= NOW()
+			AND EXISTS (
+				SELECT 1 FROM github_runner_installation i
+				WHERE i.id = j.installation_id AND i.workspace_id = j.workspace_id AND NOT i.paused
+			)
+	)
+	SELECT * FROM due
+	WHERE $1 <= 0 OR workspace_id NOT IN (
+		SELECT j.workspace_id FROM (SELECT DISTINCT workspace_id FROM due) j WHERE ` + githubRunnerCount("$1") + ` >= $1
+	)
+	ORDER BY provision_at, id
 	LIMIT 100;
 	`
 
 	jobs := []types.GitHubRunnerJob{}
-	if err := r.client.SelectContext(ctx, &jobs, query); err != nil {
+	if err := r.client.SelectContext(ctx, &jobs, query, limit); err != nil {
 		return nil, err
 	}
 
@@ -917,18 +970,33 @@ func (r *PostgresBackendRepository) ListDueGitHubRunnerJobs(ctx context.Context)
 
 // ClaimGitHubRunnerJob gives a due job to one caller, to start its runner.
 // The claim names that runner before it exists, so that a crash cannot leave
-// one no job refers to, and makes the job due again later, for an attempt
-// that fails or never finishes. No job of a paused account is claimed, so
-// that the jobs listed as due before it paused start no runner after it.
-func (r *PostgresBackendRepository) ClaimGitHubRunnerJob(ctx context.Context, job *types.GitHubRunnerJob, vmName string) (bool, error) {
+// one no job refers to, and makes the job due again in a minute, for an
+// attempt that never finishes. The job waits for nothing while its runner
+// is started, and the times of the runner it had before are not this one's.
+// No job of a paused account is claimed, so that the jobs listed as due
+// before it paused start no runner after it.
+//
+// Nor is a job claimed that would be one runner too many for its workspace,
+// when limit is more than zero. The jobs of its account that have been due
+// longer count as runners too: however many gateways claim at once, the jobs
+// that have waited longest get the runners there is room for, and no other
+// job gets one. A job that is not claimed stays as it is, so it has spent no
+// attempt.
+func (r *PostgresBackendRepository) ClaimGitHubRunnerJob(ctx context.Context, job *types.GitHubRunnerJob, vmName string, limit int) (bool, error) {
 	query := `
 	UPDATE github_runner_job j
-	SET vm = $3, attempts = attempts + 1, provision_at = NOW() + (attempts + 1) * INTERVAL '1 minute'
+	SET vm = $3, attempts = attempts + 1, provision_at = NOW() + INTERVAL '1 minute', waiting = '',
+		registered_at = NULL, vm_ready_at = NULL
 	WHERE id = $1 AND attempts = $2 AND provision_at <= NOW()
-		AND NOT EXISTS (SELECT 1 FROM github_runner_installation i WHERE i.id = j.installation_id AND i.paused);
+		AND NOT EXISTS (SELECT 1 FROM github_runner_installation i WHERE i.id = j.installation_id AND i.paused)
+		AND ($4 <= 0 OR ` + githubRunnerCount("$4") + ` + (
+			SELECT COUNT(*) FROM github_runner_job d
+			WHERE d.workspace_id = j.workspace_id AND d.installation_id = j.installation_id
+				AND d.provision_at <= NOW() AND (d.provision_at, d.id) < (j.provision_at, j.id)
+		) < $4);
 	`
 
-	result, err := r.client.ExecContext(ctx, query, job.ID, job.Attempts, vmName)
+	result, err := r.client.ExecContext(ctx, query, job.ID, job.Attempts, vmName, limit)
 	if err != nil {
 		return false, err
 	}
@@ -945,17 +1013,50 @@ func (r *PostgresBackendRepository) ClaimGitHubRunnerJob(ctx context.Context, jo
 // FinishGitHubRunnerJob stops starting a runner for a job: it has one, or it
 // will never get one, for the reason in message.
 func (r *PostgresBackendRepository) FinishGitHubRunnerJob(ctx context.Context, jobId int64, message string) error {
-	query := `UPDATE github_runner_job SET provision_at = NULL, error = $2 WHERE id = $1;`
+	query := `UPDATE github_runner_job SET provision_at = NULL, error = $2, waiting = '' WHERE id = $1;`
 	_, err := r.client.ExecContext(ctx, query, jobId, message)
 	return err
 }
 
-// FailGitHubRunnerJob records why an attempt to start a job's runner failed.
-// The job stays due when its claim said it would be.
-func (r *PostgresBackendRepository) FailGitHubRunnerJob(ctx context.Context, jobId int64, message string) error {
-	query := `UPDATE github_runner_job SET error = $2 WHERE id = $1;`
-	_, err := r.client.ExecContext(ctx, query, jobId, message)
+// FailGitHubRunnerJob records why an attempt to start a job's runner failed,
+// and what the job waits for until the next one, in words a user is shown.
+// The job is due again after a time that grows with its attempts. A job that
+// is no longer to get a runner, as one of an account that disconnected
+// during the attempt, stays so.
+func (r *PostgresBackendRepository) FailGitHubRunnerJob(ctx context.Context, jobId int64, message, waiting string) error {
+	query := `
+	UPDATE github_runner_job SET provision_at = ` + githubRunnerRetry + `, error = $2, waiting = $3
+	WHERE id = $1 AND provision_at IS NOT NULL;
+	`
+	_, err := r.client.ExecContext(ctx, query, jobId, message, waiting)
 	return err
+}
+
+// WaitGitHubRunnerJob makes a job that is due for a runner due at a later
+// time instead, and says what it waits for until then. Nothing was tried, so
+// the job has spent no attempt.
+func (r *PostgresBackendRepository) WaitGitHubRunnerJob(ctx context.Context, jobId int64, waiting string, until time.Time) error {
+	query := `UPDATE github_runner_job SET provision_at = $3, waiting = $2 WHERE id = $1 AND provision_at <= NOW();`
+	_, err := r.client.ExecContext(ctx, query, jobId, waiting, until)
+	return err
+}
+
+// MarkGitHubRunnerRegistered records that the runner a job has claimed was
+// registered with GitHub, now.
+func (r *PostgresBackendRepository) MarkGitHubRunnerRegistered(ctx context.Context, jobId int64) error {
+	query := `UPDATE github_runner_job SET registered_at = NOW() WHERE id = $1;`
+	_, err := r.client.ExecContext(ctx, query, jobId)
+	return err
+}
+
+// CountGitHubRunners returns how many runners a workspace has: those that
+// exist, and those being started.
+func (r *PostgresBackendRepository) CountGitHubRunners(ctx context.Context, workspaceId uint) (int, error) {
+	query := `SELECT ` + githubRunnerCount("NULL") + ` FROM (SELECT $1::bigint AS workspace_id) j;`
+
+	var count int
+	err := r.client.GetContext(ctx, &count, query, workspaceId)
+	return count, err
 }
 
 // GetGitHubRunner describes the runner that a VM was started as, or returns
@@ -971,7 +1072,8 @@ func (r *PostgresBackendRepository) GetGitHubRunner(ctx context.Context, workspa
 			SELECT a.status FROM github_runner_job a
 			WHERE a.workspace_id = j.workspace_id AND a.runner_name = j.vm AND a.runner_name <> ''
 			LIMIT 1
-		), '') AS job_status
+		), '') AS job_status,
+		j.waiting, j.vm_ready_at IS NOT NULL AS ready
 	FROM github_runner_job j
 	WHERE j.workspace_id = $1 AND j.vm = $2 AND j.vm <> ''
 	LIMIT 1;
@@ -989,11 +1091,71 @@ func (r *PostgresBackendRepository) GetGitHubRunner(ctx context.Context, workspa
 	return &runner, nil
 }
 
+// ObserveGitHubRunner records, on the job a runner was started for, what the
+// runner's VM was found to be doing: what the job waits for meanwhile, and
+// when the VM was ready, if it is. The first time it was found ready stays.
+func (r *PostgresBackendRepository) ObserveGitHubRunner(ctx context.Context, workspaceId uint, vmName, waiting string, readyAt *time.Time) error {
+	query := `
+	UPDATE github_runner_job SET waiting = $3, vm_ready_at = COALESCE(vm_ready_at, $4)
+	WHERE workspace_id = $1 AND vm = $2 AND vm <> '';
+	`
+	_, err := r.client.ExecContext(ctx, query, workspaceId, vmName, waiting, readyAt)
+	return err
+}
+
+// IsSurplusGitHubRunner reports whether an idle runner is one more than the
+// queued jobs of its repository and label can take. Each such job has a
+// runner in the idle ones that come first by name, so that of several idle
+// runners, each asking for itself, the same ones are left for the jobs.
+// Idle means that the runner's VM is up and that GitHub has given it no job.
+// The VMs that exist are read in the order of their names, and what each is
+// a runner of is asked of each, for the reason githubRunnerCount gives.
+func (r *PostgresBackendRepository) IsSurplusGitHubRunner(ctx context.Context, workspaceId uint, vmName string) (bool, error) {
+	query := `
+	SELECT (
+		SELECT COUNT(*) FROM github_runner_job q
+		WHERE q.workspace_id = j.workspace_id AND q.repository = j.repository AND q.label = j.label AND q.status = 'queued'
+	) <= (
+		SELECT COUNT(*) FROM (
+			SELECT v.name FROM persistent_vm v
+			WHERE v.workspace_id = j.workspace_id AND v.name < j.vm
+				AND v.data->>'desired_state' <> 'deleted' AND v.data->>'status' = 'running'
+				AND (
+					SELECT o.repository = j.repository AND o.label = j.label FROM github_runner_job o
+					WHERE o.workspace_id = v.workspace_id AND o.vm = v.name AND o.vm <> ''
+					LIMIT 1
+				)
+				AND COALESCE((
+					SELECT a.status FROM github_runner_job a
+					WHERE a.workspace_id = v.workspace_id AND a.runner_name = v.name AND a.runner_name <> ''
+					LIMIT 1
+				), '') = ''
+			ORDER BY v.name
+		) idle
+	)
+	FROM (
+		SELECT workspace_id, repository, label, vm FROM github_runner_job
+		WHERE workspace_id = $1 AND vm = $2 AND vm <> ''
+		LIMIT 1
+	) j;
+	`
+
+	var surplus bool
+	err := r.client.GetContext(ctx, &surplus, query, workspaceId, vmName)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+
+	return surplus, err
+}
+
 // ReplaceGitHubRunner deletes a runner VM that stopped before GitHub gave it
 // a job, and makes the job it was started for due again, as some queued job
 // is still counting on a runner. One statement does both, so that a crash
-// cannot do only one of them.
-func (r *PostgresBackendRepository) ReplaceGitHubRunner(ctx context.Context, workspaceId uint, vmName, message string) error {
+// cannot do only one of them. The job is due after a time that grows with
+// its attempts, as a runner that stops every time would otherwise be started
+// without a pause, and waits for what waiting says until then.
+func (r *PostgresBackendRepository) ReplaceGitHubRunner(ctx context.Context, workspaceId uint, vmName, message, waiting string) error {
 	query := `
 	WITH deleted AS (
 		UPDATE persistent_vm
@@ -1001,10 +1163,10 @@ func (r *PostgresBackendRepository) ReplaceGitHubRunner(ctx context.Context, wor
 		WHERE workspace_id = $1 AND name = $2 AND data->>'desired_state' <> 'deleted'
 	)
 	UPDATE github_runner_job
-	SET provision_at = NOW(), error = $3
+	SET provision_at = ` + githubRunnerRetry + `, error = $3, waiting = $4
 	WHERE workspace_id = $1 AND vm = $2 AND vm <> '';
 	`
 
-	_, err := r.client.ExecContext(ctx, query, workspaceId, vmName, message)
+	_, err := r.client.ExecContext(ctx, query, workspaceId, vmName, message, waiting)
 	return err
 }
