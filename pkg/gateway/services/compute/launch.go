@@ -232,9 +232,14 @@ const (
 	launchErrorProviderUnavailable  = "provider_unavailable"
 	launchErrorBootstrapFailed      = "bootstrap_failed"
 	launchErrorProviderFailure      = "provider_failure"
-	launchErrorSSHBootstrapFailed   = "ssh_bootstrap_failed"
-	launchErrorStoreFailed          = "store_failed"
-	launchErrorSchedulerFailed      = "scheduler_failed"
+	// The provider refused to sell, and said so: it has none left, or lets
+	// the account buy no more. The launch keeps nothing it bought, and the
+	// same machine may be had from another offer.
+	launchErrorOutOfStock         = "out_of_stock"
+	launchErrorProviderQuota      = "provider_quota"
+	launchErrorSSHBootstrapFailed = "ssh_bootstrap_failed"
+	launchErrorStoreFailed        = "store_failed"
+	launchErrorSchedulerFailed    = "scheduler_failed"
 )
 
 // createPlanReservations buys the machines a plan calls for. On failure it
@@ -283,8 +288,11 @@ func (s *Service) createPlanReservations(ctx context.Context, workspaceID string
 			}
 			if err != nil {
 				_ = s.revokeComputeJoinTokenHash(ctx, hashComputeToken(registrationToken))
-				if errors.Is(err, providers.ErrOutOfStock) || errors.Is(err, providers.ErrQuota) {
-					return created, launchErrorProviderFailure, err
+				switch {
+				case errors.Is(err, providers.ErrOutOfStock):
+					return created, launchErrorOutOfStock, err
+				case errors.Is(err, providers.ErrQuota):
+					return created, launchErrorProviderQuota, err
 				}
 				// Anything but a clear refusal may be an answer that was lost
 				// on the way, with the machine made all the same. It is passed

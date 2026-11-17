@@ -3268,10 +3268,30 @@ func TestLaunchPoolCapacityBuysNothingWhenTheProviderIsOutOfStock(t *testing.T) 
 	})
 	require.NoError(t, err)
 	require.False(t, res.Ok)
-	require.Equal(t, launchErrorProviderFailure, res.ErrorCode)
+	require.Equal(t, launchErrorOutOfStock, res.ErrorCode)
 	require.Contains(t, res.ErrMsg, "out of stock")
 	require.Empty(t, repo.pools["workspace-1"], "no pool is left behind")
 	requireEveryTokenRevoked(t, repo)
+}
+
+// A provider that refuses to sell says so in a way its caller can tell from
+// a failure: the same machine may be had from another offer, and the
+// dashboard goes on to the next one.
+func TestALaunchSaysWhenItsProviderRefusedToSell(t *testing.T) {
+	for code, refusal := range map[string]error{
+		launchErrorOutOfStock:      fmt.Errorf("%w: none left in us-east", providers.ErrOutOfStock),
+		launchErrorProviderQuota:   fmt.Errorf("%w: 8 GPUs at most", providers.ErrQuota),
+		launchErrorProviderFailure: errors.New("internal server error"),
+	} {
+		shadeform := fakeProvider("shadeform", a10gOffer)
+		shadeform.RefuseCreates(refusal)
+		res, err := launchService(&fakeComputeRepo{}, shadeform).LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+			Pool: &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: 1, Ttl: "1h", MaxSpend: 2},
+		})
+		require.NoError(t, err)
+		require.False(t, res.Ok)
+		require.Equal(t, code, res.ErrorCode, refusal)
+	}
 }
 
 func TestLaunchPoolCapacityDeletesWhatItBoughtWhenALaterMachineFails(t *testing.T) {
@@ -3286,7 +3306,7 @@ func TestLaunchPoolCapacityDeletesWhatItBoughtWhenALaterMachineFails(t *testing.
 	})
 	require.NoError(t, err)
 	require.False(t, res.Ok)
-	require.Equal(t, launchErrorProviderFailure, res.ErrorCode)
+	require.Equal(t, launchErrorOutOfStock, res.ErrorCode)
 	require.Contains(t, res.ErrMsg, "out of stock")
 
 	creates := shadeform.Creates()
