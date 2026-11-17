@@ -275,6 +275,7 @@ def _run_interactive_capacity_flow(
             f"Launch {offer_hardware_label(offer)} for ~${hourly:.2f}/hr ({ttl_label(ttl)})?",
             default=True,
         ):
+            terminal.detail("Cancelled.")
             return None
     except KeyboardInterrupt:
         terminal.detail("Cancelled.")

@@ -285,12 +285,15 @@ class TestHandleCapacityVerdict(TestCase):
         with mock.patch.object(terminal, "is_interactive", return_value=True):
             with mock.patch.object(terminal, "select", side_effect=[offer, "1h"]):
                 with mock.patch.object(terminal, "confirm", return_value=False):
-                    result = handle_capacity_verdict(
-                        runner, GetOrCreateStubRequest(gpu="A6000"), response, "function"
-                    )
+                    with mock.patch.object(terminal, "detail") as detail_mock:
+                        result = handle_capacity_verdict(
+                            runner, GetOrCreateStubRequest(gpu="A6000"), response, "function"
+                        )
 
         self.assertIsNone(result)
         runner.gateway_stub.get_or_create_stub.assert_not_called()
+        # Callers exit on a None verdict, so the reason has to be on screen by now.
+        detail_mock.assert_called_once_with("Cancelled.")
 
     def test_interactive_tui_no_offers_fails_with_hint(self):
         runner = _runner()
