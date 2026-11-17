@@ -226,6 +226,7 @@ const (
 	EventComputeActionReservationUsageRecorded   = "reservation.usage_recorded"
 	EventComputeActionReservationRenewed         = "reservation.renewed"
 	EventComputeActionReservationTerminating     = "reservation.terminating"
+	EventComputeActionReservationInterrupted     = "reservation.interrupted"
 	EventComputeActionReservationStatusUpdated   = "reservation.status_updated"
 	EventComputeActionPoolHeartbeat              = "pool.heartbeat"
 	EventComputeActionContainerPlaced            = "container.placed"

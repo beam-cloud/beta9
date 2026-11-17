@@ -18,6 +18,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/providers"
+	"github.com/beam-cloud/beta9/pkg/providers/watch"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/redis/go-redis/v9"
@@ -462,7 +463,7 @@ func TestProvisionBuysTheCheapestMachineThatFits(t *testing.T) {
 	require.Equal(t, Machine{
 		ID: got.MachineID, Pool: "spot-l40s", InstanceID: "verda-1", TokenHash: "hash-of-" + got.MachineID,
 		offerKey: offerKey{Provider: "verda", OfferID: "1L40S.20V", Region: "FIN-01", Spot: true},
-		GPUCount: 1, CPUMillicores: 20_000, MemoryMB: 60_000, HourlyMicros: 90 * microsPerCent,
+		GPU:      "L40S", GPUCount: 1, CPUMillicores: 20_000, MemoryMB: 60_000, HourlyMicros: 90 * microsPerCent,
 		CreatedAt: bought, Until: bought.Add(leaseFor),
 	}, record)
 
@@ -2705,12 +2706,14 @@ func TestDecide(t *testing.T) {
 		idle = false
 	)
 	at := func(after time.Duration) time.Time { return bought.Add(after) }
-	released := func(reason string) func(*Machine) {
-		return func(m *Machine) { m.Release = &Release{Reason: reason} }
+	// released is the release of a machine for reason, which the market's
+	// history names end.
+	released := func(reason, end string) func(*Machine) {
+		return func(m *Machine) { m.Release = &Release{Reason: reason, End: end} }
 	}
 	// failed is the release of a machine its provider could not start.
 	failed := func(m *Machine) {
-		m.Release = &Release{Reason: "its provider failed to start it", SoldOut: true}
+		m.Release = &Release{Reason: "its provider failed to start it", End: watch.ResultFailed, SoldOut: true}
 	}
 
 	tests := []struct {
@@ -2724,7 +2727,7 @@ func TestDecide(t *testing.T) {
 		// A machine that is already being given back.
 		{
 			name: "being given back: nothing more is decided",
-			was:  machine(released("it had nothing to run for 10m0s")),
+			was:  machine(released("it had nothing to run for 10m0s", watch.ResultReleased)),
 			seen: seen(2*time.Hour, providerSaid(gone)),
 		},
 
@@ -2733,7 +2736,7 @@ func TestDecide(t *testing.T) {
 			name: "its provider no longer has it",
 			was:  joined(),
 			seen: seen(time.Hour, providerSaid(gone), worker(types.WorkerStatusAvailable, busy)),
-			want: released("its provider no longer has it"),
+			want: released("its provider no longer has it", watch.ResultGone),
 		},
 		{
 			// A provider can take a moment to know what it has just sold.
@@ -2751,13 +2754,13 @@ func TestDecide(t *testing.T) {
 			name: "its provider still cannot find it after the launch grace",
 			was:  machine(),
 			seen: seen(launchGrace, providerSaid(gone)),
-			want: released("its provider no longer has it"),
+			want: released("its provider no longer has it", watch.ResultGone),
 		},
 		{
 			name: "its provider is deleting it",
 			was:  joined(),
 			seen: seen(time.Hour, providerHas(providers.StatusDeleted), worker(types.WorkerStatusAvailable, busy)),
-			want: released("its provider is deleting it"),
+			want: released("its provider is deleting it", watch.ResultGone),
 		},
 		{
 			// A spot machine, taken back in the middle of its work. Its
@@ -2765,7 +2768,7 @@ func TestDecide(t *testing.T) {
 			name: "its provider took it back",
 			was:  joined(),
 			seen: seen(time.Hour, providerHas(providers.StatusInterrupted), worker(types.WorkerStatusAvailable, busy)),
-			want: released("its provider took it back"),
+			want: released("its provider took it back", watch.ResultInterrupted),
 		},
 		{
 			name: "its provider failed to start it",
@@ -2779,7 +2782,7 @@ func TestDecide(t *testing.T) {
 			name: "its provider says it failed after it had run",
 			was:  joined(),
 			seen: seen(time.Hour, providerHas(providers.StatusFailed), worker(types.WorkerStatusAvailable, busy)),
-			want: released("its provider says it failed"),
+			want: released("its provider says it failed", watch.ResultFailed),
 		},
 		{
 			name: "its provider cannot be asked: it is not given up",
@@ -2797,7 +2800,7 @@ func TestDecide(t *testing.T) {
 			name: "never answered, not listed after the launch grace",
 			was:  machine(func(m *Machine) { m.InstanceID = "" }),
 			seen: seen(launchGrace, providerSaid(gone)),
-			want: released("its provider never created it"),
+			want: released("its provider never created it", ""),
 		},
 		{
 			name: "never answered, and its provider cannot be asked",
@@ -2825,7 +2828,7 @@ func TestDecide(t *testing.T) {
 			seen: seen(time.Minute, providerHas(providers.StatusDeleted)),
 			want: func(m *Machine) {
 				m.InstanceID = "verda-1"
-				released("its provider is deleting it")(m)
+				released("its provider is deleting it", watch.ResultGone)(m)
 			},
 		},
 
@@ -2839,13 +2842,13 @@ func TestDecide(t *testing.T) {
 			name: "not joined by the boot timeout",
 			was:  machine(),
 			seen: seen(20*time.Minute, worker(types.WorkerStatusPending, idle)),
-			want: released("it did not join its pool within 20m0s"),
+			want: released("it did not join its pool within 20m0s", watch.ResultNeverUp),
 		},
 		{
 			name: "not joined by its pool's own boot timeout",
 			was:  machine(),
 			seen: seen(5*time.Minute, func(s *sighting) { s.pool.Provisioning.BootTimeout = types.Duration(5 * time.Minute) }),
-			want: released("it did not join its pool within 5m0s"),
+			want: released("it did not join its pool within 5m0s", watch.ResultNeverUp),
 		},
 		{
 			name: "not joined, and its pool's workers cannot be read",
@@ -2893,7 +2896,7 @@ func TestDecide(t *testing.T) {
 			name: "without a worker for the boot timeout",
 			was:  joined(func(m *Machine) { m.DownSince = at(40 * time.Minute) }),
 			seen: seen(time.Hour),
-			want: released("it has had no worker for 20m0s"),
+			want: released("it has had no worker for 20m0s", watch.ResultLost),
 		},
 
 		// Whether its pool still buys it.
@@ -2924,7 +2927,7 @@ func TestDecide(t *testing.T) {
 			was:  joined(func(m *Machine) { m.PoolGoneSince = at(time.Hour - poolGoneGrace) }),
 			seen: seen(time.Hour, noPool, worker(types.WorkerStatusAvailable, busy)),
 			want: func(m *Machine) {
-				m.Release = &Release{Reason: "its pool no longer buys machines", DrainUntil: at(time.Hour + drainFor)}
+				m.Release = &Release{Reason: "its pool no longer buys machines", End: watch.ResultReleased, DrainUntil: at(time.Hour + drainFor)}
 			},
 		},
 		{
@@ -3328,4 +3331,281 @@ func TestTheLastOfWhatAMachineCostIsCountedOnceWhenItsRecordCannotBeRemoved(t *t
 	// Nothing more is spent on a machine that is gone.
 	w.every(time.Minute, 10*time.Minute)
 	require.Equal(t, spent, w.spentCents())
+}
+
+// recorded is what a provisioner told the market's history became of its
+// machines, oldest first.
+type recorded struct {
+	log      *watch.MemoryLog
+	recorder *watch.Recorder
+}
+
+// recordingOutcomes is a world whose provisioner writes what becomes of its
+// machines to the market's history.
+func recordingOutcomes(t *testing.T) (*world, *recorded) {
+	t.Helper()
+	log := watch.NewMemoryLog()
+	told := &recorded{log: log}
+	var w *world
+	w = newWorld(t, func(opts *Options) {
+		told.recorder = watch.NewRecorder(log, watch.Streams{}, opts.Clock)
+		opts.Outcomes = told.recorder
+	})
+	return w, told
+}
+
+func (r *recorded) outcomes(t *testing.T) []watch.Outcome {
+	t.Helper()
+	r.recorder.Flush(context.Background())
+	var outcomes []watch.Outcome
+	for _, record := range r.log.All("outcomes") {
+		var outcome watch.Outcome
+		require.NoError(t, json.Unmarshal(record.Body, &outcome))
+		outcomes = append(outcomes, outcome)
+	}
+	return outcomes
+}
+
+// A provider that names a price and not its stock is known to have had a
+// machine only from being asked for one. Every machine a pool buys is
+// written to the market's history: how the purchase went, how long the
+// machine took to join, and how long it was kept before it ended, and how.
+func TestWhatBecomesOfAMachineAPoolBuysIsWrittenToTheMarketsHistory(t *testing.T) {
+	w, told := recordingOutcomes(t)
+	w.Tick(w.ctx)
+	machine := w.buy("spot-l40s")
+
+	w.after(3 * time.Minute)
+	require.Len(t, told.outcomes(t), 1, "it has not joined yet")
+	w.workers.join(machine)
+	w.workers.work(machine, true)
+	w.after(tickInterval)
+	up := w.clock.Now()
+	w.every(tickInterval, time.Hour)
+
+	w.verda.SetStatus(machine.InstanceID, providers.StatusInterrupted, "preempted")
+	w.after(tickInterval)
+	ended := w.clock.Now()
+	w.every(tickInterval, 10*time.Minute)
+
+	outcomes := told.outcomes(t)
+	require.Len(t, outcomes, 3, "each is written once")
+	create, active, end := outcomes[0], outcomes[1], outcomes[2]
+
+	require.Equal(t, watch.Outcome{
+		At: bought, Event: watch.OutcomeCreate, Result: watch.ResultOK, Source: watch.SourcePool,
+		Provider: "verda", Cloud: "verda", Region: "FIN-01", Geo: "eu-north", Offer: "1L40S.20V", Spot: true,
+		GPU: "L40S", GPUs: 1, HourlyMicros: 100 * microsPerCent,
+	}, create)
+
+	require.Equal(t, watch.OutcomeActive, active.Event)
+	require.Equal(t, up, active.At)
+	require.Equal(t, up.Sub(bought), active.Took, "how long it took to join, from when it was bought")
+
+	require.Equal(t, watch.OutcomeEnd, end.Event)
+	require.Equal(t, watch.ResultInterrupted, end.Result)
+	require.Equal(t, ended, end.At)
+	require.Equal(t, ended.Sub(bought), end.Took, "how long the machine was had")
+	for _, later := range []watch.Outcome{active, end} {
+		later.At, later.Event, later.Result, later.Took = create.At, create.Event, create.Result, create.Took
+		require.Equal(t, create, later, "every outcome of a machine says the same of what it was bought as")
+	}
+}
+
+func TestAPurchaseAProviderRefusesIsWrittenToTheMarketsHistoryWithWhy(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		result string
+	}{
+		{"it has none left", fmt.Errorf("%w: no capacity in FIN-01", providers.ErrOutOfStock), watch.ResultOutOfStock},
+		{"the account may buy no more", providers.ErrQuota, watch.ResultQuota},
+		{"it failed", errors.New("internal server error"), watch.ResultError},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			w, told := recordingOutcomes(t)
+			w.Tick(w.ctx)
+			w.verda.RefuseCreates(test.err)
+			_, err := w.Provision(w.ctx, "spot-l40s", scheduler.MachineNeed{})
+			require.Error(t, err)
+			w.every(tickInterval, time.Hour)
+
+			outcomes := told.outcomes(t)
+			require.Len(t, outcomes, 1, "a machine that was never made has no end")
+			require.Equal(t, watch.OutcomeCreate, outcomes[0].Event)
+			require.Equal(t, test.result, outcomes[0].Result)
+			require.Equal(t, test.err.Error(), outcomes[0].Err)
+			require.Equal(t, "L40S", outcomes[0].GPU)
+		})
+	}
+}
+
+// How a machine ended says whether it is its provider that is to be held to
+// it: one that never joined, and one that was given back for want of work,
+// are told apart.
+func TestHowAMachineEndedIsWrittenToTheMarketsHistory(t *testing.T) {
+	t.Run("it never joined", func(t *testing.T) {
+		w, told := recordingOutcomes(t)
+		w.Tick(w.ctx)
+		w.buy("spot-l40s")
+		w.every(tickInterval, time.Hour)
+
+		outcomes := told.outcomes(t)
+		require.Len(t, outcomes, 2)
+		require.Equal(t, watch.OutcomeEnd, outcomes[1].Event)
+		require.Equal(t, watch.ResultNeverUp, outcomes[1].Result)
+	})
+	t.Run("it had nothing to run", func(t *testing.T) {
+		w, told := recordingOutcomes(t)
+		w.Tick(w.ctx)
+		machine := w.buy("spot-l40s")
+		w.workers.join(machine)
+		w.workers.work(machine, false)
+		w.every(tickInterval, time.Hour)
+
+		outcomes := told.outcomes(t)
+		require.Len(t, outcomes, 3)
+		require.Equal(t, watch.OutcomeActive, outcomes[1].Event)
+		require.Equal(t, watch.OutcomeEnd, outcomes[2].Event)
+		require.Equal(t, watch.ResultReleased, outcomes[2].Result)
+	})
+}
+
+// endOf is the end the market's history has of a machine, if it has one.
+func endOf(t *testing.T, told *recorded) (watch.Outcome, bool) {
+	t.Helper()
+	var ends []watch.Outcome
+	for _, outcome := range told.outcomes(t) {
+		if outcome.Event == watch.OutcomeEnd {
+			ends = append(ends, outcome)
+		}
+	}
+	require.LessOrEqual(t, len(ends), 1, "a machine ends once")
+	if len(ends) == 0 {
+		return watch.Outcome{}, false
+	}
+	return ends[0], true
+}
+
+// A machine that is given back is had, and paid for, until its provider
+// has deleted it. That is when the market's history says it ended, and not
+// when it was decided to give it back.
+func TestAMachineThatIsGivenBackEndsWhenItHasBeenDeleted(t *testing.T) {
+	t.Run("after its work was waited for", func(t *testing.T) {
+		w, told := recordingOutcomes(t)
+		w.Tick(w.ctx)
+		machine := w.buy("spot-l40s")
+		w.workers.join(machine)
+		w.workers.work(machine, true)
+		w.after(tickInterval)
+
+		// Its pool is deleted, and its work is waited for.
+		w.control.set(func(c *fakeControl) { delete(c.pools, "spot-l40s") })
+		w.every(time.Minute, poolGoneGrace+time.Minute)
+		require.NotNil(t, w.record(machine.ID).Release)
+		w.every(time.Minute, 5*time.Minute)
+		_, ended := endOf(t, told)
+		require.False(t, ended, "it is still running, and still has its work")
+
+		w.workers.work(machine, false)
+		w.after(time.Minute)
+		w.gone(machine)
+		end, ended := endOf(t, told)
+		require.True(t, ended)
+		require.Equal(t, watch.ResultReleased, end.Result)
+		require.Equal(t, w.clock.Now(), end.At)
+		require.Equal(t, w.clock.Now().Sub(bought), end.Took, "how long it was had, with the time its work was waited for")
+	})
+
+	t.Run("however long its provider takes to delete it", func(t *testing.T) {
+		w, told := recordingOutcomes(t)
+		w.Tick(w.ctx)
+		machine := w.buy("spot-l40s")
+		w.workers.join(machine)
+		w.workers.work(machine, false)
+		w.verda.FailDeletes(errors.New("the provider is down"))
+		w.every(time.Minute, 30*time.Minute)
+		require.NotNil(t, w.record(machine.ID).Release)
+		_, ended := endOf(t, told)
+		require.False(t, ended, "its provider still has it")
+
+		w.verda.FailDeletes(nil)
+		w.after(time.Minute)
+		w.gone(machine)
+		end, ended := endOf(t, told)
+		require.True(t, ended)
+		require.Equal(t, watch.ResultReleased, end.Result)
+		require.Equal(t, w.clock.Now(), end.At)
+		require.Equal(t, w.clock.Now().Sub(bought), end.Took)
+
+		w.every(time.Minute, 10*time.Minute)
+		endOf(t, told)
+	})
+
+	t.Run("that never joined its pool", func(t *testing.T) {
+		w, told := recordingOutcomes(t)
+		w.Tick(w.ctx)
+		machine := w.buy("spot-l40s")
+		w.verda.FailDeletes(errors.New("the provider is down"))
+		w.every(time.Minute, time.Hour)
+		require.NotNil(t, w.record(machine.ID).Release)
+		_, ended := endOf(t, told)
+		require.False(t, ended)
+
+		w.verda.FailDeletes(nil)
+		w.after(time.Minute)
+		end, ended := endOf(t, told)
+		require.True(t, ended)
+		require.Equal(t, watch.ResultNeverUp, end.Result)
+		require.Equal(t, w.clock.Now(), end.At)
+	})
+}
+
+// A machine its provider took back ended when that was seen, however long
+// what is left of it takes to delete.
+func TestAMachineItsProviderTookBackEndedWhenThatWasSeen(t *testing.T) {
+	w, told := recordingOutcomes(t)
+	w.Tick(w.ctx)
+	machine := w.buy("spot-l40s")
+	w.workers.join(machine)
+	w.workers.work(machine, true)
+	w.every(tickInterval, time.Hour)
+
+	w.verda.SetStatus(machine.InstanceID, providers.StatusInterrupted, "preempted")
+	w.verda.FailDeletes(errors.New("the provider is down"))
+	w.after(tickInterval)
+	seen := w.clock.Now()
+	end, ended := endOf(t, told)
+	require.True(t, ended)
+	require.Equal(t, watch.ResultInterrupted, end.Result)
+	require.Equal(t, seen, end.At)
+	require.Equal(t, seen.Sub(bought), end.Took)
+
+	w.every(time.Minute, 20*time.Minute)
+	w.verda.FailDeletes(nil)
+	w.after(time.Minute)
+	w.gone(machine)
+	end, _ = endOf(t, told)
+	require.Equal(t, seen, end.At, "it is written once")
+}
+
+// Only what a provider did to a machine ended it before it was given back.
+func TestOnlyAMachineItsProviderEndedHasEndedBeforeItIsDeleted(t *testing.T) {
+	for end, atProvider := range map[string]bool{
+		watch.ResultInterrupted: true,
+		watch.ResultFailed:      true,
+		watch.ResultGone:        true,
+		watch.ResultNeverUp:     false,
+		watch.ResultLost:        false,
+		watch.ResultReleased:    false,
+		"":                      false,
+	} {
+		require.Equal(t, atProvider, endedAtProvider(end), end)
+	}
+	// Whatever a provider's status makes of a machine is its provider's
+	// doing.
+	for status, end := range lostEnd {
+		require.True(t, endedAtProvider(end), status)
+	}
 }

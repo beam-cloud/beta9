@@ -89,6 +89,7 @@ type Gateway struct {
 	workerRepo           repository.WorkerRepository
 	DefaultStorageClient *clients.StorageClient
 	Scheduler            *scheduler.Scheduler
+	market               providerMarket
 	ctx                  context.Context
 	cancelFunc           context.CancelFunc
 	drainCtx             context.Context
@@ -199,6 +200,11 @@ func NewGateway() (*Gateway, error) {
 
 	providerRegistry := providers.NewRegistry(config.Providers, providerOwner)
 
+	// What the providers sell is sampled by one gateway at a time and
+	// shared with the rest, who list offers and answer the dashboard from
+	// it.
+	gateway.market = newProviderMarket(config, providerRegistry, redisClient)
+
 	keyEventManager := common.NewKeyEventManager(redisClient)
 	gateway.ComputeService = computesvc.New(computesvc.Options{
 		Config:           config,
@@ -216,6 +222,8 @@ func NewGateway() (*Gateway, error) {
 		KeyEventManager:  keyEventManager,
 		RedisClient:      redisClient,
 		Tailscale:        tailscale,
+		SampledOffers:    gateway.market.sampledOffers(),
+		Outcomes:         gateway.market.outcomes,
 	})
 
 	// Pools with a provisioning block buy their machines through this. The
@@ -229,11 +237,13 @@ func NewGateway() (*Gateway, error) {
 			MaxHourlyCents: config.Providers.MaxHourlyCents,
 			MaxDailyCents:  config.Providers.MaxDailyCents,
 		},
+		Outcomes: gateway.market.outcomes,
 	})
 	scheduler.SetProvisioner(machineProvisioner)
 
 	gateway.ComputeService.Start(ctx)
 	machineProvisioner.Start(ctx)
+	gateway.market.start(ctx)
 
 	// Removes Redis keys left behind by containers and workers that are gone.
 	// Every replica runs the loop; a Redis lock lets one sweep at a time.
@@ -382,6 +392,7 @@ func (g *Gateway) initHttp() error {
 	apiv1.NewDeploymentGroup(g.baseRouteGroup.Group("/deployment", authMiddleware), g.BackendRepo, g.ContainerRepo, *g.Scheduler, g.RedisClient, g.Config)
 	apiv1.NewAppGroup(g.baseRouteGroup.Group("/app", authMiddleware), g.BackendRepo, g.Config, g.ContainerRepo, *g.Scheduler, g.RedisClient)
 	apiv1.NewPoolGroup(g.baseRouteGroup.Group("/pools", authMiddleware), g.ComputeService)
+	apiv1.NewMarketGroup(g.baseRouteGroup.Group("/market", authMiddleware), g.market.reader)
 
 	return nil
 }

@@ -37,6 +37,11 @@ func normalizePoolConfig(in *pb.PoolConfig) *pb.PoolConfig {
 	if out.ContainerRuntime == "" {
 		out.ContainerRuntime = types.ContainerRuntimeRunc.String()
 	}
+	// Pricing is kept as it is read: on-demand is written as nothing. What
+	// cannot be read is left for computePoolFromProto to refuse.
+	if pricing, err := model.ParsePricing(out.Pricing); err == nil {
+		out.Pricing = string(pricing)
+	}
 	return out
 }
 
@@ -70,6 +75,10 @@ func computePoolFromProto(in *pb.PoolConfig, nodeCount uint32, requireReservatio
 	if err != nil {
 		return model.Pool{}, err
 	}
+	pricing, err := model.ParsePricing(in.Pricing)
+	if err != nil {
+		return model.Pool{}, err
+	}
 
 	pool := model.Pool{
 		Name:           in.Name,
@@ -82,6 +91,7 @@ func computePoolFromProto(in *pb.PoolConfig, nodeCount uint32, requireReservatio
 		Providers:      in.Providers,
 		Regions:        in.Regions,
 		MinReliability: in.MinReliability,
+		Pricing:        pricing,
 	}
 	if requireReservation {
 		if err := pool.Validate(); err != nil {
@@ -116,6 +126,7 @@ func poolOfferToProto(offer providers.Offer) *pb.PoolOffer {
 		RegionDisplayName: offer.RegionDisplayName,
 		Latitude:          offer.Latitude,
 		Longitude:         offer.Longitude,
+		Spot:              offer.Spot,
 	}
 }
 
@@ -126,7 +137,7 @@ func providerInstanceToProto(reservation model.Reservation, projectCost computeC
 		projectCost = identityCost
 	}
 	machineID := reservation.MachineID
-	if machineID == "" && reservation.Managed() && reservation.Status == model.ReservationFailed {
+	if machineID == "" && reservation.Managed() && reservation.Dismissable() {
 		machineID = reservation.ID
 	}
 	return &pb.ProviderInstance{
@@ -151,6 +162,7 @@ func providerInstanceToProto(reservation model.Reservation, projectCost computeC
 		CpuMillicores:     reservation.CPUMillicores,
 		MemoryMb:          reservation.MemoryMB,
 		StorageMb:         reservation.StorageMB,
+		Spot:              reservation.Spot,
 	}
 }
 

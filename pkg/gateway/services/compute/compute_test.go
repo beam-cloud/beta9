@@ -24,6 +24,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/providers"
+	"github.com/beam-cloud/beta9/pkg/providers/watch"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -3008,27 +3009,152 @@ func TestListPoolOffersAsksEveryProviderWhenThePoolNamesNone(t *testing.T) {
 	require.Empty(t, res.Offers, "the pool's regions narrow what is listed")
 }
 
-// A reservation is sold for a term. A spot machine costs less and can be
-// taken back at any time, so it is neither shown nor bought as one.
-func TestReservationsAreNeverSpotMachines(t *testing.T) {
+// spotA10GOffer is the same machine as a10gOffer, sold for a quarter of the
+// price on the terms that its provider may take it back.
+var spotA10GOffer = func() providers.Offer {
 	spot := a10gOffer
 	spot.Spot = true
 	spot.HourlyCostMicros = a10gOffer.HourlyCostMicros / 4
-	shadeform := fakeProvider("shadeform", spot, a10gOffer)
+	return spot
+}()
+
+// A spot machine costs less and can be taken back at any time. A pool that
+// does not ask for one is neither shown nor sold one, however little it
+// costs.
+func TestAReservationIsOnDemandUnlessThePoolAsksForSpot(t *testing.T) {
+	shadeform := fakeProvider("shadeform", spotA10GOffer, a10gOffer)
 	service := &Service{providers: providers.RegistryOf(shadeform)}
 
-	res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{}})
+	listed := func(pricing string) []*pb.PoolOffer {
+		res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{Pricing: pricing}})
+		require.NoError(t, err)
+		require.True(t, res.Ok, res.ErrMsg)
+		return res.Offers
+	}
+
+	for _, pricing := range []string{"", "on_demand", "on-demand", "On_Demand"} {
+		offers := listed(pricing)
+		require.Len(t, offers, 1, pricing)
+		require.False(t, offers[0].Spot, pricing)
+		require.Equal(t, service.billableOffer(a10gOffer).HourlyCostMicros, offers[0].HourlyCostMicros, "the on-demand machine, at its price")
+	}
+
+	offers := listed("spot")
+	require.Len(t, offers, 1)
+	require.True(t, offers[0].Spot, "a spot offer says that it is one")
+	require.Equal(t, service.billableOffer(spotA10GOffer).HourlyCostMicros, offers[0].HourlyCostMicros)
+
+	// Both ways of buying the one instance type, cheapest first.
+	offers = listed("any")
+	require.Len(t, offers, 2)
+	require.Equal(t, []bool{true, false}, []bool{offers[0].Spot, offers[1].Spot})
+	require.Equal(t, offers[0].Id, offers[1].Id)
+
+	res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{Pricing: "preemptible"}})
 	require.NoError(t, err)
-	require.True(t, res.Ok, res.ErrMsg)
-	require.Len(t, res.Offers, 1)
-	require.Equal(t, service.billableOffer(a10gOffer).HourlyCostMicros, res.Offers[0].HourlyCostMicros, "the on-demand machine, at its price")
+	require.False(t, res.Ok)
+	require.Contains(t, res.ErrMsg, `pricing must be on_demand, spot or any, not "preemptible"`)
 
 	// These are the offers a launch chooses from.
-	offers, err := service.collectPoolOffers(context.Background(), model.Pool{})
+	chosen, err := service.collectPoolOffers(context.Background(), model.Pool{}, nil)
 	require.NoError(t, err)
-	require.Len(t, offers, 1)
-	require.False(t, offers[0].Spot)
-	require.Equal(t, a10gOffer.HourlyCostMicros, offers[0].HourlyCostMicros)
+	require.Len(t, chosen, 1)
+	require.False(t, chosen[0].Spot)
+	require.Equal(t, a10gOffer.HourlyCostMicros, chosen[0].HourlyCostMicros)
+}
+
+func TestLaunchPoolCapacityBuysOnDemandWhenSpotCostsLess(t *testing.T) {
+	shadeform := fakeProvider("shadeform", spotA10GOffer, a10gOffer)
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, shadeform)
+
+	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		Pool: &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: 1, OfferId: "A10G", Ttl: "1h", MaxSpend: 2},
+	})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+
+	creates := shadeform.Creates()
+	require.Len(t, creates, 1)
+	require.False(t, creates[0].Offer.Spot)
+	require.Zero(t, creates[0].MaxHourlyCostMicros, "an on-demand machine's price does not move, so it has no limit")
+	reservation := repo.pools["workspace-1"][0].Reservations[0]
+	require.False(t, reservation.Spot)
+	require.Equal(t, a10gOffer.HourlyCostMicros, reservation.HourlyCostMicros)
+	require.Len(t, res.Pool.Reservations, 1)
+	require.False(t, res.Pool.Reservations[0].Spot)
+}
+
+func TestLaunchPoolCapacityBuysASpotMachineWhenThePoolAsksForSpot(t *testing.T) {
+	shadeform := fakeProvider("shadeform", spotA10GOffer, a10gOffer)
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, shadeform)
+
+	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		Pool: &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: 1, OfferId: "A10G", Ttl: "1h", MaxSpend: 2, Pricing: "spot"},
+	})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+
+	creates := shadeform.Creates()
+	require.Len(t, creates, 1)
+	require.True(t, creates[0].Offer.Spot)
+	require.Equal(t, spotA10GOffer.HourlyCostMicros, creates[0].Offer.HourlyCostMicros)
+	// The machine is kept for as long as it costs no more than its tenant
+	// pays for it, which is the offer's price and Beam's margin.
+	require.Equal(t, service.billableMicros(spotA10GOffer.HourlyCostMicros), creates[0].MaxHourlyCostMicros)
+	require.Greater(t, creates[0].MaxHourlyCostMicros, spotA10GOffer.HourlyCostMicros)
+
+	state := repo.pools["workspace-1"][0]
+	require.Equal(t, "spot", state.Config.Pricing, "the pool remembers how its machines are bought")
+	reservation := state.Reservations[0]
+	require.True(t, reservation.Spot)
+	require.Equal(t, spotA10GOffer.HourlyCostMicros, reservation.HourlyCostMicros)
+	require.Equal(t, spotA10GOffer.HourlyCostMicros, reservation.CommittedMicros, "one hour at the spot price")
+	require.Len(t, res.Pool.Reservations, 1)
+	require.True(t, res.Pool.Reservations[0].Spot, "the machine is listed as the spot machine it is")
+}
+
+func TestLaunchPoolCapacityBuysWhicheverCostsLessWhenThePoolTakesEither(t *testing.T) {
+	// One spot machine is in stock, and two are wanted.
+	lastSpot := spotA10GOffer
+	lastSpot.Available = 1
+	shadeform := fakeProvider("shadeform", a10gOffer, lastSpot)
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, shadeform)
+
+	res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		Pool: &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: 2, Ttl: "1h", MaxSpend: 4, Pricing: "any"},
+	})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+
+	bought := []bool{}
+	for _, create := range shadeform.Creates() {
+		bought = append(bought, create.Offer.Spot)
+	}
+	require.ElementsMatch(t, []bool{true, false}, bought, "the spot machine, and an on-demand one for the rest")
+}
+
+// A pool that was filled with on-demand machines and is then given spot ones
+// holds both, and says so.
+func TestAddingSpotMachinesToAnOnDemandPoolMakesItHoldEither(t *testing.T) {
+	onDemand := &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: 1, MaxSpend: 2}
+	spot := &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: 1, MaxSpend: 2, Pricing: "spot"}
+
+	require.Equal(t, "any", mergePoolConfigForLaunch(onDemand, spot).Pricing)
+	require.Equal(t, "any", mergePoolConfigForLaunch(spot, onDemand).Pricing)
+	require.Equal(t, "spot", mergePoolConfigForLaunch(spot, spot).Pricing)
+	require.Empty(t, mergePoolConfigForLaunch(onDemand, onDemand).Pricing)
+	require.Empty(t, normalizePoolConfig(&pb.PoolConfig{Name: "pool-1", Pricing: "On-Demand"}).Pricing, "on-demand is written as nothing")
+}
+
+// Only a reservation is bought one way or the other. A pool of the tenant's
+// own machines has no use for the setting.
+func TestOnlyAReservationNamesHowItsMachinesAreSold(t *testing.T) {
+	err := model.Pool{Name: "pool-1", Pricing: model.PricingSpot}.Validate()
+	require.Error(t, err)
+	require.NoError(t, model.Pool{Name: "pool-1"}.Validate())
 }
 
 func TestListPoolOffersNeedsAProvider(t *testing.T) {
@@ -3142,10 +3268,30 @@ func TestLaunchPoolCapacityBuysNothingWhenTheProviderIsOutOfStock(t *testing.T) 
 	})
 	require.NoError(t, err)
 	require.False(t, res.Ok)
-	require.Equal(t, launchErrorProviderFailure, res.ErrorCode)
+	require.Equal(t, launchErrorOutOfStock, res.ErrorCode)
 	require.Contains(t, res.ErrMsg, "out of stock")
 	require.Empty(t, repo.pools["workspace-1"], "no pool is left behind")
 	requireEveryTokenRevoked(t, repo)
+}
+
+// A provider that refuses to sell says so in a way its caller can tell from
+// a failure: the same machine may be had from another offer, and the
+// dashboard goes on to the next one.
+func TestALaunchSaysWhenItsProviderRefusedToSell(t *testing.T) {
+	for code, refusal := range map[string]error{
+		launchErrorOutOfStock:      fmt.Errorf("%w: none left in us-east", providers.ErrOutOfStock),
+		launchErrorProviderQuota:   fmt.Errorf("%w: 8 GPUs at most", providers.ErrQuota),
+		launchErrorProviderFailure: errors.New("internal server error"),
+	} {
+		shadeform := fakeProvider("shadeform", a10gOffer)
+		shadeform.RefuseCreates(refusal)
+		res, err := launchService(&fakeComputeRepo{}, shadeform).LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+			Pool: &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: 1, Ttl: "1h", MaxSpend: 2},
+		})
+		require.NoError(t, err)
+		require.False(t, res.Ok)
+		require.Equal(t, code, res.ErrorCode, refusal)
+	}
 }
 
 func TestLaunchPoolCapacityDeletesWhatItBoughtWhenALaterMachineFails(t *testing.T) {
@@ -3160,7 +3306,7 @@ func TestLaunchPoolCapacityDeletesWhatItBoughtWhenALaterMachineFails(t *testing.
 	})
 	require.NoError(t, err)
 	require.False(t, res.Ok)
-	require.Equal(t, launchErrorProviderFailure, res.ErrorCode)
+	require.Equal(t, launchErrorOutOfStock, res.ErrorCode)
 	require.Contains(t, res.ErrMsg, "out of stock")
 
 	creates := shadeform.Creates()
@@ -6757,16 +6903,127 @@ func TestListPoolOffersFailsWhenNoProviderAnswers(t *testing.T) {
 	require.Contains(t, res.ErrMsg, "shadeform: shadeform is down")
 }
 
-// The providers that pools buy their own machines from are configured in the
-// same place. What one of them sells on demand is not for a tenant to
-// reserve, however little it costs, and it is not asked.
-func TestOnlyProvidersThatSellReservationsAreAskedWhatTheySell(t *testing.T) {
+// Every provider that is configured sells reservations, and the cheapest of
+// what they all sell is what is bought.
+func TestEveryConfiguredProviderSellsReservations(t *testing.T) {
 	cheaper := a10gOffer
 	cheaper.HourlyCostMicros = a10gOffer.HourlyCostMicros / 2
 	verda := &faultyProvider{Fake: fakeProvider("verda", cheaper)}
 	shadeform := fakeProvider("shadeform", a10gOffer)
 	repo := &fakeComputeRepo{}
 	service := launchService(repo, verda, shadeform)
+
+	res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{}})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	listed := []string{}
+	for _, offer := range res.Offers {
+		listed = append(listed, offer.Provider)
+	}
+	require.Equal(t, []string{"verda", "shadeform"}, listed, "cheapest first")
+
+	res, err = service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{Providers: []string{"shadeform"}}})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Len(t, res.Offers, 1, "a pool that names providers is shown theirs alone")
+	require.Equal(t, "shadeform", res.Offers[0].Provider)
+
+	launched, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		Pool: &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Nodes: 1, Ttl: "1h", MaxSpend: 2},
+	})
+	require.NoError(t, err)
+	require.True(t, launched.Ok, launched.ErrMsg)
+	require.Len(t, verda.Creates(), 1)
+	require.Empty(t, shadeform.Creates())
+}
+
+// The providers are asked at the same time, and what they answer is put
+// together in the same order whichever of them answers first.
+func TestProvidersAreAskedWhatTheySellAtTheSameTime(t *testing.T) {
+	release := make(chan struct{})
+	asked := make(chan string, 2)
+	slow := func(name string, offer providers.Offer) *waitingProvider {
+		return &waitingProvider{Fake: fakeProvider(name, offer), asked: asked, release: release}
+	}
+	service := &Service{providers: providers.RegistryOf(slow("aws", a10gOffer), slow("gcp", a10gOffer))}
+
+	done := make(chan []providers.Offer, 1)
+	go func() {
+		offers, err := service.collectPoolOffers(context.Background(), model.Pool{}, nil)
+		require.NoError(t, err)
+		done <- offers
+	}()
+
+	// Both are asked before either has answered.
+	waiting := []string{}
+	for range 2 {
+		select {
+		case name := <-asked:
+			waiting = append(waiting, name)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("only %v were asked while no provider had answered", waiting)
+		}
+	}
+	require.ElementsMatch(t, []string{"aws", "gcp"}, waiting)
+	close(release)
+
+	offers := <-done
+	require.Len(t, offers, 2)
+	require.Equal(t, []string{"aws", "gcp"}, []string{offers[0].Provider, offers[1].Provider})
+}
+
+// waitingProvider says that it was asked what it sells, and answers when it
+// is released.
+type waitingProvider struct {
+	*providers.Fake
+	asked   chan<- string
+	release <-chan struct{}
+}
+
+func (p *waitingProvider) Offers(ctx context.Context, filter providers.OfferFilter) ([]providers.Offer, error) {
+	p.asked <- p.Name()
+	<-p.release
+	return p.Fake.Offers(ctx, filter)
+}
+
+// A provider whose client panics has not answered. The others' offers are
+// still listed.
+func TestAProviderThatPanicsDoesNotHideWhatTheOthersSell(t *testing.T) {
+	service := &Service{providers: providers.RegistryOf(
+		&panickingProvider{Fake: fakeProvider("aws")},
+		fakeProvider("shadeform", a10gOffer),
+	)}
+
+	res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{}})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Len(t, res.Offers, 1)
+	require.Equal(t, "shadeform", res.Offers[0].Provider)
+
+	res, err = service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{Providers: []string{"aws"}}})
+	require.NoError(t, err)
+	require.False(t, res.Ok)
+	require.Contains(t, res.ErrMsg, "aws: listing offers panicked: catalogue has no prices")
+}
+
+type panickingProvider struct{ *providers.Fake }
+
+func (p *panickingProvider) Offers(context.Context, providers.OfferFilter) ([]providers.Offer, error) {
+	panic("catalogue has no prices")
+}
+
+// The config can name the providers that sell reservations. The providers
+// that pools buy their own machines from are configured in the same place,
+// and what one of those sells is then not for a tenant to reserve, however
+// little it costs, and it is not asked.
+func TestOnlyProvidersTheConfigNamesSellReservations(t *testing.T) {
+	cheaper := a10gOffer
+	cheaper.HourlyCostMicros = a10gOffer.HourlyCostMicros / 2
+	verda := &faultyProvider{Fake: fakeProvider("verda", cheaper)}
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, verda, shadeform)
+	service.appConfig.ManagedCompute.Reservations.Providers = []string{"hetzner", "shadeform"}
 
 	for _, named := range [][]string{nil, {"verda", "shadeform"}} {
 		res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{Providers: named}})
@@ -7332,10 +7589,122 @@ func TestStatusCheckDeletesWhatIsLeftOfAMachineTheProviderTookBack(t *testing.T)
 	m.provider.SetStatus(m.instance, providers.StatusInterrupted, "")
 
 	reservation := m.check(t, 0)
-	require.Equal(t, model.ReservationFailed, reservation.Status)
+	require.Equal(t, model.ReservationFailed, reservation.Status, "a machine that was not bought as spot was not the provider's to take")
+	require.Equal(t, reconcileReasonProviderFailed, reservation.TerminatingReason)
 	require.Equal(t, instanceInterruptedMessage, reservation.LastStatusMessage)
 	require.Equal(t, []string{m.instance}, m.provider.Deletes(), "a stopped machine or its disk is not left at the provider")
 	require.True(t, m.tokenRevoked())
+	require.Empty(t, reported(m.events, types.EventComputeActionReservationInterrupted))
+}
+
+// newSpotMachine has a running spot machine that is wanted for six hours, in
+// a workspace that can pay for it.
+func newSpotMachine(t *testing.T) (*boughtMachine, *fakeManagedBilling) {
+	t.Helper()
+	m := boughtMachineAt(time.Now().UTC().Truncate(time.Second), providers.StatusActive, 6*time.Hour)
+	m.state.Reservations[0].Spot = true
+	m.state.Reservations[0].BillingCursorAt = m.now
+	billing := &fakeManagedBilling{balanceDecision: healthyBalance}
+	m.service.billing = billing
+	return m, billing
+}
+
+// A spot machine is sold on the terms that its provider may take it back.
+// When it does, the reservation ends as interrupted and not as a failure,
+// what is left of the machine is deleted, and the tenant is billed for the
+// time the machine was theirs and no longer.
+func TestASpotMachineItsProviderTakesBackEndsItsReservationAndItsBilling(t *testing.T) {
+	m, billing := newSpotMachine(t)
+
+	// While the machine runs, its time is billed.
+	reservation := m.check(t, 10*time.Minute)
+	require.Equal(t, model.ReservationActive, reservation.Status)
+	require.Len(t, billing.usage, 1)
+	require.Equal(t, 10*time.Minute, billing.usage[0].EndAt.Sub(billing.usage[0].StartAt))
+
+	m.provider.SetStatus(m.instance, providers.StatusInterrupted, "")
+	reservation = m.check(t, 10*time.Minute)
+	require.Equal(t, model.ReservationInterrupted, reservation.Status)
+	require.Equal(t, reconcileReasonInterrupted, reservation.TerminatingReason)
+	require.Equal(t, instanceInterruptedMessage, reservation.LastStatusMessage)
+	require.Empty(t, reservation.LastError)
+	require.True(t, reservation.Closed())
+	require.False(t, reservation.ActiveAt(m.now), "the machine no longer counts towards what the pool has")
+	require.Equal(t, []string{m.instance}, m.provider.Deletes(), "a stopped machine or its disk is not left at the provider")
+	require.Empty(t, m.provider.Everything())
+	require.True(t, m.tokenRevoked())
+	require.Equal(t, []string{reconcileReasonInterrupted}, reported(m.events, types.EventComputeActionReservationInterrupted))
+
+	// The time up to the check that found the machine gone is billed, once.
+	require.Len(t, billing.usage, 2)
+	require.Equal(t, 10*time.Minute, billing.usage[1].EndAt.Sub(billing.usage[1].StartAt))
+
+	// Nothing more is billed however long the reservation stays listed, and
+	// the provider is not asked about the machine again.
+	for range 3 {
+		reservation = m.check(t, time.Hour)
+	}
+	require.Equal(t, model.ReservationInterrupted, reservation.Status)
+	require.Len(t, billing.usage, 2)
+	require.Len(t, m.provider.Deletes(), 1)
+	require.Empty(t, reported(m.events, types.EventComputeActionReservationInterrupted), "it is reported once")
+}
+
+func TestASpotMachineThatCannotBeDeletedYetStillEndsAsInterrupted(t *testing.T) {
+	m, _ := newSpotMachine(t)
+	m.provider.SetStatus(m.instance, providers.StatusInterrupted, "spot capacity was reclaimed")
+	m.provider.FailDeletes(errors.New("provider is down"))
+
+	reservation := m.check(t, 0)
+	require.Equal(t, model.ReservationTerminating, reservation.Status)
+	require.Equal(t, reconcileReasonInterrupted, reservation.TerminatingReason)
+	require.Equal(t, "spot capacity was reclaimed", reservation.LastStatusMessage)
+	require.Empty(t, reported(m.events, types.EventComputeActionReservationInterrupted), "it is not reported until the machine is gone")
+
+	m.provider.FailDeletes(nil)
+	reservation = m.check(t, 2*reconcileStatusCheckInterval)
+	require.Equal(t, model.ReservationInterrupted, reservation.Status, "it ends as the interruption it was, not as a release")
+	require.Equal(t, "spot capacity was reclaimed", reservation.LastStatusMessage)
+	require.Empty(t, reservation.LastError)
+	require.Equal(t, []string{reconcileReasonInterrupted}, reported(m.events, types.EventComputeActionReservationInterrupted))
+	require.Empty(t, m.provider.Everything())
+}
+
+// An interrupted reservation stays in the pool's record, where its tenant
+// sees what became of the machine, until the tenant dismisses it. Nothing is
+// left at the provider to delete by then.
+func TestAnInterruptedReservationIsListedUntilItIsDismissed(t *testing.T) {
+	m, _ := newSpotMachine(t)
+	m.state.CreatedByTokenID = "owner-token"
+	m.provider.SetStatus(m.instance, providers.StatusInterrupted, "")
+	reservation := m.check(t, 0)
+	require.Equal(t, model.ReservationInterrupted, reservation.Status)
+
+	listed := providerInstanceToProto(reservation, nil)
+	require.Equal(t, "interrupted", listed.Status)
+	require.True(t, listed.Spot)
+	require.Equal(t, instanceInterruptedMessage, listed.StatusMessage)
+
+	res, err := m.service.DeletePrivateMachine(
+		testAuthContext("workspace-1", "owner-token"),
+		&pb.DeleteMachineRequest{PoolName: "pool-1", MachineId: reservation.ID},
+	)
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Empty(t, m.state.Reservations)
+	require.Len(t, m.provider.Deletes(), 1, "the machine was deleted when it was taken back, and is not deleted again")
+}
+
+func TestDeletingAPoolLeavesAnInterruptedMachineAlone(t *testing.T) {
+	m, _ := newSpotMachine(t)
+	m.provider.SetStatus(m.instance, providers.StatusInterrupted, "")
+	m.check(t, 0)
+	require.Len(t, m.provider.Deletes(), 1)
+
+	res, err := m.service.DeletePool(testAuthContext("workspace-1", "owner-token"), &pb.DeletePoolRequest{Name: "pool-1"})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Len(t, m.provider.Deletes(), 1, "nothing of it is left at the provider")
 }
 
 func TestStatusCheckKeepsDeletingAFailedMachineUntilTheProviderLetsItGo(t *testing.T) {
@@ -8950,4 +9319,254 @@ func TestAMachineThatWasBoughtIsNotRemovedByHand(t *testing.T) {
 	machine, err = repo.GetAgentMachineState(ctx, "admin-workspace", "l40s", byHand.MachineID)
 	require.NoError(t, err)
 	require.Nil(t, machine)
+}
+
+// heardOffers is what the market's sampler last heard the providers sell,
+// by provider. A provider it has not heard from lately is not in it.
+type heardOffers map[string][]providers.Offer
+
+func (h heardOffers) Offers(ctx context.Context, provider string) ([]providers.Offer, bool) {
+	offers, fresh := h[provider]
+	return offers, fresh
+}
+
+// What is for sale is listed from what the sampler last heard, so that a
+// page of offers does not wait for seven providers. A provider the sampler
+// has not heard from lately is asked. A purchase asks the provider itself:
+// it buys what is for sale now, at the price it is for sale at now.
+func TestOffersAreListedFromWhatTheSamplerLastHeardAndBoughtFromTheProviderItself(t *testing.T) {
+	now := a10gOffer
+	now.HourlyCostMicros = 2 * a10gOffer.HourlyCostMicros
+	shadeform := &faultyProvider{Fake: fakeProvider("shadeform", now)}
+	verda := &faultyProvider{Fake: fakeProvider("verda", a10gOffer)}
+	heard := a10gOffer
+	heard.Provider = "shadeform"
+	other := a10gOffer
+	other.ID, other.InstanceType, other.GPU, other.Provider = "H100", "H100", "H100", "shadeform"
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, shadeform, verda)
+	service.sampledOffers = heardOffers{"shadeform": {heard, other}}
+
+	res, err := service.ListPoolOffers(context.Background(), &pb.ListPoolOffersRequest{Pool: &pb.PoolConfig{Gpu: []string{"A10G"}}})
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Len(t, res.Offers, 2, "what was heard is put through what the pool asks for, like what a provider answers")
+	listed := map[string]int64{}
+	for _, offer := range res.Offers {
+		listed[offer.Provider] = offer.HourlyCostMicros
+	}
+	require.Equal(t, service.billableMicros(a10gOffer.HourlyCostMicros), listed["shadeform"], "the price the sampler heard, and not the one the provider has now")
+	require.Equal(t, service.billableMicros(a10gOffer.HourlyCostMicros), listed["verda"], "a provider the sampler has not heard from is asked")
+
+	launched, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+		Pool: &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Providers: []string{"shadeform"}, Nodes: 1, Ttl: "1h", MaxSpend: 5},
+	})
+	require.NoError(t, err)
+	require.True(t, launched.Ok, launched.ErrMsg)
+	require.Len(t, shadeform.Creates(), 1)
+	require.Equal(t, now.HourlyCostMicros, shadeform.Creates()[0].Offer.HourlyCostMicros, "the machine is bought at the price it is for sale at now")
+}
+
+// outcomesOf is what the service told the market's history became of its
+// machines.
+func outcomesOf(t *testing.T, service *Service, log *watch.MemoryLog) []watch.Outcome {
+	t.Helper()
+	service.outcomes.Flush(context.Background())
+	var outcomes []watch.Outcome
+	for _, record := range log.All("outcomes") {
+		var outcome watch.Outcome
+		require.NoError(t, json.Unmarshal(record.Body, &outcome))
+		outcomes = append(outcomes, outcome)
+	}
+	return outcomes
+}
+
+func recordOutcomes(service *Service) *watch.MemoryLog {
+	log := watch.NewMemoryLog()
+	service.outcomes = watch.NewRecorder(log, watch.Streams{}, nil)
+	return log
+}
+
+// A provider that gives a price and no word on its stock is known to have
+// had a machine, or not, only from being asked for one. Every purchase is
+// written to the market's history with how it went.
+func TestEveryPurchaseIsWrittenToTheMarketsHistoryWithHowItWent(t *testing.T) {
+	provider := &faultyProvider{Fake: fakeProvider("aws", spotA10GOffer)}
+	service := launchService(&fakeComputeRepo{}, provider)
+	log := recordOutcomes(service)
+	launch := func() *pb.LaunchPoolCapacityResponse {
+		res, err := service.LaunchPoolCapacity(testAuthContext("workspace-1", "token-1"), &pb.LaunchPoolCapacityRequest{
+			Pool: &pb.PoolConfig{Name: "pool-1", Gpu: []string{"A10G"}, Pricing: "spot", Nodes: 1, Ttl: "1h", MaxSpend: 5},
+		})
+		require.NoError(t, err)
+		return res
+	}
+
+	require.True(t, launch().Ok)
+	provider.RefuseCreates(fmt.Errorf("%w: no spot capacity", providers.ErrOutOfStock))
+	require.False(t, launch().Ok)
+
+	outcomes := outcomesOf(t, service, log)
+	require.Len(t, outcomes, 2)
+	bought, refused := outcomes[0], outcomes[1]
+	require.Equal(t, watch.OutcomeCreate, bought.Event)
+	require.Equal(t, watch.ResultOK, bought.Result)
+	require.Equal(t, watch.SourceReservation, bought.Source)
+	require.Equal(t, "aws", bought.Provider)
+	require.Equal(t, spotA10GOffer.Region, bought.Region)
+	require.Equal(t, watch.Geo(spotA10GOffer.Region), bought.Geo)
+	require.Equal(t, "A10G", bought.GPU)
+	require.True(t, bought.Spot)
+	require.Equal(t, spotA10GOffer.HourlyCostMicros, bought.HourlyMicros, "what the provider charges, not what the tenant pays")
+	require.Equal(t, watch.ResultOutOfStock, refused.Result)
+	require.Contains(t, refused.Err, "no spot capacity")
+}
+
+// What became of a machine after it was bought is written too: how long it
+// took to come up, and how it ended. That a spot machine was taken back is
+// what tells how long one is kept.
+func TestWhatBecomesOfAReservedMachineIsWrittenToTheMarketsHistory(t *testing.T) {
+	m := boughtMachineAt(time.Now().UTC().Truncate(time.Second), providers.StatusPending, 6*time.Hour)
+	m.state.Reservations[0].Spot = true
+	m.state.Reservations[0].GPU, m.state.Reservations[0].GPUCount = "A10G", 1
+	m.state.Reservations[0].Region = "newyork-usa-1"
+	m.state.Reservations[0].BillingCursorAt = m.now
+	m.service.billing = &fakeManagedBilling{balanceDecision: healthyBalance}
+	log := recordOutcomes(m.service)
+
+	m.check(t, time.Minute)
+	require.Empty(t, outcomesOf(t, m.service, log), "it is still booting")
+
+	m.provider.SetStatus(m.instance, providers.StatusActive, "")
+	m.check(t, time.Minute)
+	m.check(t, time.Minute)
+	m.provider.SetStatus(m.instance, providers.StatusInterrupted, "")
+	m.check(t, 10*time.Minute)
+	m.check(t, 10*time.Minute)
+
+	outcomes := outcomesOf(t, m.service, log)
+	require.Len(t, outcomes, 2, "each is written once")
+	up, ended := outcomes[0], outcomes[1]
+	require.Equal(t, watch.OutcomeActive, up.Event)
+	require.Equal(t, time.Hour+2*time.Minute, up.Took, "from when it was bought")
+	require.Equal(t, watch.OutcomeEnd, ended.Event)
+	require.Equal(t, watch.ResultInterrupted, ended.Result)
+	require.Equal(t, time.Hour+13*time.Minute, ended.Took)
+	require.Equal(t, "shadeform", ended.Provider)
+	require.Equal(t, "us-east", ended.Geo)
+	require.Equal(t, "A10G", ended.GPU)
+	require.True(t, ended.Spot)
+	require.Equal(t, int64(1_000_000), ended.HourlyMicros)
+}
+
+// eventsOf is the outcomes of one event, in the order they were written.
+func eventsOf(outcomes []watch.Outcome, event string) []watch.Outcome {
+	var of []watch.Outcome
+	for _, outcome := range outcomes {
+		if outcome.Event == event {
+			of = append(of, outcome)
+		}
+	}
+	return of
+}
+
+// A purchase is written to the market's history when it is made, before
+// the launch it is part of is known to succeed. A machine that the launch
+// gives back when it fails is written as given back: the history has no
+// machine that was bought and never ended.
+func TestAMachineThatAFailedLaunchGivesBackHasAnEndInTheMarketsHistory(t *testing.T) {
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	shadeform.RefuseCreatesAfter(1, fmt.Errorf("%w: none left in us-east", providers.ErrOutOfStock))
+	service := launchService(&fakeComputeRepo{}, shadeform)
+	log := recordOutcomes(service)
+
+	res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), service, 2)
+	require.False(t, res.Ok)
+	require.Empty(t, shadeform.Everything(), "the machine that was bought is deleted again")
+
+	outcomes := outcomesOf(t, service, log)
+	purchases := eventsOf(outcomes, watch.OutcomeCreate)
+	require.Len(t, purchases, 2)
+	require.Equal(t, watch.ResultOK, purchases[0].Result)
+	require.Equal(t, watch.ResultOutOfStock, purchases[1].Result)
+
+	ends := eventsOf(outcomes, watch.OutcomeEnd)
+	require.Len(t, ends, 1, "the machine that was bought ended, and the one that was refused never was")
+	ended := ends[0]
+	require.Equal(t, watch.ResultReleased, ended.Result, "it is not held against its provider")
+	require.Equal(t, watch.SourceReservation, ended.Source)
+	require.GreaterOrEqual(t, ended.Took, time.Duration(0))
+	ended.At, ended.Event, ended.Result, ended.Took = purchases[0].At, purchases[0].Event, purchases[0].Result, purchases[0].Took
+	require.Equal(t, purchases[0], ended, "it says the same of what the machine was bought as")
+}
+
+// A machine whose purchase went unanswered was made all the same, and is
+// given back like any other.
+func TestAMachineWhosePurchaseWentUnansweredHasAnEndOnceItIsGivenBack(t *testing.T) {
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	shadeform.LoseAnswers(1)
+	service := launchService(&fakeComputeRepo{}, shadeform)
+	log := recordOutcomes(service)
+
+	res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), service, 1)
+	require.False(t, res.Ok)
+	require.Len(t, shadeform.Deletes(), 1)
+
+	outcomes := outcomesOf(t, service, log)
+	require.Equal(t, watch.ResultUnanswered, eventsOf(outcomes, watch.OutcomeCreate)[0].Result)
+	ends := eventsOf(outcomes, watch.OutcomeEnd)
+	require.Len(t, ends, 1)
+	require.Equal(t, watch.ResultReleased, ends[0].Result)
+}
+
+// A machine that a failed launch cannot give back is left to the
+// reconciler, which writes its end when it has deleted it: once.
+func TestAMachineAFailedLaunchCouldNotGiveBackEndsWhenItIsDeleted(t *testing.T) {
+	shadeform := fakeProvider("shadeform", a10gOffer)
+	shadeform.RefuseCreatesAfter(1, fmt.Errorf("%w: none left in us-east", providers.ErrOutOfStock))
+	shadeform.FailDeletes(errors.New("provider is down"))
+	repo := &fakeComputeRepo{}
+	service := launchService(repo, shadeform)
+	log := recordOutcomes(service)
+
+	res := launchA10Gs(t, testAuthContext("workspace-1", "token-1"), service, 2)
+	require.False(t, res.Ok)
+	require.Len(t, shadeform.Everything(), 1)
+	require.Empty(t, eventsOf(outcomesOf(t, service, log), watch.OutcomeEnd), "it is still there")
+
+	shadeform.FailDeletes(nil)
+	left := repo.pools["workspace-1"][0].Reservations[0]
+	require.NoError(t, service.reconcileManagedComputeAt(context.Background(), left.CreatedAt.Add(time.Minute)))
+	require.NoError(t, service.reconcileManagedComputeAt(context.Background(), left.CreatedAt.Add(2*time.Minute)))
+	require.Empty(t, shadeform.Everything())
+
+	ends := eventsOf(outcomesOf(t, service, log), watch.OutcomeEnd)
+	require.Len(t, ends, 1)
+	require.Equal(t, watch.ResultReleased, ends[0].Result)
+	require.Equal(t, time.Minute, ends[0].Took)
+}
+
+// A purchase that its provider never made a machine for has nothing to end,
+// whether that is known at once or only after the provider has had its
+// time to list one.
+func TestAPurchaseThatMadeNoMachineHasNoEndInTheMarketsHistory(t *testing.T) {
+	p := launchUnanswered(t)
+	log := recordOutcomes(p.service)
+
+	require.Equal(t, model.ReservationDeleted, p.reconcile(t, providers.LaunchGrace).Status)
+	require.Empty(t, p.provider.Deletes(), "the provider made none")
+	require.Empty(t, outcomesOf(t, p.service, log))
+}
+
+func TestAMachineATenantGivesBackIsNotHeldAgainstItsProvider(t *testing.T) {
+	for reason, result := range map[string]string{
+		reconcileReasonInterrupted:        watch.ResultInterrupted,
+		reconcileReasonProviderFailed:     watch.ResultFailed,
+		reconcileReasonReservationExpired: watch.ResultExpired,
+		reconcileReasonMachineReleased:    watch.ResultReleased,
+		reconcileReasonLaunchFailed:       watch.ResultReleased,
+		reconcileReasonCreditExhausted:    watch.ResultReleased,
+	} {
+		require.Equal(t, result, reservationEnd(reason), reason)
+	}
 }
