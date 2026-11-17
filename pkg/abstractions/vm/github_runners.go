@@ -407,6 +407,9 @@ func (r *githubRunners) job(c echo.Context) (*types.GitHubRunnerJob, error) {
 // cancelJob cancels the workflow run of a job, and so the run's other jobs
 // too, as GitHub cancels no job on its own. The runner of a job that ran is
 // deleted as every runner is, once GitHub reports the job completed.
+//
+// A job that has completed has nothing left to cancel, which is what the
+// request was after: a list that was read a moment ago still offers it.
 func (r *githubRunners) cancelJob(c echo.Context) error {
 	if err := r.ready(); err != nil {
 		return err
@@ -419,7 +422,7 @@ func (r *githubRunners) cancelJob(c echo.Context) error {
 
 	switch {
 	case job.Status == types.GitHubJobCompleted:
-		return echo.NewHTTPError(http.StatusConflict, "the job has already completed")
+		return c.NoContent(http.StatusAccepted)
 	case job.RunID == 0:
 		return echo.NewHTTPError(http.StatusConflict, "the job was recorded without its workflow run; cancel the run on GitHub")
 	}

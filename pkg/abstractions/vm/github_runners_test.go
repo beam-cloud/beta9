@@ -1416,7 +1416,7 @@ func TestGitHubRunnerCancelJob(t *testing.T) {
 		"run finished since":   {job: running, github: `409 {"message":"Cannot cancel a workflow run that is completed."}`, code: 202},
 		"App may not cancel":   {github: `403 {"message":"Resource not accessible by integration"}`, code: 403, message: "The GitHub App needs the Actions permission set to read and write; accept the updated permissions on GitHub"},
 		"GitHub fails":         {github: `500 {}`, code: 500, message: "Internal Server Error"},
-		"completed":            {job: func(job *types.GitHubRunnerJob) { job.Status = types.GitHubJobCompleted }, code: 409, message: "the job has already completed"},
+		"completed":            {job: func(job *types.GitHubRunnerJob) { job.Status = types.GitHubJobCompleted }, code: 202},
 		"recorded without run": {job: func(job *types.GitHubRunnerJob) { job.RunID = 0 }, code: 409, message: "the job was recorded without its workflow run; cancel the run on GitHub"},
 		"of another workspace": {job: func(job *types.GitHubRunnerJob) { job.WorkspaceID = 9 }, code: 404, message: "job not found"},
 		"unknown":              {id: "2", code: 404, message: "job not found"},
