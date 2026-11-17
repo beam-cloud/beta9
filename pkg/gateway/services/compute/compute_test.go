@@ -7670,6 +7670,162 @@ func TestASpotMachineThatCannotBeDeletedYetStillEndsAsInterrupted(t *testing.T) 
 	require.Empty(t, m.provider.Everything())
 }
 
+// repricing is a provider that takes no price limit for a spot machine, and
+// says what one costs now. GCP, Verda and Shadeform are such.
+type repricing struct {
+	*faultyProvider
+	// price is what a spot machine costs an hour now, and priceErr is why
+	// that cannot be learnt.
+	price    int64
+	priceErr error
+	// priced are the offers whose price was asked for, in order.
+	priced []providers.Offer
+}
+
+func (p *repricing) SpotPrice(ctx context.Context, offer providers.Offer) (int64, error) {
+	p.priced = append(p.priced, offer)
+	return p.price, p.priceErr
+}
+
+// newRepricedMachine has a running spot machine, reserved at a dollar an
+// hour, at a provider that takes no price limit. The machine costs now what
+// it cost when it was bought.
+func newRepricedMachine(t *testing.T) (*boughtMachine, *repricing, *fakeManagedBilling) {
+	t.Helper()
+	m, billing := newSpotMachine(t)
+	provider := &repricing{faultyProvider: m.provider, price: m.state.Reservations[0].HourlyCostMicros}
+	m.service.providers = providers.RegistryOf(provider)
+	return m, provider, billing
+}
+
+// A spot machine is billed at the price it was reserved at, and costs what
+// its provider's spot price has come to. A provider that takes no price
+// limit goes on charging whatever that is, so the machine is given back once
+// it costs more than its tenant pays, and the reservation ends as one whose
+// provider took the machine back does.
+func TestASpotMachineThatComesToCostMoreThanItsTenantPaysIsGivenBack(t *testing.T) {
+	m, provider, billing := newRepricedMachine(t)
+	reserved := &m.state.Reservations[0]
+	reserved.OfferID, reserved.Cloud, reserved.Region = "A10G", "massedcompute", "newyork-usa-1"
+	paid := m.service.billableMicros(reserved.HourlyCostMicros)
+	require.Greater(t, paid, reserved.HourlyCostMicros, "the tenant pays the price and Beam's margin")
+	log := recordOutcomes(m.service)
+
+	// The price rises to what the tenant pays. The machine still earns what
+	// it costs, and is kept.
+	provider.price = paid
+	reservation := m.check(t, 10*time.Minute)
+	require.Equal(t, model.ReservationActive, reservation.Status)
+	require.Empty(t, m.provider.Deletes())
+	require.Equal(t, []providers.Offer{{
+		ID: "A10G", Provider: "shadeform", Cloud: "massedcompute", Region: "newyork-usa-1", HourlyCostMicros: 1_000_000, Spot: true,
+	}}, provider.priced, "the provider is asked about the machine that was bought")
+	require.Len(t, billing.usage, 1)
+
+	// It rises above it.
+	provider.price = paid + 1
+	reservation = m.check(t, 10*time.Minute)
+	require.Equal(t, model.ReservationInterrupted, reservation.Status)
+	require.Equal(t, reconcileReasonSpotPrice, reservation.TerminatingReason)
+	require.Equal(t, instancePricedOutMessage, reservation.LastStatusMessage)
+	require.Empty(t, reservation.LastError)
+	require.True(t, reservation.Closed())
+	require.False(t, reservation.ActiveAt(m.now), "the machine no longer counts towards what the pool has")
+	require.Equal(t, []string{m.instance}, m.provider.Deletes(), "the machine is not left at the provider, where it costs money")
+	require.Empty(t, m.provider.Everything())
+	require.True(t, m.tokenRevoked())
+	require.Equal(t, []string{reconcileReasonSpotPrice}, reported(m.events, types.EventComputeActionReservationInterrupted))
+
+	// The time up to the check that found the price is billed, once, and
+	// nothing after it. The provider is not asked about the machine again.
+	require.Len(t, billing.usage, 2)
+	require.Equal(t, 10*time.Minute, billing.usage[1].EndAt.Sub(billing.usage[1].StartAt))
+	for range 3 {
+		reservation = m.check(t, time.Hour)
+	}
+	require.Equal(t, model.ReservationInterrupted, reservation.Status)
+	require.Len(t, billing.usage, 2)
+	require.Len(t, m.provider.Deletes(), 1)
+	require.Len(t, provider.priced, 2)
+	require.Empty(t, reported(m.events, types.EventComputeActionReservationInterrupted), "it is reported once")
+
+	// The market's history is told why the machine went: for its price, and
+	// not because its provider took it back.
+	outcomes := outcomesOf(t, m.service, log)
+	require.Len(t, outcomes, 1)
+	require.Equal(t, watch.OutcomeEnd, outcomes[0].Event)
+	require.Equal(t, watch.ResultPricedOut, outcomes[0].Result)
+}
+
+// A machine that is still booting costs its provider's price already.
+func TestASpotMachineIsGivenBackForItsPriceBeforeItHasComeUp(t *testing.T) {
+	m, provider, _ := newRepricedMachine(t)
+	m.provider.SetStatus(m.instance, providers.StatusPending, "")
+	m.state.Reservations[0].Status = model.ReservationPending
+	provider.price = 2 * m.service.billableMicros(m.state.Reservations[0].HourlyCostMicros)
+
+	reservation := m.check(t, 0)
+	require.Equal(t, model.ReservationInterrupted, reservation.Status)
+	require.Equal(t, reconcileReasonSpotPrice, reservation.TerminatingReason)
+	require.Equal(t, []string{m.instance}, m.provider.Deletes())
+}
+
+func TestASpotMachineGivenBackForItsPriceThatCannotBeDeletedYetStillEndsAsInterrupted(t *testing.T) {
+	m, provider, _ := newRepricedMachine(t)
+	provider.price = 2 * m.service.billableMicros(m.state.Reservations[0].HourlyCostMicros)
+	m.provider.FailDeletes(errors.New("provider is down"))
+
+	reservation := m.check(t, 0)
+	require.Equal(t, model.ReservationTerminating, reservation.Status)
+	require.Equal(t, reconcileReasonSpotPrice, reservation.TerminatingReason)
+	require.Empty(t, reported(m.events, types.EventComputeActionReservationInterrupted), "it is not reported until the machine is gone")
+
+	// The price falls again before the machine can be deleted. It is given
+	// back all the same: its tenant has been told it is going.
+	provider.price = m.state.Reservations[0].HourlyCostMicros
+	m.provider.FailDeletes(nil)
+	reservation = m.check(t, 2*reconcileStatusCheckInterval)
+	require.Equal(t, model.ReservationInterrupted, reservation.Status)
+	require.Equal(t, instancePricedOutMessage, reservation.LastStatusMessage)
+	require.Empty(t, reservation.LastError)
+	require.Equal(t, []string{reconcileReasonSpotPrice}, reported(m.events, types.EventComputeActionReservationInterrupted))
+	require.Empty(t, m.provider.Everything())
+}
+
+// Not knowing what a machine costs is no reason to take it from its tenant.
+func TestASpotMachineWhosePriceCannotBeLearntIsKept(t *testing.T) {
+	m, provider, _ := newRepricedMachine(t)
+	provider.price, provider.priceErr = 0, errors.New("shadeform is down")
+
+	for range 3 {
+		reservation := m.check(t, 10*time.Minute)
+		require.Equal(t, model.ReservationActive, reservation.Status)
+		require.Empty(t, reservation.LastError, "the machine is as it was")
+	}
+	require.Len(t, provider.priced, 3, "it is asked again on every check")
+	require.Empty(t, m.provider.Deletes())
+	require.False(t, m.tokenRevoked())
+}
+
+// The price of a machine that is not spot does not move, and a provider that
+// takes a price limit ends a spot machine that costs more by itself. Neither
+// is asked what the machine costs now.
+func TestOnlyASpotMachineWithNoPriceLimitAtItsProviderIsCheckedForItsPrice(t *testing.T) {
+	m, provider, _ := newRepricedMachine(t)
+	m.state.Reservations[0].Spot = false
+	provider.price = 10 * m.state.Reservations[0].HourlyCostMicros
+
+	reservation := m.check(t, 10*time.Minute)
+	require.Equal(t, model.ReservationActive, reservation.Status)
+	require.Empty(t, provider.priced, "an on-demand machine")
+
+	limited, _ := newSpotMachine(t)
+	limited.provider.SetOffers(providers.Offer{ID: "A10G", GPU: "A10G", GPUCount: 1, Spot: true, HourlyCostMicros: 10_000_000})
+	reservation = limited.check(t, 10*time.Minute)
+	require.Equal(t, model.ReservationActive, reservation.Status, "a provider that was given the limit with the purchase")
+	require.Empty(t, limited.provider.Deletes())
+}
+
 // An interrupted reservation stays in the pool's record, where its tenant
 // sees what became of the machine, until the tenant dismisses it. Nothing is
 // left at the provider to delete by then.
@@ -9462,6 +9618,7 @@ func TestWhatBecomesOfAReservedMachineIsWrittenToTheMarketsHistory(t *testing.T)
 func TestAMachineATenantGivesBackIsNotHeldAgainstItsProvider(t *testing.T) {
 	for reason, result := range map[string]string{
 		reconcileReasonInterrupted:        watch.ResultInterrupted,
+		reconcileReasonSpotPrice:          watch.ResultPricedOut,
 		reconcileReasonProviderFailed:     watch.ResultFailed,
 		reconcileReasonReservationExpired: watch.ResultExpired,
 		reconcileReasonMachineReleased:    watch.ResultReleased,

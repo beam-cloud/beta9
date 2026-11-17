@@ -461,6 +461,25 @@ func (c *GCP) regionOffers(ctx context.Context, name string) ([]Offer, error) {
 	return offers, nil
 }
 
+// SpotPrice is what a Spot VM of the offer's machine type costs an hour now
+// in the offer's region, with its disk. It is the price the region's offers
+// are made from, which is read at most once an hour.
+func (c *GCP) SpotPrice(ctx context.Context, offer Offer) (int64, error) {
+	_, machineType, ok := strings.Cut(offer.ID, "/")
+	if !ok || machineType == "" || offer.Region == "" {
+		return 0, fmt.Errorf("a GCP offer needs a zone, a machine type and a region: %+v", offer)
+	}
+	facts, err := c.region(ctx, offer.Region)
+	if err != nil {
+		return 0, err
+	}
+	price, priced := facts.prices[machineType]
+	if !priced {
+		return 0, fmt.Errorf("GCP has no Spot price for %s in %s", machineType, offer.Region)
+	}
+	return price + hourlyDiskMicros(c.config.DiskGB, gcpDiskMicrosPerGBMonth), nil
+}
+
 // Create buys a Spot VM at the price Google charges for one: there is no
 // price to bid, so the request's price limit has nothing to be passed to.
 // The offer is this client's own and is not looked up again: what Compute

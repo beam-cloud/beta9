@@ -29,13 +29,17 @@ func (s *Service) billableOffer(offer providers.Offer) providers.Offer {
 }
 
 // spotPriceLimitMicros is the most a spot machine bought from this offer may
-// come to cost an hour before its provider takes it back. It is nothing for
-// a machine that is not spot, whose price does not move.
+// come to cost an hour before it is given up. It is nothing for a machine
+// that is not spot, whose price does not move.
 //
 // The limit is what the tenant is billed an hour, not what the offer costs:
 // a spot price moves, and a limit at the price the machine was bought for
 // loses the machine to the first rise. Up to what the tenant pays, the
 // machine is kept, and it never costs more than it earns.
+//
+// A provider that takes a price limit is given this one with the purchase,
+// and takes the machine back itself. One that takes none is asked its price
+// while the machine runs: see spotPriceOver.
 func (s *Service) spotPriceLimitMicros(offer providers.Offer) int64 {
 	if !offer.Spot {
 		return 0

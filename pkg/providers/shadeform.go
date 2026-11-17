@@ -30,19 +30,28 @@ const (
 	// shadeformPreempted is the status detail of a spot instance that
 	// Shadeform took back.
 	shadeformPreempted = "preempted"
+
+	// shadeformPricesFor is how long the catalogue stands for what a spot
+	// machine that was bought earlier costs now.
+	shadeformPricesFor = 5 * time.Minute
 )
 
 // Shadeform resells GPU machines from other clouds through one API.
 type Shadeform struct {
 	api   *api
 	owner string
+	// now is the clock, which a test sets.
+	now func() time.Time
+
+	// prices is the catalogue as SpotPrice last read it.
+	prices cached[[]shadeformInstanceType]
 }
 
 // NewShadeform makes a client that buys as owner: the name this control
 // plane puts on the instances it buys.
 func NewShadeform(config types.ShadeformProviderConfig, owner string) *Shadeform {
 	baseURL := cmp.Or(config.BaseURL, shadeformBaseURL)
-	return &Shadeform{api: newAPI(baseURL, withHeader("X-API-KEY", config.ApiKey)), owner: owner}
+	return &Shadeform{api: newAPI(baseURL, withHeader("X-API-KEY", config.ApiKey)), owner: owner, now: time.Now}
 }
 
 func (c *Shadeform) Name() string { return shadeformName }
@@ -72,7 +81,9 @@ type shadeformInstanceType struct {
 	} `json:"availability"`
 }
 
-func (c *Shadeform) Offers(ctx context.Context, filter OfferFilter) ([]Offer, error) {
+// instanceTypes reads Shadeform's catalogue: every instance type, with what
+// each region has of it and for how much.
+func (c *Shadeform) instanceTypes(ctx context.Context) ([]shadeformInstanceType, error) {
 	// Each type is read by itself, so that one this client cannot read does
 	// not hide what the others sell.
 	var catalogue struct {
@@ -82,7 +93,7 @@ func (c *Shadeform) Offers(ctx context.Context, filter OfferFilter) ([]Offer, er
 		return nil, err
 	}
 
-	offers := []Offer{}
+	read := make([]shadeformInstanceType, 0, len(catalogue.InstanceTypes))
 	unread := []string{}
 	for _, written := range catalogue.InstanceTypes {
 		var instanceType shadeformInstanceType
@@ -90,6 +101,26 @@ func (c *Shadeform) Offers(ctx context.Context, filter OfferFilter) ([]Offer, er
 			unread = append(unread, fmt.Sprintf("%s: %v", instanceType.ShadeInstanceType, err))
 			continue
 		}
+		read = append(read, instanceType)
+	}
+	switch {
+	case len(unread) == 0:
+	case len(unread) == len(catalogue.InstanceTypes):
+		return nil, fmt.Errorf("Shadeform's instance types could not be read: %s", unread[0])
+	default:
+		log.Warn().Str("provider", shadeformName).Strs("unread", unread).Msg("could not read some instance types; their offers are left out")
+	}
+	return read, nil
+}
+
+func (c *Shadeform) Offers(ctx context.Context, filter OfferFilter) ([]Offer, error) {
+	instanceTypes, err := c.instanceTypes(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	offers := []Offer{}
+	for _, instanceType := range instanceTypes {
 		// Only virtual machines launch on request; bare metal is ordered.
 		if instanceType.DeploymentType != "vm" || instanceType.Configuration.NumGPUs == 0 {
 			continue
@@ -115,14 +146,33 @@ func (c *Shadeform) Offers(ctx context.Context, filter OfferFilter) ([]Offer, er
 			})
 		}
 	}
-	switch {
-	case len(unread) == 0:
-	case len(unread) == len(catalogue.InstanceTypes):
-		return nil, fmt.Errorf("Shadeform's instance types could not be read: %s", unread[0])
-	default:
-		log.Warn().Str("provider", shadeformName).Strs("unread", unread).Msg("could not read some instance types; their offers are left out")
-	}
 	return filter.matching(offers), nil
+}
+
+// SpotPrice is what a spot machine of the offer's instance type costs an
+// hour now in the offer's cloud and region. It is the price of the region's
+// spot entry in the catalogue, whether or not the entry has stock. The
+// catalogue is read for it at most once in shadeformPricesFor, however many
+// machines are asked about.
+func (c *Shadeform) SpotPrice(ctx context.Context, offer Offer) (int64, error) {
+	instanceTypes, err := c.prices.get(c.now(), shadeformPricesFor, func() ([]shadeformInstanceType, error) {
+		return c.instanceTypes(ctx)
+	})
+	if err != nil {
+		return 0, err
+	}
+	for _, instanceType := range instanceTypes {
+		if instanceType.ShadeInstanceType != offer.ID || instanceType.Cloud != offer.Cloud {
+			continue
+		}
+		for _, stock := range instanceType.Availability {
+			price := instanceType.hourlyMicros(stock.RentalType, stock.HourlyPrice)
+			if stock.Region == offer.Region && stock.RentalType == shadeformSpot && price > 0 {
+				return price, nil
+			}
+		}
+	}
+	return 0, fmt.Errorf("Shadeform has no spot price for %s from %s in %s", offer.ID, offer.Cloud, offer.Region)
 }
 
 // hourlyMicros is what the type costs an hour when rented this way: on
