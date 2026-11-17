@@ -605,6 +605,8 @@ type StubConfigV1 struct {
 	Serving   *ServingConfig    `json:"serving,omitempty"`
 	Pool      *PoolConfig       `json:"pool,omitempty"`
 	Disks     []*pb.DurableDisk `json:"disks,omitempty"`
+	// RootLayer goes under the image of the stub's containers.
+	RootLayer *RootLayer `json:"root_layer,omitempty"`
 	// ManagedEndpoint carries the platform endpoint/service spec for
 	// managed_endpoint/* and managed_service/* stubs.
 	ManagedEndpoint *ManagedEndpointStubConfig `json:"managed_endpoint,omitempty"`

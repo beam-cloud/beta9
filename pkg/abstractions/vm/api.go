@@ -405,6 +405,10 @@ func (s *Service) create(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "capture_exit_snapshot is not a VM option")
 	}
 
+	if spec.RootLayer != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "root_layer is not a VM option")
+	}
+
 	var image *pb.VerifyImageBuildRequest
 	if len(req.Image) > 0 {
 		if seed != "" || spec.ImageID != "" || spec.SourceSnapshotID != "" {

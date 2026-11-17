@@ -59,6 +59,19 @@ type VMRepository interface {
 	ObserveGitHubRunner(context.Context, uint, string, string, *time.Time) error
 	IsSurplusGitHubRunner(context.Context, uint, string) (bool, error)
 	ReplaceGitHubRunner(context.Context, uint, string, string, string) error
+
+	// The cache of a workspace's runners: the disk its runners start on,
+	// and the generations of it that jobs leave.
+	SetGitHubRunnerEnhancedCache(context.Context, uint, bool) (*types.GitHubRunnerInstallation, error)
+	CurrentGitHubRunnerCache(context.Context, uint, string) (*types.GitHubRunnerCache, error)
+	ClaimGitHubRunnerCachePublisher(context.Context, uint, string, time.Duration) (bool, error)
+	RetireGitHubRunnerCache(context.Context, uint, time.Duration) error
+	ListGitHubRunnerCacheCandidates(context.Context) ([]types.GitHubRunnerCacheCandidate, error)
+	PromoteGitHubRunnerCache(context.Context, types.GitHubRunnerCacheCandidate) (bool, error)
+	RejectGitHubRunnerCacheCandidate(context.Context, types.GitHubRunnerCacheCandidate, string) error
+	ListRetiredGitHubRunnerCaches(context.Context, time.Duration) ([]types.GitHubRunnerCache, error)
+	DeleteGitHubRunnerCache(context.Context, uint, string) error
+	GetGitHubRunnerJobByRunner(context.Context, uint, string) (*types.GitHubRunnerJob, error)
 }
 
 // PublicVMRepository is required only when public VM networking is enabled.
@@ -664,10 +677,10 @@ func (r *PostgresBackendRepository) TryLockVM(ctx context.Context, id string) (f
 var ErrGitHubRunnerConflict = errors.New("GitHub runner connection conflict")
 
 const (
-	githubRunnerInstallationColumns = `id, workspace_id, token_id, account, account_type, paused, created_at`
+	githubRunnerInstallationColumns = `id, workspace_id, token_id, account, account_type, paused, enhanced_cache, created_at`
 	githubRunnerJobColumns          = `id, run_id, installation_id, workspace_id, repository, workflow, name, url, label, status,
 	conclusion, runner_name, created_at, started_at, completed_at, vm, attempts, provision_at, error, waiting,
-	received_at, registered_at, vm_ready_at`
+	received_at, registered_at, vm_ready_at, default_branch`
 
 	// githubRunnerRetry is when a job is due again after its runner could not
 	// be started, or stopped before it took a job: five seconds later at
@@ -802,9 +815,9 @@ func (r *PostgresBackendRepository) SaveGitHubRunnerJob(ctx context.Context, job
 	query := `
 	INSERT INTO github_runner_job (
 		id, installation_id, workspace_id, repository, workflow, name, url, label, status,
-		conclusion, runner_name, created_at, started_at, completed_at, run_id, provision_at, received_at
+		conclusion, runner_name, created_at, started_at, completed_at, run_id, default_branch, provision_at, received_at
 	)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW(), NOW())
 	ON CONFLICT (id) DO UPDATE
 	SET status = EXCLUDED.status, conclusion = EXCLUDED.conclusion, runner_name = EXCLUDED.runner_name,
 		started_at = EXCLUDED.started_at, completed_at = EXCLUDED.completed_at,
@@ -815,7 +828,8 @@ func (r *PostgresBackendRepository) SaveGitHubRunnerJob(ctx context.Context, job
 	`
 
 	_, err := r.client.ExecContext(ctx, query, job.ID, job.InstallationID, job.WorkspaceID, job.Repository, job.Workflow,
-		job.Name, job.URL, job.Label, job.Status, job.Conclusion, job.RunnerName, job.CreatedAt, job.StartedAt, job.CompletedAt, job.RunID)
+		job.Name, job.URL, job.Label, job.Status, job.Conclusion, job.RunnerName, job.CreatedAt, job.StartedAt, job.CompletedAt, job.RunID,
+		job.DefaultBranch)
 	return err
 }
 
@@ -1169,4 +1183,187 @@ func (r *PostgresBackendRepository) ReplaceGitHubRunner(ctx context.Context, wor
 
 	_, err := r.client.ExecContext(ctx, query, workspaceId, vmName, message, waiting)
 	return err
+}
+
+const githubRunnerCacheColumns = `workspace_id, disk_name, snapshot_id, created_at, publisher_at, retired_at`
+
+// SetGitHubRunnerEnhancedCache turns the cache of the account a workspace
+// has connected on or off, and returns the account as it then is.
+func (r *PostgresBackendRepository) SetGitHubRunnerEnhancedCache(ctx context.Context, workspaceId uint, enabled bool) (*types.GitHubRunnerInstallation, error) {
+	query := `
+	UPDATE github_runner_installation SET enhanced_cache = $2 WHERE workspace_id = $1
+	RETURNING ` + githubRunnerInstallationColumns + `;`
+	return r.getGitHubRunnerInstallation(ctx, query, workspaceId, enabled)
+}
+
+// CurrentGitHubRunnerCache returns the cache disk a workspace's runners
+// start on, which is a new one, named diskName, if it has none. It returns
+// nil when another gateway made the workspace's disk in the meantime.
+func (r *PostgresBackendRepository) CurrentGitHubRunnerCache(ctx context.Context, workspaceId uint, diskName string) (*types.GitHubRunnerCache, error) {
+	query := `
+	WITH created AS (
+		INSERT INTO github_runner_cache (workspace_id, disk_name) VALUES ($1, $2)
+		ON CONFLICT DO NOTHING
+		RETURNING ` + githubRunnerCacheColumns + `
+	)
+	SELECT ` + githubRunnerCacheColumns + ` FROM created
+	UNION ALL
+	SELECT ` + githubRunnerCacheColumns + ` FROM github_runner_cache WHERE workspace_id = $1 AND retired_at IS NULL
+	LIMIT 1;
+	`
+
+	var cache types.GitHubRunnerCache
+	err := r.client.GetContext(ctx, &cache, query, workspaceId, diskName)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &cache, nil
+}
+
+// ClaimGitHubRunnerCachePublisher reports whether a runner that starts now
+// on a workspace's cache disk may be the one to leave its next generation:
+// no other was started to since the disk's last generation, or the last one
+// that was is given up on, as it was started longer than wait ago.
+func (r *PostgresBackendRepository) ClaimGitHubRunnerCachePublisher(ctx context.Context, workspaceId uint, diskName string, wait time.Duration) (bool, error) {
+	query := `
+	UPDATE github_runner_cache SET publisher_at = NOW()
+	WHERE workspace_id = $1 AND disk_name = $2 AND retired_at IS NULL
+		AND (publisher_at IS NULL OR publisher_at <= NOW() - $3 * INTERVAL '1 second');
+	`
+	result, err := r.client.ExecContext(ctx, query, workspaceId, diskName, wait.Seconds())
+	if err != nil {
+		return false, err
+	}
+
+	count, err := result.RowsAffected()
+	return count == 1, err
+}
+
+// RetireGitHubRunnerCache retires the cache disk of a workspace if it is
+// at least as old as age, so that no runner starts on it again and it is
+// deleted.
+func (r *PostgresBackendRepository) RetireGitHubRunnerCache(ctx context.Context, workspaceId uint, age time.Duration) error {
+	query := `
+	UPDATE github_runner_cache SET retired_at = NOW()
+	WHERE workspace_id = $1 AND retired_at IS NULL AND created_at <= NOW() - $2 * INTERVAL '1 second';
+	`
+	_, err := r.client.ExecContext(ctx, query, workspaceId, age.Seconds())
+	return err
+}
+
+// ListGitHubRunnerCacheCandidates returns the generations of the last hour
+// that runners left of the generation their workspace's runners get now,
+// oldest first. A generation is published for the stub of its VM, which is
+// named after the VM, and the VM says which generation it started on.
+func (r *PostgresBackendRepository) ListGitHubRunnerCacheCandidates(ctx context.Context) ([]types.GitHubRunnerCacheCandidate, error) {
+	query := `
+	SELECT c.workspace_id, c.disk_name, c.snapshot_id AS parent, s.external_id::text AS snapshot_id, v.name AS runner, s.created_at
+	FROM github_runner_cache c
+	JOIN disk_snapshot s ON s.workspace_id = c.workspace_id AND s.disk_name = c.disk_name
+		AND s.status = 'available' AND s.deleted_at IS NULL AND s.created_at > NOW() - INTERVAL '1 hour'
+	JOIN stub st ON st.id = s.stub_id AND st.name LIKE 'vm/%'
+	JOIN persistent_vm v ON v.workspace_id = c.workspace_id AND v.id = SUBSTRING(st.name FROM 4)
+	WHERE c.retired_at IS NULL AND s.external_id::text <> c.snapshot_id
+		AND v.data->'spec'->'root_layer'->>'disk_name' = c.disk_name
+		AND COALESCE(v.data->'spec'->'root_layer'->>'snapshot_id', '') = c.snapshot_id
+	ORDER BY s.created_at
+	LIMIT 50;
+	`
+
+	candidates := []types.GitHubRunnerCacheCandidate{}
+	err := r.client.SelectContext(ctx, &candidates, query)
+	return candidates, err
+}
+
+// PromoteGitHubRunnerCache makes a candidate the generation its workspace's
+// runners get, if they still get the one it was made from, and lets the
+// next runner be started to leave a generation. It reports whether it did.
+func (r *PostgresBackendRepository) PromoteGitHubRunnerCache(ctx context.Context, candidate types.GitHubRunnerCacheCandidate) (bool, error) {
+	query := `
+	UPDATE github_runner_cache SET snapshot_id = $4, publisher_at = NULL
+	WHERE workspace_id = $1 AND disk_name = $2 AND snapshot_id = $3 AND retired_at IS NULL;
+	`
+	result, err := r.client.ExecContext(ctx, query, candidate.WorkspaceID, candidate.DiskName, candidate.Parent, candidate.SnapshotID)
+	if err != nil {
+		return false, err
+	}
+
+	count, err := result.RowsAffected()
+	return count == 1, err
+}
+
+// RejectGitHubRunnerCacheCandidate withdraws a candidate for a reason, so
+// that it is not considered again, and lets the next runner be started to
+// leave a generation. Only a generation of a cache disk is withdrawn.
+func (r *PostgresBackendRepository) RejectGitHubRunnerCacheCandidate(ctx context.Context, candidate types.GitHubRunnerCacheCandidate, reason string) error {
+	query := `
+	WITH rejected AS (
+		UPDATE disk_snapshot SET status = 'failed', reason = $4, updated_at = NOW()
+		WHERE workspace_id = $1 AND disk_name = $2 AND external_id::text = $3 AND disk_name LIKE $5
+		RETURNING workspace_id, disk_name
+	)
+	UPDATE github_runner_cache c SET publisher_at = NULL
+	FROM rejected
+	WHERE c.workspace_id = rejected.workspace_id AND c.disk_name = rejected.disk_name;
+	`
+	_, err := r.client.ExecContext(ctx, query, candidate.WorkspaceID, candidate.DiskName, candidate.SnapshotID, reason, types.RootLayerDiskPrefix+"%")
+	return err
+}
+
+// ListRetiredGitHubRunnerCaches returns the cache disks that were retired
+// at least age ago, by when no runner still runs on one.
+func (r *PostgresBackendRepository) ListRetiredGitHubRunnerCaches(ctx context.Context, age time.Duration) ([]types.GitHubRunnerCache, error) {
+	query := `
+	SELECT ` + githubRunnerCacheColumns + ` FROM github_runner_cache
+	WHERE retired_at <= NOW() - $1 * INTERVAL '1 second'
+	ORDER BY retired_at
+	LIMIT 20;
+	`
+
+	caches := []types.GitHubRunnerCache{}
+	err := r.client.SelectContext(ctx, &caches, query, age.Seconds())
+	return caches, err
+}
+
+// DeleteGitHubRunnerCache forgets a retired cache disk and its generations,
+// once what was stored for them is gone. Nothing else deletes the rows of a
+// disk's generations, and these are deleted only for a cache disk.
+func (r *PostgresBackendRepository) DeleteGitHubRunnerCache(ctx context.Context, workspaceId uint, diskName string) error {
+	query := `
+	WITH retired AS (
+		DELETE FROM github_runner_cache
+		WHERE workspace_id = $1 AND disk_name = $2 AND retired_at IS NOT NULL AND disk_name LIKE $3
+		RETURNING workspace_id, disk_name
+	)
+	DELETE FROM disk_snapshot s USING retired
+	WHERE s.workspace_id = retired.workspace_id AND s.disk_name = retired.disk_name;
+	`
+	_, err := r.client.ExecContext(ctx, query, workspaceId, diskName, types.RootLayerDiskPrefix+"%")
+	return err
+}
+
+// GetGitHubRunnerJobByRunner returns the job that GitHub gave a runner, or
+// nil if it has reported none.
+func (r *PostgresBackendRepository) GetGitHubRunnerJobByRunner(ctx context.Context, workspaceId uint, runner string) (*types.GitHubRunnerJob, error) {
+	query := `
+	SELECT ` + githubRunnerJobColumns + ` FROM github_runner_job
+	WHERE workspace_id = $1 AND runner_name = $2 AND runner_name <> ''
+	ORDER BY created_at DESC
+	LIMIT 1;
+	`
+
+	var job types.GitHubRunnerJob
+	err := r.client.GetContext(ctx, &job, query, workspaceId, runner)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &job, nil
 }

@@ -351,7 +351,13 @@ func assembleRoot(vm *microvm.Spec) error {
 	}
 	// virtio-fs inode handles change on cold boots and forks. Keep copied-up
 	// data on the durable disk instead of indexing or referencing lower inodes.
-	overlayOpts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s,index=off,metacopy=off", microvm.ImageMount, upper, work)
+	// A root disk that is never restored can refer to them: a change to a
+	// file's attributes then leaves its data in the image.
+	metacopy := "off"
+	if vm.RootMetacopy {
+		metacopy = "on"
+	}
+	overlayOpts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s,index=off,metacopy=%s", microvm.ImageMount, upper, work, metacopy)
 	if err := unix.Mount("overlay", microvm.NewRoot, "overlay", 0, overlayOpts); err != nil {
 		return fmt.Errorf("mount overlay (%s): %w", overlayOpts, err)
 	}
@@ -1552,6 +1558,7 @@ func runProcess(proc *specs.Process, ctrl *control, workload *workloadMemory) (i
 				continue
 			}
 			code := exitCode(status)
+			exportCache()
 			// Sync before reporting: FUSE_SYNCFS flushes the host filesystems
 			// behind the virtio-fs binds (object-storage volumes upload here),
 			// and the host tears the VM down once it hears of the exit.

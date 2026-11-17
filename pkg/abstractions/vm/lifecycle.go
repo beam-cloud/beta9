@@ -128,7 +128,9 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 		req.Pool = &pb.PoolConfig{Name: v.Spec.Pool}
 	}
 
-	resp, err := s.gateway.GetOrCreateStub(ctx, req)
+	// A root layer is no option of a stub's request, which anyone can make:
+	// it reaches the stub's configuration only from here.
+	resp, err := s.gateway.GetOrCreateStub(types.WithRootLayer(ctx, v.Spec.RootLayer), req)
 	if err != nil {
 		return err
 	}

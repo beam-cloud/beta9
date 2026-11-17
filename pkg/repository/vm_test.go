@@ -743,13 +743,14 @@ func TestGitHubRunnerJobIsClaimedWithinTheLimit(t *testing.T) {
 		`ORDER BY v.name LIMIT $1 ) runners ) + (`, `) >= $1 )`, `ORDER BY provision_at, id LIMIT 100;`)).
 		WithArgs(100).
 		WillReturnRows(sqlmock.NewRows(columns).AddRow(int64(5), int64(77), int64(42), 8, "acme/repo", "CI", "test", "", "beam-4vcpu-ubuntu-2404",
-			"queued", "", "", received, nil, nil, "ghr-a", 3, received, "boom", "Retrying", received, received.Add(time.Second), nil))
+			"queued", "", "", received, nil, nil, "ghr-a", 3, received, "boom", "Retrying", received, received.Add(time.Second), nil, true))
 	due, err := r.ListDueGitHubRunnerJobs(ctx, 100)
 	require.NoError(t, err)
 	registered := received.Add(time.Second)
 	require.Equal(t, []types.GitHubRunnerJob{{ID: 5, RunID: 77, InstallationID: 42, WorkspaceID: 8, Repository: "acme/repo", Workflow: "CI",
 		Name: "test", Label: "beam-4vcpu-ubuntu-2404", Status: "queued", CreatedAt: received, VM: "ghr-a", Attempts: 3, ProvisionAt: &received,
-		Error: "boom", Waiting: "Retrying", ReceivedAt: &received, RegisteredAt: &registered}}, due)
+		Error: "boom", Waiting: "Retrying", ReceivedAt: &received, RegisteredAt: &registered, DefaultBranch: true}}, due,
+		"a due job says whether it is on a default branch, which decides what its runner keeps")
 
 	// Every runner of a workspace is counted for its status.
 	mock.ExpectQuery(statement(`SELECT (`, `v.workspace_id = j.workspace_id`, `ORDER BY v.name LIMIT NULL ) runners ) + (`,
@@ -799,14 +800,14 @@ func TestGitHubRunnerJobTimelineIsStored(t *testing.T) {
 	ctx := context.Background()
 
 	// A job is received when it is first seen, and no later delivery of it
-	// changes that.
+	// changes that, or the branch it was first said to be on.
 	created := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
-	mock.ExpectExec(statement(`completed_at, run_id, provision_at, received_at )`, `$14, $15, NOW(), NOW())`, `ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status,`,
+	mock.ExpectExec(statement(`completed_at, run_id, default_branch, provision_at, received_at )`, `$15, $16, NOW(), NOW())`, `ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status,`,
 		`run_id = COALESCE(NULLIF(EXCLUDED.run_id, 0), github_runner_job.run_id) WHERE`)).
-		WithArgs(int64(5), int64(42), uint(8), "acme/repo", "CI", "test", "", "beam-4vcpu-ubuntu-2404", "queued", "", "", created, nil, nil, int64(77)).
+		WithArgs(int64(5), int64(42), uint(8), "acme/repo", "CI", "test", "", "beam-4vcpu-ubuntu-2404", "queued", "", "", created, nil, nil, int64(77), true).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	require.NoError(t, r.SaveGitHubRunnerJob(ctx, &types.GitHubRunnerJob{ID: 5, RunID: 77, InstallationID: 42, WorkspaceID: 8, Repository: "acme/repo",
-		Workflow: "CI", Name: "test", Label: "beam-4vcpu-ubuntu-2404", Status: "queued", CreatedAt: created}))
+		Workflow: "CI", Name: "test", Label: "beam-4vcpu-ubuntu-2404", Status: "queued", CreatedAt: created, DefaultBranch: true}))
 
 	mock.ExpectExec(statement(`UPDATE github_runner_job SET registered_at = NOW() WHERE id = $1;`)).
 		WithArgs(int64(5)).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -831,10 +832,10 @@ func TestGitHubRunnerJobTimelineIsStored(t *testing.T) {
 	// The times are returned with the job.
 	received, registered := created.Add(time.Second+123*time.Millisecond), created.Add(2*time.Second)
 	columns := strings.Split(strings.Join(strings.Fields(githubRunnerJobColumns), ""), ",")
-	mock.ExpectQuery(statement(`error, waiting, received_at, registered_at, vm_ready_at FROM github_runner_job j WHERE workspace_id = $1 AND id = $2`)).
+	mock.ExpectQuery(statement(`error, waiting, received_at, registered_at, vm_ready_at, default_branch FROM github_runner_job j WHERE workspace_id = $1 AND id = $2`)).
 		WithArgs(uint(8), int64(5)).
 		WillReturnRows(sqlmock.NewRows(columns).AddRow(int64(5), int64(77), int64(42), 8, "acme/repo", "CI", "test", "", "beam-4vcpu-ubuntu-2404",
-			"queued", "", "", created, nil, nil, "ghr-a", 1, nil, "", "", received, registered, ready))
+			"queued", "", "", created, nil, nil, "ghr-a", 1, nil, "", "", received, registered, ready, false))
 	job, err := r.GetGitHubRunnerJob(ctx, 8, 5)
 	require.NoError(t, err)
 	require.Equal(t, &types.GitHubRunnerJob{ID: 5, RunID: 77, InstallationID: 42, WorkspaceID: 8, Repository: "acme/repo", Workflow: "CI", Name: "test",
@@ -1475,4 +1476,119 @@ func TestVMGitHubRunnerQueueIntegration(t *testing.T) {
 	require.True(t, surplus("ghr-s2"))
 	require.NoError(t, repo.SaveGitHubRunnerJob(ctx, job(other, 25, types.GitHubJobQueued, "")))
 	require.False(t, surplus("ghr-s2"))
+}
+
+// The statements that the cache of a workspace's runners is kept with. They
+// say which disk they are for, and those that withdraw or delete what a
+// worker published only do so for a cache disk.
+func TestGitHubRunnerCacheStatements(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	r := repo.(*PostgresBackendRepository)
+	ctx := context.Background()
+	const disk, layers = "root-layer-0123456789abcdef", "root-layer-%"
+	created := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
+	columns := strings.Split(strings.ReplaceAll(githubRunnerCacheColumns, " ", ""), ",")
+
+	// A workspace's cache is the one it has, or a new one.
+	mock.ExpectQuery(statement(`INSERT INTO github_runner_cache (workspace_id, disk_name) VALUES ($1, $2)`, `ON CONFLICT DO NOTHING`,
+		`UNION ALL`, `WHERE workspace_id = $1 AND retired_at IS NULL`, `LIMIT 1;`)).
+		WithArgs(uint(8), disk).
+		WillReturnRows(sqlmock.NewRows(columns).AddRow(8, disk, "generation-1", created, nil, nil))
+	cache, err := r.CurrentGitHubRunnerCache(ctx, 8, disk)
+	require.NoError(t, err)
+	require.Equal(t, &types.GitHubRunnerCache{WorkspaceID: 8, DiskName: disk, SnapshotID: "generation-1", CreatedAt: created}, cache)
+
+	// Another gateway made the workspace's disk in the meantime.
+	mock.ExpectQuery(statement(`INSERT INTO github_runner_cache`)).WithArgs(uint(8), disk).WillReturnRows(sqlmock.NewRows(columns))
+	cache, err = r.CurrentGitHubRunnerCache(ctx, 8, disk)
+	require.NoError(t, err)
+	require.Nil(t, cache)
+
+	// One runner at a time is started to add to the cache.
+	for _, claimed := range []bool{true, false} {
+		affected := int64(0)
+		if claimed {
+			affected = 1
+		}
+		mock.ExpectExec(statement(`UPDATE github_runner_cache SET publisher_at = NOW()`, `WHERE workspace_id = $1 AND disk_name = $2 AND retired_at IS NULL`,
+			`AND (publisher_at IS NULL OR publisher_at <= NOW() - $3 * INTERVAL '1 second');`)).
+			WithArgs(uint(8), disk, float64(900)).WillReturnResult(sqlmock.NewResult(0, affected))
+		got, err := r.ClaimGitHubRunnerCachePublisher(ctx, 8, disk, 15*time.Minute)
+		require.NoError(t, err)
+		require.Equal(t, claimed, got)
+	}
+
+	// A candidate is a generation that the VM it was published for started
+	// on what runners get now, as the VM's own record says.
+	mock.ExpectQuery(statement(`FROM github_runner_cache c`, `JOIN disk_snapshot s ON s.workspace_id = c.workspace_id AND s.disk_name = c.disk_name`,
+		`s.status = 'available' AND s.deleted_at IS NULL AND s.created_at > NOW() - INTERVAL '1 hour'`,
+		`JOIN stub st ON st.id = s.stub_id AND st.name LIKE 'vm/%'`,
+		`JOIN persistent_vm v ON v.workspace_id = c.workspace_id AND v.id = SUBSTRING(st.name FROM 4)`,
+		`WHERE c.retired_at IS NULL AND s.external_id::text <> c.snapshot_id`,
+		`AND v.data->'spec'->'root_layer'->>'disk_name' = c.disk_name`,
+		`AND COALESCE(v.data->'spec'->'root_layer'->>'snapshot_id', '') = c.snapshot_id`, `ORDER BY s.created_at`)).
+		WillReturnRows(sqlmock.NewRows([]string{"workspace_id", "disk_name", "parent", "snapshot_id", "runner", "created_at"}).
+			AddRow(8, disk, "generation-1", "generation-2", "ghr-a", created))
+	candidates, err := r.ListGitHubRunnerCacheCandidates(ctx)
+	require.NoError(t, err)
+	candidate := types.GitHubRunnerCacheCandidate{WorkspaceID: 8, DiskName: disk, Parent: "generation-1", SnapshotID: "generation-2", Runner: "ghr-a", CreatedAt: created}
+	require.Equal(t, []types.GitHubRunnerCacheCandidate{candidate}, candidates)
+
+	// It takes the place of the generation it was made from, and of no other.
+	for _, promoted := range []bool{true, false} {
+		affected := int64(0)
+		if promoted {
+			affected = 1
+		}
+		mock.ExpectExec(statement(`UPDATE github_runner_cache SET snapshot_id = $4, publisher_at = NULL`,
+			`WHERE workspace_id = $1 AND disk_name = $2 AND snapshot_id = $3 AND retired_at IS NULL;`)).
+			WithArgs(uint(8), disk, "generation-1", "generation-2").WillReturnResult(sqlmock.NewResult(0, affected))
+		got, err := r.PromoteGitHubRunnerCache(ctx, candidate)
+		require.NoError(t, err)
+		require.Equal(t, promoted, got)
+	}
+
+	mock.ExpectExec(statement(`UPDATE disk_snapshot SET status = 'failed', reason = $4`,
+		`WHERE workspace_id = $1 AND disk_name = $2 AND external_id::text = $3 AND disk_name LIKE $5`,
+		`UPDATE github_runner_cache c SET publisher_at = NULL`)).
+		WithArgs(uint(8), disk, "generation-2", "the job of the runner did not succeed", layers).WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, r.RejectGitHubRunnerCacheCandidate(ctx, candidate, "the job of the runner did not succeed"))
+
+	// A cache is retired when it is old enough, and deleted once it has
+	// been retired for long enough.
+	mock.ExpectExec(statement(`UPDATE github_runner_cache SET retired_at = NOW()`,
+		`WHERE workspace_id = $1 AND retired_at IS NULL AND created_at <= NOW() - $2 * INTERVAL '1 second';`)).
+		WithArgs(uint(8), float64(7*24*3600)).WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, r.RetireGitHubRunnerCache(ctx, 8, 7*24*time.Hour))
+
+	retiredAt := created.Add(time.Hour)
+	mock.ExpectQuery(statement(`FROM github_runner_cache`, `WHERE retired_at <= NOW() - $1 * INTERVAL '1 second'`, `ORDER BY retired_at`)).
+		WithArgs(float64(25 * 3600)).
+		WillReturnRows(sqlmock.NewRows(columns).AddRow(8, disk, "generation-1", created, nil, retiredAt))
+	retired, err := r.ListRetiredGitHubRunnerCaches(ctx, 25*time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, []types.GitHubRunnerCache{{WorkspaceID: 8, DiskName: disk, SnapshotID: "generation-1", CreatedAt: created, RetiredAt: &retiredAt}}, retired)
+
+	mock.ExpectExec(statement(`DELETE FROM github_runner_cache`,
+		`WHERE workspace_id = $1 AND disk_name = $2 AND retired_at IS NOT NULL AND disk_name LIKE $3`,
+		`DELETE FROM disk_snapshot s USING retired`, `WHERE s.workspace_id = retired.workspace_id AND s.disk_name = retired.disk_name;`)).
+		WithArgs(uint(8), disk, layers).WillReturnResult(sqlmock.NewResult(0, 3))
+	require.NoError(t, r.DeleteGitHubRunnerCache(ctx, 8, disk))
+
+	// The setting is the account's, and the job that ran on a runner is
+	// found by the runner's name.
+	installation := strings.Split(strings.ReplaceAll(githubRunnerInstallationColumns, " ", ""), ",")
+	mock.ExpectQuery(statement(`UPDATE github_runner_installation SET enhanced_cache = $2 WHERE workspace_id = $1`, `RETURNING`)).
+		WithArgs(uint(8), false).
+		WillReturnRows(sqlmock.NewRows(installation).AddRow(int64(42), 8, "token", "acme", "Organization", false, false, created))
+	account, err := r.SetGitHubRunnerEnhancedCache(ctx, 8, false)
+	require.NoError(t, err)
+	require.Equal(t, &types.GitHubRunnerInstallation{ID: 42, WorkspaceID: 8, TokenID: "token", Account: "acme", AccountType: "Organization", CreatedAt: created}, account)
+
+	mock.ExpectQuery(statement(`FROM github_runner_job`, `WHERE workspace_id = $1 AND runner_name = $2 AND runner_name <> ''`)).
+		WithArgs(uint(8), "ghr-a").WillReturnRows(sqlmock.NewRows(strings.Split(strings.Join(strings.Fields(githubRunnerJobColumns), ""), ",")))
+	job, err := r.GetGitHubRunnerJobByRunner(ctx, 8, "ghr-a")
+	require.NoError(t, err)
+	require.Nil(t, job)
+	require.NoError(t, mock.ExpectationsWereMet())
 }

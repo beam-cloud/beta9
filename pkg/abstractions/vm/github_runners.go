@@ -113,6 +113,8 @@ type githubRunners struct {
 	wake   chan struct{}
 	// How often each failed webhook was redelivered, by GUID. Only run uses it.
 	redelivered map[string]int
+	// Set by tests, which have no object storage.
+	deleteStored func(ctx context.Context, workspace *types.Workspace, prefix string) error
 }
 
 func (s *Service) initGitHubRunners(api *echo.Group) error {
@@ -171,6 +173,9 @@ type runnerStatus struct {
 	Installation *types.GitHubRunnerInstallation `json:"installation"`
 	Sizes        []runnerSize                    `json:"sizes"`
 	Runners      runnerCount                     `json:"runners"`
+	// Whether the runners of the connected account get the workspace's
+	// cache, which no account says of itself until one is connected.
+	EnhancedCache *bool `json:"enhanced_cache,omitempty"`
 }
 
 // runnerCount is how many runners a workspace has, those being started among
@@ -198,12 +203,17 @@ func (r *githubRunners) respond(c echo.Context, installation *types.GitHubRunner
 		return err
 	}
 
-	return c.JSON(http.StatusOK, runnerStatus{
+	status := runnerStatus{
 		Enabled:      r.github != nil,
 		Installation: installation,
 		Sizes:        runnerSizes,
 		Runners:      runnerCount{Running: running, Limit: r.limit()},
-	})
+	}
+	if installation != nil {
+		status.EnhancedCache = &installation.EnhancedCache
+	}
+
+	return c.JSON(http.StatusOK, status)
 }
 
 // limit is the most runners a workspace has at once, or zero for any number.
@@ -214,22 +224,25 @@ func (r *githubRunners) limit() int {
 // update changes the settings of the workspace's account that a request
 // names, and answers as status does. An account that is paused starts no
 // runner, which leaves its jobs queued on GitHub until it resumes. The jobs
-// that run and the runners that exist are left alone.
+// that run and the runners that exist are left alone. An account whose
+// enhanced cache is turned off has it deleted, and starts a new one when it
+// is turned on again.
 func (r *githubRunners) update(c echo.Context) error {
 	ctx, info := requestContext(c)
 	var req struct {
-		Paused *bool `json:"paused"`
+		Paused        *bool `json:"paused"`
+		EnhancedCache *bool `json:"enhanced_cache"`
 	}
 	if err := decode(c, &req); err != nil {
 		return err
 	}
 
-	var installation *types.GitHubRunnerInstallation
-	var err error
-	if req.Paused == nil {
-		installation, err = r.s.repo.GetGitHubRunnerInstallation(ctx, info.Workspace.Id)
-	} else {
+	installation, err := r.s.repo.GetGitHubRunnerInstallation(ctx, info.Workspace.Id)
+	if err == nil && installation != nil && req.Paused != nil {
 		installation, err = r.s.repo.PauseGitHubRunnerInstallation(ctx, info.Workspace.Id, *req.Paused)
+	}
+	if err == nil && installation != nil && req.EnhancedCache != nil {
+		installation, err = r.s.repo.SetGitHubRunnerEnhancedCache(ctx, info.Workspace.Id, *req.EnhancedCache)
 	}
 	if err != nil {
 		return err
@@ -237,6 +250,12 @@ func (r *githubRunners) update(c echo.Context) error {
 
 	if installation == nil {
 		return echo.NewHTTPError(http.StatusConflict, "no GitHub account is connected")
+	}
+
+	if !installation.EnhancedCache {
+		if err := r.s.repo.RetireGitHubRunnerCache(ctx, info.Workspace.Id, 0); err != nil {
+			return err
+		}
 	}
 
 	// The jobs that waited are due, so the loop need not wait for its tick.
@@ -558,6 +577,12 @@ func (r *githubRunners) disconnect(c echo.Context) error {
 		if err := r.s.repo.DeleteGitHubRunnerInstallation(ctx, installation.ID); err != nil {
 			return err
 		}
+
+		// What the account's jobs left is not kept for whichever account
+		// the workspace connects next.
+		if err := r.s.repo.RetireGitHubRunnerCache(ctx, installation.WorkspaceID, 0); err != nil {
+			return err
+		}
 	}
 
 	return c.NoContent(http.StatusNoContent)
@@ -763,11 +788,13 @@ type runnerEvent struct {
 		ID int64 `json:"id"`
 	} `json:"installation"`
 	Repository struct {
-		FullName string `json:"full_name"`
+		FullName      string `json:"full_name"`
+		DefaultBranch string `json:"default_branch"`
 	} `json:"repository"`
 	Job struct {
 		ID          int64      `json:"id"`
 		RunID       int64      `json:"run_id"`
+		HeadBranch  string     `json:"head_branch"`
 		Name        string     `json:"name"`
 		Workflow    string     `json:"workflow_name"`
 		URL         string     `json:"html_url"`
@@ -824,12 +851,21 @@ func (r *githubRunners) installationChanged(ctx context.Context, event runnerEve
 		return nil
 	}
 
+	installation, err := r.s.repo.GetGitHubRunnerInstallationById(ctx, event.Installation.ID)
+	if err != nil {
+		return err
+	}
+
 	if err := r.s.repo.DeleteGitHubRunnerInstallation(ctx, event.Installation.ID); err != nil {
 		return err
 	}
 
 	r.github.forget(event.Installation.ID)
-	return nil
+	if installation == nil {
+		return nil
+	}
+
+	return r.s.repo.RetireGitHubRunnerCache(ctx, installation.WorkspaceID, 0)
 }
 
 // jobChanged records a job of a connected account that asks for a Beam
@@ -862,6 +898,10 @@ func (r *githubRunners) jobChanged(ctx context.Context, event runnerEvent) error
 		CreatedAt:      event.Job.CreatedAt,
 		StartedAt:      event.Job.StartedAt,
 		CompletedAt:    event.Job.CompletedAt,
+		// A branch of a fork can have this name too, so this only picks the
+		// runners that keep what their jobs add to the cache. Whether it is
+		// kept is decided by what GitHub says of the run (trustsRun).
+		DefaultBranch: event.Job.HeadBranch != "" && event.Job.HeadBranch == event.Repository.DefaultBranch,
 	})
 	if err != nil {
 		return err
@@ -895,6 +935,7 @@ func (r *githubRunners) run(ctx context.Context) {
 		}
 
 		r.provisionDue(ctx)
+		r.promoteCaches(ctx)
 		if time.Since(asked) < runnerSweep {
 			continue
 		}
@@ -917,7 +958,11 @@ func (r *githubRunners) run(ctx context.Context) {
 // the sweep in turns, and one of them sweeps at a time. It reports whether
 // this one did.
 func (r *githubRunners) sweep(ctx context.Context, since time.Time) (bool, error) {
-	redeliver := func(ctx context.Context) error { return r.redeliver(ctx, since) }
+	redeliver := func(ctx context.Context) error {
+		// Retired caches are deleted by one gateway at a time as well.
+		r.deleteCaches(ctx)
+		return r.redeliver(ctx, since)
+	}
 	if r.s.stateRepo == nil {
 		return true, redeliver(ctx)
 	}
@@ -1071,6 +1116,12 @@ func (r *githubRunners) launch(ctx context.Context, job types.GitHubRunnerJob, s
 		log.Warn().Err(err).Int64("github_job_id", job.ID).Msg("time GitHub runner registration")
 	}
 
+	// A runner without the cache is slower, and no worse.
+	layer, err := r.cacheLayer(ctx, installation, job)
+	if err != nil {
+		log.Warn().Err(err).Int64("github_job_id", job.ID).Msg("find the cache of a GitHub runner")
+	}
+
 	info := &auth.AuthInfo{Workspace: workspace, Token: token}
 	captureExitSnapshot := false
 	_, err = r.s.createVM(auth.ContextWithAuthInfo(ctx, info), info, types.VMCreateOptions{
@@ -1087,6 +1138,7 @@ func (r *githubRunners) launch(ctx context.Context, job types.GitHubRunnerJob, s
 			// A runner is deleted with its job and never starts again, so
 			// nothing of its disk is worth uploading when it exits.
 			CaptureExitSnapshot: &captureExitSnapshot,
+			RootLayer:           layer,
 		},
 		Metadata: map[string]string{"github.repository": job.Repository},
 	})

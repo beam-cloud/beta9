@@ -534,11 +534,13 @@ type vmGateway struct {
 	containers *vmContainers
 	backend    *vmBackend
 	stub       *pb.GetOrCreateStubRequest
-	stops      int
+	// The root layer the last stub was asked for with, which no request carries.
+	layer *types.RootLayer
+	stops int
 }
 
-func (g *vmGateway) GetOrCreateStub(_ context.Context, in *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error) {
-	g.stub = in
+func (g *vmGateway) GetOrCreateStub(ctx context.Context, in *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error) {
+	g.stub, g.layer = in, types.RootLayerFromContext(ctx)
 	return &pb.GetOrCreateStubResponse{Ok: true, StubId: uuid.NewString()}, nil
 }
 func (g *vmGateway) StopContainer(_ context.Context, in *pb.StopContainerRequest) (*pb.StopContainerResponse, error) {

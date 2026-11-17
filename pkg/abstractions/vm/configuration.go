@@ -100,6 +100,9 @@ func validate(spec *types.VMSpec) error {
 		if disk == nil || !validName.MatchString(disk.Name) || strings.HasPrefix(disk.Name, "vm-") || seenDisks[disk.Name] {
 			return fmt.Errorf("additional disks require unique names; the vm- prefix is reserved for VM roots")
 		}
+		if strings.HasPrefix(disk.Name, types.RootLayerDiskPrefix) {
+			return fmt.Errorf("disk names that begin with %q are reserved", types.RootLayerDiskPrefix)
+		}
 
 		if disk.Driver != "" && disk.Driver != "qcow" {
 			return fmt.Errorf("microVM disks require the qcow driver")

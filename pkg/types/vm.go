@@ -110,6 +110,9 @@ type VMSpec struct {
 	// start it from again, so it can be deleted but not stopped or paused.
 	// GitHub runners turn it off; the API does not accept it.
 	CaptureExitSnapshot *bool `json:"capture_exit_snapshot,omitempty"`
+	// RootLayer goes under the VM's image (see RootLayer). GitHub runners
+	// have their workspace's cache there; the API does not accept it.
+	RootLayer *RootLayer `json:"root_layer,omitempty"`
 }
 
 // VMCreateOptions carries parsed inputs for creation and forks.
@@ -387,14 +390,52 @@ const (
 // of the GitHub App, to the workspace that runs its jobs and is billed for
 // them. Runners launch with the Beam token that connected it. No runner
 // starts while it is paused, which leaves its jobs queued on GitHub.
+// EnhancedCache gives its runners the workspace's cache (GitHubRunnerCache).
 type GitHubRunnerInstallation struct {
-	ID          int64     `db:"id" json:"id"`
-	WorkspaceID uint      `db:"workspace_id" json:"-"`
-	TokenID     string    `db:"token_id" json:"-"`
-	Account     string    `db:"account" json:"account"`
-	AccountType string    `db:"account_type" json:"account_type"`
-	Paused      bool      `db:"paused" json:"paused"`
-	CreatedAt   time.Time `db:"created_at" json:"created_at"`
+	ID            int64     `db:"id" json:"id"`
+	WorkspaceID   uint      `db:"workspace_id" json:"-"`
+	TokenID       string    `db:"token_id" json:"-"`
+	Account       string    `db:"account" json:"account"`
+	AccountType   string    `db:"account_type" json:"account_type"`
+	Paused        bool      `db:"paused" json:"paused"`
+	EnhancedCache bool      `db:"enhanced_cache" json:"-"`
+	CreatedAt     time.Time `db:"created_at" json:"created_at"`
+}
+
+// GitHubRunnerCache is the disk that holds what the jobs of a workspace
+// download and build again and again: the standard cache directories of
+// their tools, whose entries are named by their content or their version.
+// Every runner of the workspace starts with SnapshotID of it under its
+// image, read-only (RootLayer), so a job finds the entries there instead of
+// fetching or building them.
+//
+// SnapshotID is the generation runners get, and is empty until there is
+// one. It moves only to a generation that a job on a default branch left
+// (GitHubRunnerCacheCandidate). One runner at a time is started to leave
+// one, and PublisherAt is when the last was. A workspace has one disk that
+// is not retired. A retired one is deleted, with everything stored for it.
+type GitHubRunnerCache struct {
+	WorkspaceID uint       `db:"workspace_id"`
+	DiskName    string     `db:"disk_name"`
+	SnapshotID  string     `db:"snapshot_id"`
+	CreatedAt   time.Time  `db:"created_at"`
+	PublisherAt *time.Time `db:"publisher_at"`
+	RetiredAt   *time.Time `db:"retired_at"`
+}
+
+// GitHubRunnerCacheCandidate is a generation of a workspace's cache that no
+// runner gets yet: SnapshotID, which the worker of the runner VM named
+// Runner published. That runner started on Parent, which is the generation
+// runners get now, so the candidate is Parent and what the runner's job
+// added. It becomes the generation runners get if that job is one whose
+// code a default branch holds.
+type GitHubRunnerCacheCandidate struct {
+	WorkspaceID uint      `db:"workspace_id"`
+	DiskName    string    `db:"disk_name"`
+	Parent      string    `db:"parent"`
+	SnapshotID  string    `db:"snapshot_id"`
+	Runner      string    `db:"runner"`
+	CreatedAt   time.Time `db:"created_at"`
 }
 
 // GitHubRunnerJob is a workflow job that asked for a Beam runner.
@@ -442,6 +483,9 @@ type GitHubRunnerJob struct {
 	ReceivedAt     *time.Time `db:"received_at" json:"-"`
 	RegisteredAt   *time.Time `db:"registered_at" json:"-"`
 	VMReadyAt      *time.Time `db:"vm_ready_at" json:"-"`
+	// DefaultBranch is whether GitHub said the job runs on its repository's
+	// default branch, when the job was first heard of.
+	DefaultBranch bool `db:"default_branch" json:"-"`
 
 	Timeline GitHubRunnerTimeline `db:"-" json:"timeline,omitzero"`
 }

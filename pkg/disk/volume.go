@@ -179,8 +179,10 @@ func (m *Manager) attach(ctx context.Context, spec AttachSpec, source ChunkSourc
 
 	fresh := state == nil && len(spec.Chain) == 0 && !spec.ReadOnly
 	// Fresh exports can adopt a formatted spare. A VM switches its export
-	// from NBD to vhost-user without formatting on the launch path.
-	if fresh && spec.Journal == nil {
+	// from NBD to vhost-user without formatting on the launch path. A
+	// vhost-user spare cannot become a host-mounted volume, so such an attach
+	// does not have this manager keep spares of its size either.
+	if fresh && spec.Journal == nil && (m.spareExport != ExportVhostUser || spec.Export == ExportVhostUser) {
 		m.rememberSpareSize(spec.VirtualSizeBytes)
 		defer m.replenishSpares(spec.VirtualSizeBytes)
 		if volume := m.adoptSpare(ctx, spec); volume != nil {

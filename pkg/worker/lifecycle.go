@@ -400,6 +400,7 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 		exitCode = 1
 	}
 
+	s.collectRootLayerExport(containerId, request)
 	s.clearContainer(containerId, request, exitCode, exitReported)
 }
 
@@ -1536,6 +1537,9 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		if err := s.annotateExportedDurableDisks(request, spec); err != nil {
 			return nil, err
 		}
+		if err := s.annotateRootLayer(request, spec); err != nil {
+			return nil, err
+		}
 	}
 
 	deferredCPU := s.hasDeferredCPUThrottle(request.ContainerId)
@@ -1981,6 +1985,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	} else {
 		// Under a block-root runtime the guest keeps its writable layer on its own
 		// disk, and this overlay only shares the image and bind mounts.
+		layerDir, releaseLayer := s.rootLayers.acquire(request)
+		// Deferred before the overlay's cleanup, so it runs after it.
+		defer releaseLayer()
+		containerInstance.Overlay.SetUnder(layerDir)
 		err = containerInstance.Overlay.Setup()
 	}
 	metrics.RecordWorkerStartupPhase("overlay_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})

@@ -70,6 +70,8 @@ func (s *Worker) initializeDurableDisks(ctx context.Context) {
 		}
 	}
 	go s.pruneDetachedQcowVolumes(ctx)
+	s.rootLayers = newRootLayers(s)
+	go s.rootLayers.run(ctx)
 }
 
 // Detached qcow layers are another local cache, outside the CAS and image

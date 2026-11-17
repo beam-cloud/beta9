@@ -1,6 +1,7 @@
 package types
 
 import (
+	"context"
 	"fmt"
 	"path"
 	"strings"
@@ -38,6 +39,51 @@ func SafeDurableDiskName(name string) string {
 		return "disk"
 	}
 	return name
+}
+
+// RootLayerDiskPrefix begins the names of the disks that are root layers. No
+// request may name a disk that begins with it: a root layer is mounted by the
+// host, so it must never have been a guest's block device.
+const RootLayerDiskPrefix = "root-layer-"
+
+// RootLayer is a generation of a workspace's durable disk that goes under a
+// VM's image, read-only: its files are in the VM's root wherever the image
+// has none. A worker attaches a generation once and shares it between its
+// VMs, and a VM starts without one its worker does not have yet.
+//
+// Only workers write the disk. It is set by the gateway's own callers and is
+// not an option of any API.
+type RootLayer struct {
+	// DiskName names the disk in the workspace. It begins with
+	// RootLayerDiskPrefix.
+	DiskName string `json:"disk_name"`
+	// Size is the disk's virtual size, as a durable disk's.
+	Size string `json:"size"`
+	// SnapshotID is the generation that goes under the root. It is empty
+	// until the disk has one.
+	SnapshotID string `json:"snapshot_id,omitempty"`
+	// Publish has the worker add what the VM's workload leaves in Paths to
+	// the disk when the VM exits, as a generation whose parent is SnapshotID.
+	// Nothing uses that generation until the gateway chooses it.
+	Publish bool `json:"publish,omitempty"`
+	// Paths are the directories of the VM's root that the disk holds.
+	Paths []string `json:"paths,omitempty"`
+}
+
+type rootLayerContextKey struct{}
+
+// WithRootLayer has the stub made with ctx put layer under its containers'
+// roots. A context value, so that only code in the gateway can ask for it.
+func WithRootLayer(ctx context.Context, layer *RootLayer) context.Context {
+	if layer == nil || !strings.HasPrefix(layer.DiskName, RootLayerDiskPrefix) {
+		return ctx
+	}
+	return context.WithValue(ctx, rootLayerContextKey{}, layer)
+}
+
+func RootLayerFromContext(ctx context.Context) *RootLayer {
+	layer, _ := ctx.Value(rootLayerContextKey{}).(*RootLayer)
+	return layer
 }
 
 func CheckpointModelCacheVolumeName(stubName string) string {

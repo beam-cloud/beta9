@@ -291,6 +291,42 @@ func (g *githubApp) cancelRun(ctx context.Context, installation int64, repositor
 	return err
 }
 
+// githubRun is a workflow run, as far as the trust in what its jobs leave
+// behind depends on it: what started it, which branch of which repository
+// its code is from, and that repository's default branch.
+type githubRun struct {
+	Event          string `json:"event"`
+	HeadBranch     string `json:"head_branch"`
+	HeadRepository struct {
+		FullName string `json:"full_name"`
+	} `json:"head_repository"`
+	DefaultBranch string `json:"-"`
+}
+
+// run returns a workflow run of a repository, as GitHub has it, rather than
+// as a job says of itself.
+func (g *githubApp) run(ctx context.Context, installation int64, repository string, run int64) (*githubRun, error) {
+	token, err := g.installationToken(ctx, installation)
+	if err != nil {
+		return nil, err
+	}
+
+	var found githubRun
+	if _, err := g.ask(ctx, installation, http.MethodGet, fmt.Sprintf("%s/repos/%s/actions/runs/%d", g.apiURL, repository, run), token, nil, &found); err != nil {
+		return nil, err
+	}
+
+	var repo struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	if _, err := g.ask(ctx, installation, http.MethodGet, g.apiURL+"/repos/"+repository, token, nil, &repo); err != nil {
+		return nil, err
+	}
+
+	found.DefaultBranch = repo.DefaultBranch
+	return &found, nil
+}
+
 // deliveries returns a page of the App's webhook deliveries, newest first,
 // and the URL of the page after it, if there is one. An empty URL asks for
 // the first page.

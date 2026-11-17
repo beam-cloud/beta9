@@ -201,7 +201,9 @@ func (s *Worker) cleanupIdleQcowVolumes() {
 	}
 	ctx, cancel := context.WithTimeout(s.durableDiskCleanupContext(), durableDiskCleanupGrace)
 	defer cancel()
-	if err := s.diskManager.DetachAll(ctx); err != nil {
+	// Root layers stay for the next VM; they go when nothing has used them
+	// for a while (rootLayers.prune).
+	if err := s.diskManager.DetachAllExcept(ctx, rootLayerOwner); err != nil {
 		log.Warn().Err(err).Msg("failed to detach idle qcow volumes")
 	}
 }

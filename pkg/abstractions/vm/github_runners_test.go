@@ -48,6 +48,10 @@ type runnerStore struct {
 	*vmStore
 	installation *types.GitHubRunnerInstallation
 	jobs         map[int64]*types.GitHubRunnerJob
+	// The cache disks of the workspace, and the generations that workers
+	// published of them (see github_runner_cache_test.go).
+	caches    []*types.GitHubRunnerCache
+	published []*publishedCache
 }
 
 func (r *runnerStore) connected(id int64) bool {
@@ -74,6 +78,8 @@ func (r *runnerStore) SaveGitHubRunnerInstallation(_ context.Context, i *types.G
 	}
 	saved := *i
 	saved.Paused = r.installation != nil && r.installation.Paused
+	// A new connection has the cache, and connecting again leaves it as it is.
+	saved.EnhancedCache = r.installation == nil || r.installation.EnhancedCache
 	r.installation = &saved
 	return nil
 }
@@ -349,7 +355,7 @@ func runnerFixture(t *testing.T) (*githubRunners, *runnerStore, *auth.AuthInfo, 
 	t.Helper()
 	s, v, info, runtime, _ := fixture()
 	store := &runnerStore{vmStore: s.repo.(*vmStore), jobs: map[int64]*types.GitHubRunnerJob{}, installation: &types.GitHubRunnerInstallation{
-		ID: 42, WorkspaceID: 7, TokenID: info.Token.ExternalId, Account: "acme", AccountType: "Organization"}}
+		ID: 42, WorkspaceID: 7, TokenID: info.Token.ExternalId, Account: "acme", AccountType: "Organization", EnhancedCache: true}}
 	delete(store.rows, v.ID)
 	s.repo = store
 	app := &githubApp{id: runnerConfig.AppID, slug: runnerConfig.AppSlug, clientID: runnerConfig.ClientID, clientSecret: runnerConfig.ClientSecret,
@@ -408,9 +414,14 @@ func deliver(t *testing.T, r *githubRunners, event, action string, labels []stri
 		}
 		return value
 	}
+	// A job that is not on the default branch is on a pull request's.
+	branch := "feature"
+	if job.DefaultBranch {
+		branch = "main"
+	}
 	body, err := json.Marshal(map[string]any{"action": action, "installation": map[string]any{"id": 42},
-		"repository": map[string]any{"full_name": "acme/repo"},
-		"workflow_job": map[string]any{"id": job.ID, "run_id": job.RunID, "name": "test", "workflow_name": "CI", "html_url": "https://github.com/acme/repo/actions/runs/1/job/1",
+		"repository": map[string]any{"full_name": "acme/repo", "default_branch": "main"},
+		"workflow_job": map[string]any{"id": job.ID, "run_id": job.RunID, "head_branch": branch, "name": "test", "workflow_name": "CI", "html_url": "https://github.com/acme/repo/actions/runs/1/job/1",
 			"labels": labels, "runner_name": nullable(job.RunnerName), "conclusion": nullable(job.Conclusion),
 			"created_at": "2026-11-16T09:00:00Z", "completed_at": nil}})
 	require.NoError(t, err)
@@ -865,7 +876,8 @@ func TestGitHubRunnerConnect(t *testing.T) {
 	code, step, _ = connect(t, r, info, fmt.Sprintf(`{"state":%q,"installation_id":42}`, authorized))
 	require.Equal(t, 200, code)
 	require.Equal(t, runnerConnection{Connected: true}, step)
-	require.Equal(t, &types.GitHubRunnerInstallation{ID: 42, WorkspaceID: 7, TokenID: info.Token.ExternalId, Account: "acme", AccountType: "Organization"}, store.installation)
+	require.Equal(t, &types.GitHubRunnerInstallation{ID: 42, WorkspaceID: 7, TokenID: info.Token.ExternalId, Account: "acme", AccountType: "Organization",
+		EnhancedCache: true}, store.installation, "a new connection has the cache")
 }
 
 // GitHub has nothing to install on an account that has the App, so the user
@@ -911,7 +923,8 @@ func TestGitHubRunnerConnectInstalledAccount(t *testing.T) {
 	code, step, _ = connect(t, r, info, fmt.Sprintf(`{"state":%q,"installation_id":43}`, step.State))
 	require.Equal(t, 200, code)
 	require.Equal(t, runnerConnection{Connected: true}, step)
-	require.Equal(t, &types.GitHubRunnerInstallation{ID: 43, WorkspaceID: 7, TokenID: info.Token.ExternalId, Account: "Alice", AccountType: "User"}, store.installation)
+	require.Equal(t, &types.GitHubRunnerInstallation{ID: 43, WorkspaceID: 7, TokenID: info.Token.ExternalId, Account: "Alice", AccountType: "User",
+		EnhancedCache: true}, store.installation)
 }
 
 // An account the user owns can be on any page of their installations.
