@@ -95,15 +95,29 @@ func (r *runnerStore) SaveGitHubRunnerJob(_ context.Context, job *types.GitHubRu
 	return nil
 }
 
-func (r *runnerStore) ListGitHubRunnerJobs(_ context.Context, ws uint, limit, offset int) ([]types.GitHubRunnerJob, int, error) {
-	jobs := []types.GitHubRunnerJob{}
+func (r *runnerStore) ListGitHubRunnerJobs(_ context.Context, ws uint, filter types.GitHubRunnerJobFilter) (*types.GitHubRunnerJobPage, error) {
+	jobs, repositories := []types.GitHubRunnerJob{}, []string{}
+	search := strings.ToLower(filter.Search)
 	for _, job := range r.jobs {
-		if job.WorkspaceID == ws && (job.Status == types.GitHubJobCompleted || r.connected(job.InstallationID)) {
+		if job.WorkspaceID != ws || job.Status != types.GitHubJobCompleted && !r.connected(job.InstallationID) {
+			continue
+		}
+
+		repositories = append(repositories, job.Repository)
+		if (filter.Repository == "" || job.Repository == filter.Repository) &&
+			strings.Contains(strings.ToLower(job.Name+"\n"+job.Workflow+"\n"+job.Repository), search) &&
+			(len(filter.Statuses) == 0 || slices.Contains(filter.Statuses, job.Status)) &&
+			(len(filter.Conclusions) == 0 || slices.Contains(filter.Conclusions, job.Conclusion)) {
 			jobs = append(jobs, *job)
 		}
 	}
 	slices.SortFunc(jobs, func(a, b types.GitHubRunnerJob) int { return int(b.ID - a.ID) })
-	return jobs[min(offset, len(jobs)):min(offset+limit, len(jobs))], len(jobs), nil
+	slices.Sort(repositories)
+	return &types.GitHubRunnerJobPage{
+		Jobs:         jobs[min(filter.Offset, len(jobs)):min(filter.Offset+filter.Limit, len(jobs))],
+		Total:        len(jobs),
+		Repositories: slices.Compact(repositories),
+	}, nil
 }
 
 func (r *runnerStore) ListDueGitHubRunnerJobs(context.Context) ([]types.GitHubRunnerJob, error) {
@@ -559,68 +573,125 @@ func TestGitHubRunnerConnect(t *testing.T) {
 	calls := fakeGitHub(t, r, map[string]string{
 		"POST /login/oauth/access_token":   `200 {"access_token":"user-token"}`,
 		"GET /user":                        `200 {"login":"alice"}`,
+		"GET /user/installations":          `200 {"total_count":0,"installations":[]}`,
 		"GET /app/installations/42":        `200 {"account":{"login":"acme","type":"Organization"}}`,
 		"GET /orgs/acme/memberships/alice": `200 {"state":"active","role":"admin"}`,
 	})
 
-	// To GitHub to install the App, and back with what was installed.
+	// To GitHub to authorize the App, and back with a code for the user.
 	code, step, _ := connect(t, r, info, `{}`)
 	require.Equal(t, 200, code)
-	require.True(t, strings.HasPrefix(step.URL, r.github.webURL+"/apps/beam-runners/installations/new?state="), step.URL)
-	installed := connectState(t, step.URL)
-	for _, incomplete := range []string{`{"state":%q}`, `{"state":%q,"code":"code"}`} {
-		code, _, message := connect(t, r, info, fmt.Sprintf(incomplete, installed))
-		require.Equal(t, 400, code, "an installation is authorized only once it is known")
+	require.True(t, strings.HasPrefix(step.URL, r.github.webURL+"/login/oauth/authorize?client_id=client&state="), step.URL)
+	started := connectState(t, step.URL)
+	for _, incomplete := range []string{`{"state":%q}`, `{"state":%q,"installation_id":42}`} {
+		code, _, message := connect(t, r, info, fmt.Sprintf(incomplete, started))
+		require.Equal(t, 400, code, "an account is connected only once the user is known")
 		require.Contains(t, message, "connect again")
 	}
-
-	// To GitHub to authorize it, and back with a code for the user.
-	code, step, _ = connect(t, r, info, fmt.Sprintf(`{"state":%q,"installation_id":42}`, installed))
-	require.Equal(t, 200, code)
-	require.False(t, step.Connected)
-	require.True(t, strings.HasPrefix(step.URL, r.github.webURL+"/login/oauth/authorize?client_id=client&state="), step.URL)
-	authorized := connectState(t, step.URL)
 	require.Empty(t, calls(), "nothing is asked of GitHub before the user returns from it")
 
 	other := *info
 	other.Token = &types.Token{ExternalId: "another-token"}
-	code, _, _ = connect(t, r, &other, fmt.Sprintf(`{"state":%q,"code":"code"}`, authorized))
+	code, _, _ = connect(t, r, &other, fmt.Sprintf(`{"state":%q,"code":"code"}`, started))
 	require.Equal(t, 400, code, "a state is only valid for the token that started connecting")
+
+	// The user has the App nowhere: to GitHub to install it, and back with
+	// what was installed.
+	code, step, _ = connect(t, r, info, fmt.Sprintf(`{"state":%q,"code":"code"}`, started))
+	require.Equal(t, 200, code)
+	require.False(t, step.Connected)
+	require.Empty(t, step.Accounts)
+	require.True(t, strings.HasPrefix(step.URL, r.github.webURL+"/apps/beam-runners/installations/new?state="), step.URL)
+	require.Equal(t, step.State, connectState(t, step.URL))
+	require.Contains(t, calls(), `POST /login/oauth/access_token {"client_id":"client","client_secret":"client-secret","code":"code"}`)
+	authorized := step.State
+	code, _, message := connect(t, r, info, fmt.Sprintf(`{"state":%q}`, authorized))
+	require.Equal(t, 400, code)
+	require.Contains(t, message, "connect again")
 	require.Nil(t, store.installation)
 
-	code, step, _ = connect(t, r, info, fmt.Sprintf(`{"state":%q,"code":"code"}`, authorized))
+	code, step, _ = connect(t, r, info, fmt.Sprintf(`{"state":%q,"installation_id":42}`, authorized))
 	require.Equal(t, 200, code)
 	require.Equal(t, runnerConnection{Connected: true}, step)
 	require.Equal(t, &types.GitHubRunnerInstallation{ID: 42, WorkspaceID: 7, TokenID: info.Token.ExternalId, Account: "acme", AccountType: "Organization"}, store.installation)
-	require.Contains(t, calls(), `POST /login/oauth/access_token {"client_id":"client","client_secret":"client-secret","code":"code"}`)
+}
+
+// GitHub has nothing to install on an account that has the App, so the user
+// chooses one of those here.
+func TestGitHubRunnerConnectInstalledAccount(t *testing.T) {
+	r, store, info, _ := runnerFixture(t)
+	store.installation = nil
+	token := `201 {"token":"installation-token","expires_at":"2099-01-01T00:00:00Z"}`
+	calls := fakeGitHub(t, r, map[string]string{
+		"POST /login/oauth/access_token": `200 {"access_token":"user-token"}`,
+		"GET /user":                      `200 {"login":"alice"}`,
+		"GET /user/installations": `200 {"total_count":5,"installations":[
+			{"id":44,"account":{"login":"member-of","type":"Organization"}},
+			{"id":43,"account":{"login":"Alice","type":"User"}},
+			{"id":45,"account":{"login":"suspended","type":"Organization"},"suspended_at":"2026-11-16T09:00:00Z"},
+			{"id":46,"account":{"login":"unreachable","type":"Organization"}},
+			{"id":42,"account":{"login":"acme","type":"Organization"}}]}`,
+		"GET /orgs/acme/memberships/alice":         `200 {"state":"active","role":"admin"}`,
+		"POST /app/installations/44/access_tokens": token,
+		"GET /orgs/member-of/memberships/alice":    `200 {"state":"active","role":"member"}`,
+		"POST /app/installations/46/access_tokens": `500 {}`,
+		"GET /app/installations/43":                `200 {"account":{"login":"Alice","type":"User"}}`,
+		"GET /app/installations/44":                `200 {"account":{"login":"member-of","type":"Organization"}}`,
+	})
+
+	_, step, _ := connect(t, r, info, `{}`)
+	code, step, _ := connect(t, r, info, fmt.Sprintf(`{"state":%q,"code":"code"}`, connectState(t, step.URL)))
+	require.Equal(t, 200, code)
+	require.False(t, step.Connected)
+	require.Equal(t, []runnerAccount{
+		{InstallationID: 42, Account: "acme", AccountType: "Organization"},
+		{InstallationID: 43, Account: "Alice", AccountType: "User"},
+	}, step.Accounts, "the accounts the user owns, by name")
+	require.True(t, strings.HasPrefix(step.URL, r.github.webURL+"/apps/beam-runners/installations/new?state="), "another account is a trip to GitHub")
+	require.Contains(t, calls(), "GET /user/installations")
+	require.Nil(t, store.installation)
+
+	// The state says who chooses, so an account is still theirs to connect.
+	code, _, message := connect(t, r, info, fmt.Sprintf(`{"state":%q,"installation_id":44}`, step.State))
+	require.Equal(t, 403, code, message)
+	require.Nil(t, store.installation)
+
+	code, step, _ = connect(t, r, info, fmt.Sprintf(`{"state":%q,"installation_id":43}`, step.State))
+	require.Equal(t, 200, code)
+	require.Equal(t, runnerConnection{Connected: true}, step)
+	require.Equal(t, &types.GitHubRunnerInstallation{ID: 43, WorkspaceID: 7, TokenID: info.Token.ExternalId, Account: "Alice", AccountType: "User"}, store.installation)
 }
 
 func TestGitHubRunnerConnectState(t *testing.T) {
 	r, _, info, _ := runnerFixture(t)
-	state := r.state(info, 42, time.Now().Add(time.Minute).Unix())
-	installation, err := r.verify(info, state)
-	require.NoError(t, err)
-	require.EqualValues(t, 42, installation)
-	for _, tampered := range []string{state + "0", "43" + state[2:], strings.Replace(state, ".", ".1", 1)} {
-		_, err = r.verify(info, tampered)
-		require.Error(t, err, tampered)
+	for _, login := range []string{"", "alice"} {
+		state := r.state(info, login, time.Now().Add(time.Minute).Unix())
+		verified, err := r.verify(info, state)
+		require.NoError(t, err)
+		require.Equal(t, login, verified)
+		for _, tampered := range []string{state + "0", "bob" + state[len(login):], strings.Replace(state, ".", ".1", 1), strings.TrimPrefix(state, login)} {
+			if tampered != state {
+				_, err = r.verify(info, tampered)
+				require.Error(t, err, tampered)
+			}
+		}
+		other := *info
+		other.Workspace = &types.Workspace{Id: 9}
+		_, err = r.verify(&other, state)
+		require.Error(t, err)
+		other.Workspace, other.Token = info.Workspace, &types.Token{ExternalId: "another-token"}
+		_, err = r.verify(&other, state)
+		require.Error(t, err)
+		_, err = r.verify(info, r.state(info, login, time.Now().Add(-time.Second).Unix()))
+		require.Error(t, err)
 	}
-	other := *info
-	other.Workspace = &types.Workspace{Id: 9}
-	_, err = r.verify(&other, state)
-	require.Error(t, err)
-	other.Workspace, other.Token = info.Workspace, &types.Token{ExternalId: "another-token"}
-	_, err = r.verify(&other, state)
-	require.Error(t, err)
-	_, err = r.verify(info, r.state(info, 42, time.Now().Add(-time.Second).Unix()))
-	require.Error(t, err)
 }
 
 func TestGitHubRunnerConnectRequiresAccountOwner(t *testing.T) {
 	for _, tc := range []struct {
-		name, grant, installation, membership string
-		installedIn                           uint
-		code                                  int
+		name, installation, membership string
+		installedIn                    uint
+		code                           int
 	}{
 		{name: "org owner", membership: `200 {"state":"active","role":"admin"}`, code: 200},
 		{name: "org member", membership: `200 {"state":"active","role":"member"}`, code: 403},
@@ -630,7 +701,6 @@ func TestGitHubRunnerConnectRequiresAccountOwner(t *testing.T) {
 		{name: "another user", installation: `200 {"account":{"login":"bob","type":"User"}}`, code: 403},
 		{name: "suspended", installation: `200 {"account":{"login":"Alice","type":"User"},"suspended_at":"2026-11-16T09:00:00Z"}`, code: 403},
 		{name: "uninstalled", installation: `404 {"message":"Not Found"}`, code: 400},
-		{name: "rejected code", grant: `200 {"error":"bad_verification_code"}`, code: 400},
 		{name: "other workspace", membership: `200 {"state":"active","role":"admin"}`, installedIn: 9, code: 409},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -640,21 +710,28 @@ func TestGitHubRunnerConnectRequiresAccountOwner(t *testing.T) {
 				store.installation = &types.GitHubRunnerInstallation{ID: 42, WorkspaceID: tc.installedIn}
 			}
 			routes := map[string]string{
-				"POST /login/oauth/access_token": cmp.Or(tc.grant, `200 {"access_token":"user-token"}`),
-				"GET /user":                      `200 {"login":"alice"}`,
-				"GET /app/installations/42":      cmp.Or(tc.installation, `200 {"account":{"login":"acme","type":"Organization"}}`),
+				"GET /app/installations/42": cmp.Or(tc.installation, `200 {"account":{"login":"acme","type":"Organization"}}`),
 			}
 			if tc.membership != "" {
 				routes["GET /orgs/acme/memberships/alice"] = tc.membership
 			}
 			fakeGitHub(t, r, routes)
-			state := r.state(info, 42, time.Now().Add(time.Minute).Unix())
-			code, step, message := connect(t, r, info, fmt.Sprintf(`{"code":"code","state":%q}`, state))
+			state := r.state(info, "alice", time.Now().Add(time.Minute).Unix())
+			code, step, message := connect(t, r, info, fmt.Sprintf(`{"installation_id":42,"state":%q}`, state))
 			require.Equal(t, tc.code, code, message)
 			require.Equal(t, tc.code == 200, step.Connected)
 			require.Equal(t, tc.code == 200, store.installation != nil && store.installation.WorkspaceID == 7)
 		})
 	}
+}
+
+func TestGitHubRunnerConnectRejectedCode(t *testing.T) {
+	r, _, info, _ := runnerFixture(t)
+	fakeGitHub(t, r, map[string]string{"POST /login/oauth/access_token": `200 {"error":"bad_verification_code"}`})
+	state := r.state(info, "", time.Now().Add(time.Minute).Unix())
+	code, step, message := connect(t, r, info, fmt.Sprintf(`{"code":"code","state":%q}`, state))
+	require.Equal(t, 400, code, message)
+	require.Equal(t, runnerConnection{}, step)
 }
 
 func TestGitHubRunnerRedeliversFailedWebhooks(t *testing.T) {
@@ -786,7 +863,7 @@ func TestGitHubRunnerJobsResponse(t *testing.T) {
 	c, rec := actionContext(info, "", "", "")
 	c.Request().URL.RawQuery = "limit=1"
 	require.NoError(t, r.jobs(c))
-	require.JSONEq(t, `{"total":2,"data":[{"id":2,"repository":"acme/repo","workflow":"CI","name":"test",
+	require.JSONEq(t, `{"total":2,"repositories":["acme/repo"],"data":[{"id":2,"repository":"acme/repo","workflow":"CI","name":"test",
 		"url":"https://github.com/acme/repo/actions/runs/1/job/2","label":"beam-4vcpu-ubuntu-2404","status":"in_progress",
 		"runner_name":"ghr-0123456789ab","created_at":"2026-11-16T09:00:00Z","started_at":"2026-11-16T09:01:00Z"}]}`, rec.Body.String())
 
@@ -796,6 +873,47 @@ func TestGitHubRunnerJobsResponse(t *testing.T) {
 	c.Request().URL.RawQuery = "limit=1&offset=1"
 	require.NoError(t, r.jobs(c))
 	require.Contains(t, rec.Body.String(), `"status":"queued","created_at":"0001-01-01T00:00:00Z","error":"no runner after 5 attempts: boom"`)
+
+	// The filters narrow the jobs, and never the repositories to choose from.
+	store.jobs[3] = &types.GitHubRunnerJob{ID: 3, InstallationID: 42, WorkspaceID: 7, Repository: "acme/site", Workflow: "Deploy", Name: "build",
+		Status: types.GitHubJobCompleted, Conclusion: "failure"}
+	store.jobs[4] = &types.GitHubRunnerJob{ID: 4, InstallationID: 42, WorkspaceID: 7, Repository: "acme/site", Workflow: "Deploy", Name: "publish",
+		Status: types.GitHubJobCompleted, Conclusion: "success"}
+	for query, ids := range map[string][]int64{
+		"":                                    {4, 3, 2, 1},
+		"repository=acme/site":                {4, 3},
+		"repository=acme":                     {},
+		"q=DEPLOY":                            {4, 3},
+		"q=site&status=completed":             {4, 3},
+		"q=test":                              {2},
+		"status=queued,in_progress":           {2, 1},
+		"conclusion=failure,timed_out":        {3},
+		"repository=acme/repo&status=queued":  {1},
+		"repository=acme/repo&q=publish":      {},
+		"conclusion=success&offset=1":         {},
+		"status=completed&conclusion=success": {4},
+	} {
+		c, rec = actionContext(info, "", "", "")
+		c.Request().URL.RawQuery = "limit=10&" + query
+		require.NoError(t, r.jobs(c))
+		var page struct {
+			Total int `json:"total"`
+			Data  []struct {
+				ID int64 `json:"id"`
+			} `json:"data"`
+			Repositories []string `json:"repositories"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &page))
+		listed := []int64{}
+		for _, job := range page.Data {
+			listed = append(listed, job.ID)
+		}
+		require.Equal(t, ids, listed, query)
+		require.Equal(t, []string{"acme/repo", "acme/site"}, page.Repositories, query)
+		if !strings.Contains(query, "offset") {
+			require.Equal(t, len(ids), page.Total, query)
+		}
+	}
 
 	c, rec = actionContext(info, "", "", "")
 	require.NoError(t, r.status(c))

@@ -407,6 +407,25 @@ type GitHubRunnerJob struct {
 	Error          string     `db:"error" json:"error,omitempty"`
 }
 
+// GitHubRunnerJobFilter selects one page of a workspace's jobs, newest first.
+// A zero Limit returns only the total and the repositories.
+type GitHubRunnerJobFilter struct {
+	Limit, Offset int
+	// Case-insensitive substring of the name, workflow or repository.
+	Search                string
+	Repository            string
+	Statuses, Conclusions []string
+}
+
+// GitHubRunnerJobPage names every repository the workspace has jobs of, so
+// that each can be chosen before it is selected. The filter narrows only Jobs
+// and Total.
+type GitHubRunnerJobPage struct {
+	Jobs         []GitHubRunnerJob
+	Total        int
+	Repositories []string
+}
+
 // GitHubRunner is what the lifecycle of a runner VM depends on: where it is
 // registered, whether that account is still connected, and the status of the
 // job GitHub gave it, which is empty while it waits for one.

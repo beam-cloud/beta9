@@ -44,7 +44,7 @@ type VMRepository interface {
 	SaveGitHubRunnerInstallation(context.Context, *types.GitHubRunnerInstallation) error
 	DeleteGitHubRunnerInstallation(context.Context, int64) error
 	SaveGitHubRunnerJob(context.Context, *types.GitHubRunnerJob) error
-	ListGitHubRunnerJobs(context.Context, uint, int, int) ([]types.GitHubRunnerJob, int, error)
+	ListGitHubRunnerJobs(context.Context, uint, types.GitHubRunnerJobFilter) (*types.GitHubRunnerJobPage, error)
 	ListDueGitHubRunnerJobs(context.Context) ([]types.GitHubRunnerJob, error)
 	ClaimGitHubRunnerJob(context.Context, *types.GitHubRunnerJob, string) (bool, error)
 	FinishGitHubRunnerJob(context.Context, int64, string) error
@@ -759,39 +759,62 @@ func (r *PostgresBackendRepository) SaveGitHubRunnerJob(ctx context.Context, job
 }
 
 // ListGitHubRunnerJobs returns a page of a workspace's jobs, newest first,
-// and how many it has. The jobs that a disconnected account left unfinished
-// are not among them, because nothing reports how they end. They are back if
-// the account connects again.
-func (r *PostgresBackendRepository) ListGitHubRunnerJobs(ctx context.Context, workspaceId uint, limit, offset int) ([]types.GitHubRunnerJob, int, error) {
-	const history = `
+// with how many match the filter and the repositories it has jobs of. The
+// jobs that a disconnected account left unfinished are not among them,
+// because nothing reports how they end. They are back if the account
+// connects again.
+func (r *PostgresBackendRepository) ListGitHubRunnerJobs(ctx context.Context, workspaceId uint, filter types.GitHubRunnerJobFilter) (*types.GitHubRunnerJobPage, error) {
+	// Each condition of the filter is inert at its zero value, so one
+	// statement covers every combination of them.
+	const (
+		history = `
 	FROM github_runner_job j
 	WHERE workspace_id = $1 AND (
 		status = 'completed'
 		OR EXISTS (SELECT 1 FROM github_runner_installation i WHERE i.id = j.installation_id AND i.workspace_id = j.workspace_id)
 	)
 	`
+		matches = `($2 = '' OR repository = $2)
+		AND ($3 = '' OR name ILIKE $3 OR workflow ILIKE $3 OR repository ILIKE $3)
+		AND (cardinality($4::text[]) = 0 OR status = ANY($4))
+		AND (cardinality($5::text[]) = 0 OR conclusion = ANY($5))`
+	)
 
-	var total int
-	if err := r.client.GetContext(ctx, &total, `SELECT COUNT(*)`+history, workspaceId); err != nil {
-		return nil, 0, err
+	search := ""
+	if filter.Search != "" {
+		search = "%" + likeEscaper.Replace(filter.Search) + "%"
+	}
+	args := []any{workspaceId, filter.Repository, search, pq.Array(append([]string{}, filter.Statuses...)), pq.Array(append([]string{}, filter.Conclusions...))}
+
+	var repositories []struct {
+		Repository string `db:"repository"`
+		Matches    int    `db:"matches"`
+	}
+	query := `SELECT repository, COUNT(*) FILTER (WHERE ` + matches + `) AS matches` + history + `GROUP BY repository ORDER BY repository;`
+	if err := r.client.SelectContext(ctx, &repositories, query, args...); err != nil {
+		return nil, err
 	}
 
-	jobs := []types.GitHubRunnerJob{}
-	if limit == 0 || offset >= total {
-		return jobs, total, nil
+	page := &types.GitHubRunnerJobPage{Jobs: []types.GitHubRunnerJob{}, Repositories: []string{}}
+	for _, row := range repositories {
+		page.Repositories = append(page.Repositories, row.Repository)
+		page.Total += row.Matches
+	}
+	if filter.Limit == 0 || filter.Offset >= page.Total {
+		return page, nil
 	}
 
-	query := `
-	SELECT ` + githubRunnerJobColumns + history + `
+	query = `
+	SELECT ` + githubRunnerJobColumns + history + `AND ` + matches + `
 	ORDER BY id DESC
-	LIMIT $2 OFFSET $3;
+	LIMIT $6 OFFSET $7;
 	`
 
-	if err := r.client.SelectContext(ctx, &jobs, query, workspaceId, limit, offset); err != nil {
-		return nil, 0, err
+	if err := r.client.SelectContext(ctx, &page.Jobs, query, append(args, filter.Limit, filter.Offset)...); err != nil {
+		return nil, err
 	}
 
-	return jobs, total, nil
+	return page, nil
 }
 
 // ListDueGitHubRunnerJobs returns the jobs of connected accounts that are due
