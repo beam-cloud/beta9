@@ -184,3 +184,87 @@ func TestContainerOverlayEphemeralLayersMountVolatile(t *testing.T) {
 		require.Len(t, mountCalls(t, logPath), 1)
 	})
 }
+
+func TestContainerOverlayReadOnlyLayers(t *testing.T) {
+	overlayVolatileUnsupported.Store(false)
+	t.Cleanup(func() { overlayVolatileUnsupported.Store(false) })
+
+	t.Run("sit above the image in every base layer", func(t *testing.T) {
+		logPath := fakeMount(t, "exit 0")
+		image, top, middle := t.TempDir(), t.TempDir(), t.TempDir()
+
+		ephemeral := NewContainerOverlay(&types.ContainerRequest{ContainerId: "ephemeral"}, image, t.TempDir())
+		require.NoError(t, ephemeral.SetReadOnlyLayers(top, middle))
+		require.NoError(t, ephemeral.Setup())
+		require.Error(t, ephemeral.SetReadOnlyLayers(top), "mounted overlays cannot change layers")
+		// A second writable layer stacks on the first, which already has them.
+		require.NoError(t, ephemeral.AddEmptyLayer())
+		require.Equal(t, image, ephemeral.RootPath())
+
+		disk := t.TempDir()
+		persistent := NewContainerOverlay(&types.ContainerRequest{ContainerId: "persistent"}, image, t.TempDir())
+		require.NoError(t, persistent.SetReadOnlyLayers(top))
+		require.NoError(t, persistent.SetupWithWritable(filepath.Join(disk, "upper"), filepath.Join(disk, "work")))
+
+		calls := mountCalls(t, logPath)
+		require.Len(t, calls, 3)
+		require.Contains(t, calls[0], "lowerdir="+top+":"+middle+":"+image+",upperdir=")
+		require.Contains(t, calls[1], "lowerdir="+filepath.Join(ephemeral.OverlayPath(), "ephemeral", "layer-0", "merged")+",upperdir=")
+		require.Contains(t, calls[2], "lowerdir="+top+":"+image+",upperdir=")
+	})
+
+	t.Run("reject paths that would change the mount options", func(t *testing.T) {
+		for _, dir := range []string{"relative", "/a:/b", "/a,ro", "/a/../b", `/a\040b`} {
+			overlay := NewContainerOverlay(&types.ContainerRequest{ContainerId: "invalid"}, t.TempDir(), t.TempDir())
+			require.Error(t, overlay.SetReadOnlyLayers(dir), dir)
+		}
+	})
+
+	t.Run("kernel overlay merges them under the writable layer", func(t *testing.T) {
+		if os.Geteuid() != 0 {
+			t.Skip("mounting an overlay needs root")
+		}
+		// t.TempDir paths can be on an overlay themselves, which cannot
+		// hold an upper directory; a tmpfs can.
+		base := t.TempDir()
+		require.NoError(t, unix.Mount("tmpfs", base, "tmpfs", 0, ""))
+		t.Cleanup(func() { _ = unix.Unmount(base, unix.MNT_DETACH) })
+		image, layer := filepath.Join(base, "image"), filepath.Join(base, "layer")
+		for path, content := range map[string]string{
+			filepath.Join(image, "etc", "os-release"):   "image",
+			filepath.Join(image, "root", ".bashrc"):     "image bashrc",
+			filepath.Join(image, "root", "image-only"):  "image",
+			filepath.Join(layer, "root", ".bashrc"):     "layer bashrc",
+			filepath.Join(layer, "root", "notes", "a"):  "layer",
+			filepath.Join(layer, "home", "beam", "doc"): "layer",
+		} {
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0755))
+			require.NoError(t, os.WriteFile(path, []byte(content), 0644))
+		}
+
+		overlay := NewContainerOverlay(&types.ContainerRequest{ContainerId: "merged"}, image, filepath.Join(base, "overlay"))
+		require.NoError(t, overlay.SetReadOnlyLayers(layer))
+		require.NoError(t, overlay.Setup())
+		t.Cleanup(func() { _ = overlay.Cleanup() })
+		merged := overlay.TopLayerPath()
+		read := func(root, name string) string {
+			data, err := os.ReadFile(filepath.Join(root, name))
+			require.NoError(t, err)
+			return string(data)
+		}
+		require.Equal(t, "image", read(merged, "etc/os-release"))
+		require.Equal(t, "layer bashrc", read(merged, "root/.bashrc"), "the layer wins over the image")
+		require.Equal(t, "image", read(merged, "root/image-only"), "directories merge")
+		require.Equal(t, "layer", read(merged, "root/notes/a"))
+		require.Equal(t, "layer", read(merged, "home/beam/doc"))
+
+		// Writes and deletes land in the writable layer only.
+		require.NoError(t, os.WriteFile(filepath.Join(merged, "root", ".bashrc"), []byte("edited"), 0644))
+		require.NoError(t, os.Remove(filepath.Join(merged, "root", "notes", "a")))
+		require.Equal(t, "edited", read(merged, "root/.bashrc"))
+		require.NoFileExists(t, filepath.Join(merged, "root", "notes", "a"))
+		require.Equal(t, "layer bashrc", read(layer, "root/.bashrc"))
+		require.Equal(t, "layer", read(layer, "root/notes/a"))
+		require.Equal(t, "image bashrc", read(image, "root/.bashrc"))
+	})
+}

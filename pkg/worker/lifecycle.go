@@ -1969,6 +1969,14 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			restoreFilesystemCleanupNeeded = false
 		}
 	}
+	// Deferred before the overlay's cleanup, so the mirror is released after it.
+	releaseMirror, err := s.attachMirror(ctx, request, spec, containerInstance.Overlay)
+	if err != nil {
+		exitCode = int(types.ContainerExitCodeStartupFailed)
+		outputLogger.Error(fmt.Sprintf("Failed to mount the mirror: %v\n", err))
+		return
+	}
+	defer releaseMirror()
 	phaseStart := time.Now()
 	if rootDisk := qcowRootDiskMount(request); rootDisk != nil && !s.runtimeOwnsBlockRoot() {
 		// The whole machine filesystem persists: the overlay's writable layer

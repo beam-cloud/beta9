@@ -1,0 +1,146 @@
+{
+  "description": "A tree with explicit extents and the bytes every writer must encode it to. Entries are listed parents first but otherwise out of order.",
+  "meta": "{\"client\":\"vector\",\"source\":{\"os\":\"macos\",\"arch\":\"arm64\"}}",
+  "root": {
+    "kind": "dir",
+    "mode": 448,
+    "mtime_ns": 1700000000000000000
+  },
+  "entries": [
+    {
+      "path": "projects",
+      "kind": "dir",
+      "mode": 493,
+      "mtime_ns": 1700000001000000000
+    },
+    {
+      "path": ".zshrc",
+      "kind": "file",
+      "mode": 420,
+      "mtime_ns": 1700000002123456789,
+      "extents": [
+        {
+          "object": "4862f447f2c7f272fa2f4aaf89dadb3b1ac09105bd5864f8d1a0c9452bb0a226",
+          "object_size": 9000,
+          "offset": 0,
+          "stored_len": 700,
+          "raw_len": 1200
+        }
+      ]
+    },
+    {
+      "path": ".ssh",
+      "kind": "dir",
+      "mode": 448,
+      "mtime_ns": 1700000003000000000
+    },
+    {
+      "path": ".ssh/config",
+      "kind": "file",
+      "mode": 384,
+      "mtime_ns": -1,
+      "extents": [
+        {
+          "object": "4862f447f2c7f272fa2f4aaf89dadb3b1ac09105bd5864f8d1a0c9452bb0a226",
+          "object_size": 9000,
+          "offset": 700,
+          "stored_len": 300,
+          "raw_len": 300
+        }
+      ]
+    },
+    {
+      "path": "projects/app",
+      "kind": "dir",
+      "mode": 493,
+      "mtime_ns": 0
+    },
+    {
+      "path": "projects/current",
+      "kind": "symlink",
+      "mode": 511,
+      "mtime_ns": 1700000004000000000,
+      "target": "app/src"
+    },
+    {
+      "path": "projects/app/src",
+      "kind": "dir",
+      "mode": 493,
+      "mtime_ns": 1700000005000000000
+    },
+    {
+      "path": "projects/app/src/main.rs",
+      "kind": "file",
+      "mode": 420,
+      "mtime_ns": 1700000006000000000,
+      "extents": [
+        {
+          "object": "4862f447f2c7f272fa2f4aaf89dadb3b1ac09105bd5864f8d1a0c9452bb0a226",
+          "object_size": 9000,
+          "offset": 1000,
+          "stored_len": 5000,
+          "raw_len": 5000
+        }
+      ]
+    },
+    {
+      "path": "projects/app/up",
+      "kind": "symlink",
+      "mode": 511,
+      "mtime_ns": 1700000007000000000,
+      "target": "../../.zshrc"
+    },
+    {
+      "path": "projects/app/empty",
+      "kind": "file",
+      "mode": 420,
+      "mtime_ns": 1700000008000000000
+    },
+    {
+      "path": "projects/app/model.bin",
+      "kind": "file",
+      "mode": 292,
+      "mtime_ns": 1700000009000000000,
+      "extents": [
+        {
+          "object": "2725aea2d2dea736fbe38e41ecb518f6098cb68ac77362c5e34faafb356567c5",
+          "object_size": 3000000,
+          "offset": 0,
+          "stored_len": 3000000,
+          "raw_len": 4194304
+        },
+        {
+          "object": "b6f3c15844fe12f966ad90db59da8332a9a6d9dfd198ac83949be2045ec6dc1e",
+          "object_size": 1048576,
+          "offset": 0,
+          "stored_len": 1048576,
+          "raw_len": 1048576
+        },
+        {
+          "object": "2725aea2d2dea736fbe38e41ecb518f6098cb68ac77362c5e34faafb356567c5",
+          "object_size": 3000000,
+          "offset": 0,
+          "stored_len": 3000000,
+          "raw_len": 4194304
+        }
+      ]
+    },
+    {
+      "path": "Ünïcödé — 文件.txt",
+      "kind": "file",
+      "mode": 416,
+      "mtime_ns": 1700000010000000000,
+      "extents": [
+        {
+          "object": "4862f447f2c7f272fa2f4aaf89dadb3b1ac09105bd5864f8d1a0c9452bb0a226",
+          "object_size": 9000,
+          "offset": 6000,
+          "stored_len": 3000,
+          "raw_len": 3000
+        }
+      ]
+    }
+  ],
+  "raw_manifest_hex": "424d4952524f52010000000000000000d30300000000000001000000010000000d00000003000000070000003a00000069000000000000001c259000000000000000000000000000000000000000000000000000000000007b22636c69656e74223a22766563746f72222c22736f75726365223a7b226f73223a226d61636f73222c2261726368223a2261726d3634227d7d2725aea2d2dea736fbe38e41ecb518f6098cb68ac77362c5e34faafb356567c5c0c62d00000000004862f447f2c7f272fa2f4aaf89dadb3b1ac09105bd5864f8d1a0c9452bb0a2262823000000000000b6f3c15844fe12f966ad90db59da8332a9a6d9dfd198ac83949be2045ec6dc1e0000100000000000000000000000000000002a36fe9c971701000000040000000000000000000100c0010000000000000000000000000000005efae8fe9c971705000000010000000000000004000100c001000000000000b0040000000000001561bbb4fe9c971700000000010000000400000006000200a401000000000000000000000000000000cac471fe9c971706000000020000000a00000008000100ed01000000000000b80b00000000000000e4358a009d97170100000001000000120000001a000200a0010000000000002c01000000000000ffffffffffffffff02000000010000002c0000000600020080010000000000000000000000000000000000000000000008000000040000003200000003000100ed01000000000000070000000000000000289524ff9c97173c000000070000003500000007000300ff01000000000000000000000000000000500013009d971700000000000000004300000005000200a4010000000000000000900000000000001a9b4e009d9717030000000300000048000000090002002401000000000000000000000000000000f22f60ff9c97170c000000010000005100000003000100ed010000000000000c00000000000000008665d7ff9c9717560000000c0000005400000002000300ff01000000000000881300000000000000bcca9bff9c971706000000010000006200000007000200a4010000000000000100000000000000bc020000b00400000100000070170000b80b0000b80b000001000000bc0200002c0100002c0100000000000000000000c0c62d0000004000020000000000000000001000000010000000000000000000c0c62d000000400001000000e803000088130000881300002e7373682e7a7368726370726f6a65637473c39c6ec3af63c3b664c3a920e2809420e69687e4bbb62e747874636f6e66696761707063757272656e746170702f737263656d7074796d6f64656c2e62696e73726375702e2e2f2e2e2f2e7a736872636d61696e2e7273",
+  "raw_manifest_sha256": "53d527d35e5cc0074f5d0dbb6cffdc4c3e59ae5f65fb49d0367b0aad66c7336a"
+}

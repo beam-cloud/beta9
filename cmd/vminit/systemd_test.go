@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"golang.org/x/sys/unix"
 )
 
 func TestShortVMIDsProduceStableSystemdIdentity(t *testing.T) {
@@ -378,5 +380,66 @@ func TestSSHPreparationIsOrderedBeforeSSHAndIndependentOfExec(t *testing.T) {
 	}
 	if strings.Contains(guestAgentUnit, "beam-ssh-keys") {
 		t.Fatal("exec agent must not depend on SSH readiness")
+	}
+}
+
+func TestGuestResolvConfReplacesTheWorkersReadOnlyBind(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("binds a file over another: needs root")
+	}
+	dir := t.TempDir()
+	worker, name := filepath.Join(dir, "worker"), filepath.Join(dir, "resolv.conf")
+	read := func(path string) string {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	if err := os.WriteFile(worker, []byte("nameserver 1.1.1.1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// What tailscaled left on the durable root at the last boot.
+	if err := os.WriteFile(name, []byte("nameserver 100.100.100.100\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mount(worker, name, "", unix.MS_BIND, ""); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { unix.Unmount(name, unix.MNT_DETACH) })
+	if err := unix.Mount("", name, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(name, nil, 0644); !errors.Is(err, unix.EROFS) {
+		t.Fatalf("the bind is writable: %v", err)
+	}
+
+	if err := guestResolvConf(name); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(name); got != "nameserver 1.1.1.1\n" {
+		t.Fatalf("resolv.conf = %q, want the worker's", got)
+	}
+
+	// tailscaled writes a temporary file and renames it over resolv.conf,
+	// which a mount point refuses.
+	temp := filepath.Join(dir, "resolv.conf.tmp")
+	if err := os.WriteFile(temp, []byte("nameserver 100.100.100.100\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(temp, name); err != nil {
+		t.Fatalf("the guest cannot replace resolv.conf: %v", err)
+	}
+	if err := guestResolvConf(name); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(name); got != "nameserver 100.100.100.100\n" {
+		t.Fatalf("resolv.conf = %q, want the guest's once there is no bind", got)
+	}
+	if got := read(worker); got != "nameserver 1.1.1.1\n" {
+		t.Fatalf("the worker's resolv.conf = %q", got)
+	}
+	if err := guestResolvConf(filepath.Join(dir, "missing")); err != nil {
+		t.Fatalf("without a resolv.conf: %v", err)
 	}
 }

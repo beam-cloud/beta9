@@ -1,0 +1,47 @@
+#!/bin/sh
+set -eu
+
+if [ -f /run/beam-mirrored-home ]; then
+  # The mirror's path when it is where it was on its source machine. It is
+  # then the desktop user's home: root's interactive logins continue as that
+  # user, with any agent the login forwarded.
+  home=$(cat /run/beam-mirrored-home)
+  user=
+  if [ -n "$home" ] && [ -s /opt/beam-vm/desktop-user ]; then
+    read -r user < /opt/beam-vm/desktop-user || true
+  fi
+  if [ -n "$user" ] && [ "$user" != root ] && id -u "$user" >/dev/null 2>&1; then
+    if [ "$(id -u)" = 0 ]; then
+      case "${SSH_AUTH_SOCK:-}" in
+        /tmp/ssh-*/agent.*)
+          if [ -S "$SSH_AUTH_SOCK" ]; then
+            chown "$user" "${SSH_AUTH_SOCK%/*}" "$SSH_AUTH_SOCK" || true
+          fi
+          ;;
+      esac
+      exec runuser -u "$user" -- env -u XDG_RUNTIME_DIR HOME="$home" /opt/beam-vm/mirror-shell "$@"
+    fi
+    if [ "$(id -un)" = "$user" ]; then
+      export HOME="$home"
+    fi
+  elif [ -n "$home" ] && [ -z "$user" ] && [ "$(id -u)" = 0 ] && [ -d "$home" ]; then
+    # Without a desktop account the mirror is root's, and so is its home.
+    export HOME="$home"
+  fi
+  cd "$HOME" || cd /
+  export BEAM_MIRROR_SHELL_STARTED=1
+  if [ -f "$HOME/.zshrc" ] || [ -f "$HOME/.zprofile" ]; then
+    export SHELL=/usr/bin/zsh
+    exec "$SHELL" -il
+  fi
+  if [ -f "$HOME/.config/fish/config.fish" ]; then
+    export SHELL=/usr/bin/fish
+    exec "$SHELL" -il
+  fi
+  exec /bin/bash -il
+fi
+
+if [ "${1:-}" = --desktop ]; then
+  exec "${SHELL:-/bin/bash}"
+fi
+exec /bin/bash -il

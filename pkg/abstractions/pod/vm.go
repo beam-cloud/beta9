@@ -38,6 +38,7 @@ func (s *GenericPodService) RunVM(ctx context.Context, info *auth.AuthInfo, stub
 	spec.Ports = vmSpec.RuntimePorts()
 	spec.BlockNetwork = vmSpec.BlockNetwork
 	spec.AllowList = vmSpec.AllowList
+	spec.Mirror = vmSpec.Mirror
 	var checkpoint *types.Checkpoint
 	if checkpointID != "" {
 		checkpoint, err = s.backendRepo.GetCheckpointById(ctx, checkpointID)

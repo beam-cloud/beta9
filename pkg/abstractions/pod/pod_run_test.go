@@ -111,3 +111,24 @@ func TestRunVMValidatesGPUBeforeLaunch(t *testing.T) {
 		})
 	}
 }
+
+func TestRunVMCarriesTheMirrorPinPerLaunch(t *testing.T) {
+	launchError := errors.New("secret resolution failed")
+	config, err := json.Marshal(types.StubConfigV1{UseVM: true, Env: []string{"BEAM_VM_SYSTEMD=1"}, Secrets: []types.Secret{{Name: "APP_KEY"}}})
+	require.NoError(t, err)
+	stub := &types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeVM), Config: string(config)}}
+	service := &GenericPodService{backendRepo: &sandboxBackendRepository{stub: stub, secretErr: launchError}}
+	info := &auth.AuthInfo{Workspace: &types.Workspace{ExternalId: "workspace"}}
+	pin := &types.VMMirror{Name: "laptop", ID: "5d0a0b0e-3a44-4d55-8d7f-3f6f8f0f8a11", Generation: 3, ManifestDigest: "abc", ManifestSize: 10}
+
+	launched := func(spec types.VMSpec) *types.VMMirror {
+		require.ErrorIs(t, service.RunVM(context.Background(), info, "stub", "container", spec, "", nil), launchError)
+		var config types.StubConfigV1
+		require.NoError(t, json.Unmarshal([]byte(stub.Config), &config))
+		return config.Mirror
+	}
+	require.Equal(t, pin, launched(types.VMSpec{Mirror: pin}))
+	// The stub outlives the launch; a later launch without the mirror, as
+	// after a purge, must not find the old pin in it.
+	require.Nil(t, launched(types.VMSpec{}))
+}

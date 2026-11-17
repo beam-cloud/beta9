@@ -54,6 +54,7 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 		"BEAM_VM_SYSTEMD=1",
 		"BEAM_VM_ID="+v.ID,
 		"BEAM_VM_DESKTOP="+fmt.Sprint(v.Spec.Desktop),
+		"BEAM_VM_MIRRORED_HOME="+fmt.Sprint(v.Spec.Mirror != nil),
 		"BEAM_VM_SSH="+fmt.Sprint(v.Spec.SSH),
 		"BEAM_VM_SSH_PUBLIC_KEY="+v.Spec.SSHPublicKey,
 	)
@@ -195,6 +196,10 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 	if err := s.prepare(ctx, v); err != nil {
 		return err
 	}
+	spec, err := s.launchSpec(ctx, v)
+	if err != nil {
+		return err
+	}
 
 	// Persist before enqueue. A retry uses this exact runtime identity.
 	if v.ContainerID == "" {
@@ -208,7 +213,7 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 		return err
 	}
 
-	err = s.runtime.RunVM(ctx, info, v.StubID, v.ContainerID, v.Spec, v.MemoryCheckpointID, v.MemoryDiskSnapshots)
+	err = s.runtime.RunVM(ctx, info, v.StubID, v.ContainerID, spec, v.MemoryCheckpointID, v.MemoryDiskSnapshots)
 	if err != nil {
 		if _, stateErr := s.containers.GetContainerState(v.ContainerID); (&types.ErrContainerStateNotFound{}).From(stateErr) {
 			v.ContainerID = ""
@@ -296,6 +301,10 @@ func (s *Service) capture(ctx context.Context, v *types.VM, kind, name, descript
 		}
 		if kind != types.VMArtifactTemplate {
 			return nil, fmt.Errorf("only templates can be published")
+		}
+		// A published template drops the pin but shares the whole root.
+		if v.Spec.Mirror != nil {
+			return nil, fmt.Errorf("a VM with a mirror cannot be published: its disk holds the mirrored files it changed; publish from a VM that never had a mirror")
 		}
 	}
 

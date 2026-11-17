@@ -1,18 +1,40 @@
 #!/bin/bash
 set -euo pipefail
 
+# A mirrored home gets the launchers and defaults the image put in the
+# desktop user's own home, without replacing any it already has.
+seed_home() {
+  local image_home=
+  if [ -s /opt/beam-vm/desktop-home ]; then
+    read -r image_home < /opt/beam-vm/desktop-home
+  fi
+  if [ -z "$image_home" ] || [ "$image_home" = "$desktop_home" ]; then
+    return 0
+  fi
+  printf '%s\n' Desktop .config .local/share/gnome-shell/lock-warning-shown |
+    runuser -u "$desktop_user" -- rsync -rl --ignore-existing --ignore-missing-args \
+      --files-from=- "$image_home/" "$desktop_home/"
+}
+
 # Select the session account once; both modes use the same trust and supervisor.
 run_as=()
+mirrored=false
 if [ -z "${BEAM_VM_KIOSK:-}" ]; then
   read -r desktop_user < /opt/beam-vm/desktop-user
   # The worker overlays /workspace with a fresh root-owned directory.
   chown "$desktop_user:$desktop_user" /run/beam-desktop /workspace
   desktop_home=$(getent passwd "$desktop_user" | cut -d: -f6)
+  # The mirror's path when it is where it was on its source machine.
+  if [ -s /run/beam-mirrored-home ]; then
+    read -r desktop_home < /run/beam-mirrored-home
+    mirrored=true
+  fi
   export XDG_CONFIG_HOME="$desktop_home/.config"
   export XDG_CURRENT_DESKTOP=ubuntu:GNOME DESKTOP_SESSION=ubuntu XDG_SESSION_TYPE=x11
   export GNOME_SHELL_SESSION_MODE=ubuntu
   export XDG_CONFIG_DIRS="/etc/xdg/xdg-ubuntu:${XDG_CONFIG_DIRS:-/etc/xdg}"
-  run_as=(runuser -u "$desktop_user" --)
+  # runuser takes HOME from passwd; the session uses the home chosen here.
+  run_as=(runuser -u "$desktop_user" -- env HOME="$desktop_home")
 fi
 if [ "${1:-}" = --launch ]; then
   shift
@@ -21,6 +43,9 @@ if [ "${1:-}" = --launch ]; then
     export DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR=/run/beam-desktop
   fi
   exec "${run_as[@]}" "$@"
+fi
+if [ "$mirrored" = true ]; then
+  seed_home || echo 'Unable to copy desktop defaults into the mirrored home; continuing' >&2
 fi
 "${run_as[@]}" /opt/beam-vm/browser-trust
 exec "${run_as[@]}" /opt/beam-vm/kiosk

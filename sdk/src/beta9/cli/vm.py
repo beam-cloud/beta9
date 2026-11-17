@@ -164,6 +164,9 @@ def _show(info, as_json):
     else:
         urls = _published_urls(info)
         protected = (info.get("spec") or {}).get("protected_ports") or []
+        pin = (info.get("spec") or {}).get("mirror")
+        if pin:
+            info = {**info, "mirror": f"{pin['name']}, generation {pin.get('generation')}"}
         fields = {
             label: info[key]
             for key, label in (
@@ -171,6 +174,7 @@ def _show(info, as_json):
                 ("status", "Status"),
                 ("error", "Error"),
                 ("public_ipv6", "IPv6"),
+                ("mirror", "Mirror"),
                 ("terminal_url", "Terminal" if 7681 in protected else "Terminal (public)"),
                 (
                     "desktop_url",
@@ -282,6 +286,7 @@ def _show(info, as_json):
     type=click.Path(exists=True, file_okay=False),
     help="Upload a local directory after creation.",
 )
+@click.option("--mirror", metavar="NAME", help="Start with the files of mirror NAME.")
 @click.option(
     "--ttl",
     type=click.IntRange(0, 31536000),
@@ -374,6 +379,7 @@ def new(
     idle_action=None,
     kiosk_config=None,
     gpu=None,
+    mirror=None,
 ):
     """Create a VM with a durable root. NAME defaults to a friendly generated name."""
     as_json = as_json or terminal.json_output()
@@ -434,6 +440,7 @@ def new(
         request_id=str(request_id) if request_id else None,
         disks=list(disk) if disk else None,
         volumes=_volumes(volume) if volume else None,
+        mirror=mirror,
         _service=service,
     )
     with StoredStdoutInterceptor(capture_logs=as_json):

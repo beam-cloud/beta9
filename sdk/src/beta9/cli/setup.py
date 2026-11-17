@@ -1,6 +1,7 @@
 """Account sign-in, coding agent configuration, and workload onboarding."""
 
 import shlex
+import subprocess
 import sys
 from contextlib import nullcontext, redirect_stdout
 from decimal import Decimal, InvalidOperation
@@ -258,6 +259,133 @@ def setup_vm(name, template, desktop, clients, skip_agents, yes, context):
         raise
     except (LoginError, GatewayHTTPError, RuntimeError, TimeoutError, ValueError, OSError) as exc:
         raise click.ClickException(str(exc)) from exc
+
+
+MIRROR_APP = Path("/Applications/Beam Mirror.app")
+MIRROR_BUNDLE_ID = "com.beam.mirror"
+MIRROR_DOWNLOAD_URL = "https://downloads.beam.cloud/mirror/Beam-Mirror.dmg"
+# Far more than a Beam Mirror disk image needs.
+MIRROR_IMAGE_LIMIT = 1 << 30
+
+
+@setup.command(
+    name="mirror",
+    help="Install Beam Mirror and open it with this sign-in, ready to set up your profile. "
+    "macOS only.",
+)
+@click.option(
+    "--from",
+    "source",
+    metavar="DMG|URL",
+    help="Install or update from this disk image: a path or an https URL. "
+    "Without it, Beam Mirror is downloaded if it isn't installed.",
+)
+@extraclick.config_context_option
+def setup_mirror(source: Optional[str], context: Optional[str]):
+    from ..auth import LoginError
+
+    if sys.platform != "darwin":
+        raise click.ClickException("Beam Mirror runs on macOS.")
+    selected = context or extraclick.selected_context()
+    try:
+        with redirect_stdout(sys.stderr) if terminal.json_output() else nullcontext():
+            connect_workspace(selected)
+            if source or not MIRROR_APP.exists():
+                with terminal.progress("Installing Beam Mirror"):
+                    install_mirror(source or MIRROR_DOWNLOAD_URL)
+            # A Beam Mirror that is running offers the sign-in, or makes way
+            # for a newer one; otherwise this one starts.
+            run_checked(
+                ["open", "-n", "-a", str(MIRROR_APP), "--args", "app", "--context", selected]
+            )
+    except (LoginError, RuntimeError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    version = mirror_version()
+    if terminal.json_output():
+        terminal.print_json({"ready": True, "context": selected, "version": version})
+    else:
+        app = f"Beam Mirror {version}" if version else "Beam Mirror"
+        terminal.success(f"{app} is open. Finish setting it up there.")
+
+
+def install_mirror(source: str) -> None:
+    """Copy Beam Mirror from a disk image into /Applications, over any older copy."""
+    import plistlib
+    import shutil
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as scratch:
+        image = Path(source).expanduser()
+        if source.startswith("https://"):
+            image = Path(scratch) / "Beam-Mirror.dmg"
+            download_image(source, image)
+        elif "://" in source:
+            raise RuntimeError("Download Beam Mirror over https.")
+        elif not image.is_file():
+            raise RuntimeError(f"{source} doesn't exist.")
+        mount = Path(scratch) / "image"
+        mount.mkdir()
+        run_checked(
+            ["hdiutil", "attach", "-nobrowse", "-readonly", "-noautoopen"]
+            + ["-mountpoint", str(mount), str(image)]
+        )
+        try:
+            app = mount / MIRROR_APP.name
+            try:
+                with open(app / "Contents" / "Info.plist", "rb") as info:
+                    bundle = plistlib.load(info).get("CFBundleIdentifier")
+            except (OSError, plistlib.InvalidFileException):
+                bundle = None
+            if bundle != MIRROR_BUNDLE_ID:
+                raise RuntimeError(f"{source} doesn't hold Beam Mirror.")
+            staged = MIRROR_APP.with_name(f".{MIRROR_APP.name}.new")
+            old = MIRROR_APP.with_name(f".{MIRROR_APP.name}.old")
+            for leftover in (staged, old):
+                shutil.rmtree(leftover, ignore_errors=True)
+            run_checked(["ditto", str(app), str(staged)])
+            # A copy that is running keeps running until the new one opens.
+            if MIRROR_APP.exists():
+                MIRROR_APP.rename(old)
+            staged.rename(MIRROR_APP)
+            shutil.rmtree(old, ignore_errors=True)
+        finally:
+            subprocess.run(["hdiutil", "detach", "-quiet", str(mount)], capture_output=True)
+
+
+def download_image(url: str, path: Path) -> None:
+    import requests
+
+    try:
+        with requests.get(url, stream=True, timeout=30) as response:
+            response.raise_for_status()
+            if not response.url.startswith("https://"):
+                raise RuntimeError("Download Beam Mirror over https.")
+            size = 0
+            with open(path, "wb") as file:
+                for chunk in response.iter_content(1 << 20):
+                    size += len(chunk)
+                    if size > MIRROR_IMAGE_LIMIT:
+                        raise RuntimeError(f"{url} is too large to be Beam Mirror.")
+                    file.write(chunk)
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Couldn't download Beam Mirror: {exc}") from exc
+
+
+def run_checked(command: Sequence[str]) -> None:
+    result = subprocess.run(list(command), capture_output=True, text=True)
+    if result.returncode != 0:
+        reason = (result.stderr or result.stdout).strip() or f"exit status {result.returncode}"
+        raise RuntimeError(f"{command[0]} failed: {reason}")
+
+
+def mirror_version() -> str:
+    import plistlib
+
+    try:
+        with open(MIRROR_APP / "Contents" / "Info.plist", "rb") as info:
+            return str(plistlib.load(info).get("CFBundleShortVersionString", ""))
+    except (OSError, plistlib.InvalidFileException):
+        return ""
 
 
 def app_urls(info: Dict[str, Any]) -> Dict[int, str]:

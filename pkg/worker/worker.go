@@ -129,6 +129,7 @@ type Worker struct {
 	gvisorRuntime           runtime.Runtime
 	containerServer         *ContainerRuntimeServer
 	cacheManager            *WorkerCacheManager
+	mirrorLayers            *mirrorLayers
 	fileCacheManager        *FileCacheManager
 	criuManager             CRIUManager
 	containerNetworkManager ContainerNetwork
@@ -731,6 +732,7 @@ func NewWorker() (_ *Worker, err error) {
 		cancel:                  cancel,
 		config:                  config,
 		imageMountPath:          getImageMountPath(workerId),
+		mirrorLayers:            newMirrorLayers(ctx, workerId, cacheClient),
 		cpuLimit:                cpuLimit,
 		memoryLimit:             memoryLimit,
 		gpuType:                 gpuType,

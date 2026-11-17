@@ -1540,6 +1540,23 @@ type VMConfig struct {
 	Network        VMNetworkConfig    `key:"network" json:"network"`
 	WebRTC         VMWebRTCConfig     `key:"webrtc" json:"webrtc"`
 	GitHubRunners  GitHubRunnerConfig `key:"githubRunners" json:"github_runners"`
+	Mirror         VMMirrorConfig     `key:"mirror" json:"mirror"`
+}
+
+// VMMirrorConfig bounds what mirrors keep in workspace buckets. Zero values
+// use defaults.
+type VMMirrorConfig struct {
+	// Generations kept per mirror besides those a VM, snapshot or template
+	// is pinned to. Default 5.
+	KeepGenerations int `key:"keepGenerations" json:"keep_generations"`
+	// How long a sweep still counts a generation that stopped being kept, for
+	// a VM being created that resolved it. Default 1h.
+	ExpiredGrace time.Duration `key:"expiredGrace" json:"expired_grace"`
+	// How long an object no kept generation references survives, which is
+	// also how long an upload may take before its commit. Default 48h.
+	SweepGrace time.Duration `key:"sweepGrace" json:"sweep_grace"`
+	// How often unreferenced objects are swept. Default 6h.
+	SweepInterval time.Duration `key:"sweepInterval" json:"sweep_interval"`
 }
 
 // GitHubRunnerConfig runs GitHub Actions jobs on ordinary CPU VMs through a

@@ -106,6 +106,10 @@ func bootSystemd(spec *specs.Spec, workload *workloadMemory, lateDevices bool) e
 		return err
 	}
 
+	if err := guestResolvConf("/etc/resolv.conf"); err != nil {
+		return err
+	}
+
 	if err := workload.configureSystemd("/"); err != nil {
 		return err
 	}
@@ -288,7 +292,7 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 		}
 	}
 
-	return nil
+	return prepareMirroredHome(root, process)
 }
 
 func vmMachineID(id string) (string, error) {
@@ -354,6 +358,34 @@ func prepareVMIdentity(root string, process *specs.Process) error {
 	return os.WriteFile(identityPath, []byte(id+"\n"), 0644)
 }
 
+// replaceFile swaps in a file's new contents whole, with its mode: a boot
+// cut short must not leave a partial file on the durable root.
+func replaceFile(name string, data []byte) error {
+	info, err := os.Stat(name)
+	if err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(filepath.Dir(name), "."+filepath.Base(name)+"-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(temp.Name())
+	_, err = temp.Write(data)
+	if err == nil {
+		err = temp.Chmod(info.Mode().Perm())
+	}
+	if err == nil {
+		err = temp.Sync()
+	}
+	if closeErr := temp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(temp.Name(), name)
+}
+
 func systemdQuote(value string) string {
 	replace := strings.NewReplacer("\\", "\\\\", "\"", "\\\"", "\n", "\\n", "\r", "\\r", "\t", "\\t", "%", "%%")
 	return "\"" + replace.Replace(value) + "\""
@@ -393,6 +425,25 @@ func guestHosts(hostname string) error {
 	}
 
 	return os.WriteFile("/etc/hostname", []byte(hostname+"\n"), 0644)
+}
+
+// guestResolvConf makes the worker's read-only resolv.conf bind the guest's
+// own file, which tailscaled, resolvconf and the like rewrite. Every boot
+// starts from the worker's resolvers: a restricted network lets DNS reach
+// only those.
+func guestResolvConf(name string) error {
+	data, err := os.ReadFile(name)
+	if os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if err := unix.Unmount(name, unix.MNT_DETACH); err == unix.EINVAL {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("unmount guest resolv.conf: %w", err)
+	}
+	return replaceFile(name, data)
 }
 
 func runSystemdAgent() (int, error) {

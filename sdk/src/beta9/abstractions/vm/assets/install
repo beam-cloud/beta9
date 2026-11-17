@@ -34,7 +34,7 @@ fi
 apt-get update
 # Runtime libraries required by native coding-agent binaries.
 apt_install systemd systemd-sysv dbus ca-certificates curl openssh-server rsync git \
-  sudo procps python3 python3-pip libatomic1 libstdc++6 libgcc-s1
+  sudo procps python3 python3-pip zsh fish libatomic1 libstdc++6 libgcc-s1
 
 arch=$(dpkg --print-architecture)
 case "$arch" in
@@ -72,7 +72,9 @@ npm cache clean --force
 
 install -d /opt/beam-vm /workspace /run/sshd /etc/systemd/system
 install -m 0755 "$assets/boot" "$assets/desktop" "$assets/xstartup" "$assets/kiosk" \
-  "$assets/kiosk-openbox-build" "$assets/kiosk-selkies-patch" "$assets/kiosk-mcp" /opt/beam-vm/
+  "$assets/kiosk-openbox-build" "$assets/kiosk-selkies-patch" "$assets/kiosk-mcp" \
+  "$assets/mirror-shell" /opt/beam-vm/
+install -m 0644 "$assets/mirror-profile.sh" /etc/profile.d/beam-mirror.sh
 install -m 0644 "$assets/kiosk-openbox.xml" "$assets/kiosk_config.py" /opt/beam-vm/
 install -m 0644 "$assets"/*.service /etc/systemd/system/
 
@@ -164,6 +166,8 @@ if [ "$desktop" = true ] && [ "$kiosk" != true ]; then
   fi
   desktop_home=$(getent passwd "$desktop_user" | cut -d: -f6)
   printf '%s\n' "$desktop_user" > /opt/beam-vm/desktop-user
+  # A mirror can move the account's home; the desktop copies its defaults from here.
+  printf '%s\n' "$desktop_home" > /opt/beam-vm/desktop-home
   test -u /usr/bin/sudo
   printf '%s ALL=(ALL:ALL) NOPASSWD: ALL\n' "$desktop_user" > /etc/sudoers.d/beam-desktop
   chmod 0440 /etc/sudoers.d/beam-desktop

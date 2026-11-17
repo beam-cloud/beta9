@@ -509,6 +509,10 @@ func (s *ContainerRuntimeServer) ContainerArchive(req *pb.ContainerArchiveReques
 		return stream.Send(&pb.ContainerArchiveResponse{Done: true, Success: false, ErrorMsg: "Container not running"})
 	}
 
+	if refusal := mirrorArchiveRefusal(instance.Request); refusal != "" {
+		return stream.Send(&pb.ContainerArchiveResponse{Done: true, Success: false, ErrorMsg: refusal})
+	}
+
 	// A v1 base has no OCI image to stack a layer on; its snapshot archives the
 	// merged root, which carries the runtime spec inside the filesystem.
 	_, layered := s.imageClient.GetSourceImageRef(instance.Request.ImageId)

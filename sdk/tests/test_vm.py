@@ -926,6 +926,36 @@ def test_cli_preserves_env_values_and_template_defaults(cli_service, monkeypatch
     fake.wait.assert_not_called()
 
 
+def test_cli_new_names_a_mirror(cli_service, monkeypatch):
+    fake = MagicMock()
+    fake.info = {"name": "dev", "id": "resource", "status": "running", "spec": {}}
+    factory = MagicMock(return_value=fake)
+    monkeypatch.setattr(vm_cli, "VM", factory)
+    for args, expected in ((["--mirror", "laptop"], "laptop"), ([], None)):
+        result = CliRunner().invoke(vm_cli.management, ["new", "dev", *args, "--json"])
+        assert result.exit_code == 0, result.output
+        assert factory.call_args.kwargs["mirror"] == expected
+
+
+def test_vm_requests_a_mirror_by_name_only():
+    service = SimpleNamespace(channel=MagicMock(), http=MagicMock())
+    assert VM("dev", mirror="laptop", _service=service)._spec["mirror"] == {"name": "laptop"}
+    assert "mirror" not in VM("dev", _service=service)._spec
+
+
+def test_vm_details_show_the_pinned_generation(capsys):
+    vm_cli._show(
+        {
+            "name": "dev",
+            "id": "vm-id",
+            "status": "running",
+            "spec": {"mirror": {"name": "laptop", "id": "m", "generation": 4}},
+        },
+        False,
+    )
+    assert "laptop, generation 4" in capsys.readouterr().out
+
+
 def test_cli_forwards_gpu_with_typed_resources(cli_service):
     cli_service.http.json.return_value = {
         "name": "dev",
@@ -2769,6 +2799,102 @@ def test_agent_login_failure_stops_setup(monkeypatch):
     assert result.exit_code != 0
     assert "Sign-in expired" in result.output
     configure.assert_not_called()
+
+
+def fake_mirror_tools(monkeypatch, bundle_id="com.beam.mirror"):
+    """hdiutil and ditto as `setup mirror` uses them; returns the commands run."""
+    import plistlib
+
+    from beta9.cli import setup
+
+    commands = []
+
+    def run(command, **_):
+        commands.append(command)
+        if command[:2] == ["hdiutil", "attach"]:
+            mount = Path(command[command.index("-mountpoint") + 1])
+            info = {"CFBundleIdentifier": bundle_id, "CFBundleShortVersionString": "0.2.10"}
+            contents = mount / "Beam Mirror.app" / "Contents"
+            contents.mkdir(parents=True)
+            (contents / "Info.plist").write_bytes(plistlib.dumps(info))
+        elif command[0] == "ditto":
+            shutil.copytree(command[1], command[2])
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(setup.subprocess, "run", run)
+    monkeypatch.setattr(setup.sys, "platform", "darwin")
+    monkeypatch.setattr(setup, "connect_workspace", MagicMock())
+    return commands
+
+
+def test_setup_mirror_installs_the_app_and_offers_the_sign_in(tmp_path, monkeypatch):
+    from beta9.cli import setup
+
+    app = tmp_path / "Applications" / "Beam Mirror.app"
+    (app / "Contents").mkdir(parents=True)
+    (app / "Contents" / "older").write_text("0.2.9")
+    image = tmp_path / "Beam-Mirror.dmg"
+    image.write_bytes(b"image")
+    monkeypatch.setattr(setup, "MIRROR_APP", app)
+    commands = fake_mirror_tools(monkeypatch)
+
+    args = ["setup", "mirror", "--context", "staging", "--from", str(image)]
+    result = CliRunner().invoke(setup.common, args)
+
+    assert result.exit_code == 0, result.output
+    assert "Beam Mirror 0.2.10 is open" in result.output
+    setup.connect_workspace.assert_called_once_with("staging")
+    assert (app / "Contents" / "Info.plist").exists()
+    assert not (app / "Contents" / "older").exists()
+    assert sorted(path.name for path in app.parent.iterdir()) == ["Beam Mirror.app"]
+    assert commands[-2][:2] == ["hdiutil", "detach"]
+    assert commands[-1] == ["open", "-n", "-a", str(app), "--args", "app", "--context", "staging"]
+
+
+def test_setup_mirror_downloads_a_missing_app_and_opens_an_installed_one(tmp_path, monkeypatch):
+    from beta9.cli import setup
+
+    app = tmp_path / "Beam Mirror.app"
+    monkeypatch.setattr(setup, "MIRROR_APP", app)
+    commands = fake_mirror_tools(monkeypatch)
+    downloads = []
+
+    def download(url, path):
+        downloads.append(url)
+        path.write_bytes(b"image")
+
+    monkeypatch.setattr(setup, "download_image", download)
+
+    opened = ["open", "-n", "-a", str(app), "--args", "app", "--context", "staging"]
+    for _ in range(2):
+        result = CliRunner().invoke(setup.common, ["setup", "mirror", "--context", "staging"])
+        assert result.exit_code == 0, result.output
+        assert commands[-1] == opened
+    assert downloads == [setup.MIRROR_DOWNLOAD_URL]
+    assert (app / "Contents" / "Info.plist").exists()
+
+
+def test_setup_mirror_needs_macos_and_a_beam_mirror_image(tmp_path, monkeypatch):
+    from beta9.cli import setup
+
+    app = tmp_path / "Beam Mirror.app"
+    monkeypatch.setattr(setup, "MIRROR_APP", app)
+    image = tmp_path / "Other.dmg"
+    image.write_bytes(b"image")
+    commands = fake_mirror_tools(monkeypatch, bundle_id="com.example.other")
+
+    result = CliRunner().invoke(setup.common, ["setup", "mirror", "--from", str(image)])
+    assert result.exit_code != 0 and "doesn't hold Beam Mirror" in result.output
+    assert not app.exists() and not any(command[0] == "open" for command in commands)
+
+    result = CliRunner().invoke(
+        setup.common, ["setup", "mirror", "--from", "http://example.com/x.dmg"]
+    )
+    assert result.exit_code != 0 and "https" in result.output
+
+    monkeypatch.setattr(setup.sys, "platform", "linux")
+    result = CliRunner().invoke(setup.common, ["setup", "mirror"])
+    assert result.exit_code != 0 and "macOS" in result.output
 
 
 def test_vm_hourly_price_uses_live_vm_rates(monkeypatch):
