@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 )
@@ -74,6 +75,39 @@ func processEnv(proc *specs.Process, key string) string {
 	}
 
 	return ""
+}
+
+// A headless VM keeps Beam out of its workload's sight. It takes none of the
+// guest's ports: it has no web terminal, and its process manager listens on a
+// socket that the host reaches over vsock. Its units start with systemd's own
+// environment, and one that needs the VM's loads systemdEnvironmentFile.
+func headless(process *specs.Process) bool {
+	return processEnv(process, "BEAM_VM_HEADLESS") == "1"
+}
+
+const systemdEnvironmentFile = "/run/beam-vm/environment"
+
+// environmentFile is env in the syntax of a unit's EnvironmentFile. Between
+// double quotes systemd takes everything as written, line breaks included,
+// except a backslash before a quote or another backslash.
+func environmentFile(env []string) string {
+	escape := strings.NewReplacer("\\", "\\\\", "\"", "\\\"")
+	var file strings.Builder
+	for _, entry := range env {
+		if name, value, ok := strings.Cut(entry, "="); ok {
+			file.WriteString(name + "=\"" + escape.Replace(value) + "\"\n")
+		}
+	}
+	return file.String()
+}
+
+// listenOnSocket has a headless VM's process manager listen on the socket
+// that the host reaches through microvm.ProcessPort. It is set as the manager
+// starts and not in the VM's environment, which its units can load.
+func listenOnSocket(process *specs.Process) {
+	if headless(process) {
+		process.Env = append(process.Env, "GOPROC_SOCKET="+microvm.ProcessSocket)
+	}
 }
 
 func systemdBinary() (string, error) {
@@ -169,6 +203,7 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 
 	// The worker starts goproc directly. Set the environment and working
 	// directory here, without a shell or SSH key generation on the exec path.
+	vmEnv := process.Env
 	process.Env = append(process.Env, "HOME=/root", "LANG=C.UTF-8")
 	if processEnv(process, "BEAM_VM_DESKTOP") == "true" {
 		process.Env = append(process.Env, "DISPLAY=:1", "XAUTHORITY=/run/beam-desktop/.Xauthority")
@@ -204,22 +239,30 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 		return err
 	}
 
-	// Apply VM environment before any enabled user units start, including
-	// units ordered before multi-user.target. Keep secrets on transient /run.
-	managerDir := filepath.Join(root, "run/systemd/system.conf.d")
-	if err := os.MkdirAll(managerDir, 0755); err != nil {
-		return err
-	}
+	if headless(process) {
+		// Without root's HOME, which a unit that names its user would take
+		// from the file instead of that user's.
+		if err := os.WriteFile(filepath.Join(root, systemdEnvironmentFile), []byte(environmentFile(vmEnv)), 0600); err != nil {
+			return err
+		}
+	} else {
+		// Apply VM environment before any enabled user units start, including
+		// units ordered before multi-user.target. Keep secrets on transient /run.
+		managerDir := filepath.Join(root, "run/systemd/system.conf.d")
+		if err := os.MkdirAll(managerDir, 0755); err != nil {
+			return err
+		}
 
-	var manager strings.Builder
-	manager.WriteString("[Manager]\nDefaultEnvironment=")
-	for _, entry := range process.Env {
-		manager.WriteString(" " + systemdQuote(entry))
-	}
+		var manager strings.Builder
+		manager.WriteString("[Manager]\nDefaultEnvironment=")
+		for _, entry := range process.Env {
+			manager.WriteString(" " + systemdQuote(entry))
+		}
 
-	manager.WriteString("\n")
-	if err := os.WriteFile(filepath.Join(managerDir, "90-beam-vm.conf"), []byte(manager.String()), 0600); err != nil {
-		return err
+		manager.WriteString("\n")
+		if err := os.WriteFile(filepath.Join(managerDir, "90-beam-vm.conf"), []byte(manager.String()), 0600); err != nil {
+			return err
+		}
 	}
 
 	unitDir := filepath.Join(root, "run/systemd/system")
@@ -242,7 +285,10 @@ func writeSystemdBootFiles(root string, process *specs.Process) error {
 		return err
 	}
 
-	services := map[string]string{"beam-terminal.service": "/etc/systemd/system/beam-terminal.service"}
+	services := map[string]string{}
+	if !headless(process) {
+		services["beam-terminal.service"] = "/etc/systemd/system/beam-terminal.service"
+	}
 	if processEnv(process, "BEAM_VM_SSH") == "true" {
 		// SSH validates its configuration in ExecStartPre, so keys must be
 		// ready before the entire SSH service, including user pre-start hooks.
@@ -405,6 +451,8 @@ func runSystemdAgent() (int, error) {
 	if err := json.Unmarshal(data, &process); err != nil {
 		return 1, err
 	}
+
+	listenOnSocket(&process)
 
 	workload, err := openWorkloadMemory()
 	if err != nil {

@@ -313,7 +313,7 @@ func publicVMPort(v *types.VM, port uint32) bool {
 }
 
 func managedVMWebPort(v *types.VM, port uint32) bool {
-	return port == types.VMTerminalPort || (port == types.VMDesktopPort && v.Spec.Desktop)
+	return (port == types.VMTerminalPort && !v.Spec.Headless) || (port == types.VMDesktopPort && v.Spec.Desktop)
 }
 
 func publicVMHTTPPort(v *types.VM, port uint32) bool {

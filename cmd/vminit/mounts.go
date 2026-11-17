@@ -84,6 +84,30 @@ func mountPathsOverlap(a, b string) bool {
 	return a == b || strings.HasPrefix(a, strings.TrimSuffix(b, "/")+"/") || strings.HasPrefix(b, strings.TrimSuffix(a, "/")+"/")
 }
 
+// kernelModulesTarget is where a root takes the host's module indexes for the
+// running kernel. It is "" where the host has none for this kernel or the
+// root has modules of its own, as a GPU image does.
+func kernelModulesTarget(root, release string, indexes map[string][]byte) (string, error) {
+	if len(indexes) == 0 {
+		return "", nil
+	}
+	for name := range indexes {
+		if name != filepath.Base(name) || name == "." || name == ".." {
+			return "", fmt.Errorf("module index %q is not a file name", name)
+		}
+	}
+	// /lib is a link in most images, and one that leaves the root would put
+	// the indexes in the image instead.
+	target, err := canonicalMountTarget(root, filepath.Join("/lib/modules", release))
+	if err != nil {
+		return "", err
+	}
+	if entries, err := os.ReadDir(target); len(entries) > 0 || err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	return target, nil
+}
+
 func canonicalMountTarget(root, destination string) (string, error) {
 	path := filepath.Join(root, destination)
 	var suffix []string

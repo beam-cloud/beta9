@@ -1247,7 +1247,7 @@ func portsForRequest(request *types.ContainerRequest) []uint32 {
 	}
 
 	ports = append(ports, uint32(types.WorkerShellPort))
-	if request.Stub.Type.IsSandbox() {
+	if request.Stub.Type.IsSandbox() && !request.IsHeadlessVM() {
 		ports = append(ports, uint32(types.WorkerSandboxProcessManagerPort))
 	}
 

@@ -102,6 +102,12 @@ type GuestPortDialer interface {
 	DialGuestPort(ctx context.Context, containerID string, port uint32) (net.Conn, error)
 }
 
+// GuestProcessDialer reaches the process manager of a headless VM, which
+// listens on a socket in the guest and not on a port.
+type GuestProcessDialer interface {
+	DialGuestProcessManager(ctx context.Context, containerID string) (net.Conn, error)
+}
+
 // GuestUpperDir is where a guest keeps the writable layer of its root
 // filesystem, the counterpart of a host overlay's upper directory.
 var GuestUpperDir = path.Join(microvm.DiskMount, microvm.DiskOverlayUpper)

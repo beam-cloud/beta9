@@ -31,6 +31,8 @@ if ! command -v apt-get >/dev/null; then
   echo 'Beam VM images require Debian/Ubuntu and systemd' >&2
   exit 1
 fi
+# An image that came with its package indexes keeps them.
+if compgen -G '/var/lib/apt/lists/*_Packages*' >/dev/null; then indexes=true; else indexes=false; fi
 apt-get update
 # Runtime libraries required by native coding-agent binaries.
 apt_install systemd systemd-sysv dbus ca-certificates curl openssh-server rsync git \
@@ -226,7 +228,7 @@ if [ "$desktop" = true ] || [ "$kiosk" = true ]; then
 fi
 
 # A desktop's package opener needs these indexes to resolve downloaded packages.
-if [ "$desktop" != true ] || [ "$kiosk" = true ]; then
+if [ "$indexes" != true ] && { [ "$desktop" != true ] || [ "$kiosk" = true ]; }; then
   rm -rf /var/lib/apt/lists/*
 fi
 rm -rf "$assets"

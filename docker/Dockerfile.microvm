@@ -96,6 +96,14 @@ grep -q '^# CONFIG_NUMA is not set$' .config || { echo "guest kernel must expose
 make -j"$(nproc)" vmlinux modules
 cp vmlinux /out/vmlinux
 cp .config /out/vmlinux.config
+# modprobe succeeds for a driver these indexes list as built in and fails
+# without them. No image has them for this kernel, so the worker shares them
+# with guests that have no modules of their own.
+release="$(cat include/config/kernel.release)"
+install -D -m 0644 -t "/tmp/modules/lib/modules/${release}" modules.builtin modules.builtin.modinfo modules.order
+depmod -b /tmp/modules "${release}"
+modprobe -d /tmp/modules -S "${release}" -n fuse
+cp -a /tmp/modules/lib/modules /out/modules
 EOT
 
 # Driver image builds consume the exact sources, generated headers and symbols

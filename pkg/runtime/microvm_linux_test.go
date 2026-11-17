@@ -949,6 +949,55 @@ func TestRestoreCanvasKeepsCheckpointExecutable(t *testing.T) {
 	require.Error(t, err, "never substitute another executable into captured memory")
 }
 
+func TestBootingGuestGetsKernelModuleIndexesInItsSpec(t *testing.T) {
+	share := t.TempDir()
+	kernel := filepath.Join(share, "vmlinux")
+	require.Nil(t, microVMKernelModules(kernel), "a kernel that came without indexes")
+	release := filepath.Join(share, "modules", "6.12.111")
+	require.NoError(t, os.MkdirAll(filepath.Join(release, "kernel"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(release, "modules.builtin"), []byte("kernel/fs/fuse/fuse.ko\n"), 0o644))
+	modules := microVMKernelModules(kernel)
+	require.Equal(t, map[string]map[string][]byte{"6.12.111": {"modules.builtin": []byte("kernel/fs/fuse/fuse.ko\n")}}, modules)
+
+	guestInit := filepath.Join(t.TempDir(), "init")
+	require.NoError(t, os.WriteFile(guestInit, []byte("agent"), 0o755))
+	checkpoint := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(checkpoint, checkpointInitFile), []byte("agent"), 0o755))
+	prepare := func(restoreFrom string) (microvm.Spec, []string) {
+		rt := &MicroVM{cfg: Config{MicroVMInitPath: guestInit}, kernelModules: modules}
+		inst := &microVMInstance{canvas: t.TempDir()}
+		t.Cleanup(func() {
+			for _, target := range inst.submounts {
+				require.NoError(t, unix.Unmount(target, unix.MNT_DETACH))
+			}
+		})
+		err := rt.prepareCanvas(inst, &specs.Spec{}, microvm.Network{}, microVMDisk{}, nil, restoreFrom)
+		if errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES) {
+			t.Skip("requires privileged bind mounts")
+		}
+		require.NoError(t, err)
+		data, err := os.ReadFile(filepath.Join(inst.canvas, microvm.SpecFile))
+		require.NoError(t, err)
+		var spec microvm.Spec
+		require.NoError(t, json.Unmarshal(data, &spec))
+		entries, err := os.ReadDir(filepath.Join(inst.canvas, microvm.CanvasDir))
+		require.NoError(t, err)
+		var names []string
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		return spec, names
+	}
+
+	spec, canvas := prepare("")
+	require.Equal(t, modules, spec.KernelModules)
+	// A paused VM needs every file it knew in the canvas from the worker that
+	// resumes it, which can be one from before there were indexes.
+	require.Equal(t, []string{"binds", "disk", "image", "init", "newroot", "vm.json"}, canvas)
+	spec, _ = prepare(checkpoint)
+	require.Nil(t, spec.KernelModules, "a restored guest has what it booted with")
+}
+
 func TestLinkLocalFromMAC(t *testing.T) {
 	mac, _ := net.ParseMAC("de:f0:d8:b8:88:fb")
 	require.Equal(t, "fe80::dcf0:d8ff:feb8:88fb", linkLocalFromMAC(mac).String())

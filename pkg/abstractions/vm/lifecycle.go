@@ -57,6 +57,9 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 		"BEAM_VM_SSH="+fmt.Sprint(v.Spec.SSH),
 		"BEAM_VM_SSH_PUBLIC_KEY="+v.Spec.SSHPublicKey,
 	)
+	if v.Spec.Headless {
+		env = append(env, "BEAM_VM_HEADLESS=1")
+	}
 	if v.Spec.Desktop {
 		env = append(env, "DISPLAY=:1", "XAUTHORITY=/run/beam-desktop/.Xauthority")
 		if v.Spec.DesktopTransport != "" {

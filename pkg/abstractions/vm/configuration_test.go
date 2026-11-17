@@ -73,6 +73,18 @@ func TestRootDiskCapacity(t *testing.T) {
 	}
 }
 
+// Headless is how GitHub runners start, not something a VM can ask for.
+func TestHeadlessIsNotAnAPIOption(t *testing.T) {
+	s, _, info, runtime, gateway := fixture()
+	rec := vmRequest(managementAPI(s, info), "POST", "/"+info.Workspace.ExternalId, `{"name":"quiet","spec":{"image_id":"base","headless":true}}`)
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	require.Empty(t, runtime.requests)
+
+	rec = vmRequest(managementAPI(s, info), "POST", "/"+info.Workspace.ExternalId, `{"name":"ordinary","spec":{"image_id":"base"}}`)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	require.NotContains(t, gateway.stub.Env, "BEAM_VM_HEADLESS=1")
+}
+
 func TestDesktopMinimumMemory(t *testing.T) {
 	for _, memory := range []int64{512, 1023, 1024, 1536} {
 		t.Run(fmt.Sprint(memory), func(t *testing.T) {
@@ -129,6 +141,10 @@ func TestVMSystemPortProtection(t *testing.T) {
 		{"public terminal", types.VMSpec{PublicPorts: []uint32{7681}}, nil, false},
 		{"public desktop", types.VMSpec{Desktop: true, PublicPorts: []uint32{8080}}, []uint32{7681}, false},
 		{"conflicting", types.VMSpec{PublicPorts: []uint32{7681}, ProtectedPorts: []uint32{7681}}, nil, true},
+		{"headless", types.VMSpec{Headless: true}, nil, false},
+		{"headless with its own port", types.VMSpec{Headless: true, Ports: []uint32{7681}}, nil, false},
+		{"headless desktop", types.VMSpec{Headless: true, Desktop: true}, nil, true},
+		{"headless ssh", types.VMSpec{Headless: true, SSH: true, SSHPublicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"}, nil, true},
 		{"public ssh", types.VMSpec{PublicPorts: []uint32{2222}}, nil, true},
 		{"protected ssh", types.VMSpec{ProtectedPorts: []uint32{2222}}, nil, true},
 	} {

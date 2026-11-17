@@ -98,6 +98,11 @@ type Spec struct {
 	// guest starts nothing that could look for one before then, except a
 	// process manager, whose commands the host holds back.
 	LateDevices bool `json:"late_devices,omitempty"`
+	// KernelModules are the module indexes built with the guest kernel: the
+	// files of /lib/modules/<release>, by release and name. The guest keeps
+	// them in memory instead of reading them from the canvas, so that a
+	// paused VM resumes under a worker that has none.
+	KernelModules map[string]map[string][]byte `json:"kernel_modules,omitempty"`
 }
 
 // Network is the static configuration of the guest's single NIC. Addresses

@@ -2,8 +2,11 @@ package microvm
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -134,7 +137,78 @@ func TestPortRejectsFailedConnections(t *testing.T) {
 	}
 }
 
+// A headless guest's process manager listens on a socket, which the host
+// reaches the way it reaches a port, and can tell from one that is not there.
+func TestSocketForwardsToUnixSocketAndReportsMissingOne(t *testing.T) {
+	// Socket paths are short, and macOS's temporary directory is not.
+	dir, err := os.MkdirTemp("/tmp", "beam-socket")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	path := filepath.Join(dir, "manager.sock")
+
+	client, done := socketTestStream(t, path)
+	if err := ConnectProcess(client); !errors.Is(err, ErrProcessUnavailable) {
+		t.Fatalf("no listener on the socket: %v", err)
+	}
+	if err := <-done; err == nil {
+		t.Fatal("guest must report the dial failure")
+	}
+
+	target, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	payload := bytes.Repeat([]byte{0, 1, 127, 128, 255}, 20_000)
+	received := make(chan []byte, 1)
+	go func() {
+		conn, err := target.Accept()
+		if err != nil {
+			received <- nil
+			return
+		}
+		defer conn.Close()
+		conn.SetDeadline(time.Now().Add(5 * time.Second))
+		data, _ := io.ReadAll(conn)
+		conn.Write(data)
+		received <- data
+	}()
+	client, done = socketTestStream(t, path)
+	if err := ConnectProcess(client); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(client)
+	if err != nil || !bytes.Equal(payload, got) {
+		t.Fatalf("response: %d bytes, %v", len(got), err)
+	}
+	if got := <-received; !bytes.Equal(payload, got) {
+		t.Fatalf("request: got %d bytes, want %d", len(got), len(payload))
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func socketTestStream(t *testing.T, path string) (*net.TCPConn, <-chan error) {
+	t.Helper()
+	return testStream(t, func(conn *net.TCPConn) error { return ServeSocket(conn, path) })
+}
+
 func portTestStream(t *testing.T) (*net.TCPConn, <-chan error) {
+	t.Helper()
+	return testStream(t, func(conn *net.TCPConn) error { return ServePort(conn) })
+}
+
+// testStream stands in for a vsock connection: serve runs the guest's end.
+func testStream(t *testing.T, serve func(*net.TCPConn) error) (*net.TCPConn, <-chan error) {
 	t.Helper()
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -149,7 +223,7 @@ func portTestStream(t *testing.T) (*net.TCPConn, <-chan error) {
 			return
 		}
 		defer conn.Close()
-		done <- ServePort(conn.(*net.TCPConn))
+		done <- serve(conn.(*net.TCPConn))
 	}()
 	conn, err := net.Dial("tcp4", listener.Addr().String())
 	if err != nil {

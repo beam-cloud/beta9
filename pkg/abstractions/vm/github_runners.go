@@ -667,7 +667,9 @@ func (r *githubRunners) launch(ctx context.Context, job types.GitHubRunnerJob, s
 			Memory:        size.Memory,
 			DiskSize:      size.DiskSize,
 			DockerEnabled: true,
-			Env:           []string{"BEAM_GITHUB_JIT_CONFIG=" + config},
+			// A job finds no port of its machine taken, as on GitHub's.
+			Headless: true,
+			Env:      []string{"BEAM_GITHUB_JIT_CONFIG=" + config},
 		},
 		Metadata: map[string]string{"github.repository": job.Repository},
 	})

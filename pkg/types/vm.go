@@ -48,6 +48,13 @@ func isPersistentVM(useVM bool, env []string) bool {
 	return useVM && slices.Contains(env, "BEAM_VM_SYSTEMD=1")
 }
 
+// IsHeadlessVM identifies a VM that takes none of its guest's ports: it has
+// no web terminal, and its process manager listens on a socket that the
+// worker reaches over vsock instead of on a port.
+func (r *ContainerRequest) IsHeadlessVM() bool {
+	return r.IsPersistentVM() && slices.Contains(r.Env, "BEAM_VM_HEADLESS=1")
+}
+
 func (r *ContainerRequest) VMID() string {
 	for _, env := range r.Env {
 		if id, ok := strings.CutPrefix(env, "BEAM_VM_ID="); ok {
@@ -94,6 +101,10 @@ type VMSpec struct {
 	Disks            []*pb.DurableDisk  `json:"disks,omitempty"`
 	Volumes          []*pb.Volume       `json:"volumes,omitempty"`
 	SourceSnapshotID string             `json:"source_snapshot_id,omitempty"`
+	// Headless VMs take none of their guest's ports, so that what runs in
+	// one finds the machine it expects. GitHub runners are headless; the API
+	// does not accept it.
+	Headless bool `json:"headless,omitempty"`
 }
 
 // VMCreateOptions carries parsed inputs for creation and forks.

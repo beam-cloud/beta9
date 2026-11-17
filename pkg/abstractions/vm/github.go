@@ -206,6 +206,10 @@ func (g *githubApp) organizationRole(ctx context.Context, installation int64, or
 	return membership.Role, err
 }
 
+// runnerWorkFolder is where GitHub's own runners keep a job's files. Paths
+// under it end up in workflows, caches and build outputs written for them.
+const runnerWorkFolder = "/home/runner/work"
+
 // registerRunner registers a runner that takes one job of a repository, and
 // returns the configuration it starts with. It joins the default runner
 // group, which every repository of an account can use.
@@ -219,7 +223,7 @@ func (g *githubApp) registerRunner(ctx context.Context, installation int64, repo
 		Config string `json:"encoded_jit_config"`
 	}
 	_, err = g.call(ctx, http.MethodPost, g.apiURL+"/repos/"+repository+"/actions/runners/generate-jitconfig", token,
-		map[string]any{"name": name, "runner_group_id": 1, "labels": []string{label}, "work_folder": "_work"}, &runner)
+		map[string]any{"name": name, "runner_group_id": 1, "labels": []string{label}, "work_folder": runnerWorkFolder}, &runner)
 	return runner.Config, err
 }
 

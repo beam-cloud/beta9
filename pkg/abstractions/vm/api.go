@@ -397,6 +397,10 @@ func (s *Service) create(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "use a VM template or fork to initialize a root disk")
 	}
 
+	if spec.Headless {
+		return echo.NewHTTPError(http.StatusBadRequest, "headless is not a VM option")
+	}
+
 	var image *pb.VerifyImageBuildRequest
 	if len(req.Image) > 0 {
 		if seed != "" || spec.ImageID != "" || spec.SourceSnapshotID != "" {

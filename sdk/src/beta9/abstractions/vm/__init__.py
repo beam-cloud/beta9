@@ -47,7 +47,7 @@ from .kiosk_config import DesktopRuntime, Kiosk, MCPServer as MCPServer
 DEFAULT_VM_BASE_IMAGE = (
     "ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55"
 )
-DEFAULT_VM_GPU_BASE_IMAGE = "public.ecr.aws/n4e0e1y0/beta9-microvm:1bcfe3a671c9-nvidia"
+DEFAULT_VM_GPU_BASE_IMAGE = "public.ecr.aws/n4e0e1y0/beta9-microvm:437ec6704878-nvidia"
 
 # How long wait() asks one container for exec before it reads the VM again.
 CONTAINER_WAIT = 5.0

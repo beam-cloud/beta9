@@ -247,6 +247,47 @@ func TestSystemdManagedServicesFollowVMFeatures(t *testing.T) {
 	}
 }
 
+// A headless VM takes no port of its guest: no web terminal, and a process
+// manager that listens on a socket, which only the manager is told about.
+func TestHeadlessVMHasNoTerminalAndManagerListensOnSocket(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "etc"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	process := &specs.Process{Env: []string{"BEAM_VM_ID=676139cd-f92b-4688-bb36-a0e763ef445c", "BEAM_VM_HEADLESS=1", "TOKEN=spaces \"quotes\" \\n $HOME %m\nsecond line"}}
+	if err := writeSystemdBootFiles(root, process); err != nil {
+		t.Fatal(err)
+	}
+	wants := filepath.Join(root, "run/systemd/system/multi-user.target.wants")
+	if _, err := os.Lstat(filepath.Join(wants, "beam-terminal.service")); !os.IsNotExist(err) {
+		t.Fatalf("terminal enabled in a headless VM: %v", err)
+	}
+
+	listenOnSocket(process)
+	if got := processEnv(process, "GOPROC_SOCKET"); got != "/run/beam-vm/goproc.sock" {
+		t.Fatalf("process manager socket: %q", got)
+	}
+
+	// A job's own services start with the environment systemd has on any
+	// machine. The unit that runs the job loads the VM's from a file.
+	if _, err := os.Lstat(filepath.Join(root, "run/systemd/system.conf.d/90-beam-vm.conf")); !os.IsNotExist(err) {
+		t.Fatalf("the VM's environment in every unit of a headless VM: %v", err)
+	}
+	environmentPath := filepath.Join(root, systemdEnvironmentFile)
+	assertPrivateFile(t, environmentPath)
+	environment, err := os.ReadFile(environmentPath)
+	want := "BEAM_VM_ID=\"676139cd-f92b-4688-bb36-a0e763ef445c\"\nBEAM_VM_HEADLESS=\"1\"\nTOKEN=\"spaces \\\"quotes\\\" \\\\n $HOME %m\nsecond line\"\n"
+	if err != nil || string(environment) != want {
+		t.Fatalf("environment file: %q, %v", environment, err)
+	}
+
+	other := &specs.Process{Env: []string{"BEAM_VM_ID=676139cd-f92b-4688-bb36-a0e763ef445c"}}
+	listenOnSocket(other)
+	if got := processEnv(other, "GOPROC_SOCKET"); got != "" {
+		t.Fatalf("other VMs keep the port, got socket %q", got)
+	}
+}
+
 func TestGuestAgentStopsAfterOrdinaryServices(t *testing.T) {
 	if !strings.Contains(guestAgentUnit, "Before=sysinit.target shutdown.target") || !strings.Contains(guestAgentUnit, "After=local-fs.target systemd-journald.service") || !strings.Contains(guestAgentUnit, "DefaultDependencies=no") {
 		t.Fatal("guest agent must outlive services and stop before local filesystems")

@@ -155,6 +155,10 @@ func validate(spec *types.VMSpec) error {
 		return fmt.Errorf("desktop requires at least 1024 MiB")
 	}
 
+	if spec.Headless && (spec.Desktop || spec.Kiosk != nil || spec.SSH) {
+		return fmt.Errorf("a headless VM has no desktop, kiosk or SSH")
+	}
+
 	for _, env := range spec.Env {
 		key, _, ok := strings.Cut(env, "=")
 		if !ok || !validEnvKey.MatchString(key) || strings.HasPrefix(key, "BEAM_VM_") || strings.HasPrefix(key, "BETA9_") || strings.ContainsRune(env, 0) {
@@ -176,7 +180,11 @@ func validate(spec *types.VMSpec) error {
 	}
 
 	seen := map[uint32]bool{}
-	ports := []uint32{types.VMTerminalPort}
+	ports := []uint32{}
+	if !spec.Headless {
+		ports = append(ports, types.VMTerminalPort)
+	}
+
 	if spec.Desktop {
 		ports = append(ports, types.VMDesktopPort)
 	}
@@ -215,7 +223,8 @@ func validate(spec *types.VMSpec) error {
 		}
 	}
 	for _, port := range []uint32{types.VMTerminalPort, types.VMDesktopPort} {
-		if (port == types.VMTerminalPort || spec.Desktop) && !slices.Contains(spec.PublicPorts, port) && !slices.Contains(spec.ProtectedPorts, port) {
+		managed := port == types.VMTerminalPort && !spec.Headless || port == types.VMDesktopPort && spec.Desktop
+		if managed && !slices.Contains(spec.PublicPorts, port) && !slices.Contains(spec.ProtectedPorts, port) {
 			spec.ProtectedPorts = append(spec.ProtectedPorts, port)
 		}
 	}
@@ -526,7 +535,7 @@ func (s *Service) configurePort(ctx context.Context, v *types.VM, action string,
 	if err := validateDesktopPort(v.Spec, port, public); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
-	systemPort := port == types.VMTerminalPort || (port == types.VMDesktopPort && v.Spec.Desktop)
+	systemPort := managedVMWebPort(v, port)
 	if port == 0 || port > 65535 || port == types.VMSSHPort || port == uint32(types.WorkerSandboxProcessManagerPort) || (systemPort && (action != "expose" || protected == nil)) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid or reserved port")
 	}
