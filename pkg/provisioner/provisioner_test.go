@@ -17,8 +17,8 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/market"
 	"github.com/beam-cloud/beta9/pkg/providers"
+	"github.com/beam-cloud/beta9/pkg/providers/market"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/redis/go-redis/v9"

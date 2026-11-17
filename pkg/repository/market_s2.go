@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/market"
+	"github.com/beam-cloud/beta9/pkg/providers/market"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/s2-streamstore/s2-sdk-go/s2"
 )
@@ -23,7 +23,7 @@ const (
 )
 
 // S2MarketLog keeps the market's history in S2: what the providers sold,
-// sampled at an interval, in the streams that pkg/market names.
+// sampled at an interval, in the streams that pkg/providers/market names.
 //
 // A stream is made before it is first written to, keeping its records for
 // as long as the stream says. Left to be made by its first append, it would

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/market"
+	"github.com/beam-cloud/beta9/pkg/providers/market"
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog/log"
 )

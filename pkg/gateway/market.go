@@ -8,8 +8,8 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	computesvc "github.com/beam-cloud/beta9/pkg/gateway/services/compute"
-	"github.com/beam-cloud/beta9/pkg/market"
 	"github.com/beam-cloud/beta9/pkg/providers"
+	"github.com/beam-cloud/beta9/pkg/providers/market"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 )

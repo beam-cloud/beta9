@@ -9,8 +9,8 @@ import (
 	"time"
 
 	model "github.com/beam-cloud/beta9/pkg/compute"
-	"github.com/beam-cloud/beta9/pkg/market"
 	"github.com/beam-cloud/beta9/pkg/providers"
+	"github.com/beam-cloud/beta9/pkg/providers/market"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 )

@@ -17,6 +17,12 @@
 //
 // Prices are the provider's, in millionths of a dollar. What a tenant pays is
 // worked out where the record is read.
+//
+// The record is written by a Sampler (sampler.go, rollup.go) and a Recorder
+// of outcomes (outcomes.go), in the formats of records.go. It is read by a
+// Reader (reader.go), which answers what is for sale now (now.go) and what a
+// GPU sold for over time (series.go). Log (log.go) is the history, which
+// pkg/repository keeps in S2, and Shared (shared.go) is the state in Redis.
 package market
 
 import (
@@ -208,4 +214,18 @@ func slug(name string) string {
 		return "unknown"
 	}
 	return b.String()
+}
+
+// How machines are sold, as a question and an answer name it.
+const (
+	PricingOnDemand = "on_demand"
+	PricingSpot     = "spot"
+	PricingAny      = "any"
+)
+
+func pricingOf(spot bool) string {
+	if spot {
+		return PricingSpot
+	}
+	return PricingOnDemand
 }
