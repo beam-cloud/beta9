@@ -265,8 +265,13 @@ class _CallableWrapper(DeployableMixin):
 
     @with_grpc_error_handling
     def _prepare_runtime(self) -> None:
-        if not self.parent.prepare_runtime(func=self.func, stub_type=self.base_stub_type):
+        if self.parent.prepare_runtime(func=self.func, stub_type=self.base_stub_type):
+            return
+        if called_on_import():
+            # Nothing is prepared, or reported, while user code is being imported.
             raise RuntimeError("Unable to prepare function runtime")
+        # prepare_runtime already reported the reason; a traceback would bury it.
+        raise SystemExit(1)
 
     def _call_remote(self, *args, **kwargs) -> Any:
         args = cloudpickle.dumps(

@@ -1,13 +1,34 @@
 import inspect
+import io
 from unittest import TestCase, mock
 from unittest.mock import MagicMock, PropertyMock
 
 import cloudpickle
 
-from beta9 import Image
-from beta9.abstractions.function import Function
+from beta9 import Image, terminal
+from beta9.abstractions.function import Function, Schedule
+from beta9.abstractions.image import ImageBuildResult
 from beta9.cli.extraclick import handle_config_override
 from beta9.clients.function import FunctionInvokeResponse
+from beta9.clients.gateway import GetOrCreateStubResponse
+from beta9.sync import FileSyncResult
+
+NO_CREDITS = (
+    "insufficient_credits: This workspace has no credits yet. Add credits at "
+    "https://platform.beam.cloud/settings/credits to run workloads."
+)
+
+
+def refuse_stub(wrapper, reason=NO_CREDITS):
+    """Let the image and file sync succeed, then have the gateway refuse the stub."""
+    parent = wrapper.parent
+    parent.image.build = MagicMock(
+        return_value=ImageBuildResult(success=True, image_id="image-id", python_version="python3.8")
+    )
+    parent.syncer.sync = MagicMock(return_value=FileSyncResult(success=True, object_id="object-id"))
+    parent.gateway_stub.get_or_create_stub = MagicMock(
+        return_value=GetOrCreateStubResponse(ok=False, err_msg=reason)
+    )
 
 
 class TestTaskQueue(TestCase):
@@ -121,3 +142,31 @@ class TestTaskQueue(TestCase):
 
             for val in test_func.map([1, 2, 3]):
                 self.assertEqual(val, 1998)
+
+    def test_refused_runtime_exits_on_the_reported_reason(self):
+        # A traceback after the reason would bury it, so the call exits instead of raising.
+        function = Function(cpu=1, memory=128, image=Image(python_version="python3.8"))
+        schedule = Schedule(when="@daily", image=Image(python_version="python3.8"))
+
+        for decorator in (function, schedule):
+            wrapper = decorator(lambda *args: 1)
+            refuse_stub(wrapper)
+
+            for call in (wrapper, wrapper.remote, lambda: list(wrapper.map([1]))):
+                output = io.StringIO()
+                with terminal.redirect_terminal_to_buffer(output):
+                    with self.assertRaises(SystemExit) as exited:
+                        call()
+
+                self.assertEqual(exited.exception.code, 1)
+                self.assertEqual(output.getvalue().count("insufficient_credits"), 1)
+
+    def test_map_while_importing_user_code_still_raises(self):
+        # Nothing is reported on this path, so exiting would leave no explanation.
+        @Function(cpu=1, memory=128, image=Image(python_version="python3.8"))
+        def test_func(*args):
+            return 1
+
+        with mock.patch.dict("os.environ", {"BETA9_IMPORTING_USER_CODE": "true"}):
+            with self.assertRaisesRegex(RuntimeError, "Unable to prepare function runtime"):
+                list(test_func.map([1]))
