@@ -445,7 +445,7 @@ class FileSyncer:
             )
             if not create_response.ok:
                 if create_response.base_missing:
-                    terminal.detail("Previous sync is gone from the server; uploading everything")
+                    terminal.detail("File contents not found on remote. Uploading everything...")
                 return None
             if not self._put_archive(
                 temp_zip_name, create_response.presigned_url, create_response.put_headers
