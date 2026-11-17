@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -120,6 +122,67 @@ func TestRootLayerGenerationOutlivesTheVMsOnIt(t *testing.T) {
 	require.Nil(t, entry.ready)
 	require.NoDirExists(t, current.dir)
 	require.Empty(t, layers.disks)
+}
+
+// The entry of a disk is what holds publishes to it to one at a time on a
+// worker, so it stays while one is under way or waiting, though no VM has
+// the disk.
+func TestRootLayerDiskStaysWhilePublishedTo(t *testing.T) {
+	worker := rootLayerWorker(t, runtime.Capabilities{BlockRoot: true})
+	layers := worker.rootLayers
+	key := "workspace-1/" + types.RootLayerDiskPrefix + "0123456789abcdef"
+
+	first, firstDone := layers.publisher(key)
+	first.publish.Lock()
+	layers.prune()
+	second, secondDone := layers.publisher(key)
+	require.Same(t, first, second)
+	require.False(t, second.publish.TryLock(), "a second publish waits for the first")
+
+	first.publish.Unlock()
+	firstDone()
+	layers.prune()
+	require.Same(t, second, layers.disks[key])
+
+	secondDone()
+	layers.prune()
+	require.Empty(t, layers.disks)
+}
+
+// A guest writes its export into a filesystem of its own, and can fill only
+// that, whatever it writes.
+func TestRootLayerExportIsBounded(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("mounting an export needs root")
+	}
+	if _, err := exec.LookPath("mkfs.ext4"); err != nil {
+		t.Skip("mounting an export needs mkfs.ext4")
+	}
+	dir := filepath.Join(t.TempDir(), "container-1")
+	const size = 64 << 20
+	require.NoError(t, makeRootLayerExport(dir, size))
+	t.Cleanup(func() { removeRootLayerExport(dir) })
+
+	file, err := os.Create(filepath.Join(dir, "fill"))
+	require.NoError(t, err)
+	chunk := make([]byte, 1<<20)
+	var written int64
+	for ; written <= 2*size; written += int64(len(chunk)) {
+		if _, err = file.Write(chunk); err != nil {
+			break
+		}
+	}
+	require.ErrorIs(t, err, syscall.ENOSPC)
+	require.NoError(t, file.Close())
+	require.Less(t, written, int64(size))
+
+	var image syscall.Stat_t
+	require.NoError(t, syscall.Stat(dir+".img", &image))
+	require.LessOrEqual(t, image.Blocks*512, int64(size), "the worker's disk gives no more than the export's size")
+
+	removeRootLayerExport(dir)
+	require.NoDirExists(t, dir)
+	require.NoFileExists(t, dir+".img")
 }
 
 // VMs that were told of an older generation can start after ones that were

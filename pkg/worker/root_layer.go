@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -48,7 +49,8 @@ const (
 	// on a schedule, which is what makes room again.
 	rootLayerMinFreeBytes = 1 << 30
 
-	// rootLayerMaxExportBytes is the largest export a publish reads.
+	// rootLayerMaxExportBytes is the size of the filesystem a guest exports
+	// into, and the largest export a publish reads.
 	rootLayerMaxExportBytes = 16 << 30
 
 	rootLayersDir       = ".root-layers"
@@ -74,8 +76,11 @@ type rootLayerDisk struct {
 	retired []*rootLayerMount
 	// older are generations found to be older than the one that is ready.
 	older map[string]struct{}
-	// publish holds one publish to the disk at a time on this worker.
-	publish sync.Mutex
+	// publish holds one publish to the disk at a time on this worker, and
+	// publishers is how many hold or wait for it: until there are none, the
+	// entry stays, and with it the lock.
+	publish    sync.Mutex
+	publishers int
 }
 
 type rootLayerMount struct {
@@ -386,7 +391,7 @@ func (l *rootLayers) prune() {
 			idle = append(idle, mount)
 			entry.ready = nil
 		}
-		if entry.ready == nil && entry.attaching == "" && len(entry.retired) == 0 {
+		if entry.ready == nil && entry.attaching == "" && len(entry.retired) == 0 && entry.publishers == 0 {
 			delete(l.disks, key)
 		}
 	}
@@ -409,10 +414,91 @@ func (l *rootLayers) run(ctx context.Context) {
 	}
 }
 
+// publisher is the entry of a disk for a publish to it, which keeps the
+// entry until done is called.
+func (l *rootLayers) publisher(key string) (entry *rootLayerDisk, done func()) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entry = l.disks[key]
+	if entry == nil {
+		entry = &rootLayerDisk{}
+		l.disks[key] = entry
+	}
+	entry.publishers++
+	return entry, func() {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		entry.publishers--
+	}
+}
+
 // rootLayerExportDir is the host directory a VM's guest writes its cache
 // export into. It is beside the disks: an export can be as large as a layer.
 func (s *Worker) rootLayerExportDir(containerID string) string {
 	return filepath.Join(s.diskManager.Root(), rootLayerExportsDir, containerID)
+}
+
+// makeRootLayerExport mounts the filesystem a guest exports into at dir:
+// ext4 in a sparse file of size bytes beside it. The guest can write there
+// what it likes, as root, and takes no more of the worker's disk than that.
+// It writes one file, so the filesystem has few inodes and no journal.
+func makeRootLayerExport(dir string, size int64) (err error) {
+	removeRootLayerExport(dir)
+	defer func() {
+		if err != nil {
+			removeRootLayerExport(dir)
+		}
+	}()
+	image := dir + ".img"
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(image, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	err = file.Truncate(size)
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	for _, command := range [][]string{
+		{"mkfs.ext4", "-F", "-q", "-m", "0", "-N", "64", "-O", "^has_journal", "-E", "nodiscard", image},
+		{"mount", "-t", "ext4", "-o", "loop,noatime,nosuid,nodev,noexec", image, dir},
+	} {
+		if out, err := exec.Command(command[0], command[1:]...).CombinedOutput(); err != nil {
+			return fmt.Errorf("%s: %w: %s", command[0], err, strings.TrimSpace(string(out)))
+		}
+	}
+	return os.Chmod(dir, 0o700)
+}
+
+// removeRootLayerExport unmounts and removes an export. One that is still in
+// use goes once it is not.
+func removeRootLayerExport(dir string) {
+	if exec.Command("umount", dir).Run() != nil {
+		_ = exec.Command("umount", "-l", dir).Run()
+	}
+	_ = os.RemoveAll(dir)
+	_ = os.Remove(dir + ".img")
+}
+
+// removeRootLayerExports removes the exports that the VMs of an earlier
+// worker process left. It runs before this one starts any VM.
+func (s *Worker) removeRootLayerExports() {
+	root := filepath.Join(s.diskManager.Root(), rootLayerExportsDir)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		removeRootLayerExport(filepath.Join(root, strings.TrimSuffix(entry.Name(), ".img")))
+	}
+	if len(entries) > 0 {
+		log.Info().Int("entries", len(entries)).Msg("removed root layer exports left from before")
+	}
 }
 
 // annotateRootLayer tells the guest of a VM with a root layer how to keep
@@ -436,11 +522,10 @@ func (s *Worker) annotateRootLayer(request *types.ContainerRequest, spec *specs.
 		return nil
 	}
 	dir := s.rootLayerExportDir(request.ContainerId)
-	if err := os.RemoveAll(dir); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+	if err := makeRootLayerExport(dir, rootLayerMaxExportBytes); err != nil {
+		// The VM runs as it would have, and leaves nothing to the layer.
+		log.Warn().Err(err).Str("container_id", request.ContainerId).Msg("no root layer export for a VM")
+		return nil
 	}
 	spec.Mounts = append(spec.Mounts, specs.Mount{
 		Type:        "none",
@@ -468,7 +553,7 @@ func (s *Worker) collectRootLayerExport(containerID string, request *types.Conta
 		if err == nil {
 			log.Warn().Str("container_id", containerID).Int64("bytes", info.Size()).Msg("ignored a root layer export")
 		}
-		_ = os.RemoveAll(dir)
+		removeRootLayerExport(dir)
 		return
 	}
 	// The workspace's storage credentials are given for a container that
@@ -478,14 +563,14 @@ func (s *Worker) collectRootLayerExport(containerID string, request *types.Conta
 	cancel()
 	if err != nil {
 		log.Warn().Err(err).Str("container_id", containerID).Msg("no storage credentials to publish a root layer export")
-		_ = os.RemoveAll(dir)
+		removeRootLayerExport(dir)
 		return
 	}
 	copied := *request
 	copied.Mounts = nil
 	parent := *layer
 	go func() {
-		defer os.RemoveAll(dir)
+		defer removeRootLayerExport(dir)
 		ctx, cancel := context.WithTimeout(s.durableDiskCleanupContext(), rootLayerPublishTimeout)
 		defer cancel()
 		start := time.Now()
@@ -517,15 +602,8 @@ var errRootLayerUnchanged = errors.New("the export adds nothing to the layer")
 // a local copy could hold a generation the gateway turned down.
 func (s *Worker) publishRootLayer(ctx context.Context, request *types.ContainerRequest, layer types.RootLayer, export string) (*types.DiskSnapshot, cacheMergeStats, error) {
 	var stats cacheMergeStats
-	l := s.rootLayers
-	l.mu.Lock()
-	key := rootLayerDiskKey(request, &layer)
-	entry := l.disks[key]
-	if entry == nil {
-		entry = &rootLayerDisk{}
-		l.disks[key] = entry
-	}
-	l.mu.Unlock()
+	entry, done := s.rootLayers.publisher(rootLayerDiskKey(request, &layer))
+	defer done()
 	entry.publish.Lock()
 	defer entry.publish.Unlock()
 
