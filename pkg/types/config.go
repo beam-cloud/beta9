@@ -1313,10 +1313,21 @@ const (
 )
 
 type ManagedComputeConfig struct {
-	BillableMarginPct *float64                    `key:"billableMarginPct" json:"billable_margin_pct"`
-	Billing           ManagedComputeBillingConfig `key:"billing" json:"billing"`
-	BYOC              ManagedComputeBYOCConfig    `key:"byoc" json:"byoc"`
-	SSH               ManagedComputeSSHConfig     `key:"ssh" json:"ssh"`
+	BillableMarginPct *float64                         `key:"billableMarginPct" json:"billable_margin_pct"`
+	Billing           ManagedComputeBillingConfig      `key:"billing" json:"billing"`
+	BYOC              ManagedComputeBYOCConfig         `key:"byoc" json:"byoc"`
+	SSH               ManagedComputeSSHConfig          `key:"ssh" json:"ssh"`
+	Reservations      ManagedComputeReservationsConfig `key:"reservations" json:"reservations"`
+}
+
+// ManagedComputeReservationsConfig says where the machines tenants reserve
+// are bought.
+type ManagedComputeReservationsConfig struct {
+	// Providers are the keys under providers that sell reservations. Empty
+	// means every provider that is configured. A provider that is configured
+	// for pools to buy their own machines from, and is not named here, sells
+	// nothing to a tenant.
+	Providers []string `key:"providers" json:"providers"`
 }
 
 type ManagedComputeSSHConfig struct {

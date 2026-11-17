@@ -474,6 +474,10 @@ monitoring:
     apiKey: ""
 managedCompute:
   billableMarginPct: 0.10
+  # The providers a tenant's reservation is bought from, by their key under
+  # providers. Empty means every provider that is configured.
+  reservations:
+    providers: []
   byoc:
     pricing:
       memoryHourlyMicrosPerGB: 4500

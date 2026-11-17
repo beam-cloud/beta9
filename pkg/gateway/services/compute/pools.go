@@ -217,7 +217,7 @@ func (s *Service) deletePoolInstances(ctx context.Context, workspaceID string, s
 			}
 		}
 		switch reservation.Status {
-		case model.ReservationDeleted:
+		case model.ReservationDeleted, model.ReservationInterrupted:
 		case model.ReservationFailed:
 			// A reservation recorded as failed before failed machines were
 			// deleted at the provider may still have one.
@@ -566,7 +566,7 @@ func (s *Service) releasePrivateReservationForDelete(ctx context.Context, worksp
 		}
 		reservation := &state.Reservations[reservationIndex]
 		machineID = reservation.MachineID
-		if reservation.Status == model.ReservationFailed {
+		if reservation.Dismissable() {
 			state.Reservations = append(state.Reservations[:reservationIndex], state.Reservations[reservationIndex+1:]...)
 			now := time.Now().UTC()
 			state.ReservedNodes = activeReservationNodes(state.Reservations, now)

@@ -682,6 +682,13 @@ class PoolConfig(betterproto.Message):
     container_runtime: str = betterproto.string_field(15)
     """Runtime for workers in this pool."""
 
+    pricing: str = betterproto.string_field(16)
+    """
+    How the machines a reservation buys are sold: "" or "on_demand" for
+     machines that are kept until given back, "spot" for machines their
+     provider may take back at any time, "any" for whichever costs less.
+    """
+
 
 @dataclass(eq=False, repr=False)
 class PoolOffer(betterproto.Message):
@@ -704,6 +711,11 @@ class PoolOffer(betterproto.Message):
     region_display_name: str = betterproto.string_field(17)
     latitude: float = betterproto.double_field(18)
     longitude: float = betterproto.double_field(19)
+    spot: bool = betterproto.bool_field(20)
+    """
+    A spot machine costs less, and its provider may take it back at any
+     time.
+    """
 
 
 @dataclass(eq=False, repr=False)
@@ -729,6 +741,7 @@ class ProviderInstance(betterproto.Message):
     cpu_millicores: int = betterproto.int64_field(19)
     memory_mb: int = betterproto.int64_field(20)
     storage_mb: int = betterproto.int64_field(21)
+    spot: bool = betterproto.bool_field(22)
 
 
 @dataclass(eq=False, repr=False)

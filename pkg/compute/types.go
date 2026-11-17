@@ -21,6 +21,46 @@ func ValidatePoolName(name string) error {
 	return nil
 }
 
+// Pricing says which of the two ways a provider sells a machine a pool buys.
+type Pricing string
+
+const (
+	// PricingOnDemand buys machines that are the buyer's until they are
+	// given back. It is what a pool that names no pricing buys.
+	PricingOnDemand Pricing = ""
+	// PricingSpot buys machines the provider may take back at any time,
+	// sold for less.
+	PricingSpot Pricing = "spot"
+	// PricingAny buys whichever of the two costs less.
+	PricingAny Pricing = "any"
+)
+
+// ParsePricing reads a pool's pricing as the API writes it. Empty and
+// "on_demand" are both on-demand.
+func ParsePricing(value string) (Pricing, error) {
+	switch strings.ReplaceAll(strings.ToLower(strings.TrimSpace(value)), "-", "_") {
+	case "", "on_demand":
+		return PricingOnDemand, nil
+	case string(PricingSpot):
+		return PricingSpot, nil
+	case string(PricingAny):
+		return PricingAny, nil
+	}
+	return PricingOnDemand, fmt.Errorf("pricing must be on_demand, spot or any, not %q", value)
+}
+
+// Buys reports whether a pool with this pricing buys a machine that is sold
+// as spot, or one that is not.
+func (p Pricing) Buys(spot bool) bool {
+	switch p {
+	case PricingAny:
+		return true
+	case PricingSpot:
+		return spot
+	}
+	return !spot
+}
+
 // Pool is what a tenant asked for when reserving machines.
 type Pool struct {
 	Name           string
@@ -33,6 +73,9 @@ type Pool struct {
 	Providers      []string
 	Regions        []string
 	MinReliability float64
+	// Pricing is on-demand unless the tenant asked for spot machines, which
+	// their provider can take back.
+	Pricing Pricing
 }
 
 func (p Pool) Validate() error {
@@ -40,7 +83,7 @@ func (p Pool) Validate() error {
 		return err
 	}
 	// What only a reservation has a use for.
-	reserves := p.TTL > 0 || p.MaxSpendMicros > 0 || len(p.Providers) > 0 || len(p.Regions) > 0 || p.MinReliability > 0
+	reserves := p.TTL > 0 || p.MaxSpendMicros > 0 || len(p.Providers) > 0 || len(p.Regions) > 0 || p.MinReliability > 0 || p.Pricing != PricingOnDemand
 	switch {
 	case p.Nodes == 0 && reserves:
 		return errors.New("pool reservations require nodes > 0")
@@ -62,6 +105,8 @@ func (p Pool) MatchesOffer(offer providers.Offer) bool {
 	// pass for the cheapest machine there is.
 	case offer.HourlyCostMicros <= 0,
 		p.OfferID != "" && p.OfferID != offer.ID,
+		// An instance type that is sold both ways is two offers with one ID.
+		!p.Pricing.Buys(offer.Spot),
 		!wanted.Matches(offer),
 		len(p.Providers) > 0 && !slices.Contains(p.Providers, offer.Provider),
 		p.MinReliability > 0 && offer.Reliability > 0 && offer.Reliability < p.MinReliability:
@@ -120,30 +165,36 @@ const (
 	ReservationTerminating ReservationStatus = "terminating"
 	ReservationDeleted     ReservationStatus = "deleted"
 	ReservationFailed      ReservationStatus = "failed"
+	// ReservationInterrupted is how a spot machine's reservation ends when
+	// its provider takes the machine back. That is what a spot machine is
+	// sold as, so it is no failure.
+	ReservationInterrupted ReservationStatus = "interrupted"
 )
 
 // Reservation is one machine Beam bought for a tenant's pool: what was bought,
 // and on what terms. It is stored as JSON under these field names.
 type Reservation struct {
-	ID                    string
-	PoolName              string
-	Name                  string
-	Selector              string
-	Provider              string
-	Cloud                 string
-	Region                string
-	OfferID               string
-	InstanceType          string
-	InstanceID            string
-	MachineID             string
-	GPU                   string
-	GPUCount              uint32
-	NodeCount             uint32
-	CPUMillicores         int64
-	MemoryMB              int64
-	StorageMB             int64
-	HourlyCostMicros      int64
-	CommittedMicros       int64
+	ID               string
+	PoolName         string
+	Name             string
+	Selector         string
+	Provider         string
+	Cloud            string
+	Region           string
+	OfferID          string
+	InstanceType     string
+	InstanceID       string
+	MachineID        string
+	GPU              string
+	GPUCount         uint32
+	NodeCount        uint32
+	CPUMillicores    int64
+	MemoryMB         int64
+	StorageMB        int64
+	HourlyCostMicros int64
+	CommittedMicros  int64
+	// Spot marks a machine its provider may take back at any time.
+	Spot                  bool
 	Source                CapacitySource
 	Status                ReservationStatus
 	CreatedAt             time.Time
@@ -166,9 +217,16 @@ type Reservation struct {
 }
 
 // Closed reports whether the reservation has ended: its machine was deleted,
-// or failed.
+// failed, or was taken back by its provider.
 func (r Reservation) Closed() bool {
-	return r.Status == ReservationDeleted || r.Status == ReservationFailed
+	return r.Status == ReservationDeleted || r.Dismissable()
+}
+
+// Dismissable reports whether the reservation ended in a way its tenant is
+// shown. Such a reservation stays in the pool's record until the tenant
+// dismisses it.
+func (r Reservation) Dismissable() bool {
+	return r.Status == ReservationFailed || r.Status == ReservationInterrupted
 }
 
 // Open reports whether the machine is still wanted: the reservation has not

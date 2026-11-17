@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -259,11 +260,12 @@ func (s *Service) createPlanReservations(ctx context.Context, workspaceID string
 			}
 			now := time.Now()
 			instance, err := provider.Create(ctx, providers.CreateRequest{
-				Offer:         purchase.Offer,
-				Name:          nodeName,
-				StartupScript: bootstrapCommand,
-				Tags:          map[string]string{machineTag: machineID},
-				Until:         now.Add(pool.TTL).Add(reservationDeletionGrace),
+				Offer:               purchase.Offer,
+				Name:                nodeName,
+				StartupScript:       bootstrapCommand,
+				Tags:                map[string]string{machineTag: machineID},
+				Until:               now.Add(pool.TTL).Add(reservationDeletionGrace),
+				MaxHourlyCostMicros: s.spotPriceLimitMicros(purchase.Offer),
 			})
 			if err != nil {
 				_ = s.revokeComputeJoinTokenHash(ctx, hashComputeToken(registrationToken))
@@ -315,6 +317,7 @@ func newReservation(pool model.Pool, machineID, name string, offer providers.Off
 		StorageMB:         offer.StorageMB,
 		HourlyCostMicros:  offer.HourlyCostMicros,
 		CommittedMicros:   offer.HourlyCostMicros * model.WholeHours(pool.TTL),
+		Spot:              offer.Spot,
 		Source:            model.SourceCLIReservation,
 		Status:            status,
 		CreatedAt:         now,
@@ -486,7 +489,8 @@ func existingPoolHasGPU(existing *model.PoolState) bool {
 
 // mergePoolConfigForLaunch combines an add-capacity request into the existing
 // pool config: identity fields (name, gpu, transport, ...) are kept, regions
-// and providers accumulate, and the budget grows by the request's budget.
+// and providers accumulate, and the budget grows by the request's budget. A
+// pool that has been asked for machines sold both ways holds either kind.
 func mergePoolConfigForLaunch(existing, request *pb.PoolConfig) *pb.PoolConfig {
 	merged := normalizePoolConfig(existing)
 	if merged == nil {
@@ -494,6 +498,9 @@ func mergePoolConfigForLaunch(existing, request *pb.PoolConfig) *pb.PoolConfig {
 	}
 	merged.Regions = unionStrings(merged.Regions, request.Regions)
 	merged.Providers = unionStrings(merged.Providers, request.Providers)
+	if merged.Pricing != request.Pricing {
+		merged.Pricing = string(model.PricingAny)
+	}
 	merged.MaxSpend += request.MaxSpend
 	merged.Nodes += request.Nodes
 	if merged.Ttl == "" {
@@ -645,20 +652,28 @@ func computeReservationInstanceID(reservation model.Reservation) string {
 }
 
 // reservationProviders are the providers a reservation's machine is bought
-// from. A provider that is configured for pools to buy their own machines
-// from sells nothing to a tenant until it is named here.
-var reservationProviders = []string{"hetzner", "shadeform"}
+// from: the ones the config names under managedCompute.reservations, or
+// every provider that is configured when it names none. A provider that is
+// configured for pools to buy their own machines from, and that the config's
+// list leaves out, sells nothing to a tenant.
+func (s *Service) reservationProviders() []string {
+	if named := s.appConfig.ManagedCompute.Reservations.Providers; len(named) > 0 {
+		return named
+	}
+	return s.providers.Names()
+}
 
 // collectPoolOffers asks the pool's providers, or every provider that sells
 // reservations when it names none, what they sell that the pool can use. A
-// reservation is for a term, so it is never a spot machine, which its
-// provider can take back.
+// reservation is for a machine that is kept until it is given back, unless
+// the pool asks for spot machines, which their provider can take back.
 //
 // A provider that cannot be asked is passed over, so that it does not hide
 // what the others sell. It is an error only when none of them answered.
 func (s *Service) collectPoolOffers(ctx context.Context, pool model.Pool) ([]providers.Offer, error) {
+	selling := s.reservationProviders()
 	sellers := map[string]providers.Provider{}
-	for _, name := range reservationProviders {
+	for _, name := range selling {
 		if provider, ok := s.providers.Get(name); ok {
 			sellers[name] = provider
 		}
@@ -668,27 +683,42 @@ func (s *Service) collectPoolOffers(ctx context.Context, pool model.Pool) ([]pro
 	}
 	names := pool.Providers
 	if len(names) == 0 {
-		names = reservationProviders
+		names = selling
+	}
+	asked := make([]providers.Provider, 0, len(names))
+	for _, name := range names {
+		if provider, ok := sellers[name]; ok {
+			asked = append(asked, provider)
+		}
 	}
 
+	// The providers are asked at the same time, so that the list takes as
+	// long as the slowest of them and not as long as all of them together.
 	filter := providers.OfferFilter{GPUs: pool.GPUs, Regions: pool.Regions}
+	listed := make([][]providers.Offer, len(asked))
+	errs := make([]error, len(asked))
+	var wg sync.WaitGroup
+	for i, provider := range asked {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			listed[i], errs[i] = s.offersOf(ctx, provider, filter)
+		}()
+	}
+	wg.Wait()
+
 	offers := []providers.Offer{}
 	answered := 0
 	failures := []string{}
-	for _, name := range names {
-		provider, ok := sellers[name]
-		if !ok {
-			continue
-		}
-		listed, err := provider.Offers(ctx, filter)
-		if err != nil {
-			log.Warn().Err(err).Str("provider", name).Msg("could not list what a provider sells; its offers are left out")
-			failures = append(failures, fmt.Sprintf("%s: %v", name, err))
+	for i, provider := range asked {
+		if err := errs[i]; err != nil {
+			log.Warn().Err(err).Str("provider", provider.Name()).Msg("could not list what a provider sells; its offers are left out")
+			failures = append(failures, fmt.Sprintf("%s: %v", provider.Name(), err))
 			continue
 		}
 		answered++
-		for _, offer := range listed {
-			if !offer.Spot && pool.MatchesOffer(offer) {
+		for _, offer := range listed[i] {
+			if pool.MatchesOffer(offer) {
 				offers = append(offers, offer)
 			}
 		}
@@ -697,4 +727,16 @@ func (s *Service) collectPoolOffers(ctx context.Context, pool model.Pool) ([]pro
 		return nil, fmt.Errorf("no compute provider could be asked what it sells: %s", strings.Join(failures, "; "))
 	}
 	return offers, nil
+}
+
+// offersOf asks one provider what it sells that matches the filter. A
+// provider's client that panics has failed to answer, and does not take the
+// gateway down with it.
+func (s *Service) offersOf(ctx context.Context, provider providers.Provider, filter providers.OfferFilter) (offers []providers.Offer, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			offers, err = nil, fmt.Errorf("listing offers panicked: %v", recovered)
+		}
+	}()
+	return provider.Offers(ctx, filter)
 }
