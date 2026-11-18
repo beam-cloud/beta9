@@ -38,9 +38,6 @@ const (
 	WorkerRepositoryService_RegisterCacheHost_FullMethodName                = "/WorkerRepositoryService/RegisterCacheHost"
 	WorkerRepositoryService_UnregisterCacheHost_FullMethodName              = "/WorkerRepositoryService/UnregisterCacheHost"
 	WorkerRepositoryService_ListCacheHosts_FullMethodName                   = "/WorkerRepositoryService/ListCacheHosts"
-	WorkerRepositoryService_InspectCachePeer_FullMethodName                 = "/WorkerRepositoryService/InspectCachePeer"
-	WorkerRepositoryService_ReadCachePeer_FullMethodName                    = "/WorkerRepositoryService/ReadCachePeer"
-	WorkerRepositoryService_StoreCachePeer_FullMethodName                   = "/WorkerRepositoryService/StoreCachePeer"
 	WorkerRepositoryService_SetCacheClientLock_FullMethodName               = "/WorkerRepositoryService/SetCacheClientLock"
 	WorkerRepositoryService_RemoveCacheClientLock_FullMethodName            = "/WorkerRepositoryService/RemoveCacheClientLock"
 	WorkerRepositoryService_SetCacheStoreFromContentLock_FullMethodName     = "/WorkerRepositoryService/SetCacheStoreFromContentLock"
@@ -95,10 +92,6 @@ type WorkerRepositoryServiceClient interface {
 	RegisterCacheHost(ctx context.Context, in *RegisterCacheHostRequest, opts ...grpc.CallOption) (*RegisterCacheHostResponse, error)
 	UnregisterCacheHost(ctx context.Context, in *UnregisterCacheHostRequest, opts ...grpc.CallOption) (*UnregisterCacheHostResponse, error)
 	ListCacheHosts(ctx context.Context, in *ListCacheHostsRequest, opts ...grpc.CallOption) (*ListCacheHostsResponse, error)
-	// Typed cache operations only. These do not expose a worker's control RPCs.
-	InspectCachePeer(ctx context.Context, in *CachePeerInspectRequest, opts ...grpc.CallOption) (*CachePeerInspectResponse, error)
-	ReadCachePeer(ctx context.Context, in *CachePeerReadRequest, opts ...grpc.CallOption) (WorkerRepositoryService_ReadCachePeerClient, error)
-	StoreCachePeer(ctx context.Context, opts ...grpc.CallOption) (WorkerRepositoryService_StoreCachePeerClient, error)
 	SetCacheClientLock(ctx context.Context, in *SetCacheClientLockRequest, opts ...grpc.CallOption) (*SetCacheClientLockResponse, error)
 	RemoveCacheClientLock(ctx context.Context, in *RemoveCacheClientLockRequest, opts ...grpc.CallOption) (*RemoveCacheClientLockResponse, error)
 	SetCacheStoreFromContentLock(ctx context.Context, in *SetCacheStoreFromContentLockRequest, opts ...grpc.CallOption) (*SetCacheStoreFromContentLockResponse, error)
@@ -351,81 +344,6 @@ func (c *workerRepositoryServiceClient) ListCacheHosts(ctx context.Context, in *
 		return nil, err
 	}
 	return out, nil
-}
-
-func (c *workerRepositoryServiceClient) InspectCachePeer(ctx context.Context, in *CachePeerInspectRequest, opts ...grpc.CallOption) (*CachePeerInspectResponse, error) {
-	out := new(CachePeerInspectResponse)
-	err := c.cc.Invoke(ctx, WorkerRepositoryService_InspectCachePeer_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *workerRepositoryServiceClient) ReadCachePeer(ctx context.Context, in *CachePeerReadRequest, opts ...grpc.CallOption) (WorkerRepositoryService_ReadCachePeerClient, error) {
-	stream, err := c.cc.NewStream(ctx, &WorkerRepositoryService_ServiceDesc.Streams[2], WorkerRepositoryService_ReadCachePeer_FullMethodName, opts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &workerRepositoryServiceReadCachePeerClient{stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
-	return x, nil
-}
-
-type WorkerRepositoryService_ReadCachePeerClient interface {
-	Recv() (*CacheGetContentResponse, error)
-	grpc.ClientStream
-}
-
-type workerRepositoryServiceReadCachePeerClient struct {
-	grpc.ClientStream
-}
-
-func (x *workerRepositoryServiceReadCachePeerClient) Recv() (*CacheGetContentResponse, error) {
-	m := new(CacheGetContentResponse)
-	if err := x.ClientStream.RecvMsg(m); err != nil {
-		return nil, err
-	}
-	return m, nil
-}
-
-func (c *workerRepositoryServiceClient) StoreCachePeer(ctx context.Context, opts ...grpc.CallOption) (WorkerRepositoryService_StoreCachePeerClient, error) {
-	stream, err := c.cc.NewStream(ctx, &WorkerRepositoryService_ServiceDesc.Streams[3], WorkerRepositoryService_StoreCachePeer_FullMethodName, opts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &workerRepositoryServiceStoreCachePeerClient{stream}
-	return x, nil
-}
-
-type WorkerRepositoryService_StoreCachePeerClient interface {
-	Send(*CachePeerStoreRequest) error
-	CloseAndRecv() (*CacheStoreContentResponse, error)
-	grpc.ClientStream
-}
-
-type workerRepositoryServiceStoreCachePeerClient struct {
-	grpc.ClientStream
-}
-
-func (x *workerRepositoryServiceStoreCachePeerClient) Send(m *CachePeerStoreRequest) error {
-	return x.ClientStream.SendMsg(m)
-}
-
-func (x *workerRepositoryServiceStoreCachePeerClient) CloseAndRecv() (*CacheStoreContentResponse, error) {
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
-	m := new(CacheStoreContentResponse)
-	if err := x.ClientStream.RecvMsg(m); err != nil {
-		return nil, err
-	}
-	return m, nil
 }
 
 func (c *workerRepositoryServiceClient) SetCacheClientLock(ctx context.Context, in *SetCacheClientLockRequest, opts ...grpc.CallOption) (*SetCacheClientLockResponse, error) {
@@ -696,10 +614,6 @@ type WorkerRepositoryServiceServer interface {
 	RegisterCacheHost(context.Context, *RegisterCacheHostRequest) (*RegisterCacheHostResponse, error)
 	UnregisterCacheHost(context.Context, *UnregisterCacheHostRequest) (*UnregisterCacheHostResponse, error)
 	ListCacheHosts(context.Context, *ListCacheHostsRequest) (*ListCacheHostsResponse, error)
-	// Typed cache operations only. These do not expose a worker's control RPCs.
-	InspectCachePeer(context.Context, *CachePeerInspectRequest) (*CachePeerInspectResponse, error)
-	ReadCachePeer(*CachePeerReadRequest, WorkerRepositoryService_ReadCachePeerServer) error
-	StoreCachePeer(WorkerRepositoryService_StoreCachePeerServer) error
 	SetCacheClientLock(context.Context, *SetCacheClientLockRequest) (*SetCacheClientLockResponse, error)
 	RemoveCacheClientLock(context.Context, *RemoveCacheClientLockRequest) (*RemoveCacheClientLockResponse, error)
 	SetCacheStoreFromContentLock(context.Context, *SetCacheStoreFromContentLockRequest) (*SetCacheStoreFromContentLockResponse, error)
@@ -790,15 +704,6 @@ func (UnimplementedWorkerRepositoryServiceServer) UnregisterCacheHost(context.Co
 }
 func (UnimplementedWorkerRepositoryServiceServer) ListCacheHosts(context.Context, *ListCacheHostsRequest) (*ListCacheHostsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListCacheHosts not implemented")
-}
-func (UnimplementedWorkerRepositoryServiceServer) InspectCachePeer(context.Context, *CachePeerInspectRequest) (*CachePeerInspectResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method InspectCachePeer not implemented")
-}
-func (UnimplementedWorkerRepositoryServiceServer) ReadCachePeer(*CachePeerReadRequest, WorkerRepositoryService_ReadCachePeerServer) error {
-	return status.Errorf(codes.Unimplemented, "method ReadCachePeer not implemented")
-}
-func (UnimplementedWorkerRepositoryServiceServer) StoreCachePeer(WorkerRepositoryService_StoreCachePeerServer) error {
-	return status.Errorf(codes.Unimplemented, "method StoreCachePeer not implemented")
 }
 func (UnimplementedWorkerRepositoryServiceServer) SetCacheClientLock(context.Context, *SetCacheClientLockRequest) (*SetCacheClientLockResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetCacheClientLock not implemented")
@@ -1241,71 +1146,6 @@ func _WorkerRepositoryService_ListCacheHosts_Handler(srv interface{}, ctx contex
 		return srv.(WorkerRepositoryServiceServer).ListCacheHosts(ctx, req.(*ListCacheHostsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
-}
-
-func _WorkerRepositoryService_InspectCachePeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CachePeerInspectRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WorkerRepositoryServiceServer).InspectCachePeer(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WorkerRepositoryService_InspectCachePeer_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WorkerRepositoryServiceServer).InspectCachePeer(ctx, req.(*CachePeerInspectRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _WorkerRepositoryService_ReadCachePeer_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(CachePeerReadRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(WorkerRepositoryServiceServer).ReadCachePeer(m, &workerRepositoryServiceReadCachePeerServer{stream})
-}
-
-type WorkerRepositoryService_ReadCachePeerServer interface {
-	Send(*CacheGetContentResponse) error
-	grpc.ServerStream
-}
-
-type workerRepositoryServiceReadCachePeerServer struct {
-	grpc.ServerStream
-}
-
-func (x *workerRepositoryServiceReadCachePeerServer) Send(m *CacheGetContentResponse) error {
-	return x.ServerStream.SendMsg(m)
-}
-
-func _WorkerRepositoryService_StoreCachePeer_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(WorkerRepositoryServiceServer).StoreCachePeer(&workerRepositoryServiceStoreCachePeerServer{stream})
-}
-
-type WorkerRepositoryService_StoreCachePeerServer interface {
-	SendAndClose(*CacheStoreContentResponse) error
-	Recv() (*CachePeerStoreRequest, error)
-	grpc.ServerStream
-}
-
-type workerRepositoryServiceStoreCachePeerServer struct {
-	grpc.ServerStream
-}
-
-func (x *workerRepositoryServiceStoreCachePeerServer) SendAndClose(m *CacheStoreContentResponse) error {
-	return x.ServerStream.SendMsg(m)
-}
-
-func (x *workerRepositoryServiceStoreCachePeerServer) Recv() (*CachePeerStoreRequest, error) {
-	m := new(CachePeerStoreRequest)
-	if err := x.ServerStream.RecvMsg(m); err != nil {
-		return nil, err
-	}
-	return m, nil
 }
 
 func _WorkerRepositoryService_SetCacheClientLock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -1870,10 +1710,6 @@ var WorkerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _WorkerRepositoryService_ListCacheHosts_Handler,
 		},
 		{
-			MethodName: "InspectCachePeer",
-			Handler:    _WorkerRepositoryService_InspectCachePeer_Handler,
-		},
-		{
 			MethodName: "SetCacheClientLock",
 			Handler:    _WorkerRepositoryService_SetCacheClientLock_Handler,
 		},
@@ -1992,16 +1828,6 @@ var WorkerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "StreamWorkerEvents",
 			Handler:       _WorkerRepositoryService_StreamWorkerEvents_Handler,
 			ServerStreams: true,
-		},
-		{
-			StreamName:    "ReadCachePeer",
-			Handler:       _WorkerRepositoryService_ReadCachePeer_Handler,
-			ServerStreams: true,
-		},
-		{
-			StreamName:    "StoreCachePeer",
-			Handler:       _WorkerRepositoryService_StoreCachePeer_Handler,
-			ClientStreams: true,
 		},
 	},
 	Metadata: "worker_repo.proto",

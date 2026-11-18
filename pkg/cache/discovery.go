@@ -263,33 +263,11 @@ func sameCacheHostEndpoint(a *Host, b *Host) bool {
 	if a == nil || b == nil || !a.HasEndpoint() || !b.HasEndpoint() {
 		return false
 	}
-	return a.HostId == b.HostId && a.Addr == b.Addr && a.PrivateAddr == b.PrivateAddr && a.CacheRouteID == b.CacheRouteID
+	return a.HostId == b.HostId && a.Addr == b.Addr && a.PrivateAddr == b.PrivateAddr
 }
 
 // GetHostState attempts to connect to the gRPC service and verifies its availability
 func (d *DiscoveryClient) GetHostState(ctx context.Context, host *Host) (*Host, error) {
-	if requiresCachePeerRoute(host, d.localNodeID) {
-		timeout := time.Duration(d.cfg.GRPCDialTimeoutS) * time.Second
-		if timeout <= 0 {
-			timeout = time.Second
-		}
-		ctx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-		client, err := newCachePeerClient(ctx, d.hostDirectory, host)
-		if err != nil {
-			return nil, err
-		}
-		resp, err := client.GetState(ctx, &proto.CacheGetStateRequest{})
-		if err != nil {
-			return nil, err
-		}
-		if resp.GetVersion() != Version {
-			return nil, ErrInvalidHostVersion
-		}
-		host.RTT = 0
-		host.CapacityUsagePct = float64(resp.GetCapacityUsagePct())
-		return host, nil
-	}
 	addr := cacheHostDialAddr(host, d.localNodeID)
 
 	transportCredentials := grpc.WithTransportCredentials(insecure.NewCredentials())

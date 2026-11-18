@@ -3,7 +3,6 @@ syntax = "proto3";
 option go_package = "github.com/beam-cloud/beta9/proto";
 import "types.proto";
 import "container_repo.proto";
-import "cache.proto";
 
 service WorkerRepositoryService {
   rpc GetNextContainerRequest(GetNextContainerRequestRequest)
@@ -41,10 +40,6 @@ service WorkerRepositoryService {
   rpc UnregisterCacheHost(UnregisterCacheHostRequest)
       returns (UnregisterCacheHostResponse) {}
   rpc ListCacheHosts(ListCacheHostsRequest) returns (ListCacheHostsResponse) {}
-  // Typed cache operations only. These do not expose a worker's control RPCs.
-  rpc InspectCachePeer(CachePeerInspectRequest) returns (CachePeerInspectResponse) {}
-  rpc ReadCachePeer(CachePeerReadRequest) returns (stream cache.CacheGetContentResponse) {}
-  rpc StoreCachePeer(stream CachePeerStoreRequest) returns (cache.CacheStoreContentResponse) {}
   rpc SetCacheClientLock(SetCacheClientLockRequest)
       returns (SetCacheClientLockResponse) {}
   rpc RemoveCacheClientLock(RemoveCacheClientLockRequest)
@@ -282,58 +277,11 @@ message CacheCoordinatorHost {
   string addr = 8;
   string private_addr = 9;
   float capacity_usage_pct = 10;
-  // Set by the gateway only after validating an agent cache route.
-  string cache_route_id = 11;
 }
 
 message RegisterCacheHostRequest {
   CacheCoordinatorHost host = 1;
   int32 ttl_seconds = 2;
-  BackendRoute worker_route = 3;
-}
-
-message CachePeerTarget {
-  // The requesting worker, bound to its authenticated private-worker token.
-  string worker_id = 1;
-  string logical_host_id = 2;
-  // Pin the active process lease; a replaced registration requires discovery.
-  string registration_id = 3;
-  string pool_name = 4;
-  string locality = 5;
-}
-
-message CachePeerInspectRequest {
-  CachePeerTarget target = 1;
-  oneof request {
-    cache.CacheGetStateRequest state = 2;
-    cache.CacheHasContentRequest has = 3;
-  }
-}
-
-message CachePeerInspectResponse {
-  oneof response {
-    cache.CacheGetStateResponse state = 1;
-    cache.CacheHasContentResponse has = 2;
-  }
-}
-
-message CachePeerReadRequest {
-  CachePeerTarget target = 1;
-  string hash = 2;
-  int64 offset = 3;
-  // Zero retains Cache.GetContentStream's whole-object semantics. The gateway
-  // enforces a bounded stream even when the caller does not know its length.
-  int64 length = 4;
-}
-
-message CachePeerStoreRequest {
-  // Repeated on every frame so streaming authorization cannot change targets.
-  CachePeerTarget target = 1;
-  cache.CacheStoreContentRequest content = 2;
-  // On the first frame only; no complete object is published for a short store.
-  int64 expected_size = 3;
-  string expected_hash = 4;
-  bool finish = 5;
 }
 
 message RegisterCacheHostResponse {

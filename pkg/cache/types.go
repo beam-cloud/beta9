@@ -426,11 +426,10 @@ type Host struct {
 	Addr             string        `redis:"addr" json:"addr"`
 	PrivateAddr      string        `redis:"private_addr" json:"private_addr"`
 	CapacityUsagePct float64       `redis:"capacity_usage_pct" json:"capacity_usage_pct"`
-	CacheRouteID     string        `redis:"cache_route_id" json:"cache_route_id,omitempty"`
 }
 
 func (h *Host) HasEndpoint() bool {
-	return h != nil && (h.Addr != "" || h.PrivateAddr != "" || h.CacheRouteID != "")
+	return h != nil && (h.Addr != "" || h.PrivateAddr != "")
 }
 
 func (h *Host) LogicalOnly() *Host {
@@ -441,7 +440,6 @@ func (h *Host) LogicalOnly() *Host {
 	logical.RegistrationID = ""
 	logical.Addr = ""
 	logical.PrivateAddr = ""
-	logical.CacheRouteID = ""
 	logical.RTT = 0
 	logical.CapacityUsagePct = 0
 	return &logical

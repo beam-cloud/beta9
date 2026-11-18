@@ -90,14 +90,6 @@ func (s *WorkerRepositoryService) RegisterCacheHost(ctx context.Context, req *pb
 
 	host := cacheCoordinatorHostFromProto(req.Host)
 	host.Locality = s.scopedCacheLocality(ctx, host.Locality)
-	// A route is a capability issued only after checking the authoritative
-	// worker assignment. Never accept a route ID from the host advertisement.
-	host.CacheRouteID = ""
-	if req.WorkerRoute != nil {
-		if err := s.registerCachePeerRoute(ctx, &host, req.WorkerRoute); err != nil {
-			return &pb.RegisterCacheHostResponse{Ok: false, ErrorMsg: err.Error()}, nil
-		}
-	}
 	ttl := time.Duration(req.TtlSeconds) * time.Second
 	if err := s.cacheCoordinator.RegisterHost(ctx, host, ttl); err != nil {
 		return &pb.RegisterCacheHostResponse{Ok: false, ErrorMsg: err.Error()}, nil
@@ -172,7 +164,6 @@ func cacheCoordinatorHostFromProto(host *pb.CacheCoordinatorHost) cache.Coordina
 		Addr:             host.Addr,
 		PrivateAddr:      host.PrivateAddr,
 		CapacityUsagePct: float64(host.CapacityUsagePct),
-		CacheRouteID:     host.CacheRouteId,
 	}
 }
 
@@ -187,6 +178,5 @@ func cacheCoordinatorHostToProto(host cache.CoordinatorHost) *pb.CacheCoordinato
 		Addr:             host.Addr,
 		PrivateAddr:      host.PrivateAddr,
 		CapacityUsagePct: float32(host.CapacityUsagePct),
-		CacheRouteId:     host.CacheRouteID,
 	}
 }

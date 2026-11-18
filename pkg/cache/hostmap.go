@@ -39,8 +39,7 @@ func (hm *HostMap) Set(host *Host) {
 		existing.PoolName == host.PoolName &&
 		existing.Locality == host.Locality &&
 		existing.NodeID == host.NodeID &&
-		existing.CachePathID == host.CachePathID &&
-		existing.CacheRouteID == host.CacheRouteID {
+		existing.CachePathID == host.CachePathID {
 		hm.mu.Unlock()
 		return
 	}

@@ -75,8 +75,6 @@ type ContainerRuntimeServer struct {
 	createCheckpoint        createCheckpointFunc
 	snapshotDisks           snapshotDisksFunc
 	grpcServer              *grpc.Server
-	cacheServer             pb.CacheServer
-	listenHost              string
 	mu                      sync.Mutex
 	exposePortMu            sync.Mutex
 }
@@ -99,8 +97,6 @@ type ContainerRuntimeServerOpts struct {
 	BackendRoute            backendRouteFunc
 	CreateCheckpoint        createCheckpointFunc
 	SnapshotDisks           snapshotDisksFunc
-	CacheServer             pb.CacheServer
-	ListenHost              string
 }
 
 // NewContainerRuntimeServer creates a new runtime-agnostic container server
@@ -128,8 +124,6 @@ func NewContainerRuntimeServer(opts *ContainerRuntimeServerOpts) (*ContainerRunt
 		backendRoute:            opts.BackendRoute,
 		createCheckpoint:        opts.CreateCheckpoint,
 		snapshotDisks:           opts.SnapshotDisks,
-		cacheServer:             opts.CacheServer,
-		listenHost:              opts.ListenHost,
 	}, nil
 }
 
@@ -141,7 +135,7 @@ func (s *ContainerRuntimeServer) Start() error {
 		return errors.New("server already started")
 	}
 
-	listener, err := listenForContainerRuntimeServer(s.containerNetworkManager, s.listenHost)
+	listener, err := listenForContainerRuntimeServer(s.containerNetworkManager)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to listen")
 		return fmt.Errorf("failed to listen: %w", err)
@@ -165,9 +159,6 @@ func (s *ContainerRuntimeServer) Start() error {
 	)
 
 	pb.RegisterContainerServiceServer(s.grpcServer, s)
-	if s.cacheServer != nil {
-		pb.RegisterCacheServer(s.grpcServer, s.cacheServer)
-	}
 
 	go func() {
 		err := s.grpcServer.Serve(listener)
@@ -184,14 +175,10 @@ type hostPortConflictChecker interface {
 	HostPortConflict(port int) (bool, error)
 }
 
-func listenForContainerRuntimeServer(networkManager ContainerNetwork, bindHosts ...string) (net.Listener, error) {
-	bindHost := ""
-	if len(bindHosts) > 0 {
-		bindHost = bindHosts[0]
-	}
+func listenForContainerRuntimeServer(networkManager ContainerNetwork) (net.Listener, error) {
 	checker, _ := networkManager.(hostPortConflictChecker)
 	for attempts := 0; attempts < 100; attempts++ {
-		listener, err := net.Listen("tcp", net.JoinHostPort(bindHost, "0"))
+		listener, err := net.Listen("tcp", ":0")
 		if err != nil {
 			return nil, err
 		}

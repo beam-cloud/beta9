@@ -793,8 +793,6 @@ func NewWorker() (_ *Worker, err error) {
 		WorkerID:                workerId,
 		BackendRoute:            worker.backendRouteFor,
 		CreateCheckpoint:        worker.createCheckpoint,
-		CacheServer:             agentCacheRPCServer(worker, cacheManager),
-		ListenHost:              agentRPCBindHost(worker),
 		SnapshotDisks: func(ctx context.Context, request *types.ContainerRequest) ([]*types.DiskSnapshot, error) {
 			return worker.syncDurableDiskMounts(ctx, request, durableDiskSyncExplicit)
 		},
@@ -808,28 +806,6 @@ func NewWorker() (_ *Worker, err error) {
 	if err != nil {
 		cancel()
 		return nil, err
-	}
-	if cacheManager != nil && worker.agentWorker() && worker.routeTransport == types.BackendRouteTransportTSNet {
-		cacheAddress := net.JoinHostPort(agentRPCBindHost(worker), strconv.Itoa(containerServer.port))
-		if agentRPCBindHost(worker) == "" {
-			// Preserve explicit nonloopback worker-route targets, while keeping
-			// the new cache API on a separate loopback-only listener.
-			cacheAddress, err = cacheManager.startCachePeerListener()
-			if err != nil {
-				cancel()
-				return nil, err
-			}
-		}
-		route := &pb.BackendRoute{
-			RouteId:  types.BackendRouteID(worker.machineID, worker.workerId, "", types.BackendRouteKindCache, 0),
-			PoolName: worker.poolName, MachineId: worker.machineID, WorkerId: worker.workerId,
-			Kind: types.BackendRouteKindCache, Protocol: types.BackendRouteProtocolTCP,
-			Transport:   types.BackendRouteTransportTSNet,
-			LocalTarget: cacheAddress,
-		}
-		if err := cacheManager.PublishWorkerRoute(ctx, route); err != nil {
-			log.Warn().Err(err).Msg("failed to publish cache agent route; heartbeat will retry")
-		}
 	}
 
 	usageRecorder := clients.NewManagedComputeContainerUsageRecorder(config.ManagedCompute)
