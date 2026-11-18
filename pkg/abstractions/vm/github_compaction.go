@@ -96,19 +96,21 @@ type compactionGroup struct {
 }
 
 type compactionReport struct {
-	BeforeMS      int64             `json:"median_before_ms"`
-	AfterMS       int64             `json:"median_after_ms"`
-	SpreadMS      int64             `json:"baseline_spread_ms"`
-	LinesBefore   int               `json:"test_lines_before"`
-	LinesAfter    int               `json:"test_lines_after"`
-	TestsBefore   int               `json:"tests_before"`
-	TestsAfter    int               `json:"tests_after"`
-	CoveredBefore int               `json:"coverage_lines_before"`
-	CoveredAfter  int               `json:"coverage_lines_after"`
-	Coverable     int               `json:"coverage_lines_total"`
-	Caught        int               `json:"mutations_caught"`
-	Preserved     int               `json:"mutations_preserved"`
-	Groups        []compactionGroup `json:"groups"`
+	Reason          string            `json:"reason,omitempty"`
+	SkippedPackages json.RawMessage   `json:"skipped_packages,omitempty"`
+	BeforeMS        int64             `json:"median_before_ms"`
+	AfterMS         int64             `json:"median_after_ms"`
+	SpreadMS        int64             `json:"baseline_spread_ms"`
+	LinesBefore     int               `json:"test_lines_before"`
+	LinesAfter      int               `json:"test_lines_after"`
+	TestsBefore     int               `json:"tests_before"`
+	TestsAfter      int               `json:"tests_after"`
+	CoveredBefore   int               `json:"coverage_lines_before"`
+	CoveredAfter    int               `json:"coverage_lines_after"`
+	Coverable       int               `json:"coverage_lines_total"`
+	Caught          int               `json:"mutations_caught"`
+	Preserved       int               `json:"mutations_preserved"`
+	Groups          []compactionGroup `json:"groups"`
 }
 
 type compactionResult struct {
@@ -234,7 +236,7 @@ func (r *githubRunners) startCompaction(ctx context.Context, row types.GitHubCom
 	if head != site.Commit {
 		return r.finishCompaction(ctx, row, "Default branch changed", false, nil, "", "")
 	}
-	files, title, body, err := r.compactPipeline(ctx, row, site, token)
+	files, title, body, saved, err := r.compactPipeline(ctx, row, site, token)
 	if err != nil {
 		return err
 	}
@@ -246,7 +248,7 @@ func (r *githubRunners) startCompaction(ctx context.Context, row types.GitHubCom
 			}
 			return r.failCompactionPublication(ctx, row, err)
 		}
-		return r.finishCompaction(ctx, row, "Pull request open", true, pr, "Superseded workflow time", "")
+		return r.finishCompaction(ctx, row, "Pull request open", true, pr, saved, "")
 	}
 	repoToken, err := r.github.compactionCloneToken(ctx, row)
 	if err != nil {
@@ -335,6 +337,7 @@ func (r *githubRunners) compactionResult(c echo.Context) error {
 		}
 		return echo.NewHTTPError(http.StatusUnprocessableEntity, "compaction result failed verification")
 	case result.Status == "failed":
+		log.Warn().Str("repository", row.Repository).Str("reason", compactionText(result.Report.Reason, 240)).Msg("CI compaction VM reported a failure")
 		err = r.finishCompaction(ctx, *row, "Analysis failed", false, nil, "", string(report))
 	case len(result.Files) == 0 || !result.Report.worthwhile():
 		err = r.finishCompaction(ctx, *row, "No worthwhile change", true, nil, "", string(report))
@@ -706,12 +709,12 @@ func (s pipelineSavings) worthChanging() bool {
 	return s.wasted >= compactionMinimumTime && s.wasted >= s.runtime*compactionMinimumPercent/100
 }
 
-func (r *githubRunners) compactPipeline(ctx context.Context, row types.GitHubCompaction, site compactionHead, token string) (map[string]string, string, string, error) {
+func (r *githubRunners) compactPipeline(ctx context.Context, row types.GitHubCompaction, site compactionHead, token string) (map[string]string, string, string, string, error) {
 	until := time.Now().UTC().Truncate(time.Second)
 	repo := r.github.apiURL + "/repos/" + row.Repository
 	runs, err := r.github.pipelineRuns(ctx, row.InstallationID, repo, token, until.AddDate(0, 0, -pipelineHistoryDays), until)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", "", "", err
 	}
 
 	// REST run history gives a name that can denote either a branch or a tag.
@@ -727,7 +730,7 @@ func (r *githubRunners) compactPipeline(ctx context.Context, row types.GitHubCom
 			if !checked {
 				branch, err = r.github.pipelineBranch(ctx, row.InstallationID, repo, token, group.branch)
 				if err != nil {
-					return nil, "", "", err
+					return nil, "", "", "", err
 				}
 				branches[group.branch] = branch
 			}
@@ -749,13 +752,14 @@ func (r *githubRunners) compactPipeline(ctx context.Context, row types.GitHubCom
 	slices.Sort(paths)
 
 	var body strings.Builder
+	var wasted time.Duration
 	body.WriteString("CI Compaction found push runs that kept going after a newer push on the same branch started.\n\n")
 	body.WriteString("| Workflow | Superseded push runs | Elapsed time after a newer run started |\n")
 	body.WriteString("| --- | ---: | ---: |\n")
 	for _, file := range paths {
 		original, err := r.github.pipelineFile(ctx, row.InstallationID, repo, token, file, site.Commit)
 		if err != nil {
-			return nil, "", "", err
+			return nil, "", "", "", err
 		}
 		update, ok := addPipelineConcurrency(original)
 		if !ok {
@@ -763,14 +767,16 @@ func (r *githubRunners) compactPipeline(ctx context.Context, row types.GitHubCom
 		}
 		files[file] = update
 		stats := savings[file]
+		wasted += stats.wasted
 		fmt.Fprintf(&body, "| `%s` | %d of %d | %s |\n", file, stats.superseded, stats.runs, stats.wasted)
 	}
 	if len(files) == 0 {
-		return nil, "", "", nil
+		return nil, "", "", "", nil
 	}
 	fmt.Fprintf(&body, "\nFigures use GitHub Actions workflow timestamps for the last %d days. Each change adds workflow concurrency for non-default branch pushes.\n", pipelineHistoryDays)
 	body.WriteString("\nTurn off CI Compaction in the workspace's GitHub runners settings.\n")
-	return files, "CI Compaction: cancel superseded workflow runs", body.String(), nil
+	saved := fmt.Sprintf("%s of superseded workflow time", wasted)
+	return files, "CI Compaction: cancel superseded workflow runs", body.String(), saved, nil
 }
 
 func (g *githubApp) pipelineRuns(ctx context.Context, installation int64, repo, token string, from, until time.Time) ([]pipelineRun, error) {

@@ -374,8 +374,9 @@ func TestPipelineProposal(t *testing.T) {
 	}))
 	defer fake.Close()
 	runner := &githubRunners{github: &githubApp{apiURL: fake.URL, client: fake.Client()}}
-	files, title, body, err := runner.compactPipeline(context.Background(), types.GitHubCompaction{Repository: pipelineTestRepository, InstallationID: 11}, compactionHead{Branch: "main", Commit: "pinned-commit"}, "staged-token")
+	files, title, body, saved, err := runner.compactPipeline(context.Background(), types.GitHubCompaction{Repository: pipelineTestRepository, InstallationID: 11}, compactionHead{Branch: "main", Commit: "pinned-commit"}, "staged-token")
 	if err != nil || len(files) != 1 || !strings.HasPrefix(files[file], pipelineTestWorkflow) {
+		require.Contains(t, saved, "of superseded workflow time")
 		t.Fatalf("unexpected pipeline proposal: %s %q %v", title, files, err)
 	}
 	if !strings.Contains(body, "1 of 2 | 30s") {
