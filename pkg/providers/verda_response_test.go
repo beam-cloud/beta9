@@ -78,6 +78,7 @@ func TestVerdaCreateRejectsMissingOrInvalidResourceIDsWithoutRetry(t *testing.T)
 					StartupScript: "echo starting-agent",
 				})
 				require.ErrorContains(t, err, "Verda accepted POST "+path+" without returning a resource ID")
+				require.True(t, Unanswered(err), "an accepted mutation without its resource ID remains ambiguous")
 				require.NotContains(t, err.Error(), "private-response-content")
 				require.Equal(t, 1, api.sent(http.MethodPost, "/scripts"))
 				wantCreates := 0

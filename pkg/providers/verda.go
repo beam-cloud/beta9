@@ -397,7 +397,10 @@ func (c *Verda) createID(ctx context.Context, path string, body any) (string, er
 			return id, nil
 		}
 	}
-	return "", fmt.Errorf("Verda accepted POST %s without returning a resource ID", path)
+	// A successful mutation without an ID may still have created the resource.
+	// Keep that uncertainty so delayed instance visibility cannot erase the
+	// reservation's tag-based cleanup record or invite a blind purchase retry.
+	return "", because(errNoAnswer, fmt.Errorf("Verda accepted POST %s without returning a resource ID", path))
 }
 
 func (c *Verda) instance(raw verdaInstance) Instance {
