@@ -780,6 +780,8 @@ func (g *Gateway) registerServices() error {
 		RouteGroup:    g.baseRouteGroup.Group("/vm", g.authMiddleware),
 		Server:        g.echo,
 		BackendDialer: network.NewBackendDialer(g.Tailscale, g.Config.Tailscale, g.ContainerRepo, 10*time.Second),
+
+		ContainerCosts: clients.NewContainerCostClient(g.Config.Monitoring.ContainerCostHookConfig),
 	}); err != nil {
 		return err
 	}

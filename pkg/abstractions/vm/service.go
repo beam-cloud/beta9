@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -51,6 +52,8 @@ type Service struct {
 	webrtc        *vmWebRTC
 	runners       *githubRunners
 
+	containerCosts *clients.ContainerCostClient
+
 	runningLock sync.Mutex
 	running     map[string]*types.VM // by container, as of the last reconciliation pass
 }
@@ -67,6 +70,8 @@ type ServiceOpts struct {
 	Server        *echo.Echo
 	BackendDialer *network.BackendDialer
 	TCPConfig     types.PodTCPConfig // Shared raw TCP listener used by ICE-TCP media.
+
+	ContainerCosts *clients.ContainerCostClient
 }
 
 func New(ctx context.Context, opts ServiceOpts) error {
@@ -86,6 +91,8 @@ func New(ctx context.Context, opts ServiceOpts) error {
 		gateway:    opts.Gateway,
 		images:     opts.Images,
 		config:     opts.Config,
+
+		containerCosts: opts.ContainerCosts,
 	}
 
 	if err := s.startPublicNetwork(opts.Config.Network, opts.BackendDialer); err != nil {

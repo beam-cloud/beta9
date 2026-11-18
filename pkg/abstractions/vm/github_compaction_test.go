@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
@@ -188,12 +189,12 @@ func TestCompactionSavingsThresholds(t *testing.T) {
 		linesRemoved          int
 		want                  bool
 	}{
-		{"time at threshold", 200000, 190000, 1000, 0, true},
-		{"time below absolute threshold", 20000, 11000, 10, 0, false},
-		{"time below relative threshold", 400000, 389000, 1000, 0, false},
-		{"within baseline spread", 200000, 189000, 11000, 0, false},
-		{"size at threshold", 1000, 1000, 0, 200, true},
-		{"size below threshold", 1000, 1000, 0, 199, false},
+		{"time at threshold with more lines", 200000, 190000, 1000, -10, true},
+		{"time below absolute threshold", 20000, 11000, 10, 200, false},
+		{"time below relative threshold", 400000, 389000, 1000, 200, false},
+		{"within baseline spread", 200000, 189000, 11000, 200, false},
+		{"smaller without a speedup", 1000, 1000, 0, 200, false},
+		{"smaller but slower", 1000, 1300, 0, 200, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			report := compactionReport{
@@ -244,9 +245,11 @@ func TestCompactionPublishesVerifiedPullRequest(t *testing.T) {
 	token, err := r.github.installationToken(ctx, row.InstallationID)
 	require.NoError(t, err)
 	result := compactionTestResult()
-	proposal := result.Report.proposal(result.Files, "beam-4vcpu-ubuntu-2404", 360)
-	require.Contains(t, proposal.title, "2 tests")
-	for _, text := range []string{"3m20s", "3m10s", "5.0%", "(-200)", "75.0%", "2 of 2", "1.00 runner-hours",
+	proposal := result.Report.proposal(result.Files, "beam-4vcpu-ubuntu-2404", 360,
+		clients.ContainerCostQuote{Valid: true, CostPerMs: 0.000005})
+	require.Equal(t, "CI Compaction: cut measured test time by 5.0%", proposal.title)
+	for _, text := range []string{"3m20s", "3m10s", "5.0%", "(-200)", "2 → 1 top-level tests", "75.0%", "2 of 2", "1.00 runner-hours",
+		"$0.0005 per run and $0.18 per month at $0.1800 per runner-hour",
 		"TestSmallOrder", "TestOrder/small", "keeps the minimum", "CI Compaction"} {
 		require.Contains(t, proposal.body, text)
 	}
@@ -287,7 +290,8 @@ func TestCompactionKeepsWrittenBranchWhenPullRequestFails(t *testing.T) {
 	row := compactionTestRepo()
 	row.LastCommit = "previous"
 	result := compactionTestResult()
-	proposal := result.Report.proposal(result.Files, "beam-4vcpu-ubuntu-2404", 360)
+	proposal := result.Report.proposal(result.Files, "beam-4vcpu-ubuntu-2404", 360, clients.ContainerCostQuote{})
+	require.Contains(t, proposal.body, "Unavailable without a workspace VM rate")
 	require.NoError(t, r.publishCompaction(t.Context(), row, "installation-token", proposal, "{}"))
 	require.Equal(t, testCompactionPRCommit, store.finished.BranchSHA)
 	require.Equal(t, row.LastCommit, store.finished.LastCommit)

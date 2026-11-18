@@ -23,6 +23,7 @@ import (
 	"unicode"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog/log"
@@ -38,7 +39,6 @@ const (
 	compactionHistoryDays    = 30
 	compactionMinimumTime    = 10 * time.Second
 	compactionMinimumPercent = 5
-	compactionMinimumLines   = 200
 	compactionMaxFile        = 512 << 10
 	compactionMaxResult      = 4 << 20
 	compactionFrameworks     = "go,pytest,jest,vitest"
@@ -519,8 +519,7 @@ func (r compactionReport) savingMS() int64 {
 
 func (r compactionReport) worthwhile() bool {
 	saving := r.savingMS()
-	return r.LinesBefore-r.LinesAfter >= compactionMinimumLines ||
-		(saving >= compactionMinimumTime.Milliseconds() && float64(saving)*100 >= compactionMinimumPercent*float64(r.BeforeMS))
+	return saving >= compactionMinimumTime.Milliseconds() && float64(saving)*100 >= compactionMinimumPercent*float64(r.BeforeMS)
 }
 
 func (r *githubRunners) publishTestCompaction(ctx context.Context, row types.GitHubCompaction, result compactionResult, report string) error {
@@ -528,11 +527,43 @@ func (r *githubRunners) publishTestCompaction(ctx context.Context, row types.Git
 	if err != nil {
 		return r.failCompactionPublication(ctx, row, err)
 	}
-	runs, err := r.s.repo.CountGitHubCompactionRuns(ctx, row.WorkspaceID, row.Repository, time.Now().Add(-compactionHistoryDays*24*time.Hour))
+	// A newer workflow can update the repository's label while this run is in flight.
+	v, _ := r.s.repo.GetVM(ctx, row.WorkspaceID, compactionPrefix+row.RunID)
+	label := row.Label
+	if v != nil {
+		for _, size := range runnerSizes {
+			if v.Spec.CPU == size.CPU && v.Spec.Memory == size.Memory {
+				label = size.Label
+				break
+			}
+		}
+	}
+	runs, err := r.s.repo.CountGitHubCompactionRuns(ctx, row.WorkspaceID, row.Repository, label, time.Now().Add(-compactionHistoryDays*24*time.Hour))
 	if err != nil {
 		return r.failCompactionPublication(ctx, row, err)
 	}
-	return r.publishCompaction(ctx, row, token, result.Report.proposal(result.Files, row.Label, runs), report)
+	quote := r.compactionCostQuote(ctx, v)
+	return r.publishCompaction(ctx, row, token, result.Report.proposal(result.Files, label, runs, quote), report)
+}
+
+// The analysis VM uses the runner's workspace, size and CPU tier. Quote its
+// actual stub so billing uses the bound rate for tiered VMs.
+func (r *githubRunners) compactionCostQuote(ctx context.Context, v *types.VM) clients.ContainerCostQuote {
+	if r.s.containerCosts == nil || v == nil || v.StubID == "" || v.WorkspaceExternalID == "" {
+		return clients.ContainerCostQuote{}
+	}
+	stub, err := r.s.backend.GetStubByExternalId(ctx, v.StubID, types.QueryFilter{Field: "workspace_id", Value: v.WorkspaceExternalID})
+	if err != nil || stub == nil {
+		return clients.ContainerCostQuote{}
+	}
+	quote, _ := r.s.containerCosts.GetContainerCostQuote(ctx, &types.ContainerRequest{
+		WorkspaceId: v.WorkspaceExternalID, StubId: v.StubID, Stub: *stub,
+		Cpu: v.Spec.CPU, Memory: v.Spec.Memory,
+	})
+	if !quote.ValidUntil.IsZero() && !quote.ValidUntil.After(time.Now()) {
+		return clients.ContainerCostQuote{}
+	}
+	return quote
 }
 
 func (r *githubRunners) publishCompaction(ctx context.Context, row types.GitHubCompaction, token string, proposal compactionProposal, report string) error {
@@ -557,28 +588,30 @@ func (r *githubRunners) failCompactionPublication(ctx context.Context, row types
 	return r.finishCompaction(ctx, row, compactionCompletion{status: status})
 }
 
-func (r compactionReport) proposal(files map[string]string, label string, runs int) compactionProposal {
-	title := fmt.Sprintf("CI Compaction: %d tests → %d, coverage preserved", r.TestsBefore, r.TestsAfter)
+func (r compactionReport) proposal(files map[string]string, label string, runs int, quote clients.ContainerCostQuote) compactionProposal {
 	lines := r.LinesBefore - r.LinesAfter
 	saving := r.savingMS()
-	savings := fmt.Sprintf("%d test lines removed", lines)
-	timeSummary := "no measurable change"
-	if saving > 0 {
-		timeSummary = fmt.Sprintf("%s saved (%.1f%%)", compactionTime(saving), float64(saving)*100/float64(r.BeforeMS))
-		savings = timeSummary
-		if lines > 0 {
-			savings += fmt.Sprintf(" · %d test lines removed", lines)
-		}
+	percent := float64(saving) * 100 / float64(r.BeforeMS)
+	title := fmt.Sprintf("CI Compaction: cut measured test time by %.1f%%", percent)
+	timeSummary := fmt.Sprintf("%s saved (%.1f%%)", compactionTime(saving), percent)
+	savings := timeSummary
+	if lines > 0 {
+		savings += fmt.Sprintf(" · %d test lines removed", lines)
 	}
 	var body strings.Builder
 	fmt.Fprintf(&body, "**Test time** %s → %s (%s), %s, median of 3 runs.\n\n", compactionTime(r.BeforeMS), compactionTime(r.AfterMS), timeSummary, label)
-	fmt.Fprintf(&body, "**Test code** %d → %d lines (%+d).\n\n", r.LinesBefore, r.LinesAfter, -lines)
+	fmt.Fprintf(&body, "**Test code** %d → %d lines (%+d), %d → %d top-level tests.\n\n", r.LinesBefore, r.LinesAfter, -lines, r.TestsBefore, r.TestsAfter)
 	fmt.Fprintf(&body, "**Coverage** %.1f%% → %.1f%% of measured executable lines. Every previously covered line is still covered.\n\n",
 		float64(r.CoveredBefore)*100/float64(r.Coverable), float64(r.CoveredAfter)*100/float64(r.Coverable))
 	fmt.Fprintf(&body, "**Mutations** %d of %d previously caught case checks are still caught.\n\n", r.Preserved, r.Caught)
-	if saving > 0 {
-		fmt.Fprintf(&body, "**Projected** %d runs in the last %d days × %s = %.2f runner-hours per month.\n\n",
-			runs, compactionHistoryDays, compactionTime(saving), float64(runs)*float64(saving)/float64(time.Hour.Milliseconds()))
+	fmt.Fprintf(&body, "**Projected time saved** %.2f runner-hours per month if each of the %d successful same-size runs from the last %d days runs these suites once.\n\n",
+		float64(runs)*float64(saving)/float64(time.Hour.Milliseconds()), runs, compactionHistoryDays)
+	if quote.Valid {
+		perRun := float64(saving) * quote.CostPerMs / 100
+		fmt.Fprintf(&body, "**Estimated Beam compute saved** $%.4f per run and $%.2f per month at $%.4f per runner-hour.\n\n",
+			perRun, perRun*float64(runs), float64(time.Hour.Milliseconds())*quote.CostPerMs/100)
+	} else {
+		body.WriteString("**Estimated Beam compute saved** Unavailable without a workspace VM rate.\n\n")
 	}
 	for _, group := range r.Groups {
 		if group.Status != "merged" {
@@ -877,6 +910,7 @@ func (g *githubApp) compactPipeline(ctx context.Context, row types.GitHubCompact
 		return nil, nil
 	}
 	fmt.Fprintf(&body, "\nFigures use GitHub Actions workflow timestamps for the last %d days. Each change adds workflow concurrency for non-default branch pushes.\n", compactionHistoryDays)
+	body.WriteString("\nNo test code is removed. The elapsed overlap does not identify billed runner time, so a dollar estimate is unavailable.\n")
 	body.WriteString("\nTurn off CI Compaction in the workspace's GitHub runners settings.\n")
 	return &compactionProposal{
 		files: files, title: "CI Compaction: cancel superseded workflow runs", body: body.String(),

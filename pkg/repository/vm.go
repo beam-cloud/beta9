@@ -81,7 +81,7 @@ type VMRepository interface {
 	AcceptGitHubCompactionResult(context.Context, string, string, string) (*types.GitHubCompaction, error)
 	FinishGitHubCompaction(context.Context, types.GitHubCompaction, time.Time) error
 	SetGitHubCompactionPROpen(context.Context, int64, string, int, bool) error
-	CountGitHubCompactionRuns(context.Context, uint, string, time.Time) (int, error)
+	CountGitHubCompactionRuns(context.Context, uint, string, string, time.Time) (int, error)
 }
 
 // PublicVMRepository is required only when public VM networking is enabled.
@@ -1472,10 +1472,11 @@ WHERE installation_id = $1 AND repository = $2 AND pr_number = $3 AND pr_number 
 	return err
 }
 
-func (r *PostgresBackendRepository) CountGitHubCompactionRuns(ctx context.Context, workspaceID uint, repo string, since time.Time) (int, error) {
+func (r *PostgresBackendRepository) CountGitHubCompactionRuns(ctx context.Context, workspaceID uint, repo, label string, since time.Time) (int, error) {
 	var runs int
 	err := r.client.GetContext(ctx, &runs, `
 SELECT COUNT(DISTINCT run_id) FROM github_runner_job
-WHERE workspace_id = $1 AND lower(repository) = $2 AND created_at >= $3 AND run_id > 0 AND conclusion = 'success';`, workspaceID, repo, since)
+WHERE workspace_id = $1 AND lower(repository) = $2 AND label = $3 AND created_at >= $4
+  AND run_id > 0 AND conclusion = 'success';`, workspaceID, repo, label, since)
 	return runs, err
 }
