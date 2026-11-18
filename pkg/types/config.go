@@ -1117,6 +1117,53 @@ type ProviderConfig struct {
 	// their machines in the last 24 hours. Machines that are running keep
 	// running. Zero means no cap.
 	MaxDailyCents int64 `key:"maxDailyCents" json:"max_daily_cents"`
+
+	Market ProviderMarketConfig `key:"market" json:"market"`
+}
+
+// ProviderMarketConfig is for the record of what the providers sell: every
+// provider is asked for its offers at an interval, by one gateway at a time,
+// and what it answers is kept for the gateways in Redis and as history in S2.
+type ProviderMarketConfig struct {
+	// Enabled turns the sampling on. Nil means on.
+	Enabled *bool `key:"enabled" json:"enabled"`
+	// Interval is how often the providers are asked. Zero means a minute.
+	Interval time.Duration `key:"interval" json:"interval"`
+	// DryRun samples and logs how much there is to write, by provider, and
+	// writes no history. It is for sizing the streams before they are kept.
+	DryRun bool `key:"dryRun" json:"dry_run"`
+	// SnapshotRetention is how long every offer of every sample is kept.
+	// Zero means 90 days.
+	SnapshotRetention time.Duration `key:"snapshotRetention" json:"snapshot_retention"`
+	// SeriesRetention is how long the samples a chart is drawn from are
+	// kept at the interval they were taken at. Zero means 14 days. What they
+	// come to by the hour is kept for good.
+	SeriesRetention time.Duration `key:"seriesRetention" json:"series_retention"`
+}
+
+func (c ProviderMarketConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
+func (c ProviderMarketConfig) IntervalOrDefault() time.Duration {
+	if c.Interval <= 0 {
+		return time.Minute
+	}
+	return c.Interval
+}
+
+func (c ProviderMarketConfig) SnapshotRetentionOrDefault() time.Duration {
+	if c.SnapshotRetention <= 0 {
+		return 90 * 24 * time.Hour
+	}
+	return c.SnapshotRetention
+}
+
+func (c ProviderMarketConfig) SeriesRetentionOrDefault() time.Duration {
+	if c.SeriesRetention <= 0 {
+		return 14 * 24 * time.Hour
+	}
+	return c.SeriesRetention
 }
 
 // VastProviderConfig is for Vast, from which pools rent interruptible
@@ -1313,10 +1360,21 @@ const (
 )
 
 type ManagedComputeConfig struct {
-	BillableMarginPct *float64                    `key:"billableMarginPct" json:"billable_margin_pct"`
-	Billing           ManagedComputeBillingConfig `key:"billing" json:"billing"`
-	BYOC              ManagedComputeBYOCConfig    `key:"byoc" json:"byoc"`
-	SSH               ManagedComputeSSHConfig     `key:"ssh" json:"ssh"`
+	BillableMarginPct *float64                         `key:"billableMarginPct" json:"billable_margin_pct"`
+	Billing           ManagedComputeBillingConfig      `key:"billing" json:"billing"`
+	BYOC              ManagedComputeBYOCConfig         `key:"byoc" json:"byoc"`
+	SSH               ManagedComputeSSHConfig          `key:"ssh" json:"ssh"`
+	Reservations      ManagedComputeReservationsConfig `key:"reservations" json:"reservations"`
+}
+
+// ManagedComputeReservationsConfig says where the machines tenants reserve
+// are bought.
+type ManagedComputeReservationsConfig struct {
+	// Providers are the keys under providers that sell reservations. Empty
+	// means every provider that is configured. A provider that is configured
+	// for pools to buy their own machines from, and is not named here, sells
+	// nothing to a tenant.
+	Providers []string `key:"providers" json:"providers"`
 }
 
 type ManagedComputeSSHConfig struct {

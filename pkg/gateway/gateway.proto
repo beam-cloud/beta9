@@ -917,6 +917,10 @@ message PoolConfig {
   string offer_id = 14;
   // Runtime for workers in this pool.
   string container_runtime = 15;
+  // How the machines a reservation buys are sold: "" or "on_demand" for
+  // machines that are kept until given back, "spot" for machines their
+  // provider may take back at any time, "any" for whichever costs less.
+  string pricing = 16;
 }
 
 message PoolOffer {
@@ -939,6 +943,9 @@ message PoolOffer {
   string region_display_name = 17;
   double latitude = 18;
   double longitude = 19;
+  // A spot machine costs less, and its provider may take it back at any
+  // time.
+  bool spot = 20;
 }
 
 message ProviderInstance {
@@ -963,6 +970,7 @@ message ProviderInstance {
   int64 cpu_millicores = 19;
   int64 memory_mb = 20;
   int64 storage_mb = 21;
+  bool spot = 22;
 }
 
 message PrivatePool {

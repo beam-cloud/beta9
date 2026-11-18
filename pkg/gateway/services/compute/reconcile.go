@@ -10,6 +10,7 @@ import (
 
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/providers"
+	"github.com/beam-cloud/beta9/pkg/providers/watch"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 )
@@ -22,6 +23,7 @@ const (
 	reconcileReasonBillingUnreachable   = "billing_unreachable"
 	reconcileReasonCreditExhausted      = "credit_exhausted"
 	reconcileReasonExternalAvailability = "external_availability"
+	reconcileReasonInterrupted          = "interrupted"
 	reconcileReasonLaunchFailed         = "launch_failed"
 	reconcileReasonMachineDisconnected  = "machine_disconnected"
 	reconcileReasonMachineReleased      = "machine_released"
@@ -703,6 +705,9 @@ func (s *Service) reconcileReservationStatus(ctx context.Context, workspaceID st
 	case providers.StatusPending:
 		reservation.Status = model.ReservationPending
 	case providers.StatusActive:
+		if reservation.Status == model.ReservationPending {
+			s.outcomes.Record(reservationOutcome(*reservation).CameUp(now.Sub(reservation.CreatedAt)))
+		}
 		reservation.Status = model.ReservationActive
 	case providers.StatusFailed:
 		// The machine will never work, and the provider may go on charging
@@ -710,14 +715,22 @@ func (s *Service) reconcileReservationStatus(ctx context.Context, workspaceID st
 		s.terminateReservation(ctx, workspaceID, state, reservation, reconcileReasonProviderFailed, firstNonEmpty(instance.StatusDetail, instanceFailedMessage), now)
 		return true
 	case providers.StatusInterrupted:
-		// No reservation is bought as spot. Should a provider take a machine
-		// back all the same, what is left of it is deleted.
-		s.terminateReservation(ctx, workspaceID, state, reservation, reconcileReasonProviderFailed, firstNonEmpty(instance.StatusDetail, instanceInterruptedMessage), now)
+		// A spot machine is sold on the terms that its provider may take it
+		// back, so that ends the reservation and what it is billed, and is
+		// no failure. Should a provider take back a machine that was not
+		// bought as spot, the provider failed. Either way what is left of
+		// the machine is deleted.
+		reason := reconcileReasonProviderFailed
+		if reservation.Spot {
+			reason = reconcileReasonInterrupted
+		}
+		s.terminateReservation(ctx, workspaceID, state, reservation, reason, firstNonEmpty(instance.StatusDetail, instanceInterruptedMessage), now)
 		return true
 	case providers.StatusDeleted:
 		// The machine went without Beam deleting it: the provider took it
 		// back, its own deletion timer fired, or someone removed it.
 		s.revokeReservationJoinToken(ctx, reservation)
+		s.outcomes.Record(reservationOutcome(*reservation).Ended(watch.ResultGone, now.Sub(reservation.CreatedAt)))
 		reservation.Status = model.ReservationDeleted
 		reservation.LastStatusMessage = firstNonEmpty(instance.StatusDetail, instanceGoneMessage)
 		reservation.LastError = ""
@@ -826,10 +839,18 @@ func (s *Service) terminateReservation(ctx context.Context, workspaceID string, 
 		return
 	}
 	reservation.Status = model.ReservationDeleted
-	if reason == reconcileReasonProviderFailed {
+	action := types.EventComputeActionReservationTerminating
+	switch reason {
+	case reconcileReasonProviderFailed:
 		// A machine that failed at its provider, or that the provider took
-		// back, stays listed as failed until the tenant dismisses it.
+		// back without having sold it as spot, stays listed as failed until
+		// the tenant dismisses it.
 		reservation.Status = model.ReservationFailed
+	case reconcileReasonInterrupted:
+		// A spot machine its provider took back stays listed too, so that
+		// the tenant sees where it went.
+		reservation.Status = model.ReservationInterrupted
+		action = types.EventComputeActionReservationInterrupted
 	}
 	reservation.LastError = ""
 	if reservation.MachineID != "" {
@@ -837,7 +858,51 @@ func (s *Service) terminateReservation(ctx context.Context, workspaceID string, 
 			reservationFailed(workspaceID, state.Name, reservation, "delete SSH state", fmt.Errorf("delete SSH state: %w", err))
 		}
 	}
-	s.emitComputeEvent(types.EventComputePool, computeReservationEvent(workspaceID, state, *reservation, types.EventComputeActionReservationTerminating, reason))
+	s.recordEnd(*reservation, reservationEnd(reason), now)
+	s.emitComputeEvent(types.EventComputePool, computeReservationEvent(workspaceID, state, *reservation, action, reason))
+}
+
+// recordEnd writes to the market's history that a reservation's machine is
+// gone at its provider, and how it ended. A reservation whose provider
+// never made a machine has none that ended.
+func (s *Service) recordEnd(reservation model.Reservation, result string, now time.Time) {
+	if computeReservationInstanceID(reservation) == "" {
+		return
+	}
+	s.outcomes.Record(reservationOutcome(reservation).Ended(result, now.Sub(reservation.CreatedAt)))
+}
+
+// reservationOutcome is what the market's history is told of a reserved
+// machine: what it was bought as, where, and for how much.
+func reservationOutcome(reservation model.Reservation) watch.Outcome {
+	outcome := watch.OutcomeOf(providers.Offer{
+		ID:               reservation.OfferID,
+		Provider:         reservation.Provider,
+		Cloud:            reservation.Cloud,
+		InstanceType:     reservation.InstanceType,
+		Region:           reservation.Region,
+		GPU:              reservation.GPU,
+		GPUCount:         reservation.GPUCount,
+		HourlyCostMicros: reservation.HourlyCostMicros,
+		Spot:             reservation.Spot,
+	})
+	outcome.Source = watch.SourceReservation
+	return outcome
+}
+
+// reservationEnd is how the market's history names the end of a reservation
+// that ended for reason. Only what its provider did to the machine says
+// anything of the provider: the rest is the tenant, or Beam, giving it back.
+func reservationEnd(reason string) string {
+	switch reason {
+	case reconcileReasonInterrupted:
+		return watch.ResultInterrupted
+	case reconcileReasonProviderFailed:
+		return watch.ResultFailed
+	case reconcileReasonReservationExpired:
+		return watch.ResultExpired
+	}
+	return watch.ResultReleased
 }
 
 func (s *Service) reconcileStaleMachines(ctx context.Context, workspaceID string, state *model.PoolState, now time.Time) bool {

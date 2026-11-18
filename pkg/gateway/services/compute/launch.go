@@ -7,11 +7,13 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/providers"
+	"github.com/beam-cloud/beta9/pkg/providers/watch"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
@@ -23,7 +25,10 @@ func (s *Service) ListPoolOffers(ctx context.Context, in *pb.ListPoolOffersReque
 		return &pb.ListPoolOffersResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 
-	offers, err := s.collectPoolOffers(ctx, pool)
+	// What is for sale is listed far more often than it is bought, and is
+	// listed from what the market's sampler last heard. A purchase asks the
+	// provider itself.
+	offers, err := s.collectPoolOffers(ctx, pool, s.sampledOffers)
 	if err != nil {
 		return &pb.ListPoolOffersResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -64,7 +69,7 @@ func (s *Service) LaunchPoolCapacity(ctx context.Context, in *pb.LaunchPoolCapac
 		}
 	}
 
-	offers, err := s.collectPoolOffers(ctx, pool)
+	offers, err := s.collectPoolOffers(ctx, pool, nil)
 	if err != nil {
 		return &pb.LaunchPoolCapacityResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
@@ -227,9 +232,14 @@ const (
 	launchErrorProviderUnavailable  = "provider_unavailable"
 	launchErrorBootstrapFailed      = "bootstrap_failed"
 	launchErrorProviderFailure      = "provider_failure"
-	launchErrorSSHBootstrapFailed   = "ssh_bootstrap_failed"
-	launchErrorStoreFailed          = "store_failed"
-	launchErrorSchedulerFailed      = "scheduler_failed"
+	// The provider refused to sell, and said so: it has none left, or lets
+	// the account buy no more. The launch keeps nothing it bought, and the
+	// same machine may be had from another offer.
+	launchErrorOutOfStock         = "out_of_stock"
+	launchErrorProviderQuota      = "provider_quota"
+	launchErrorSSHBootstrapFailed = "ssh_bootstrap_failed"
+	launchErrorStoreFailed        = "store_failed"
+	launchErrorSchedulerFailed    = "scheduler_failed"
 )
 
 // createPlanReservations buys the machines a plan calls for. On failure it
@@ -259,16 +269,30 @@ func (s *Service) createPlanReservations(ctx context.Context, workspaceID string
 			}
 			now := time.Now()
 			instance, err := provider.Create(ctx, providers.CreateRequest{
-				Offer:         purchase.Offer,
-				Name:          nodeName,
-				StartupScript: bootstrapCommand,
-				Tags:          map[string]string{machineTag: machineID},
-				Until:         now.Add(pool.TTL).Add(reservationDeletionGrace),
+				Offer:               purchase.Offer,
+				Name:                nodeName,
+				StartupScript:       bootstrapCommand,
+				Tags:                map[string]string{machineTag: machineID},
+				Until:               now.Add(pool.TTL).Add(reservationDeletionGrace),
+				MaxHourlyCostMicros: s.spotPriceLimitMicros(purchase.Offer),
 			})
+			// How the purchase went is the only word on the stock of a
+			// provider that lists a price and not what it has.
+			bought, took := watch.OutcomeOf(purchase.Offer), time.Since(now)
+			bought.Source = watch.SourceReservation
+			s.outcomes.Record(bought.Bought(err, took))
+			if err == nil && instance.Status == providers.StatusActive {
+				// It is recorded as running, so the reconciler will not see
+				// it come up.
+				s.outcomes.Record(bought.CameUp(took))
+			}
 			if err != nil {
 				_ = s.revokeComputeJoinTokenHash(ctx, hashComputeToken(registrationToken))
-				if errors.Is(err, providers.ErrOutOfStock) || errors.Is(err, providers.ErrQuota) {
-					return created, launchErrorProviderFailure, err
+				switch {
+				case errors.Is(err, providers.ErrOutOfStock):
+					return created, launchErrorOutOfStock, err
+				case errors.Is(err, providers.ErrQuota):
+					return created, launchErrorProviderQuota, err
 				}
 				// Anything but a clear refusal may be an answer that was lost
 				// on the way, with the machine made all the same. It is passed
@@ -315,6 +339,7 @@ func newReservation(pool model.Pool, machineID, name string, offer providers.Off
 		StorageMB:         offer.StorageMB,
 		HourlyCostMicros:  offer.HourlyCostMicros,
 		CommittedMicros:   offer.HourlyCostMicros * model.WholeHours(pool.TTL),
+		Spot:              offer.Spot,
 		Source:            model.SourceCLIReservation,
 		Status:            status,
 		CreatedAt:         now,
@@ -430,13 +455,21 @@ func (s *Service) extendInstance(ctx context.Context, reservation model.Reservat
 // and is looked for by its tag. A provider that does not list it made none,
 // unless the purchase went unanswered: then the provider may yet come to
 // list the machine, which is left for the reconciler like the others.
+//
+// Each purchase was written to the market's history as it was made, so a
+// machine that is deleted here is written as given back. The reconciler
+// writes the end of the ones that are left to it.
 func (s *Service) deleteLaunchedInstances(ctx context.Context, workspaceID, poolName string, reservations []model.Reservation, unanswered bool) ([]model.Reservation, []string) {
 	left := []model.Reservation{}
 	failures := []string{}
 	now := time.Now()
 	for _, reservation := range reservations {
 		err := s.deleteInstance(ctx, &reservation, now)
-		if err == nil || errors.Is(err, errNotListed) && !unanswered {
+		if err == nil {
+			s.recordEnd(reservation, watch.ResultReleased, now)
+			continue
+		}
+		if errors.Is(err, errNotListed) && !unanswered {
 			continue
 		}
 		reservationFailed(workspaceID, poolName, &reservation, "delete machine", err)
@@ -486,7 +519,8 @@ func existingPoolHasGPU(existing *model.PoolState) bool {
 
 // mergePoolConfigForLaunch combines an add-capacity request into the existing
 // pool config: identity fields (name, gpu, transport, ...) are kept, regions
-// and providers accumulate, and the budget grows by the request's budget.
+// and providers accumulate, and the budget grows by the request's budget. A
+// pool that has been asked for machines sold both ways holds either kind.
 func mergePoolConfigForLaunch(existing, request *pb.PoolConfig) *pb.PoolConfig {
 	merged := normalizePoolConfig(existing)
 	if merged == nil {
@@ -494,6 +528,9 @@ func mergePoolConfigForLaunch(existing, request *pb.PoolConfig) *pb.PoolConfig {
 	}
 	merged.Regions = unionStrings(merged.Regions, request.Regions)
 	merged.Providers = unionStrings(merged.Providers, request.Providers)
+	if merged.Pricing != request.Pricing {
+		merged.Pricing = string(model.PricingAny)
+	}
 	merged.MaxSpend += request.MaxSpend
 	merged.Nodes += request.Nodes
 	if merged.Ttl == "" {
@@ -645,20 +682,39 @@ func computeReservationInstanceID(reservation model.Reservation) string {
 }
 
 // reservationProviders are the providers a reservation's machine is bought
-// from. A provider that is configured for pools to buy their own machines
-// from sells nothing to a tenant until it is named here.
-var reservationProviders = []string{"hetzner", "shadeform"}
+// from: the ones the config names under managedCompute.reservations, or
+// every provider that is configured when it names none. A provider that is
+// configured for pools to buy their own machines from, and that the config's
+// list leaves out, sells nothing to a tenant.
+func (s *Service) reservationProviders() []string {
+	return ReservationProviders(s.appConfig.ManagedCompute, s.providers)
+}
+
+// ReservationProviders names the providers of a registry that a tenant can
+// reserve machines from under the config: the ones the config lists, or
+// every one when it lists none.
+func ReservationProviders(config types.ManagedComputeConfig, registry *providers.Registry) []string {
+	if named := config.Reservations.Providers; len(named) > 0 {
+		return named
+	}
+	return registry.Names()
+}
 
 // collectPoolOffers asks the pool's providers, or every provider that sells
 // reservations when it names none, what they sell that the pool can use. A
-// reservation is for a term, so it is never a spot machine, which its
-// provider can take back.
+// reservation is for a machine that is kept until it is given back, unless
+// the pool asks for spot machines, which their provider can take back.
 //
 // A provider that cannot be asked is passed over, so that it does not hide
 // what the others sell. It is an error only when none of them answered.
-func (s *Service) collectPoolOffers(ctx context.Context, pool model.Pool) ([]providers.Offer, error) {
+//
+// With sampled, a provider that was heard from lately is not asked: what it
+// sold then is what it is taken to sell. One that was not is asked, as all
+// of them are without sampled.
+func (s *Service) collectPoolOffers(ctx context.Context, pool model.Pool, sampled SampledOffers) ([]providers.Offer, error) {
+	selling := s.reservationProviders()
 	sellers := map[string]providers.Provider{}
-	for _, name := range reservationProviders {
+	for _, name := range selling {
 		if provider, ok := s.providers.Get(name); ok {
 			sellers[name] = provider
 		}
@@ -668,27 +724,48 @@ func (s *Service) collectPoolOffers(ctx context.Context, pool model.Pool) ([]pro
 	}
 	names := pool.Providers
 	if len(names) == 0 {
-		names = reservationProviders
+		names = selling
+	}
+	asked := make([]providers.Provider, 0, len(names))
+	for _, name := range names {
+		if provider, ok := sellers[name]; ok {
+			asked = append(asked, provider)
+		}
 	}
 
+	// The providers are asked at the same time, so that the list takes as
+	// long as the slowest of them and not as long as all of them together.
 	filter := providers.OfferFilter{GPUs: pool.GPUs, Regions: pool.Regions}
+	listed := make([][]providers.Offer, len(asked))
+	errs := make([]error, len(asked))
+	var wg sync.WaitGroup
+	for i, provider := range asked {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if sampled != nil {
+				if offers, fresh := sampled.Offers(ctx, provider.Name()); fresh {
+					listed[i] = offers
+					return
+				}
+			}
+			listed[i], errs[i] = s.offersOf(ctx, provider, filter)
+		}()
+	}
+	wg.Wait()
+
 	offers := []providers.Offer{}
 	answered := 0
 	failures := []string{}
-	for _, name := range names {
-		provider, ok := sellers[name]
-		if !ok {
-			continue
-		}
-		listed, err := provider.Offers(ctx, filter)
-		if err != nil {
-			log.Warn().Err(err).Str("provider", name).Msg("could not list what a provider sells; its offers are left out")
-			failures = append(failures, fmt.Sprintf("%s: %v", name, err))
+	for i, provider := range asked {
+		if err := errs[i]; err != nil {
+			log.Warn().Err(err).Str("provider", provider.Name()).Msg("could not list what a provider sells; its offers are left out")
+			failures = append(failures, fmt.Sprintf("%s: %v", provider.Name(), err))
 			continue
 		}
 		answered++
-		for _, offer := range listed {
-			if !offer.Spot && pool.MatchesOffer(offer) {
+		for _, offer := range listed[i] {
+			if pool.MatchesOffer(offer) {
 				offers = append(offers, offer)
 			}
 		}
@@ -697,4 +774,16 @@ func (s *Service) collectPoolOffers(ctx context.Context, pool model.Pool) ([]pro
 		return nil, fmt.Errorf("no compute provider could be asked what it sells: %s", strings.Join(failures, "; "))
 	}
 	return offers, nil
+}
+
+// offersOf asks one provider what it sells that matches the filter. A
+// provider's client that panics has failed to answer, and does not take the
+// gateway down with it.
+func (s *Service) offersOf(ctx context.Context, provider providers.Provider, filter providers.OfferFilter) (offers []providers.Offer, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			offers, err = nil, fmt.Errorf("listing offers panicked: %v", recovered)
+		}
+	}()
+	return provider.Offers(ctx, filter)
 }
