@@ -1117,7 +1117,7 @@ func (p *Provisioner) listInstances(ctx context.Context, known snapshot, machine
 	p.mu.Unlock()
 
 	listed := map[string][]providers.Instance{}
-	for _, name := range p.providers.Names() {
+	for _, name := range p.providers.ConfiguredNames() {
 		if !sweepAll && !slices.Contains(inUse, name) {
 			continue
 		}

@@ -458,6 +458,16 @@ func (r *Registry) Names() []string {
 	return names
 }
 
+// ConfiguredNames includes disabled providers. Lifecycle reconciliation must
+// still inspect and clean up their existing, ambiguous and orphaned purchases.
+// Discovery and new purchases use Names instead.
+func (r *Registry) ConfiguredNames() []string {
+	if r == nil {
+		return nil
+	}
+	return slices.Sorted(maps.Keys(r.byName))
+}
+
 const (
 	// A provider that has not answered a call in this long is treated as
 	// having failed it.
