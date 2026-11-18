@@ -99,3 +99,44 @@ def test_hash_suffixes_do_not_collapse_signed_paths(upload_client):
     upload_paths = [request.path_url for request in signed_requests[::2]]
     assert len(set(upload_paths)) == 2
     assert len(uploads) == 2
+
+
+@pytest.mark.parametrize(
+    "local_path,volume,relative",
+    [
+        ("../media/clip.wav", "media", "clip_fixed-id.wav"),
+        ("./media/clip.wav", "uploads", "media/clip_fixed-id.wav"),
+        ("folder/../media/clip.wav", "uploads", "media/clip_fixed-id.wav"),
+        ("../media/clip%2F+one.wav", "media", "clip%2F+one_fixed-id.wav"),
+        ("../media/你好.wav", "media", "你好_fixed-id.wav"),
+    ],
+)
+def test_upload_parent_paths_pass_volume_boundary(upload_client, local_path, volume, relative):
+    client, signed_requests, uploads = upload_client
+    path = Path(local_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"parent payload")
+
+    assert client.upload_file(local_path) == "https://storage.example.test/signed"
+    assert uploads == [b"parent payload"]
+    assert len(signed_requests) == 2
+    for prepared, operation in zip(signed_requests, ["upload", "download"]):
+        assert unquote(urlsplit(prepared.path_url).path) == (
+            f"/volume/workspace/generate-{operation}-url/{volume}/{relative}"
+        )
+
+
+def test_upload_symlink_parent_reads_original_path(upload_client):
+    client, signed_requests, uploads = upload_client
+    Path("target/nested").mkdir(parents=True)
+    Path("target/clip.wav").write_bytes(b"physical parent")
+    Path("clip.wav").write_bytes(b"lexical parent")
+    Path("link").symlink_to("target/nested", target_is_directory=True)
+
+    client.upload_file("link/../clip.wav")
+
+    assert uploads == [b"physical parent"]
+    for prepared, operation in zip(signed_requests, ["upload", "download"]):
+        assert unquote(urlsplit(prepared.path_url).path) == (
+            f"/volume/workspace/generate-{operation}-url/uploads/clip_fixed-id.wav"
+        )
