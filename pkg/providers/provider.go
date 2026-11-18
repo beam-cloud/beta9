@@ -202,6 +202,9 @@ var (
 	ErrQuota = errors.New("quota exceeded")
 	// ErrNotFound: the provider no longer has the instance.
 	ErrNotFound = errors.New("instance not found")
+	// ErrDisabled: the provider is listed under providers.disabled, and
+	// sells nothing new. Nothing was bought.
+	ErrDisabled = errors.New("provider is disabled for new purchases")
 )
 
 // LaunchGrace is how long after a purchase its provider may not yet know of
@@ -333,13 +336,18 @@ type Registry struct {
 	byName map[string]Provider
 }
 
+// providerNames are the keys a provider can be configured under.
+var providerNames = []string{awsName, gcpName, hetznerName, nebiusName, shadeformName, vastName, verdaName}
+
 // NewRegistry builds a client for every provider the config has credentials
-// for. Owner identifies this control plane on the instances they buy.
+// for. Owner identifies this control plane on the instances they buy. A
+// provider the config disables keeps its client and sells nothing new.
 //
 // It does not fail, so that a gateway starts whatever its config says of
 // providers. What is wrong is logged as an error, once, here: an owner that
-// some provider could not store, for which no client is made, and a provider
-// whose credentials are incomplete or cannot be read, which is left out.
+// some provider could not store, for which no client is made, a provider
+// whose credentials are incomplete or cannot be read, which is left out, and
+// a name under providers.disabled that is no provider's.
 func NewRegistry(config types.ProviderConfig, owner string) *Registry {
 	registry := RegistryOf()
 	if err := checkOwner(owner); err != nil {
@@ -377,7 +385,53 @@ func NewRegistry(config types.ProviderConfig, owner string) *Registry {
 		client, err := NewGCP(gcp, owner)
 		registry.use(gcpName, client, err)
 	}
+	for _, written := range config.Disabled {
+		registry.disable(written)
+	}
 	return registry
+}
+
+// disable stops the provider written under providers.disabled from selling.
+// One that has no credentials sells nothing as it is.
+func (r *Registry) disable(written string) {
+	name := strings.ToLower(strings.TrimSpace(written))
+	if name == "" {
+		return
+	}
+	if !slices.Contains(providerNames, name) {
+		// A name that is misspelt would leave the provider it was meant for
+		// buying, with nothing to show that it still is.
+		log.Error().Str("provider", written).Strs("providers", providerNames).Msg("providers.disabled names no provider: nothing is disabled for it")
+		return
+	}
+	if provider, configured := r.byName[name]; configured && r.IsEnabled(name) {
+		r.byName[name] = disabledProvider{Provider: provider}
+	}
+}
+
+// disabledProvider is a provider that sells nothing new: it lists no offers
+// and refuses every create, without a call to the provider. What was bought
+// from it before is still read, kept for longer and deleted through its
+// client. Leaving the client out would strand those machines.
+type disabledProvider struct{ Provider }
+
+func (p disabledProvider) Offers(context.Context, OfferFilter) ([]Offer, error) {
+	return nil, nil
+}
+
+func (p disabledProvider) Create(context.Context, CreateRequest) (Instance, error) {
+	return Instance{}, fmt.Errorf("%s: %w", p.Name(), ErrDisabled)
+}
+
+// IsEnabled reports whether the provider is configured and sells new
+// machines. Get also returns a disabled provider, for what it sold before.
+func (r *Registry) IsEnabled(name string) bool {
+	provider, ok := r.Get(name)
+	if !ok {
+		return false
+	}
+	_, disabled := provider.(disabledProvider)
+	return !disabled
 }
 
 // RegistryOf holds exactly the given providers.
@@ -412,8 +466,17 @@ func (r *Registry) Get(name string) (Provider, bool) {
 	return provider, ok
 }
 
-// Names lists the configured providers in a fixed order.
+// Names lists the providers that sell new machines, in a fixed order. It is
+// what discovery and purchases go by.
 func (r *Registry) Names() []string {
+	return slices.DeleteFunc(r.ConfiguredNames(), func(name string) bool { return !r.IsEnabled(name) })
+}
+
+// ConfiguredNames lists every provider that has a client, in a fixed order,
+// the disabled ones too. It is what looking after machines goes by: what a
+// disabled provider sold before, and what it may have sold without saying,
+// is still to be read and deleted.
+func (r *Registry) ConfiguredNames() []string {
 	if r == nil {
 		return nil
 	}
@@ -485,6 +548,9 @@ type call struct {
 	// form is sent as a form when not nil, in place of body.
 	form url.Values
 	out  any // the JSON response is decoded into it when not nil
+	// rawOut receives the response without JSON decoding. A provider whose
+	// response is not JSON must opt in and validate it itself.
+	rawOut *[]byte
 
 	// repeatable marks a call that does no harm when the provider receives
 	// it twice. Reads always are. A call that buys something is not: when it
@@ -617,6 +683,9 @@ func (a *api) send(ctx context.Context, c call, payload []byte) (time.Duration, 
 			data = data[:maxErrorBodyBytes]
 		}
 		return retryAfter(resp.Header), &StatusError{Method: c.method, Path: c.path, Status: resp.StatusCode, Body: strings.TrimSpace(string(data))}
+	}
+	if c.rawOut != nil {
+		*c.rawOut = data
 	}
 	if c.out == nil || len(data) == 0 {
 		return 0, nil

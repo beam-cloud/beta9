@@ -1011,17 +1011,26 @@ func (s *Service) createManagedMachineJoinToken(ctx context.Context, state *mode
 }
 
 // validateProvider reports a pool that is to buy from a provider this
-// gateway has no credentials for.
+// gateway cannot buy from: one it has no credentials for, or one that is
+// disabled.
 func (s *Service) validateProvider(config types.WorkerPoolConfig) error {
 	if !config.Buys() {
 		return nil
 	}
-	if _, ok := s.providers.Get(config.Provisioning.Provider); ok {
+	name := config.Provisioning.Provider
+	if s.providers.IsEnabled(name) {
 		return nil
 	}
-	configured := "none are"
-	if names := s.providers.Names(); len(names) > 0 {
-		configured = "configured: " + strings.Join(names, ", ")
+	// others names the providers a pool can buy from, after the word for
+	// what this one is not.
+	others := func(word string) string {
+		if names := s.providers.Names(); len(names) > 0 {
+			return word + ": " + strings.Join(names, ", ")
+		}
+		return "none are " + word
 	}
-	return fmt.Errorf("provisioning.provider %q is not configured under providers (%s)", config.Provisioning.Provider, configured)
+	if _, configured := s.providers.Get(name); configured {
+		return fmt.Errorf("provisioning.provider %q is disabled under providers.disabled (%s)", name, others("enabled"))
+	}
+	return fmt.Errorf("provisioning.provider %q is not configured under providers (%s)", name, others("configured"))
 }

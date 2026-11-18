@@ -692,12 +692,14 @@ func (s *Service) reservationProviders() []string {
 
 // ReservationProviders names the providers of a registry that a tenant can
 // reserve machines from under the config: the ones the config lists, or
-// every one when it lists none.
+// every one when it lists none. Either way a provider that is disabled, or
+// that the registry has no client for, sells no reservation.
 func ReservationProviders(config types.ManagedComputeConfig, registry *providers.Registry) []string {
-	if named := config.Reservations.Providers; len(named) > 0 {
-		return named
+	named := config.Reservations.Providers
+	if len(named) == 0 {
+		return registry.Names()
 	}
-	return registry.Names()
+	return slices.DeleteFunc(slices.Clone(named), func(name string) bool { return !registry.IsEnabled(name) })
 }
 
 // collectPoolOffers asks the pool's providers, or every provider that sells

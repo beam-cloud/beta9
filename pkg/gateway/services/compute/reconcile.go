@@ -703,6 +703,17 @@ func (s *Service) reconcileReservationStatus(ctx context.Context, workspaceID st
 	before := *reservation
 	switch instance.Status {
 	case providers.StatusPending:
+		// A provider may report a running machine as pending again while it
+		// reboots or undergoes maintenance. Its initial boot already finished.
+		if reservation.Status == model.ReservationActive {
+			break
+		}
+		bootTimeout := s.appConfig.ManagedCompute.Reservations.BootTimeoutOrDefault()
+		if !reservation.CreatedAt.IsZero() && !now.Before(reservation.CreatedAt.Add(bootTimeout)) {
+			s.terminateReservation(ctx, workspaceID, state, reservation, reconcileReasonLaunchFailed,
+				fmt.Sprintf("the provider did not start this machine within %s", bootTimeout), now)
+			return true
+		}
 		reservation.Status = model.ReservationPending
 	case providers.StatusActive:
 		if reservation.Status == model.ReservationPending {

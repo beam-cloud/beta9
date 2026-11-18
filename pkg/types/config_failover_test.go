@@ -192,6 +192,18 @@ func TestProvisioningDefaults(t *testing.T) {
 	require.Equal(t, 5*time.Minute, WorkerPoolProvisioningConfig{BootTimeout: Duration(5 * time.Minute)}.BootWithin())
 }
 
+func TestReservationProviderBootTimeoutDefaultsAndOverride(t *testing.T) {
+	const set = 3 * time.Minute
+	for configured, want := range map[time.Duration]time.Duration{
+		0:            ManagedComputeDefaultReservationBootTimeout,
+		-time.Minute: ManagedComputeDefaultReservationBootTimeout,
+		set:          set,
+	} {
+		config := ManagedComputeReservationsConfig{BootTimeout: Duration(configured)}
+		require.Equal(t, want, config.BootTimeoutOrDefault(), "configured as %s", configured)
+	}
+}
+
 func TestPoolThatBuysJoinsThroughTheAgentAndSpotIsPreemptable(t *testing.T) {
 	spot := WorkerPoolConfig{Provisioning: WorkerPoolProvisioningConfig{Provider: "verda", Spot: true, MaxNodes: 2}}
 	require.True(t, spot.Buys())

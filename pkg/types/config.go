@@ -1101,6 +1101,11 @@ type WorkerPoolJobSpecPoolSizingConfig struct {
 // ProviderConfig holds the credentials and settings of the providers Beam
 // buys machines from.
 type ProviderConfig struct {
+	// Disabled prevents catalog discovery and new purchases while retaining
+	// credentials for inspecting and deleting machines already bought. It
+	// names providers by the keys below, in any case. A name that is no
+	// provider's disables nothing, and is logged as an error at startup.
+	Disabled  []string                `key:"disabled" json:"disabled"`
 	Vast      VastProviderConfig      `key:"vast" json:"vast"`
 	Shadeform ShadeformProviderConfig `key:"shadeform" json:"shadeform"`
 	Hetzner   HetznerProviderConfig   `key:"hetzner" json:"hetzner"`
@@ -1357,6 +1362,11 @@ const (
 
 	ManagedComputeDefaultBYOCMemoryHourlyMicrosPerGB int64 = 4_500
 	ManagedComputeDefaultBYOCCPUHourlyMicrosPerVCPU  int64 = 9_500
+
+	// ManagedComputeDefaultReservationBootTimeout is how long a reservation's
+	// machine may stay pending at its provider where the config names no
+	// time.
+	ManagedComputeDefaultReservationBootTimeout = 20 * time.Minute
 )
 
 type ManagedComputeConfig struct {
@@ -1375,6 +1385,19 @@ type ManagedComputeReservationsConfig struct {
 	// for pools to buy their own machines from, and is not named here, sells
 	// nothing to a tenant.
 	Providers []string `key:"providers" json:"providers"`
+	// BootTimeout bounds how long a newly bought machine may remain pending
+	// at its provider. It does not wait for agent registration. Zero means
+	// ManagedComputeDefaultReservationBootTimeout.
+	BootTimeout Duration `key:"bootTimeout" json:"boot_timeout"`
+}
+
+// BootTimeoutOrDefault is how long a newly bought machine may remain pending
+// at its provider before the reservation is given up.
+func (c ManagedComputeReservationsConfig) BootTimeoutOrDefault() time.Duration {
+	if c.BootTimeout > 0 {
+		return time.Duration(c.BootTimeout)
+	}
+	return ManagedComputeDefaultReservationBootTimeout
 }
 
 type ManagedComputeSSHConfig struct {

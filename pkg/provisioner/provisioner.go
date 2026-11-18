@@ -385,6 +385,11 @@ func (p *Provisioner) choose(pool string, need scheduler.MachineNeed, held []Mac
 	if _, ok := p.providers.Get(config.Provisioning.Provider); !ok {
 		return providers.Offer{}, config, fmt.Errorf("the pool buys from provider %q, which is not configured under providers", config.Provisioning.Provider)
 	}
+	// A disabled provider lists no offers, which would read as one that has
+	// nothing in stock.
+	if !p.providers.IsEnabled(config.Provisioning.Provider) {
+		return providers.Offer{}, config, fmt.Errorf("the pool buys from provider %q, which is disabled under providers.disabled", config.Provisioning.Provider)
+	}
 	list, listed := p.offers[config.Provisioning.Provider]
 	if !listed {
 		return providers.Offer{}, config, errNotListed
@@ -1117,7 +1122,7 @@ func (p *Provisioner) listInstances(ctx context.Context, known snapshot, machine
 	p.mu.Unlock()
 
 	listed := map[string][]providers.Instance{}
-	for _, name := range p.providers.Names() {
+	for _, name := range p.providers.ConfiguredNames() {
 		if !sweepAll && !slices.Contains(inUse, name) {
 			continue
 		}
