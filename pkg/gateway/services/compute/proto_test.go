@@ -62,6 +62,64 @@ func TestAgentMachineStatusPreflightFailureIsDisabled(t *testing.T) {
 	if got := agentMachineStatus(state, nil, now); got != types.MachineStatusDisabled {
 		t.Fatalf("agentMachineStatus() = %q, want %q", got, types.MachineStatusDisabled)
 	}
+	if got, want := agentMachineStatusDetail(state, now), "preflight checks failed: docker"; got != want {
+		t.Fatalf("agentMachineStatusDetail() = %q, want %q", got, want)
+	}
+}
+
+func TestAgentMachineStatusSaysWhenAMachineStoppedReportingIn(t *testing.T) {
+	now := time.Now()
+	lastSeen := now.Add(-5 * time.Minute)
+
+	tests := []struct {
+		name   string
+		state  *model.AgentTokenState
+		detail string
+	}{
+		{
+			name:   "heartbeats stopped",
+			state:  &model.AgentTokenState{Schedulable: true, LastJoinAt: lastSeen, LastHeartbeatAt: lastSeen},
+			detail: "agent stopped reporting in",
+		},
+		{
+			name:   "stream closed",
+			state:  &model.AgentTokenState{Schedulable: true, LastHeartbeatAt: lastSeen, LastDisconnectAt: lastSeen.Add(time.Second)},
+			detail: "agent disconnected",
+		},
+		{
+			name:   "unschedulable and silent",
+			state:  &model.AgentTokenState{LastHeartbeatAt: lastSeen},
+			detail: "agent stopped reporting in",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			worker := &types.Worker{Status: types.WorkerStatusDisabled}
+			if got := agentMachineStatus(tt.state, worker, now); got != types.MachineStatusDisconnected {
+				t.Fatalf("agentMachineStatus() = %q, want %q", got, types.MachineStatusDisconnected)
+			}
+			if got := agentMachineStatusDetail(tt.state, now); got != tt.detail {
+				t.Fatalf("agentMachineStatusDetail() = %q, want %q", got, tt.detail)
+			}
+		})
+	}
+}
+
+func TestAgentMachineStatusOfAMachineThatIsHeardFromButTakesNoWork(t *testing.T) {
+	now := time.Now()
+	state := &model.AgentTokenState{LastJoinAt: now, LastHeartbeatAt: now, AvailabilityReason: "host maintenance"}
+
+	if got := agentMachineStatus(state, nil, now); got != types.MachineStatusRegistered {
+		t.Fatalf("agentMachineStatus() = %q, want %q", got, types.MachineStatusRegistered)
+	}
+	if got, want := agentMachineStatusDetail(state, now), "host maintenance"; got != want {
+		t.Fatalf("agentMachineStatusDetail() = %q, want %q", got, want)
+	}
+
+	connected := &model.AgentTokenState{Schedulable: true, LastJoinAt: now, LastHeartbeatAt: now}
+	if got := agentMachineStatusDetail(connected, now); got != "" {
+		t.Fatalf("agentMachineStatusDetail() = %q, want none for a machine that takes work", got)
+	}
 }
 
 func TestAgentMachineMetricsUseScheduledCapacity(t *testing.T) {
