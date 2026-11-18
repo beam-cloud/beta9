@@ -71,7 +71,7 @@ type DurableDiskMountConfig struct {
 	SourceSnapshotId string `json:"source_snapshot_id,omitempty"`
 	// Set for a disk whose capture_exit_snapshot is false. go2proto has no
 	// optional fields, so the mount carries the negative: a request without
-	// it, as from a gateway that predates it, captures the disk.
+	// it captures the disk.
 	SkipExitSnapshot bool `json:"skip_exit_snapshot,omitempty"`
 }
 

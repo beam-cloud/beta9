@@ -105,7 +105,7 @@ func TestMountProtoRoundTripSkipsOnlyADiskThatSaysSo(t *testing.T) {
 		})
 	}
 
-	// A mount from a gateway that predates the setting has nothing to say.
+	// A mount that does not say has its disk captured.
 	old := NewMountFromProto(&pb.Mount{DurableDisk: &pb.DurableDiskMountConfig{Name: "vm-root", Driver: DurableDiskDriverQcow}})
 	require.False(t, old.DurableDisk.SkipExitSnapshot)
 }

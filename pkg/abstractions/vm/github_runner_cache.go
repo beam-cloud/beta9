@@ -168,7 +168,7 @@ func (r *githubRunners) trusts(ctx context.Context, candidate types.GitHubRunner
 		return false, "the job of the runner was of another repository", nil
 	case job.Conclusion != "success":
 		return false, "the job of the runner did not succeed", nil
-	case !job.DefaultBranch || job.RunID == 0:
+	case !job.DefaultBranch:
 		return false, "the job of the runner was not on a default branch", nil
 	}
 

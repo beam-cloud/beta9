@@ -420,11 +420,8 @@ func (r *githubRunners) cancelJob(c echo.Context) error {
 		return err
 	}
 
-	switch {
-	case job.Status == types.GitHubJobCompleted:
+	if job.Status == types.GitHubJobCompleted {
 		return c.NoContent(http.StatusAccepted)
-	case job.RunID == 0:
-		return echo.NewHTTPError(http.StatusConflict, "the job was recorded without its workflow run; cancel the run on GitHub")
 	}
 
 	ctx, _ := requestContext(c)
@@ -496,7 +493,6 @@ func (r *githubRunners) stopJob(c echo.Context) error {
 		log.Warn().Err(err).Str("vm_id", v.ID).Msg("unregister GitHub runner")
 	}
 
-	keepsNoRoot(v)
 	v.DesiredState = types.VMStateDeleted
 	if err := r.s.repo.SaveVM(ctx, v); err != nil {
 		return err
@@ -1155,28 +1151,13 @@ func (r *githubRunners) launch(ctx context.Context, job types.GitHubRunnerJob, s
 // which the reconciler then leaves alone otherwise.
 func (s *Service) reconcileRunner(ctx context.Context, v *types.VM) (bool, error) {
 	r := s.runners
-	if r == nil || !strings.HasPrefix(v.Name, runnerPrefix) {
-		return false, nil
-	}
-
-	// A runner that is being deleted is looked up only to restore the
-	// setting below, if it lost it.
-	deleted := v.DesiredState == types.VMStateDeleted
-	if deleted && !types.CapturesExitSnapshot(v.Spec.CaptureExitSnapshot) {
+	if r == nil || v.DesiredState == types.VMStateDeleted || !strings.HasPrefix(v.Name, runnerPrefix) {
 		return false, nil
 	}
 
 	runner, err := r.s.repo.GetGitHubRunner(ctx, v.WorkspaceID, v.Name)
 	if err != nil || runner == nil {
 		return false, err
-	}
-
-	// A runner's root is never kept. A gateway of an earlier version may
-	// have saved the VM, and the setting with it, as it knew it: the VM
-	// would then wait for a snapshot that its worker never takes.
-	keepsNoRoot(v)
-	if deleted {
-		return false, nil
 	}
 
 	state, err := s.runtimeState(v)
@@ -1252,13 +1233,6 @@ func (s *Service) reconcileRunner(ctx context.Context, v *types.VM) (bool, error
 
 	v.DesiredState = types.VMStateDeleted
 	return true, s.repo.SaveVM(ctx, v)
-}
-
-// keepsNoRoot says of a runner's VM that its root is not captured when it
-// exits, as it was created.
-func keepsNoRoot(v *types.VM) {
-	keep := false
-	v.Spec.CaptureExitSnapshot = &keep
 }
 
 // throttled reports whether a VM's last launch was refused because its

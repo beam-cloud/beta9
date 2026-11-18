@@ -415,8 +415,6 @@ func TestGitHubRunnerKilledInItsJobIsDeleted(t *testing.T) {
 
 	delete(runtime.containers.states, v.ContainerID)
 	runtime.containers.exitCode = int(types.ContainerExitCodeUnknownError)
-	// As a gateway of an earlier version saves it.
-	v.Spec.CaptureExitSnapshot = nil
 	require.NoError(t, r.s.reconcileVM(ctx, v))
 	require.Equal(t, types.VMStateDeleted, v.Status)
 	require.Empty(t, v.ContainerID)
@@ -457,24 +455,6 @@ func TestGitHubRunnerWhoseWorkerIsLostIsDeleted(t *testing.T) {
 			require.Zero(t, count)
 		})
 	}
-}
-
-// A gateway of an earlier version saves a runner without the setting that
-// its root is not kept. One that is already being deleted gets it back too:
-// its worker took no snapshot, and it would wait for one for good.
-func TestGitHubRunnerBeingDeletedKeepsNoRoot(t *testing.T) {
-	r, store, _, runtime := runnerFixture(t)
-	ctx := context.Background()
-	fakeGitHub(t, r, map[string]string{registersRunner: `201 {"encoded_jit_config":"jit-secret"}`})
-	v := startRunner(t, r, store, 1, false)
-
-	r.s.backend = &snapshotlessBackend{r.s.backend.(*vmBackend)}
-	delete(runtime.containers.states, v.ContainerID)
-	v.Spec.CaptureExitSnapshot = nil
-	v.EverRunning, v.DesiredState = true, types.VMStateDeleted
-	require.NoError(t, r.s.reconcileVM(ctx, v))
-	require.Equal(t, types.VMStateDeleted, v.Status)
-	require.Empty(t, v.ContainerID)
 }
 
 func queuedJob(id int64) *types.GitHubRunnerJob {
@@ -1494,7 +1474,6 @@ func TestGitHubRunnerCancelJob(t *testing.T) {
 		"App may not cancel":   {github: `403 {"message":"Resource not accessible by integration"}`, code: 403, message: "The GitHub App needs the Actions permission set to read and write; accept the updated permissions on GitHub"},
 		"GitHub fails":         {github: `500 {}`, code: 500, message: "Internal Server Error"},
 		"completed":            {job: func(job *types.GitHubRunnerJob) { job.Status = types.GitHubJobCompleted }, code: 202},
-		"recorded without run": {job: func(job *types.GitHubRunnerJob) { job.RunID = 0 }, code: 409, message: "the job was recorded without its workflow run; cancel the run on GitHub"},
 		"of another workspace": {job: func(job *types.GitHubRunnerJob) { job.WorkspaceID = 9 }, code: 404, message: "job not found"},
 		"unknown":              {id: "2", code: 404, message: "job not found"},
 		"not a job":            {id: "one", code: 404, message: "job not found"},
