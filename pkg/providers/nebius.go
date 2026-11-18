@@ -49,7 +49,7 @@ const (
 	// A billing policy is created asynchronously. Wait for it to become
 	// active before Compute can use it, without holding a reservation open
 	// indefinitely if billing never finishes the change.
-	nebiusPolicyReadyTimeout = 45 * time.Second
+	nebiusPolicyReadyTimeout = 2 * time.Minute
 )
 
 var nebiusPolicyWaits = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 15 * time.Second}
@@ -589,6 +589,7 @@ func (c *Nebius) readyPolicy(ctx context.Context, project, id, platform string, 
 	ctx, cancel := context.WithTimeout(ctx, nebiusPolicyReadyTimeout)
 	defer cancel()
 	state := "not visible"
+	waited := time.Duration(0)
 	for attempt := 0; ; attempt++ {
 		policies, err := nebiusPages[nebiusPolicy](ctx, c.api, "/billing/v1/pricing-policies", project)
 		if err != nil {
@@ -612,12 +613,17 @@ func (c *Nebius) readyPolicy(ctx context.Context, project, id, platform string, 
 				return "", fmt.Errorf("Nebius pricing policy %q cannot back a VM in state %q", id, state)
 			}
 		}
-		if attempt == len(nebiusPolicyWaits) {
+		if waited >= nebiusPolicyReadyTimeout {
 			return "", fmt.Errorf("Nebius pricing policy %q is not ready (state %q)", id, state)
 		}
-		if err := c.api.sleep(ctx, nebiusPolicyWaits[attempt]); err != nil {
+		// Keep polling at the capped backoff for the whole readiness window.
+		// Accounting for requested waits also bounds polling when a test's
+		// sleep returns immediately instead of advancing a clock.
+		wait := min(nebiusPolicyWaits[min(attempt, len(nebiusPolicyWaits)-1)], nebiusPolicyReadyTimeout-waited)
+		if err := c.api.sleep(ctx, wait); err != nil {
 			return "", fmt.Errorf("wait for Nebius pricing policy %q: %w", id, err)
 		}
+		waited += wait
 	}
 }
 

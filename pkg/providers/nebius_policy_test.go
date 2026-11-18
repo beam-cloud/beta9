@@ -184,7 +184,7 @@ func TestNebiusDoesNotBuyBeforePricingPolicyReadiness(t *testing.T) {
 			require.Error(t, err)
 			require.Zero(t, api.computeAttempts)
 			require.Zero(t, api.purchases)
-			require.LessOrEqual(t, api.policyReads, 6, "readiness polling must be bounded")
+			require.LessOrEqual(t, api.policyReads, 12, "readiness polling must be bounded")
 		})
 	}
 }
