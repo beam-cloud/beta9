@@ -566,6 +566,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		CheckpointTrigger: stubConfig.CheckpointTrigger,
 		Checkpoint:        checkpoint,
 		PoolSelector:      stubConfig.PoolSelector(),
+		Preemptable:       stubConfig.ServerlessGPUPreemptable(),
 		MachineId:         stubConfig.MachineID,
 		Hostname:          stubConfig.Hostname,
 	}

@@ -1733,6 +1733,7 @@ func (r *WorkerRedisRepository) GetFreeGpuCounts() (map[string]int, error) {
 func (r *WorkerRedisRepository) GetPreemptibleGpus() []string {
 	gpus := []string{}
 	for _, pool := range r.config.Pools {
+		pool.ApplyProvisioning()
 		if pool.GPUType == "" || slices.Contains(gpus, pool.GPUType) {
 			continue
 		}
