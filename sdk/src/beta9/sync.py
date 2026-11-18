@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import zipfile
 from http import HTTPStatus
 from pathlib import Path
@@ -49,6 +50,11 @@ MULTIPART_CONCURRENCY = 8
 # idempotent (re-PUT of the same part number replaces it), so retrying is safe.
 MULTIPART_PART_TIMEOUT_S = 60
 MULTIPART_PART_ATTEMPTS = 3
+
+# A filesystem stamps files from a clock that ticks: every 1 to 10 ms on Linux
+# before 6.13, and every two seconds at the coarsest (FAT). A write in the same
+# tick as the one before it leaves the file's timestamps where they were.
+TIMESTAMP_TICK_NS = 2_000_000_000
 
 
 def ignore_file_name() -> str:
@@ -273,9 +279,13 @@ class FileSyncer:
         mtime and ctime are unchanged since the last sync of this directory.
         mtime alone is not enough: tools that preserve it (cp -p, rsync -t,
         touch -r) can rewrite a file with different bytes of the same size.
-        ctime cannot be set from user space and moves on every write."""
+        ctime cannot be set from user space and moves on every write, except
+        a write in the same tick of the filesystem's clock as the one before.
+        So the ctime of a file that changed within a tick of this sync is not
+        recorded, and the next sync hashes the file again."""
         entries: Dict[str, _ManifestEntry] = {}
         previous = cache.manifest.entries if cache.manifest is not None else {}
+        started_ns = time.time_ns()
         for file in self._collect_files():
             rel = os.path.relpath(file, self.root_dir)
             try:
@@ -298,12 +308,13 @@ class FileSyncer:
                 except OSError as e:
                     terminal.warn(f"Failed to add {file}: {e}")
                     continue
+            settled = started_ns - st.st_ctime_ns >= TIMESTAMP_TICK_NS
             entries[rel] = _ManifestEntry(
                 size=st.st_size,
                 mtime_ns=st.st_mtime_ns,
                 sha256=sha,
                 mode=mode,
-                ctime_ns=st.st_ctime_ns,
+                ctime_ns=st.st_ctime_ns if settled else 0,
             )
             terminal.debug(f"Added {file}")
         return _Manifest(entries)
@@ -468,14 +479,14 @@ class FileSyncer:
             os.remove(temp_zip_name)
 
 
-
 class _ManifestEntry(NamedTuple):
     size: int
     mtime_ns: int
     sha256: str
     mode: int
-    # 0 when unknown (entry written by an SDK that did not record it), which
-    # never matches a real ctime, so the file is hashed again once.
+    # 0 when it cannot be trusted: the file had just changed, or the entry was
+    # written by an SDK that did not record it. 0 never matches a real ctime,
+    # so the next sync hashes the file again.
     ctime_ns: int = 0
 
 
