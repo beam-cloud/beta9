@@ -414,6 +414,8 @@ func TestGitHubRunnerKilledInItsJobIsDeleted(t *testing.T) {
 
 	delete(runtime.containers.states, v.ContainerID)
 	runtime.containers.exitCode = int(types.ContainerExitCodeUnknownError)
+	// As a gateway of an earlier version saves it.
+	v.Spec.CaptureExitSnapshot = nil
 	require.NoError(t, r.s.reconcileVM(ctx, v))
 	require.Equal(t, types.VMStateDeleted, v.Status)
 	require.Empty(t, v.ContainerID)

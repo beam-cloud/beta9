@@ -1163,6 +1163,11 @@ func (s *Service) reconcileRunner(ctx context.Context, v *types.VM) (bool, error
 		return false, err
 	}
 
+	// A runner's root is never kept. A gateway of an earlier version may
+	// have saved the VM, and the setting with it, as it knew it.
+	keep := false
+	v.Spec.CaptureExitSnapshot = &keep
+
 	state, err := s.runtimeState(v)
 	if err != nil {
 		return true, err
