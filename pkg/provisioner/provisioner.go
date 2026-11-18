@@ -745,6 +745,7 @@ type purchase struct {
 // says what stands in the way.
 var (
 	errAtMaxNodes = errors.New("the pool holds as many machines as provisioning.maxNodes allows")
+	errAtMaxGPUs  = errors.New("another machine would exceed provisioning.maxGPUs")
 	errHourlyCap  = errors.New("one more machine would take the hourly cost of all machines over providers.maxHourlyCents")
 	errDailyCap   = errors.New("providers.maxDailyCents has been spent in the last 24 hours")
 )
@@ -755,10 +756,11 @@ const microsPerCent = 10_000
 
 // choose picks the machine to buy: the cheapest one in stock that the pool
 // may buy and that has room for what is needed. It fails when the pool is at
-// maxNodes, when a spend cap would be passed, and when nothing in stock is
-// such a machine. It changes nothing.
+// maxNodes or maxGPUs, when a spend cap would be passed, and when nothing in
+// stock is such a machine. It changes nothing.
 func choose(p purchase) (providers.Offer, error) {
 	machines := 0
+	gpus := uint64(0)
 	hourlyMicros := int64(0)
 	for _, machine := range p.held {
 		// A machine counts until its record is gone: until then it may still
@@ -766,6 +768,7 @@ func choose(p purchase) (providers.Offer, error) {
 		hourlyMicros += machine.HourlyMicros
 		if machine.Pool == p.pool {
 			machines++
+			gpus += uint64(machine.GPUCount)
 		}
 	}
 	if machines >= p.config.Provisioning.MaxNodes {
@@ -774,14 +777,29 @@ func choose(p purchase) (providers.Offer, error) {
 	if p.limits.dailySpent(p.spentToday) {
 		return providers.Offer{}, errDailyCap
 	}
+	gpuLimit := p.config.Provisioning.MaxGPUs
+	if gpuLimit > 0 && gpus >= uint64(gpuLimit) {
+		return providers.Offer{}, errAtMaxGPUs
+	}
 
 	var fitting []providers.Offer
+	gpuLimited := false
 	for _, offer := range p.offers {
 		if sells(offer, p.config) && holds(offer, p.need) {
+			// The record retains the whole offer's GPUs, not just those the
+			// request needs. Filter before choosing the cheapest machine so an
+			// oversized bargain cannot hide a smaller one that fits the cap.
+			if gpuLimit > 0 && uint64(offer.GPUCount) > uint64(gpuLimit)-gpus {
+				gpuLimited = true
+				continue
+			}
 			fitting = append(fitting, offer)
 		}
 	}
 	if len(fitting) == 0 {
+		if gpuLimited {
+			return providers.Offer{}, errAtMaxGPUs
+		}
 		return providers.Offer{}, noOffer(p)
 	}
 	offer := cheapest(fitting)
