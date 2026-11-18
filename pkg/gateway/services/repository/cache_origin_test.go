@@ -48,11 +48,14 @@ func TestCacheOriginWorkspaceObjectRequiresRecordedContent(t *testing.T) {
 	service := &WorkerRepositoryService{
 		cacheCoordinatorToken: "cache-token",
 		cacheMetadata:         metadataStore,
-		backendRepo: &originCredentialsBackendRepo{workspace: &types.Workspace{
-			Id: 7, Name: "test-workspace", ExternalId: "workspace-id",
-			Storage: &types.WorkspaceStorage{
-				Id: &storageID, BucketName: &bucket, EndpointUrl: &endpoint, Region: &region,
-				AccessKey: &access, SecretKey: &secret,
+		backendRepo: &originCredentialsBackendRepo{stub: &types.StubWithRelated{
+			Stub: types.Stub{ExternalId: "stub-id"},
+			Workspace: types.Workspace{
+				Id: 7, Name: "test-workspace", ExternalId: "workspace-id",
+				Storage: &types.WorkspaceStorage{
+					Id: &storageID, BucketName: &bucket, EndpointUrl: &endpoint, Region: &region,
+					AccessKey: &access, SecretKey: &secret,
+				},
 			},
 		}},
 		eventRepo: &cacheOriginEventRepo{items: []types.CacheRequiredContentItem{

@@ -2106,6 +2106,7 @@ func TestSelectedStoreHostAvailableRejectsLogicalOnlyHost(t *testing.T) {
 }
 
 type fakeStoreCacheClient struct {
+	proto.CacheClient
 	stream   proto.Cache_StoreContentClient
 	state    *proto.CacheGetStateResponse
 	stateErr error
@@ -2125,14 +2126,6 @@ func (f *fakeStoreCacheClient) GetContentStream(ctx context.Context, in *proto.C
 
 func (f *fakeStoreCacheClient) StoreContent(ctx context.Context, opts ...grpc.CallOption) (proto.Cache_StoreContentClient, error) {
 	return f.stream, nil
-}
-
-func (f *fakeStoreCacheClient) StoreContentFromSource(ctx context.Context, in *proto.CacheStoreContentFromSourceRequest, opts ...grpc.CallOption) (*proto.CacheStoreContentFromSourceResponse, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (f *fakeStoreCacheClient) StoreContentFromSourceWithLock(ctx context.Context, in *proto.CacheStoreContentFromSourceRequest, opts ...grpc.CallOption) (*proto.CacheStoreContentFromSourceWithLockResponse, error) {
-	return nil, errors.New("not implemented")
 }
 
 func (f *fakeStoreCacheClient) GetState(ctx context.Context, in *proto.CacheGetStateRequest, opts ...grpc.CallOption) (*proto.CacheGetStateResponse, error) {

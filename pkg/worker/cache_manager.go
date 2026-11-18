@@ -44,8 +44,6 @@ const (
 	cacheDefaultRawMaxActiveConns       = 64
 	cacheDefaultRawMaxIdleConns         = 16
 	cacheDefaultGRPCPayloadCodecMin     = 64 * 1024
-	cacheDefaultS3Concurrency           = 16
-	cacheDefaultS3ChunkSize             = 64_000_000
 	cacheDefaultRegistrationTTL         = 30 * time.Second
 	cacheDefaultRegistrationHeartbeat   = 10 * time.Second
 	cacheDefaultHostWatchInterval       = 5 * time.Second
@@ -1054,13 +1052,6 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	}
 	cacheConfig.Server.ReadTransport.Enabled = true
 	cacheConfig.Server.ReadTransport.Sendfile = true
-	if cacheConfig.Server.S3DownloadConcurrency == 0 {
-		cacheConfig.Server.S3DownloadConcurrency = cacheDefaultS3Concurrency
-	}
-	if cacheConfig.Server.S3DownloadChunkSize == 0 {
-		cacheConfig.Server.S3DownloadChunkSize = cacheDefaultS3ChunkSize
-	}
-
 	if !cacheConfig.Memory.Enabled {
 		cacheConfig.Server.MaxCachePct = 0
 	} else if cacheConfig.Memory.MaxCachePct > 0 {

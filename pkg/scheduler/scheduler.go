@@ -1101,16 +1101,12 @@ func (s *Scheduler) filterWorkersByLocalGPUVerification(workers []*types.Worker,
 		}
 		// Pending workers may start and report their verification before becoming
 		// eligible for placement, but cannot run work while still pending.
-		if worker.Status != types.WorkerStatusPending {
-			if worker.VerifiedLocalGPURuntime != pool.ContainerRuntime {
-				continue
-			}
-			if pool.ContainerRuntime == types.ContainerRuntimeGvisor.String() &&
-				(worker.NVIDIADriverVersion == "" || !slices.Contains(pool.AllowedNVIDIADriverVersions, worker.NVIDIADriverVersion)) {
-				continue
-			}
+		runtimeVerified := worker.VerifiedLocalGPURuntime == pool.ContainerRuntime
+		driverApproved := pool.ContainerRuntime != types.ContainerRuntimeGvisor.String() ||
+			pool.AllowsNVIDIADriverVersion(worker.NVIDIADriverVersion)
+		if worker.Status == types.WorkerStatusPending || (runtimeVerified && driverApproved) {
+			verified = append(verified, worker)
 		}
-		verified = append(verified, worker)
 	}
 	return verified
 }

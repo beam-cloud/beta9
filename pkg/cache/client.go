@@ -2867,18 +2867,7 @@ func (c *Client) StoreContentFromS3Source(source S3ContentSource, opts StoreCont
 				return opts.RoutingKey, nil
 			}
 		}
-		s3Client, err := NewS3Client(ctx, S3SourceConfig{
-			BucketName:     source.BucketName,
-			Region:         source.Region,
-			EndpointURL:    source.EndpointURL,
-			AccessKey:      source.AccessKey,
-			SecretKey:      source.SecretKey,
-			ForcePathStyle: source.ForcePathStyle,
-		}, ServerConfig{})
-		if err != nil {
-			return "", err
-		}
-		body, err := s3Client.Open(ctx, source.Path)
+		body, err := source.open(ctx)
 		if err != nil {
 			return "", err
 		}

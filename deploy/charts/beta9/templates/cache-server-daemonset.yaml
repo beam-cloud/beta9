@@ -1,34 +1,27 @@
 {{- if .Values.cacheServer.enabled -}}
 {{- $configSecretName := required "cacheServer.configSecretName must name a dedicated cache-server Secret" .Values.cacheServer.configSecretName -}}
-{{- if eq $configSecretName "beta9-config-helm" -}}
-{{- fail "cacheServer.configSecretName cannot reference a gateway configuration Secret" -}}
-{{- end -}}
+{{- $gatewaySecrets := list "beta9-config-helm" -}}
 {{- $gateway := .Values.controllers.gateway | default dict -}}
 {{- if dig "enabled" true $gateway -}}
 {{- $gatewayController := include "bjw-s.common.lib.controller.valuesToObject" (dict "rootContext" . "id" "gateway" "values" (deepCopy $gateway)) | fromYaml -}}
 {{- $gatewayPod := include "bjw-s.common.lib.pod.spec" (dict "rootContext" . "controllerObject" $gatewayController) | fromYaml -}}
 {{- range $gatewayPod.volumes -}}
-{{- if eq $configSecretName (dig "secret" "secretName" "" .) -}}
-{{- fail "cacheServer.configSecretName cannot reference a Secret mounted by the gateway" -}}
-{{- end -}}
+{{- $gatewaySecrets = append $gatewaySecrets (dig "secret" "secretName" "" .) -}}
 {{- range (dig "projected" "sources" (list) .) -}}
-{{- if eq $configSecretName (dig "secret" "name" "" .) -}}
-{{- fail "cacheServer.configSecretName cannot reference a Secret mounted by the gateway" -}}
-{{- end -}}
+{{- $gatewaySecrets = append $gatewaySecrets (dig "secret" "name" "" .) -}}
 {{- end -}}
 {{- end -}}
 {{- range concat (default (list) $gatewayPod.containers) (default (list) $gatewayPod.initContainers) -}}
 {{- range .env -}}
-{{- if eq $configSecretName (dig "valueFrom" "secretKeyRef" "name" "" .) -}}
-{{- fail "cacheServer.configSecretName cannot reference a Secret used by the gateway environment" -}}
-{{- end -}}
+{{- $gatewaySecrets = append $gatewaySecrets (dig "valueFrom" "secretKeyRef" "name" "" .) -}}
 {{- end -}}
 {{- range .envFrom -}}
-{{- if eq $configSecretName (dig "secretRef" "name" "" .) -}}
-{{- fail "cacheServer.configSecretName cannot reference a Secret used by the gateway environment" -}}
+{{- $gatewaySecrets = append $gatewaySecrets (dig "secretRef" "name" "" .) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- if has $configSecretName $gatewaySecrets -}}
+{{- fail "cacheServer.configSecretName cannot reference a Secret used by the gateway" -}}
 {{- end -}}
 {{- $serviceAccountName := printf "%s-cache-server" .Release.Name -}}
 {{- $gatewayServiceAccountName := include "bjw-s.common.lib.pod.field.serviceAccountName" (dict "ctx" (dict "rootContext" .)) | trim -}}

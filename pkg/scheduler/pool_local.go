@@ -648,6 +648,12 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 		locality = wpc.config.Cache.Global.DefaultLocality
 	}
 
+	gateway := workerConfig.GatewayService
+	grpcPort, httpPort := 443, 443
+	if workerConfig.Worker.UseGatewayServiceHostname {
+		grpcPort, httpPort = gateway.GRPC.ExternalPort, gateway.HTTP.ExternalPort
+	}
+
 	envVars := []corev1.EnvVar{
 		{
 			Name:  "WORKER_ID",
@@ -733,51 +739,13 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 			Name:  "CACHE_HOST_NETWORK",
 			Value: strconv.FormatBool(wpc.config.Worker.HostNetwork),
 		},
+		{Name: types.ContainerGatewayGRPCHostEnv, Value: gateway.GRPC.ExternalHost},
+		{Name: types.ContainerGatewayGRPCPortEnv, Value: strconv.Itoa(grpcPort)},
+		{Name: types.ContainerGatewayHTTPHostEnv, Value: gateway.HTTP.ExternalHost},
+		{Name: types.ContainerGatewayHTTPPortEnv, Value: strconv.Itoa(httpPort)},
 	}
 
-	if wpc.config.Worker.UseGatewayServiceHostname {
-		envVars = append(envVars, []corev1.EnvVar{
-			{
-				Name:  "BETA9_GATEWAY_HOST",
-				Value: wpc.config.GatewayService.Host,
-			},
-			{
-				Name:  "BETA9_GATEWAY_PORT",
-				Value: fmt.Sprint(wpc.config.GatewayService.GRPC.Port),
-			},
-			{
-				Name:  "BETA9_GATEWAY_HOST_HTTP",
-				Value: wpc.config.GatewayService.Host,
-			},
-			{
-				Name:  "BETA9_GATEWAY_PORT_HTTP",
-				Value: fmt.Sprint(wpc.config.GatewayService.HTTP.Port),
-			},
-		}...)
-	} else {
-		envVars = append(envVars, []corev1.EnvVar{
-			{
-				Name:  "BETA9_GATEWAY_HOST",
-				Value: wpc.config.GatewayService.GRPC.ExternalHost,
-			},
-			{
-				Name:  "BETA9_GATEWAY_PORT",
-				Value: "443",
-			},
-			{
-				Name:  "BETA9_GATEWAY_HOST_HTTP",
-				Value: wpc.config.GatewayService.HTTP.ExternalHost,
-			},
-			{
-				Name:  "BETA9_GATEWAY_PORT_HTTP",
-				Value: "443",
-			},
-		}...)
-	}
-
-	if len(wpc.workerPoolConfig.JobSpec.Env) > 0 {
-		envVars = append(envVars, wpc.workerPoolConfig.JobSpec.Env...)
-	}
+	envVars = append(envVars, wpc.workerPoolConfig.JobSpec.Env...)
 
 	configJSON, err := json.MarshalIndent(workerConfig, "", "  ")
 	if err == nil {

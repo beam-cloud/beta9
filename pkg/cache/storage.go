@@ -23,11 +23,12 @@ import (
 )
 
 const (
-	diskCacheUsageCheckInterval = 30 * time.Second
-	diskCacheWriteGuardInterval = 5 * time.Second
-	pageLockStripeCount         = 4096
-	objectLockStripeCount       = 1024
-	cacheCompleteMarkerName     = "_complete"
+	diskCacheUsageCheckInterval  = 30 * time.Second
+	diskCacheWriteGuardInterval  = 5 * time.Second
+	pageLockStripeCount          = 4096
+	objectLockStripeCount        = 1024
+	cacheCompleteMarkerName      = "_complete"
+	defaultPageSourceConcurrency = 16
 )
 
 const (
@@ -563,7 +564,7 @@ func (cas *Store) AddPageSourceWithExpectedHash(ctx context.Context, expectedHas
 		return actualHash, 0, nil
 	}
 	if concurrency <= 0 {
-		concurrency = defaultDownloadConcurrency
+		concurrency = defaultPageSourceConcurrency
 	}
 	if int64(concurrency) > pageCount {
 		concurrency = int(pageCount)

@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/signal"
 	"path"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -124,7 +123,7 @@ func verifyLocalGPURuntime(pool types.WorkerPoolConfig, hasGPU bool, driverVersi
 		return "", "", fmt.Errorf("read loaded NVIDIA kernel module version: %w", err)
 	}
 	version := strings.TrimSpace(string(loaded))
-	if version == "" || !slices.Contains(pool.AllowedNVIDIADriverVersions, version) {
+	if !pool.AllowsNVIDIADriverVersion(version) {
 		return "", "", fmt.Errorf("loaded NVIDIA kernel module version %q is not approved for this pool", version)
 	}
 	return pool.ContainerRuntime, version, nil
@@ -1105,11 +1104,9 @@ func (s *Worker) runContainerRequestWithRunner(
 		failRequest(err)
 		return
 	}
-	if request.RequiresGPU() {
-		if _, _, err := verifyLocalGPURuntime(s.poolConfig, true, hostNVIDIAModuleVersionPath); err != nil {
-			failRequest(err)
-			return
-		}
+	if _, _, err := verifyLocalGPURuntime(s.poolConfig, request.RequiresGPU(), hostNVIDIAModuleVersionPath); err != nil {
+		failRequest(err)
+		return
 	}
 
 	s.startContainerStatusHeartbeat(request)

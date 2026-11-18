@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -47,9 +46,7 @@ const (
 	requiredContentLoadConcurrency = 32
 )
 
-// originCredentials holds short-lived, gateway-brokered credentials used to
-// fetch content from origin during reconciliation. It is held in memory only
-// and never written to disk, Redis, or S2.
+// originCredentials holds gateway-provided image origin access in memory.
 type originCredentials struct {
 	registryCredentials   string
 	imageArchiveStorage   *pb.CacheWorkspaceStorageCredentials
@@ -1983,7 +1980,7 @@ func (m *WorkerCacheManager) materializeArchiveObject(ctx context.Context, serve
 		if url == "" {
 			return types.CacheAuditStatusMiss
 		}
-		return m.materializeArchiveObjectFromURL(ctx, server, item, routingKey, url)
+		return materializeArchiveObjectFromURL(ctx, server, item, routingKey, url)
 	}
 
 	name := filepath.Base(routingKey)
@@ -2066,31 +2063,15 @@ func (m *WorkerCacheManager) materializeDerivedArchiveObject(ctx context.Context
 
 // materializeArchiveObjectFromURL streams an archive from its brokered URL into
 // the local cache, verifies its content hash, and publishes the cachefs path.
-func (m *WorkerCacheManager) materializeArchiveObjectFromURL(ctx context.Context, server *cache.Server, item types.CacheRequiredContentItem, routingKey, url string) string {
+func materializeArchiveObjectFromURL(ctx context.Context, server *cache.Server, item types.CacheRequiredContentItem, routingKey, url string) string {
 	ctx, cancel := context.WithTimeout(ctx, imageArchiveDownloadTimeout)
 	defer cancel()
-	body, err := openCacheOrigin(ctx, url)
+	body, err := openOriginObject(ctx, url)
 	if err != nil {
 		return types.CacheAuditStatusOriginFailure
 	}
 	defer body.Close()
 	return storeArchiveObject(ctx, server, body, item.Hash, routingKey)
-}
-
-func openCacheOrigin(ctx context.Context, url string) (io.ReadCloser, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, errors.New("invalid cache origin URL")
-	}
-	resp, err := imageArchiveHTTPClient.Do(req)
-	if err != nil {
-		return nil, errors.New("cache origin request failed")
-	}
-	if resp.StatusCode != http.StatusOK {
-		_ = resp.Body.Close()
-		return nil, fmt.Errorf("cache origin returned HTTP %d", resp.StatusCode)
-	}
-	return resp.Body, nil
 }
 
 func storeArchiveObject(ctx context.Context, server *cache.Server, reader io.Reader, expectedHash, routingKey string) string {
@@ -2275,7 +2256,7 @@ func (m *WorkerCacheManager) materializeWorkspaceObject(ctx context.Context, ser
 		log.Debug().Str("hash", item.Hash).Str("workspace_id", stub.WorkspaceID).Msg("cache reconciliation has no object read grant")
 		return types.CacheAuditStatusOriginFailure
 	}
-	body, err := openCacheOrigin(ctx, grant.WorkspaceObjectUrl)
+	body, err := openOriginObject(ctx, grant.WorkspaceObjectUrl)
 	if err != nil {
 		log.Debug().Err(err).Str("hash", item.Hash).Msg("cache reconciliation workspace object fetch failed")
 		return types.CacheAuditStatusOriginFailure

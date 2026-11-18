@@ -23,7 +23,7 @@ default credential chain. Before upgrading an S3 deployment, configure a
 dedicated worker service account with workload identity accepted by the archive
 endpoint, and scope its role to the archive bucket and required object operations.
 Verify cold archive pulls and image publication from a new worker before
-recycling existing Jobs. Keep the gateway and cache server identities separate.
+recycling existing Jobs.
 
 On multi-tenant clusters, place the gateway and credential-bearing backends on
 trusted node pools. Use protected node labels, gateway pod placement values,

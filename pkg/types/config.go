@@ -891,6 +891,10 @@ func (c WorkerPoolConfig) ValidateLocalGPURuntime() error {
 	}
 }
 
+func (c WorkerPoolConfig) AllowsNVIDIADriverVersion(version string) bool {
+	return version != "" && slices.Contains(c.AllowedNVIDIADriverVersions, version)
+}
+
 // Serves reports whether the pool lists the GPU type in alsoServes.
 func (c WorkerPoolConfig) Serves(gpu string) bool {
 	return slices.ContainsFunc(c.AlsoServes, func(served string) bool {

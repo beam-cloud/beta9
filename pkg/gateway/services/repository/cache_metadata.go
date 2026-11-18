@@ -196,11 +196,12 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 	if req == nil {
 		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: "request is required"}, nil
 	}
-	if err := s.authorizeOriginCredentials(ctx, req); err != nil {
-		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	worker, _ := auth.WorkerFromContext(ctx)
+	if err := s.authorizeOriginCredentials(ctx, worker, req); err != nil {
+		return &pb.GetCacheOriginCredentialsResponse{ErrorMsg: err.Error()}, nil
 	}
 	if req.Source != "" || req.SourceHash != "" || req.SourceBucket != "" {
-		url, err := s.cacheWorkspaceObjectURL(ctx, req)
+		url, err := s.cacheWorkspaceObjectURL(ctx, worker, req)
 		if err != nil {
 			return &pb.GetCacheOriginCredentialsResponse{ErrorMsg: err.Error()}, nil
 		}
@@ -215,8 +216,7 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 	}
 
 	if req.Registry != "" {
-		worker, err := auth.WorkerFromContext(ctx)
-		if err != nil || req.CacheLocality != "" {
+		if worker == nil || req.CacheLocality != "" {
 			return &pb.GetCacheOriginCredentialsResponse{ErrorMsg: "cache servers cannot request registry credentials"}, nil
 		}
 		if worker.Trusted && !s.workerHasCacheOriginAssignment(worker, req) {
@@ -227,20 +227,22 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 		// store round trips to every cold mount without producing used data.
 		resp := &pb.GetCacheOriginCredentialsResponse{
 			Ok:                    true,
-			RegistryCredentials:   s.registryOriginCredentials(ctx, req.WorkspaceId, req.ImageId, req.Registry),
+			RegistryCredentials:   s.imageRegistryCredentials(ctx, req.WorkspaceId, req.ImageId),
 			BuildRegistry:         s.appConfig.ImageService.EffectiveBuildRegistry(),
 			BuildRepositoryName:   s.appConfig.ImageService.BuildRepositoryName,
 			BuildRegistryInsecure: s.appConfig.ImageService.BuildRegistryInsecure,
 		}
-		// Untrusted workers reach the build registry only through the gateway's
-		// registry proxy, with their own token.
-		if worker, ok := untrustedWorker(ctx); ok {
+		if !worker.Trusted {
+			// Untrusted workers reach the build registry through the gateway proxy
+			// with their own token because the upstream login has fleet-wide access.
 			gatewayURL := s.appConfig.GatewayService.HTTP.GetExternalURL()
 			resp.BuildRegistry = normalizeRegistryHost(gatewayURL)
 			resp.BuildRegistryInsecure = strings.HasPrefix(gatewayURL, "http://")
 			if registryHostsEqual(req.Registry, resp.BuildRegistry) {
 				resp.RegistryCredentials = "beta9:" + worker.Token.Key
 			}
+		} else if resp.RegistryCredentials == "" {
+			resp.RegistryCredentials = s.buildRegistryCredentials(ctx, req.Registry)
 		}
 		return resp, nil
 	}
@@ -248,18 +250,8 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 	if req.ImageId == "" {
 		return &pb.GetCacheOriginCredentialsResponse{ErrorMsg: "cache object origin requires a recorded content item"}, nil
 	}
-	worker, err := auth.WorkerFromContext(ctx)
-	if err != nil || req.CacheLocality != "" {
-		if err := s.authorizeCacheArchiveRead(ctx, req); err != nil {
-			return &pb.GetCacheOriginCredentialsResponse{ErrorMsg: err.Error()}, nil
-		}
-	} else if worker.Trusted {
-		if !s.workerHasCacheOriginAssignment(worker, req) {
-			return &pb.GetCacheOriginCredentialsResponse{ErrorMsg: "cache origin stub is not assigned to this worker"}, nil
-		}
-		if err := s.authorizeCacheArchiveImage(ctx, req); err != nil {
-			return &pb.GetCacheOriginCredentialsResponse{ErrorMsg: err.Error()}, nil
-		}
+	if err := s.authorizeCacheArchiveRead(ctx, worker, req); err != nil {
+		return &pb.GetCacheOriginCredentialsResponse{ErrorMsg: err.Error()}, nil
 	}
 
 	imageArchiveObjectKey, imageArchiveURL, imageArchiveDataURL := s.imageArchiveCredentials(ctx, req.ImageId)
@@ -275,11 +267,10 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 // hardware) to stubs of the workspace their token belongs to, and to a stub's
 // own image. Provider machines belong to the platform's workspace without
 // owning it, so they get credentials only for the stubs they run, as does an
-// image export. Cluster workers and cache servers are trusted infrastructure
-// that serves every workspace.
-func (s *WorkerRepositoryService) authorizeOriginCredentials(ctx context.Context, req *pb.GetCacheOriginCredentialsRequest) error {
-	worker, ok := untrustedWorker(ctx)
-	if !ok {
+// image export. The operation-specific checks also apply to cluster workers
+// and cache servers.
+func (s *WorkerRepositoryService) authorizeOriginCredentials(ctx context.Context, worker *auth.Worker, req *pb.GetCacheOriginCredentialsRequest) error {
+	if worker == nil || worker.Trusted {
 		return nil
 	}
 	if !worker.InWorkspace(req.WorkspaceId) {
@@ -422,8 +413,8 @@ func (s *WorkerRepositoryService) recentCacheStubTTL() time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-// workspaceStorageCredentials resolves a workspace's (decrypted) object storage
-// credentials, or nil when unavailable. Used for geesefs/volume content fetches.
+// workspaceStorageCredentials loads storage for runtime credential requests
+// whose workspace signing-key lookup omitted the storage record.
 func (s *WorkerRepositoryService) workspaceStorageCredentials(ctx context.Context, workspaceID string) *pb.CacheWorkspaceStorageCredentials {
 	if s.backendRepo == nil || workspaceID == "" {
 		return nil
@@ -572,25 +563,6 @@ func BuildRegistryCredentials(ctx context.Context, imageCfg types.ImageServiceCo
 		}
 	}
 	return ""
-}
-
-func (s *WorkerRepositoryService) registryOriginCredentials(ctx context.Context, workspaceID, imageID, registry string) string {
-	if credentials := s.imageRegistryCredentials(ctx, workspaceID, imageID); credentials != "" {
-		return credentials
-	}
-	// Build-registry credentials can push to every workspace's images.
-	if _, ok := untrustedWorker(ctx); ok {
-		return ""
-	}
-	return s.buildRegistryCredentials(ctx, registry)
-}
-
-// untrustedWorker returns the caller when it is a worker on customer or
-// provider hardware. authorizeCacheRepositoryRequest has checked that a caller
-// with a token is a worker.
-func untrustedWorker(ctx context.Context) (*auth.Worker, bool) {
-	worker, err := auth.WorkerFromContext(ctx)
-	return worker, err == nil && !worker.Trusted
 }
 
 func (s *WorkerRepositoryService) imageRegistryCredentials(ctx context.Context, workspaceID, imageID string) string {

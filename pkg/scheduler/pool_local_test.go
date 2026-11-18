@@ -59,22 +59,52 @@ func TestLocalWorkerPrometheusConfigurationSupportsHostNetworkBinPacking(t *test
 }
 
 func TestLocalWorkerConfigUsesGatewayServiceHostname(t *testing.T) {
-	controller := &LocalKubernetesWorkerPoolController{config: types.AppConfig{
-		GatewayService: types.GatewayServiceConfig{Host: "beta9-gateway"},
-		Worker:         types.WorkerConfig{UseGatewayServiceHostname: true},
-	}}
-	controller.config.GatewayService.GRPC = types.GRPCConfig{ExternalHost: "0.tcp.ngrok.io", ExternalPort: 12345, TLS: true, Port: 1993}
-	controller.config.GatewayService.HTTP = types.HTTPConfig{ExternalHost: "public.example.com", ExternalPort: 443, TLS: true, Port: 1994}
-
-	job, _ := controller.createWorkerJob("worker-1", 0, 0, "", 0, "token")
-	config := workerConfigFromEnvironment(t, job.Spec.Template.Spec.Containers[0].Env)
-	grpc := config.GatewayService.GRPC
-	if grpc.ExternalHost != "beta9-gateway" || grpc.ExternalPort != 1993 || grpc.TLS {
-		t.Fatalf("worker gRPC config = %+v", grpc)
-	}
-	http := config.GatewayService.HTTP
-	if http.ExternalHost != "beta9-gateway" || http.ExternalPort != 1994 || http.TLS {
-		t.Fatalf("worker HTTP config = %+v", http)
+	for _, test := range []struct {
+		name                     string
+		useGatewayService        bool
+		grpcHost, httpHost       string
+		grpcPort, httpPort       int
+		grpcEnvPort, httpEnvPort string
+		tls                      bool
+	}{
+		{"service", true, "beta9-gateway", "beta9-gateway", 1993, 1994, "1993", "1994", false},
+		{"external", false, "0.tcp.ngrok.io", "public.example.com", 12345, 4443, "443", "443", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			controller := &LocalKubernetesWorkerPoolController{config: types.AppConfig{
+				GatewayService: types.GatewayServiceConfig{
+					Host: "beta9-gateway",
+					GRPC: types.GRPCConfig{ExternalHost: "0.tcp.ngrok.io", ExternalPort: 12345, TLS: true, Port: 1993},
+					HTTP: types.HTTPConfig{ExternalHost: "public.example.com", ExternalPort: 4443, TLS: true, Port: 1994},
+				},
+				Worker: types.WorkerConfig{UseGatewayServiceHostname: test.useGatewayService},
+			}}
+			job, _ := controller.createWorkerJob("worker-1", 0, 0, "", 0, "token")
+			env := job.Spec.Template.Spec.Containers[0].Env
+			config := workerConfigFromEnvironment(t, env)
+			grpc := config.GatewayService.GRPC
+			if grpc.ExternalHost != test.grpcHost || grpc.ExternalPort != test.grpcPort || grpc.TLS != test.tls {
+				t.Fatalf("worker gRPC config = %+v", grpc)
+			}
+			http := config.GatewayService.HTTP
+			if http.ExternalHost != test.httpHost || http.ExternalPort != test.httpPort || http.TLS != test.tls {
+				t.Fatalf("worker HTTP config = %+v", http)
+			}
+			values := make(map[string]string, len(env))
+			for _, variable := range env {
+				values[variable.Name] = variable.Value
+			}
+			for name, want := range map[string]string{
+				types.ContainerGatewayGRPCHostEnv: test.grpcHost,
+				types.ContainerGatewayGRPCPortEnv: test.grpcEnvPort,
+				types.ContainerGatewayHTTPHostEnv: test.httpHost,
+				types.ContainerGatewayHTTPPortEnv: test.httpEnvPort,
+			} {
+				if got := values[name]; got != want {
+					t.Errorf("%s = %q, want %q", name, got, want)
+				}
+			}
+		})
 	}
 }
 

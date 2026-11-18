@@ -17,17 +17,18 @@ import (
 
 const cacheWorkspaceObjectURLTTL = 5 * time.Minute
 
-func (s *WorkerRepositoryService) cacheWorkspaceObjectURL(ctx context.Context, req *pb.GetCacheOriginCredentialsRequest) (string, error) {
+func (s *WorkerRepositoryService) cacheWorkspaceObjectURL(ctx context.Context, worker *auth.Worker, req *pb.GetCacheOriginCredentialsRequest) (string, error) {
 	if req.Registry != "" || req.ImageId != "" || req.ImageArchiveUploadId != "" || req.Source == "" || req.SourceHash == "" {
 		return "", errors.New("cache object request must identify one workspace object")
 	}
-	if err := s.authorizeRecentCacheStub(ctx, req); err != nil {
+	if err := s.authorizeRecentCacheStub(ctx, worker, req); err != nil {
 		return "", err
 	}
 	if s.eventRepo == nil || s.backendRepo == nil {
 		return "", errors.New("cache origin metadata is unavailable")
 	}
-	if _, err := s.workerRuntimeStub(ctx, req.StubId, req.WorkspaceId); err != nil {
+	stub, err := s.workerRuntimeStub(ctx, req.StubId, req.WorkspaceId)
+	if err != nil {
 		return "", errors.New("cache origin stub is unavailable")
 	}
 	items, err := s.eventRepo.ReadStubCacheRequiredContent(ctx, req.WorkspaceId, req.StubId)
@@ -39,19 +40,15 @@ func (s *WorkerRepositoryService) cacheWorkspaceObjectURL(ctx context.Context, r
 	}) {
 		return "", errors.New("workspace object is not recorded as required cache content")
 	}
-	workspace, err := s.backendRepo.GetWorkspaceByExternalId(ctx, req.WorkspaceId)
-	if err != nil {
+	workspace := &stub.Workspace
+	if !workspace.StorageAvailable() {
 		return "", errors.New("workspace storage is unavailable")
 	}
-	full, err := s.backendRepo.GetWorkspace(ctx, workspace.Id)
-	if err != nil || full == nil || !full.StorageAvailable() {
-		return "", errors.New("workspace storage is unavailable")
-	}
-	bucket := derefString(full.Storage.BucketName)
+	bucket := derefString(workspace.Storage.BucketName)
 	if bucket == "" || (req.SourceBucket != "" && req.SourceBucket != bucket) {
 		return "", errors.New("cache object is outside workspace storage")
 	}
-	client, err := clients.NewWorkspaceStorageClientWithDefaultPresignEndpoint(ctx, full.Name, full.Storage, s.appConfig.Storage.WorkspaceStorage)
+	client, err := clients.NewWorkspaceStorageClientWithDefaultPresignEndpoint(ctx, workspace.Name, workspace.Storage, s.appConfig.Storage.WorkspaceStorage)
 	if err != nil {
 		return "", errors.New("workspace storage is unavailable")
 	}
@@ -69,30 +66,31 @@ func cacheWorkspaceOriginMatches(item types.CacheRequiredContentItem, req *pb.Ge
 	if path.Clean(item.Source) != item.Source {
 		return false
 	}
-	root, _, ok := strings.Cut(item.Source, "/")
-	if !ok {
-		return false
-	}
 	switch item.Kind {
 	case types.CacheContentKindVolume:
-		return root == types.DefaultVolumesPrefix
+		return strings.HasPrefix(item.Source, types.DefaultVolumesPrefix+"/")
 	case types.CacheContentKindCheckpoint:
-		return root == types.DefaultCheckpointsPrefix
+		return strings.HasPrefix(item.Source, types.DefaultCheckpointsPrefix+"/")
 	case types.CacheContentKindDiskSnapshot:
-		return root == types.DefaultDurableDisksPrefix
+		return strings.HasPrefix(item.Source, types.DefaultDurableDisksPrefix+"/")
 	default:
 		return false
 	}
 }
 
-func (s *WorkerRepositoryService) authorizeCacheArchiveRead(ctx context.Context, req *pb.GetCacheOriginCredentialsRequest) error {
-	if err := s.authorizeRecentCacheStub(ctx, req); err != nil {
-		return err
+func (s *WorkerRepositoryService) authorizeCacheArchiveRead(ctx context.Context, worker *auth.Worker, req *pb.GetCacheOriginCredentialsRequest) error {
+	switch {
+	case worker == nil || req.CacheLocality != "":
+		if err := s.authorizeRecentCacheStub(ctx, worker, req); err != nil {
+			return err
+		}
+	case !worker.Trusted:
+		// Direct reads by untrusted workers were checked by authorizeOriginCredentials.
+		return nil
+	case !s.workerHasCacheOriginAssignment(worker, req):
+		return errors.New("cache origin stub is not assigned to this worker")
 	}
-	return s.authorizeCacheArchiveImage(ctx, req)
-}
 
-func (s *WorkerRepositoryService) authorizeCacheArchiveImage(ctx context.Context, req *pb.GetCacheOriginCredentialsRequest) error {
 	if s.backendRepo == nil {
 		return errors.New("cache origin metadata is unavailable")
 	}
@@ -103,12 +101,11 @@ func (s *WorkerRepositoryService) authorizeCacheArchiveImage(ctx context.Context
 	return nil
 }
 
-func (s *WorkerRepositoryService) authorizeRecentCacheStub(ctx context.Context, req *pb.GetCacheOriginCredentialsRequest) error {
+func (s *WorkerRepositoryService) authorizeRecentCacheStub(ctx context.Context, worker *auth.Worker, req *pb.GetCacheOriginCredentialsRequest) error {
 	if s.cacheMetadata == nil || req.CacheLocality == "" || req.WorkspaceId == "" || req.StubId == "" {
 		return errors.New("cache origin requires a recent stub in the cache locality")
 	}
-	worker, err := auth.WorkerFromContext(ctx)
-	if (err != nil || worker.Trusted) && strings.HasPrefix(req.CacheLocality, req.WorkspaceId+cacheLocalityScopeSeparator) {
+	if (worker == nil || worker.Trusted) && strings.HasPrefix(req.CacheLocality, req.WorkspaceId+cacheLocalityScopeSeparator) {
 		return errors.New("cache origin is not in a shared cache locality")
 	}
 	stubs, err := s.cacheMetadata.ListRecentStubs(ctx, s.scopedCacheLocality(ctx, req.CacheLocality), s.recentCacheStubTTL(), 0)
