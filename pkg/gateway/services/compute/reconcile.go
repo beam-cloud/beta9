@@ -155,6 +155,7 @@ func (s *Service) reconcilePool(ctx context.Context, workspaceID string, state *
 	}
 
 	changed = s.reconcileStaleMachines(ctx, workspaceID, state, now) || changed
+	changed = syncReservedNodes(state, now) || changed
 	if !changed {
 		return nil
 	}
@@ -745,7 +746,22 @@ func (s *Service) reconcileReservationStatus(ctx context.Context, workspaceID st
 		reservation.Status = model.ReservationDeleted
 		reservation.LastStatusMessage = firstNonEmpty(instance.StatusDetail, instanceGoneMessage)
 		reservation.LastError = ""
-		s.emitComputeEvent(types.EventComputePool, computeReservationEvent(workspaceID, state, *reservation, types.EventComputeActionReservationStatusUpdated, string(reservation.Status)))
+		action := types.EventComputeActionReservationStatusUpdated
+		// A running machine that went before its term was lost, not given
+		// back, and stays listed like one the provider reported as taken back
+		// or failed, so that the tenant sees where it went.
+		if before.Status == model.ReservationActive && before.ActiveAt(now) {
+			reservation.Status = model.ReservationFailed
+			reservation.TerminatingReason = reconcileReasonProviderFailed
+			reservation.LastStatusMessage = instanceGoneMessage
+			if reservation.Spot {
+				reservation.Status = model.ReservationInterrupted
+				reservation.TerminatingReason = reconcileReasonInterrupted
+				reservation.LastStatusMessage = instanceInterruptedMessage
+				action = types.EventComputeActionReservationInterrupted
+			}
+		}
+		s.emitComputeEvent(types.EventComputePool, computeReservationEvent(workspaceID, state, *reservation, action, string(reservation.Status)))
 		return true
 	}
 	// Any other status is one the provider's client does not know, and says
@@ -869,8 +885,21 @@ func (s *Service) terminateReservation(ctx context.Context, workspaceID string, 
 			reservationFailed(workspaceID, state.Name, reservation, "delete SSH state", fmt.Errorf("delete SSH state: %w", err))
 		}
 	}
+	syncReservedNodes(state, now)
 	s.recordEnd(*reservation, reservationEnd(reason), now)
 	s.emitComputeEvent(types.EventComputePool, computeReservationEvent(workspaceID, state, *reservation, action, reason))
+}
+
+// syncReservedNodes counts the nodes of a pool's open reservations again,
+// which change as reservations close or run out. It reports whether the
+// count changed.
+func syncReservedNodes(state *model.PoolState, now time.Time) bool {
+	nodes := activeReservationNodes(state.Reservations, now)
+	if nodes == state.ReservedNodes {
+		return false
+	}
+	state.ReservedNodes = nodes
+	return true
 }
 
 // recordEnd writes to the market's history that a reservation's machine is

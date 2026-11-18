@@ -275,7 +275,13 @@ func AgentMachineStatus(state *AgentTokenState, now time.Time) string {
 }
 
 func AgentMachineConnected(state *AgentTokenState, now time.Time) bool {
-	if state == nil || !state.Schedulable {
+	return state != nil && state.Schedulable && AgentMachineHeardFrom(state, now)
+}
+
+// AgentMachineHeardFrom reports whether a machine's agent is still in touch,
+// whether or not the machine takes work.
+func AgentMachineHeardFrom(state *AgentTokenState, now time.Time) bool {
+	if state == nil {
 		return false
 	}
 	lastSeen := AgentMachineLastSeen(state)

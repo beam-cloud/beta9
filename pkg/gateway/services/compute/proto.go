@@ -311,13 +311,15 @@ func agentMachineToProto(state *model.AgentTokenState, worker *types.Worker) *pb
 	}
 	lastKeepalive := model.AgentMachineLastSeen(state)
 	metrics := agentMachineMetrics(state, worker)
+	now := time.Now()
 	return &pb.Machine{
 		Id:              state.MachineID,
 		Cpu:             state.CPUMillicores,
 		Memory:          int64(state.MemoryMB),
 		Gpu:             gpu,
 		GpuCount:        state.GPUCount,
-		Status:          string(agentMachineStatus(state, worker, time.Now())),
+		Status:          string(agentMachineStatus(state, worker, now)),
+		StatusDetail:    agentMachineStatusDetail(state, now),
 		PoolName:        state.PoolName,
 		Created:         formatComputeTime(state.CreatedAt),
 		LastKeepalive:   formatComputeTime(lastKeepalive),
@@ -406,7 +408,12 @@ func agentMachineStatus(state *model.AgentTokenState, worker *types.Worker, now 
 	if model.AgentMachineStatus(state, now) == types.AgentMachineStatusPreflightFail {
 		return types.MachineStatusDisabled
 	}
-	if !model.AgentMachineConnected(state, now) {
+	if !model.AgentMachineHeardFrom(state, now) {
+		return types.MachineStatusDisconnected
+	}
+	// An agent that is in touch but does not offer the machine for work may
+	// still be checking it before it does.
+	if !state.Schedulable {
 		return types.MachineStatusRegistered
 	}
 	if state.Cordoned {
@@ -425,6 +432,38 @@ func agentMachineStatus(state *model.AgentTokenState, worker *types.Worker, now 
 	default:
 		return types.MachineStatusPending
 	}
+}
+
+// agentMachineStatusDetail says why a machine cannot take work, in the words
+// of whatever stopped it, or "" when it can or nothing says why.
+func agentMachineStatusDetail(state *model.AgentTokenState, now time.Time) string {
+	switch {
+	case state == nil:
+		return ""
+	case model.AgentMachineStatus(state, now) == types.AgentMachineStatusPreflightFail:
+		var failed []string
+		for _, check := range state.Preflight {
+			if check.OK || check.Severity != types.AgentPreflightSeverityError {
+				continue
+			}
+			if check.Message == "" {
+				failed = append(failed, check.Name)
+				continue
+			}
+			failed = append(failed, check.Name+": "+check.Message)
+		}
+		return "preflight checks failed: " + strings.Join(failed, "; ")
+	case !model.AgentMachineHeardFrom(state, now):
+		if !state.LastDisconnectAt.IsZero() && !state.LastDisconnectAt.Before(model.AgentMachineLastSeen(state)) {
+			return "agent disconnected"
+		}
+		return "agent stopped reporting in"
+	case !state.Schedulable:
+		return state.AvailabilityReason
+	case state.Cordoned:
+		return "cordoned"
+	}
+	return ""
 }
 
 func formatComputeTime(t time.Time) string {

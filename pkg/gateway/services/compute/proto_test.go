@@ -54,6 +54,9 @@ func TestAgentMachineStatusPreflightFailureIsDisabled(t *testing.T) {
 		Schedulable: false,
 		Preflight: []model.PreflightCheckState{
 			{Name: "docker", OK: false, Severity: "error"},
+			{Name: "nvidia", OK: false, Severity: "error", Message: "driver not loaded"},
+			{Name: "disk", OK: false, Severity: "info"},
+			{Name: "kernel", OK: true, Severity: "error"},
 		},
 		LastJoinAt:      now,
 		LastHeartbeatAt: now,
@@ -61,6 +64,70 @@ func TestAgentMachineStatusPreflightFailureIsDisabled(t *testing.T) {
 
 	if got := agentMachineStatus(state, nil, now); got != types.MachineStatusDisabled {
 		t.Fatalf("agentMachineStatus() = %q, want %q", got, types.MachineStatusDisabled)
+	}
+	if got, want := agentMachineStatusDetail(state, now), "preflight checks failed: docker; nvidia: driver not loaded"; got != want {
+		t.Fatalf("agentMachineStatusDetail() = %q, want %q", got, want)
+	}
+}
+
+func TestAgentMachineStatusSaysWhyAMachineTakesNoWork(t *testing.T) {
+	now := time.Now()
+	lastSeen := now.Add(-5 * time.Minute)
+
+	tests := []struct {
+		name   string
+		state  *model.AgentTokenState
+		status types.MachineStatus
+		detail string
+	}{
+		{
+			name:   "heartbeats stopped",
+			state:  &model.AgentTokenState{Schedulable: true, LastJoinAt: lastSeen, LastHeartbeatAt: lastSeen},
+			status: types.MachineStatusDisconnected,
+			detail: "agent stopped reporting in",
+		},
+		{
+			name:   "stream closed",
+			state:  &model.AgentTokenState{Schedulable: true, LastHeartbeatAt: lastSeen, LastDisconnectAt: lastSeen.Add(time.Second)},
+			status: types.MachineStatusDisconnected,
+			detail: "agent disconnected",
+		},
+		{
+			name:   "unschedulable and silent",
+			state:  &model.AgentTokenState{LastHeartbeatAt: lastSeen},
+			status: types.MachineStatusDisconnected,
+			detail: "agent stopped reporting in",
+		},
+		{
+			name:   "held back by its agent",
+			state:  &model.AgentTokenState{LastHeartbeatAt: now, AvailabilityReason: "host maintenance"},
+			status: types.MachineStatusRegistered,
+			detail: "host maintenance",
+		},
+		{
+			name:   "cordoned",
+			state:  &model.AgentTokenState{Schedulable: true, Cordoned: true, LastHeartbeatAt: now},
+			status: types.MachineStatusDisabled,
+			detail: "cordoned",
+		},
+		{
+			name:   "takes work",
+			state:  &model.AgentTokenState{Schedulable: true, LastHeartbeatAt: now},
+			status: types.MachineStatusAvailable,
+		},
+	}
+	// The worker is on record as available throughout: only the last machine
+	// is in a state to run it.
+	worker := &types.Worker{Status: types.WorkerStatusAvailable}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := agentMachineStatus(tt.state, worker, now); got != tt.status {
+				t.Fatalf("agentMachineStatus() = %q, want %q", got, tt.status)
+			}
+			if got := agentMachineStatusDetail(tt.state, now); got != tt.detail {
+				t.Fatalf("agentMachineStatusDetail() = %q, want %q", got, tt.detail)
+			}
+		})
 	}
 }
 

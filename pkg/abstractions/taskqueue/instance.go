@@ -106,6 +106,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			CheckpointEnabled: checkpointEnabled,
 			CheckpointTrigger: i.StubConfig.CheckpointTrigger,
 			PoolSelector:      i.StubConfig.PoolSelector(),
+			Preemptable:       i.StubConfig.ServerlessGPUPreemptable(),
 		}
 		if err := abstractions.ConfigureContainerRequestNetwork(runRequest, *i.StubConfig); err != nil {
 			return err

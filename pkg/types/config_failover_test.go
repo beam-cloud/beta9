@@ -154,7 +154,7 @@ func TestProvisioningIsChecked(t *testing.T) {
 		{name: "no block", pool: WorkerPoolConfig{GPUType: "L40S"}},
 		{name: "provider and maxNodes are enough", pool: buys(nil)},
 		{name: "every key", pool: buys(func(c *WorkerPoolConfig) {
-			c.Provisioning = WorkerPoolProvisioningConfig{Provider: "verda", Spot: true, MaxNodes: 1, MaxNodeHourlyCents: 150,
+			c.Provisioning = WorkerPoolProvisioningConfig{Provider: "verda", Spot: true, MaxNodes: 1, MaxGPUs: 8, MaxNodeHourlyCents: 150,
 				Regions: []string{"fin-01"}, IdleTimeout: Duration(time.Second), BootTimeout: Duration(time.Hour)}
 		})},
 		{name: "mode written out", pool: buys(func(c *WorkerPoolConfig) { c.Mode = PoolModeExternal })},
@@ -164,6 +164,11 @@ func TestProvisioningIsChecked(t *testing.T) {
 		{name: "blank provider", pool: buys(func(c *WorkerPoolConfig) { c.Provisioning.Provider = " " }), wantErr: "needs a provider"},
 		{name: "no maxNodes", pool: buys(func(c *WorkerPoolConfig) { c.Provisioning.MaxNodes = 0 }), wantErr: "maxNodes must be at least 1"},
 		{name: "negative maxNodes", pool: buys(func(c *WorkerPoolConfig) { c.Provisioning.MaxNodes = -1 }), wantErr: "maxNodes must be at least 1"},
+		{name: "negative GPU cap", pool: buys(func(c *WorkerPoolConfig) { c.Provisioning.MaxGPUs = -1 }), wantErr: "maxGPUs cannot be negative"},
+		{name: "a CPU pool with a GPU cap", pool: buys(func(c *WorkerPoolConfig) {
+			c.GPUType, c.Provisioning.MaxGPUs = "", 8
+		}), wantErr: "maxGPUs needs a gpuType"},
+		{name: "only a GPU cap", pool: WorkerPoolConfig{Provisioning: WorkerPoolProvisioningConfig{MaxGPUs: 8}}, wantErr: "needs a provider"},
 		{name: "negative price limit", pool: buys(func(c *WorkerPoolConfig) { c.Provisioning.MaxNodeHourlyCents = -1 }), wantErr: "maxNodeHourlyCents cannot be negative"},
 		{name: "a Kubernetes pool", pool: buys(func(c *WorkerPoolConfig) { c.Mode = PoolModeLocal }), wantErr: `remove mode "local"`},
 		{name: "a private pool", pool: buys(func(c *WorkerPoolConfig) { c.Mode = PoolModePrivate }), wantErr: `remove mode "private"`},
@@ -226,12 +231,13 @@ func TestPoolThatBuysJoinsThroughTheAgentAndSpotIsPreemptable(t *testing.T) {
 // The pools API takes a pool's config as JSON and stores it as JSON.
 func TestProvisioningSurvivesJSON(t *testing.T) {
 	pool := WorkerPoolConfig{GPUType: "L40S", Provisioning: WorkerPoolProvisioningConfig{
-		Provider: "verda", Spot: true, MaxNodes: 8, MaxNodeHourlyCents: 150, Regions: []string{"fin-01"},
+		Provider: "verda", Spot: true, MaxNodes: 8, MaxGPUs: 8, MaxNodeHourlyCents: 150, Regions: []string{"fin-01"},
 		IdleTimeout: Duration(5 * time.Minute), BootTimeout: Duration(15 * time.Minute),
 	}}
 	encoded, err := json.Marshal(pool)
 	require.NoError(t, err)
 	require.Contains(t, string(encoded), `"provisioning":{"provider":"verda","spot":true,"max_nodes":8`)
+	require.Contains(t, string(encoded), `"max_gpus":8`)
 	require.Contains(t, string(encoded), `"idle_timeout":"5m0s","boot_timeout":"15m0s"`, "durations are written as they are in the config file")
 
 	var decoded WorkerPoolConfig

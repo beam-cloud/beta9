@@ -760,9 +760,10 @@ type WorkerPoolConfig struct {
 // WorkerPoolProvisioningConfig is where and how a pool buys machines.
 // Provider and MaxNodes are required.
 //
-// A pool that buys up to four spot L40S machines from Verda, keeps one GPU
-// free and takes the overflow of the A10G pools. Below it, what all such
-// pools together may spend, and the credentials of two providers:
+// A pool that buys up to four spot L40S machines from Verda, with no more
+// than four GPUs between them, keeps one GPU free and takes the overflow of
+// the A10G pools. Below it, what all such pools together may spend, and the
+// credentials of two providers:
 //
 //	worker:
 //	  pools:
@@ -773,6 +774,7 @@ type WorkerPoolConfig struct {
 //	        provider: verda
 //	        spot: true
 //	        maxNodes: 4
+//	        maxGPUs: 4
 //	        maxNodeHourlyCents: 150
 //	        regions: [FIN-01]
 //	        idleTimeout: 10m
@@ -800,6 +802,9 @@ type WorkerPoolProvisioningConfig struct {
 	// MaxNodes is the most machines the pool holds, counting those that are
 	// still booting.
 	MaxNodes int `key:"maxNodes" json:"max_nodes"`
+	// MaxGPUs is the most GPUs the pool holds across all its machines,
+	// including machines still booting or being deleted. Zero means no cap.
+	MaxGPUs int `key:"maxGPUs" json:"max_gpus,omitempty"`
 	// MaxNodeHourlyCents is the most one machine may cost per hour. Zero
 	// means any price.
 	MaxNodeHourlyCents int64 `key:"maxNodeHourlyCents" json:"max_node_hourly_cents,omitempty"`
@@ -841,7 +846,7 @@ func (p WorkerPoolProvisioningConfig) BootWithin() time.Duration {
 // written reports whether the config file or the API set anything in the
 // block.
 func (p WorkerPoolProvisioningConfig) written() bool {
-	return p.Provider != "" || p.Spot || p.MaxNodes != 0 || p.MaxNodeHourlyCents != 0 ||
+	return p.Provider != "" || p.Spot || p.MaxNodes != 0 || p.MaxGPUs != 0 || p.MaxNodeHourlyCents != 0 ||
 		len(p.Regions) > 0 || p.IdleTimeout != 0 || p.BootTimeout != 0
 }
 
@@ -923,6 +928,10 @@ func (c WorkerPoolConfig) validateProvisioning() error {
 		return fmt.Errorf("provisioning needs a provider: the key under providers to buy machines from")
 	case p.MaxNodes < 1:
 		return fmt.Errorf("provisioning.maxNodes must be at least 1: it is the most machines the pool may hold")
+	case p.MaxGPUs < 0:
+		return fmt.Errorf("provisioning.maxGPUs cannot be negative")
+	case p.MaxGPUs > 0 && strings.TrimSpace(c.GPUType) == "":
+		return fmt.Errorf("provisioning.maxGPUs needs a gpuType: a CPU pool has no GPUs to cap")
 	case p.MaxNodeHourlyCents < 0:
 		return fmt.Errorf("provisioning.maxNodeHourlyCents cannot be negative")
 	case c.Mode != "" && c.Mode != PoolModeExternal:

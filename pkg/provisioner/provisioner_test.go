@@ -592,6 +592,16 @@ func TestAPoolThatCannotBuy(t *testing.T) {
 			wantErr: errAtMaxNodes,
 		},
 		{
+			name: "it holds maxGPUs GPUs",
+			arrange: func(w *world) {
+				w.control.pools["spot-l40s"] = spotL40S(func(pool *types.WorkerPoolConfig) { pool.Provisioning.MaxGPUs = 2 })
+				w.Tick(w.ctx)
+				w.buy("spot-l40s")
+				w.buy("spot-l40s")
+			},
+			wantErr: errAtMaxGPUs,
+		},
+		{
 			name:    "the hourly cap is reached by another pool's machines",
 			options: func(opts *Options) { opts.Limits.MaxHourlyCents = 250 },
 			arrange: func(w *world) {
@@ -839,19 +849,22 @@ func TestAStaleListIsNotBoughtFrom(t *testing.T) {
 }
 
 // Invariant 3 across replicas: gateways buying at the same moment hold
-// maxNodes and the spend cap between them.
+// maxNodes, maxGPUs and the spend cap between them.
 func TestReplicasBuyingAtOnceStayWithinTheLimits(t *testing.T) {
 	tests := []struct {
-		name   string
-		limits Limits
-		want   int
+		name    string
+		maxGPUs int
+		limits  Limits
+		want    int
 	}{
-		{"maxNodes", Limits{}, 4},
-		{"the hourly cap", Limits{MaxHourlyCents: 250}, 2},
+		{name: "maxNodes", want: 4},
+		{name: "maxGPUs", maxGPUs: 3, want: 3},
+		{name: "the hourly cap", limits: Limits{MaxHourlyCents: 250}, want: 2},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			w := newWorld(t)
+			w.control.pools["spot-l40s"] = spotL40S(func(pool *types.WorkerPoolConfig) { pool.Provisioning.MaxGPUs = test.maxGPUs })
 			replicas := []*Provisioner{}
 			for range 3 {
 				replica := w.replica(func(opts *Options) { opts.Limits = test.limits })
@@ -1121,6 +1134,15 @@ func TestEveryReasonAPoolCannotBuyForIsSaid(t *testing.T) {
 				w.buy("spot-l40s")
 			},
 			want: "the pool holds as many machines as provisioning.maxNodes allows",
+		},
+		{
+			name: "maxGPUs",
+			arrange: func(w *world) {
+				w.control.pools["spot-l40s"] = spotL40S(func(pool *types.WorkerPoolConfig) { pool.Provisioning.MaxGPUs = 1 })
+				w.Tick(w.ctx)
+				w.buy("spot-l40s")
+			},
+			want: "another machine would exceed provisioning.maxGPUs",
 		},
 		{
 			name:    "the hourly cap",
@@ -1394,6 +1416,60 @@ func TestChoose(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Equal(t, test.want, offer.ID+" in "+offer.Region)
+		})
+	}
+}
+
+// maxGPUs caps the GPUs of all the pool's machines together, whatever
+// machines they are on.
+func TestChooseKeepsThePoolWithinMaxGPUs(t *testing.T) {
+	// held returns records of machines in the pool, one for each GPU count.
+	held := func(gpus ...uint32) []Machine {
+		machines := make([]Machine, len(gpus))
+		for i, count := range gpus {
+			machines[i] = Machine{Pool: "spot-l40s", GPUCount: count}
+		}
+		return machines
+	}
+	// offer is a machine with that many GPUs, at cents an hour.
+	offer := func(gpus uint32, cents int64) providers.Offer {
+		return l40s(named(fmt.Sprintf("%dL40S", gpus)), costing(cents), func(o *providers.Offer) { o.GPUCount = gpus })
+	}
+	releasing := held(4)
+	releasing[0].Release = &Release{Reason: "it had nothing to run"}
+
+	tests := []struct {
+		name    string
+		maxGPUs int
+		held    []Machine
+		offers  []providers.Offer
+		want    uint32 // the GPUs of the machine chosen
+		wantErr error
+	}{
+		{name: "no cap", held: held(8, 8), offers: []providers.Offer{offer(8, 100)}, want: 8},
+		{name: "one machine with as many GPUs as the cap", maxGPUs: 8, offers: []providers.Offer{offer(8, 100)}, want: 8},
+		{name: "the last GPU under the cap", maxGPUs: 8, held: held(1, 2, 4), offers: []providers.Offer{offer(1, 100)}, want: 1},
+		{name: "at the cap", maxGPUs: 8, held: held(1, 1, 2, 4), offers: []providers.Offer{offer(1, 100)}, wantErr: errAtMaxGPUs},
+		{name: "at the cap, whatever is in stock", maxGPUs: 8, held: held(8), wantErr: errAtMaxGPUs},
+		{name: "cheaper machines that would pass the cap are passed over", maxGPUs: 8, held: held(2, 4), offers: []providers.Offer{offer(8, 30), offer(4, 50), offer(2, 100)}, want: 2},
+		{name: "every machine in stock would pass the cap", maxGPUs: 8, held: held(7), offers: []providers.Offer{offer(2, 50)}, wantErr: errAtMaxGPUs},
+		{name: "a machine with more GPUs than the cap", maxGPUs: 8, offers: []providers.Offer{offer(16, 50)}, wantErr: errAtMaxGPUs},
+		{name: "a machine being given back counts until its record is gone", maxGPUs: 8, held: append(held(4), releasing...), offers: []providers.Offer{offer(1, 100)}, wantErr: errAtMaxGPUs},
+		{name: "other pools' machines do not count towards maxGPUs", maxGPUs: 8, held: []Machine{{Pool: "spot-a10g", GPUCount: 32}}, offers: []providers.Offer{offer(8, 100)}, want: 8},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := spotL40S(func(pool *types.WorkerPoolConfig) {
+				pool.Provisioning.MaxNodes, pool.Provisioning.MaxGPUs = 32, test.maxGPUs
+			})
+
+			got, err := choose(purchase{pool: "spot-l40s", config: config, held: test.held, offers: test.offers})
+			if test.wantErr != nil {
+				require.ErrorIs(t, err, test.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.want, got.GPUCount)
 		})
 	}
 }

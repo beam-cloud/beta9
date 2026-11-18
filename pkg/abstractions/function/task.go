@@ -231,6 +231,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated, tas
 		Mounts:       mounts,
 		Stub:         *stub,
 		PoolSelector: stubConfig.PoolSelector(),
+		Preemptable:  stubConfig.ServerlessGPUPreemptable(),
 	}
 	if err := abstractions.ConfigureContainerRequestNetwork(runRequest, stubConfig); err != nil {
 		return err
