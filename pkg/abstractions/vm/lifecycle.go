@@ -416,7 +416,13 @@ func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
 				// disk writes. Its explicit terminal status is also a barrier;
 				// missing Redis state alone never is.
 				status, err := s.containers.GetContainerRequestStatus(v.ContainerID)
-				if err != nil || status != types.ContainerRequestStatusFailed {
+				switch {
+				case err == nil && status == types.ContainerRequestStatusFailed:
+				case errors.Is(codeErr, redis.Nil) && !keepsDisks(v):
+					// A worker that is lost reports no exit, ever. It kept
+					// none of this VM's disks, so there is no final sync to
+					// confirm, and the VM is not left to wait for one.
+				default:
 					return fmt.Errorf("unable to confirm final disk sync: %w", codeErr)
 				}
 

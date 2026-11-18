@@ -30,6 +30,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
 
@@ -416,6 +417,61 @@ func TestGitHubRunnerKilledInItsJobIsDeleted(t *testing.T) {
 	runtime.containers.exitCode = int(types.ContainerExitCodeUnknownError)
 	// As a gateway of an earlier version saves it.
 	v.Spec.CaptureExitSnapshot = nil
+	require.NoError(t, r.s.reconcileVM(ctx, v))
+	require.Equal(t, types.VMStateDeleted, v.Status)
+	require.Empty(t, v.ContainerID)
+}
+
+// A worker that is lost with a runner on it reports no exit for it, ever.
+// The runner kept nothing there to wait for, so it is deleted all the same,
+// and its place in the workspace's limit with it. Redis being out of reach
+// is not that: then nothing is known, and the runner waits.
+func TestGitHubRunnerWhoseWorkerIsLostIsDeleted(t *testing.T) {
+	for name, known := range map[string]bool{"no exit was reported": true, "nothing can be read": false} {
+		t.Run(name, func(t *testing.T) {
+			r, store, _, runtime := runnerFixture(t)
+			ctx := context.Background()
+			fakeGitHub(t, r, map[string]string{registersRunner: `201 {"encoded_jit_config":"jit-secret"}`})
+			v := startRunner(t, r, store, 1, false)
+			running := *store.jobs[1]
+			running.Status, running.RunnerName = "in_progress", v.Name
+			require.Equal(t, 202, deliver(t, r, "workflow_job", "in_progress", beamLabels, &running, true))
+
+			delete(runtime.containers.states, v.ContainerID)
+			runtime.containers.exitError = redis.Nil
+			if !known {
+				runtime.containers.exitError = errors.New("redis: connection refused")
+			}
+
+			err := r.s.reconcileVM(ctx, v)
+			if !known {
+				require.ErrorContains(t, err, "unable to confirm final disk sync")
+				require.NotEmpty(t, v.ContainerID)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, types.VMStateDeleted, v.Status)
+			require.Empty(t, v.ContainerID)
+			count, err := store.CountGitHubRunners(ctx, v.WorkspaceID)
+			require.NoError(t, err)
+			require.Zero(t, count)
+		})
+	}
+}
+
+// A gateway of an earlier version saves a runner without the setting that
+// its root is not kept. One that is already being deleted gets it back too:
+// its worker took no snapshot, and it would wait for one for good.
+func TestGitHubRunnerBeingDeletedKeepsNoRoot(t *testing.T) {
+	r, store, _, runtime := runnerFixture(t)
+	ctx := context.Background()
+	fakeGitHub(t, r, map[string]string{registersRunner: `201 {"encoded_jit_config":"jit-secret"}`})
+	v := startRunner(t, r, store, 1, false)
+
+	r.s.backend = &snapshotlessBackend{r.s.backend.(*vmBackend)}
+	delete(runtime.containers.states, v.ContainerID)
+	v.Spec.CaptureExitSnapshot = nil
+	v.EverRunning, v.DesiredState = true, types.VMStateDeleted
 	require.NoError(t, r.s.reconcileVM(ctx, v))
 	require.Equal(t, types.VMStateDeleted, v.Status)
 	require.Empty(t, v.ContainerID)

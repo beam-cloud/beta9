@@ -496,6 +496,7 @@ func (r *githubRunners) stopJob(c echo.Context) error {
 		log.Warn().Err(err).Str("vm_id", v.ID).Msg("unregister GitHub runner")
 	}
 
+	keepsNoRoot(v)
 	v.DesiredState = types.VMStateDeleted
 	if err := r.s.repo.SaveVM(ctx, v); err != nil {
 		return err
@@ -1154,7 +1155,14 @@ func (r *githubRunners) launch(ctx context.Context, job types.GitHubRunnerJob, s
 // which the reconciler then leaves alone otherwise.
 func (s *Service) reconcileRunner(ctx context.Context, v *types.VM) (bool, error) {
 	r := s.runners
-	if r == nil || v.DesiredState == types.VMStateDeleted || !strings.HasPrefix(v.Name, runnerPrefix) {
+	if r == nil || !strings.HasPrefix(v.Name, runnerPrefix) {
+		return false, nil
+	}
+
+	// A runner that is being deleted is looked up only to restore the
+	// setting below, if it lost it.
+	deleted := v.DesiredState == types.VMStateDeleted
+	if deleted && !types.CapturesExitSnapshot(v.Spec.CaptureExitSnapshot) {
 		return false, nil
 	}
 
@@ -1164,9 +1172,12 @@ func (s *Service) reconcileRunner(ctx context.Context, v *types.VM) (bool, error
 	}
 
 	// A runner's root is never kept. A gateway of an earlier version may
-	// have saved the VM, and the setting with it, as it knew it.
-	keep := false
-	v.Spec.CaptureExitSnapshot = &keep
+	// have saved the VM, and the setting with it, as it knew it: the VM
+	// would then wait for a snapshot that its worker never takes.
+	keepsNoRoot(v)
+	if deleted {
+		return false, nil
+	}
 
 	state, err := s.runtimeState(v)
 	if err != nil {
@@ -1241,6 +1252,13 @@ func (s *Service) reconcileRunner(ctx context.Context, v *types.VM) (bool, error
 
 	v.DesiredState = types.VMStateDeleted
 	return true, s.repo.SaveVM(ctx, v)
+}
+
+// keepsNoRoot says of a runner's VM that its root is not captured when it
+// exits, as it was created.
+func keepsNoRoot(v *types.VM) {
+	keep := false
+	v.Spec.CaptureExitSnapshot = &keep
 }
 
 // throttled reports whether a VM's last launch was refused because its
