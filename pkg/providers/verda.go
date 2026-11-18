@@ -42,7 +42,16 @@ const (
 
 // verdaImages are the images a machine boots, best first: Ubuntu with the
 // NVIDIA driver and Docker. Verda's older GPUs run the older driver only.
-var verdaImages = []string{"ubuntu-24.04-cuda-12.8-open-docker", "ubuntu-24.04-cuda-12.6-docker"}
+var verdaImages = []string{
+	"24.04.cuda13.0.docker",
+	"24.04.cuda12.9.docker",
+	"24.04.cuda12.9-v100.docker",
+	// Older catalogues use these names. Prefer the current aliases: the
+	// instance-type catalogue can retain a retired image after /images
+	// stops publishing it, and attempting that image then fails with 404.
+	"ubuntu-24.04-cuda-12.8-open-docker",
+	"ubuntu-24.04-cuda-12.6-docker",
+}
 
 // Verda buys from Verda, formerly DataCrunch: on-demand machines, and spot
 // machines that Verda takes back without notice.
@@ -269,7 +278,7 @@ type verdaCreate struct {
 	LocationCode    string        `json:"location_code"`
 	IsSpot          bool          `json:"is_spot"`
 	OSVolume        verdaOSVolume `json:"os_volume"`
-	SSHKeyIDs       []string      `json:"ssh_key_ids,omitempty"`
+	SSHKeyIDs       []string      `json:"ssh_key_ids"`
 	StartupScriptID string        `json:"startup_script_id,omitempty"`
 	Tags            []verdaTag    `json:"tags"`
 }
@@ -331,6 +340,12 @@ func (c *Verda) Create(ctx context.Context, req CreateRequest) (Instance, error)
 		OSVolume:     verdaOSVolume{Name: req.Name, Size: c.config.DiskGB},
 		SSHKeyIDs:    c.config.SSHKeyIDs,
 		Tags:         verdaTagList(tags),
+	}
+	// The live API rejects an omitted ssh_key_ids field even though it is
+	// documented as optional. An explicit null requests no particular keys;
+	// preserve the UUID array when keys have been configured.
+	if len(body.SSHKeyIDs) == 0 {
+		body.SSHKeyIDs = nil
 	}
 	if req.Offer.Spot {
 		body.OSVolume.OnSpotDiscontinue = verdaDeletePermanently

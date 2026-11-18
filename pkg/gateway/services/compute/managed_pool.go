@@ -1016,7 +1016,7 @@ func (s *Service) validateProvider(config types.WorkerPoolConfig) error {
 	if !config.Buys() {
 		return nil
 	}
-	if _, ok := s.providers.Get(config.Provisioning.Provider); ok {
+	if s.providers.IsEnabled(config.Provisioning.Provider) {
 		return nil
 	}
 	configured := "none are"

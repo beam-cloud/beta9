@@ -246,9 +246,9 @@ func (c *Vast) Create(ctx context.Context, req CreateRequest) (Instance, error) 
 		// The only way Vast starts a VM.
 		"runtype":      "ssh",
 		"target_state": "running",
-		// A bid that does not win the machine at once rents nothing. Vast
-		// would otherwise keep an instance that waits for its turn.
-		"cancel_unavail": true,
+		// VM bids may need asynchronous scheduling. Keep the contract so
+		// its buyer can observe startup and enforce its launch deadline.
+		"cancel_unavail": false,
 	}
 	if req.StartupScript != "" {
 		script := bootScript(req.StartupScript)
@@ -265,16 +265,22 @@ func (c *Vast) Create(ctx context.Context, req CreateRequest) (Instance, error) 
 	instance["price"] = ask.MinBid
 
 	var rented struct {
-		Success  bool   `json:"success"`
 		Contract int64  `json:"new_contract"`
 		Message  string `json:"msg"`
 	}
 	err = c.api.do(ctx, call{method: http.MethodPut, path: fmt.Sprintf("/api/v0/asks/%d/", ask.ID), body: instance, out: &rented})
 	if err != nil {
+		// A malformed 2xx response can follow a completed purchase, just
+		// like a response that never arrived. Keep it for reconciliation.
+		if statusOf(err) == 0 && !Unanswered(err) {
+			err = because(errNoAnswer, err)
+		}
 		return Instance{}, vastRefusal(err)
 	}
-	if !rented.Success || rented.Contract <= 0 {
-		return Instance{}, fmt.Errorf("Vast rented no instance: %s", cmp.Or(rented.Message, "it gave no reason"))
+	// Vast can return success:false with a real new_contract while a VM
+	// bid waits to start. The contract ID is the resource we must retain.
+	if rented.Contract <= 0 {
+		return Instance{}, because(errNoAnswer, fmt.Errorf("Vast rented no instance: %s", cmp.Or(rented.Message, "it gave no reason")))
 	}
 	return Instance{ID: strconv.FormatInt(rented.Contract, 10), Status: StatusPending, Tags: req.Tags}, nil
 }
@@ -361,6 +367,11 @@ func (c *Vast) instance(raw vastInstance) Instance {
 }
 
 func (i vastInstance) status() Status {
+	// A new VM bid can be reported as stopped while its image is still
+	// loading. It has not run yet, so this is startup, not an interruption.
+	if i.Bid && (i.ActualStatus == "" || i.ActualStatus == "created" || i.ActualStatus == "loading") {
+		return StatusPending
+	}
 	// Nothing here stops an instance. Vast stops an interruptible one when
 	// someone bids more for its machine or rents it on demand, and starts
 	// it again if the machine comes free, which a pool does not wait for.

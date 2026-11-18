@@ -1101,6 +1101,9 @@ type WorkerPoolJobSpecPoolSizingConfig struct {
 // ProviderConfig holds the credentials and settings of the providers Beam
 // buys machines from.
 type ProviderConfig struct {
+	// Disabled prevents catalog discovery and new purchases while retaining
+	// credentials for inspecting and deleting machines already bought.
+	Disabled  []string                `key:"disabled" json:"disabled"`
 	Vast      VastProviderConfig      `key:"vast" json:"vast"`
 	Shadeform ShadeformProviderConfig `key:"shadeform" json:"shadeform"`
 	Hetzner   HetznerProviderConfig   `key:"hetzner" json:"hetzner"`
@@ -1375,6 +1378,16 @@ type ManagedComputeReservationsConfig struct {
 	// for pools to buy their own machines from, and is not named here, sells
 	// nothing to a tenant.
 	Providers []string `key:"providers" json:"providers"`
+	// BootTimeout bounds how long a newly bought machine may remain pending
+	// at its provider. It does not wait for agent registration. Zero uses 20m.
+	BootTimeout Duration `key:"bootTimeout" json:"boot_timeout"`
+}
+
+func (c ManagedComputeReservationsConfig) BootTimeoutOrDefault() time.Duration {
+	if c.BootTimeout > 0 {
+		return time.Duration(c.BootTimeout)
+	}
+	return 20 * time.Minute
 }
 
 type ManagedComputeSSHConfig struct {

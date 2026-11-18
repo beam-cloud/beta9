@@ -377,7 +377,38 @@ func NewRegistry(config types.ProviderConfig, owner string) *Registry {
 		client, err := NewGCP(gcp, owner)
 		registry.use(gcpName, client, err)
 	}
+	for _, configured := range config.Disabled {
+		name := strings.ToLower(strings.TrimSpace(configured))
+		if provider, ok := registry.byName[name]; ok && registry.IsEnabled(name) {
+			registry.byName[name] = disabledProvider{Provider: provider}
+		}
+	}
 	return registry
+}
+
+var ErrDisabled = errors.New("provider is disabled for new purchases")
+
+// Keep lifecycle operations available after disabling a provider. Removing
+// its client would strand existing reservations and their cleanup.
+type disabledProvider struct{ Provider }
+
+func (p disabledProvider) Offers(context.Context, OfferFilter) ([]Offer, error) {
+	return nil, nil
+}
+
+func (p disabledProvider) Create(context.Context, CreateRequest) (Instance, error) {
+	return Instance{}, fmt.Errorf("%s: %w", p.Name(), ErrDisabled)
+}
+
+// IsEnabled reports whether a configured provider can sell new machines.
+// Get also returns disabled providers, for existing-machine lifecycle work.
+func (r *Registry) IsEnabled(name string) bool {
+	provider, ok := r.Get(name)
+	if !ok {
+		return false
+	}
+	_, disabled := provider.(disabledProvider)
+	return !disabled
 }
 
 // RegistryOf holds exactly the given providers.
@@ -412,12 +443,19 @@ func (r *Registry) Get(name string) (Provider, bool) {
 	return provider, ok
 }
 
-// Names lists the configured providers in a fixed order.
+// Names lists providers enabled for discovery and purchases in a fixed order.
 func (r *Registry) Names() []string {
 	if r == nil {
 		return nil
 	}
-	return slices.Sorted(maps.Keys(r.byName))
+	names := make([]string, 0, len(r.byName))
+	for name := range r.byName {
+		if r.IsEnabled(name) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return names
 }
 
 const (

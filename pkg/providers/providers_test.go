@@ -5188,6 +5188,7 @@ func (a *nebiusAPI) create(w http.ResponseWriter, r *http.Request) {
 	operation := map[string]any{"id": fmt.Sprintf("computeoperation-e00%04d", a.nextID), "resourceId": id}
 	if a.leavesAStoppedVM != nil {
 		instance["status"].(map[string]any)["state"] = "STOPPED"
+		instance["status"].(map[string]any)["reconciling"] = false
 		operation["status"] = a.leavesAStoppedVM.body()
 		a.leavesAStoppedVM = nil
 	}
@@ -5281,7 +5282,11 @@ func (a *nebiusAPI) state(id, state string) {
 	defer a.mu.Unlock()
 	i := a.find(id)
 	require.GreaterOrEqual(a.t, i, 0, "no instance %s", id)
-	a.instances[i]["status"].(map[string]any)["state"] = state
+	status := a.instances[i]["status"].(map[string]any)
+	status["state"] = state
+	if state == "STOPPED" || state == "RUNNING" || state == "ERROR" {
+		status["reconciling"] = false
+	}
 }
 
 func (a *nebiusAPI) refuse(with *nebiusReply) {
@@ -7155,7 +7160,7 @@ func TestVastCreateSendsWhatVastNeeds(t *testing.T) {
 		"label":          "beam-rtx5090-a1b2c3d4 beam-owner=beam-test-1a2b3c beam-pool=rtx5090 beam-pool-machine=machine-a1b2c3d4",
 		"runtype":        "ssh",
 		"target_state":   "running",
-		"cancel_unavail": true,
+		"cancel_unavail": false,
 		"price":          0.7999999999999999,
 		"onstart":        "#!/usr/bin/env bash\nset -euo pipefail\ncurl -fsSL https://gateway.example/join | sh\n",
 	}, api.lastCreate())
@@ -7233,15 +7238,21 @@ func TestVastCreateSaysWhenTheMachineCannotBeHad(t *testing.T) {
 		require.ErrorIs(t, err, ErrOutOfStock)
 	})
 
-	// Vast would rent an instance that waits, stopped, for the other bid to
-	// go away. The pool wants a machine now or none.
-	t.Run("someone bids more for it", func(t *testing.T) {
+	// A queued VM bid is still an owned contract. Keep its ID so startup
+	// can be observed and the contract deleted when its deadline expires.
+	t.Run("a bid waits for its machine to become available", func(t *testing.T) {
 		api := newVastAPI(t)
 		api.set(func() { api.outbidAt = 0.45 })
 		client := api.client(testOwner)
-		_, err := client.Create(ctx, request)
-		require.ErrorIs(t, err, ErrOutOfStock)
+		created, err := client.Create(ctx, request)
+		require.NoError(t, err)
+		require.Equal(t, StatusPending, created.Status)
 		listed, err := client.List(ctx)
+		require.NoError(t, err)
+		require.Len(t, listed, 1)
+		require.Equal(t, created.ID, listed[0].ID)
+		require.NoError(t, client.Delete(ctx, created.ID))
+		listed, err = client.List(ctx)
 		require.NoError(t, err)
 		require.Empty(t, listed)
 	})
@@ -7296,11 +7307,13 @@ func TestVastNamesWhyACreateWasTurnedDown(t *testing.T) {
 			api.refusal = &vastReply{http.StatusOK, map[string]any{"success": false, "msg": "the machine is in maintenance"}}
 		})
 		_, err := api.client(testOwner).Create(ctx, request)
-		require.EqualError(t, err, "Vast rented no instance: the machine is in maintenance")
+		require.EqualError(t, err, "no answer from the provider: Vast rented no instance: the machine is in maintenance")
+		require.True(t, Unanswered(err))
 
 		api.set(func() { api.refusal = &vastReply{http.StatusOK, map[string]any{"success": true}} })
 		_, err = api.client(testOwner).Create(ctx, request)
-		require.EqualError(t, err, "Vast rented no instance: it gave no reason")
+		require.EqualError(t, err, "no answer from the provider: Vast rented no instance: it gave no reason")
+		require.True(t, Unanswered(err))
 	})
 }
 
@@ -7376,9 +7389,9 @@ func TestVastReadsAStoppedInstanceAsTakenBack(t *testing.T) {
 			fields: map[string]any{"cur_state": "stopped"},
 			want:   Instance{Status: StatusInterrupted, StatusDetail: "running"},
 		},
-		"its rental is stopped before Vast knows what it does": {
+		"its new bid is stopped before Vast knows what it does": {
 			fields: map[string]any{"cur_state": "stopped", "actual_status": nil},
-			want:   Instance{Status: StatusInterrupted},
+			want:   Instance{Status: StatusPending},
 		},
 		"it waits for its machine to come free": {
 			fields: map[string]any{"actual_status": "scheduling"},

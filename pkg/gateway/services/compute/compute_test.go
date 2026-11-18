@@ -6342,7 +6342,13 @@ func boughtMachineAt(now time.Time, status providers.Status, wantedFor time.Dura
 	}
 	events := &capturedEvents{}
 	return &boughtMachine{
-		service:  &Service{computeRepo: repo, eventRepo: events, providers: providers.RegistryOf(provider)},
+		// This fixture deliberately dates purchases an hour back for billing
+		// assertions. Tests of the initial provider boot deadline set their
+		// own shorter timeout and purchase timestamp.
+		service: &Service{computeRepo: repo, eventRepo: events, providers: providers.RegistryOf(provider),
+			appConfig: types.AppConfig{ManagedCompute: types.ManagedComputeConfig{
+				Reservations: types.ManagedComputeReservationsConfig{BootTimeout: types.Duration(24 * time.Hour)},
+			}}},
 		provider: provider,
 		repo:     repo,
 		events:   events,

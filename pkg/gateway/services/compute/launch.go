@@ -695,7 +695,13 @@ func (s *Service) reservationProviders() []string {
 // every one when it lists none.
 func ReservationProviders(config types.ManagedComputeConfig, registry *providers.Registry) []string {
 	if named := config.Reservations.Providers; len(named) > 0 {
-		return named
+		enabled := make([]string, 0, len(named))
+		for _, name := range named {
+			if registry.IsEnabled(name) {
+				enabled = append(enabled, name)
+			}
+		}
+		return enabled
 	}
 	return registry.Names()
 }

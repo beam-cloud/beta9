@@ -754,6 +754,7 @@ type nebiusInstance struct {
 	} `json:"spec"`
 	Status struct {
 		State             string `json:"state"`
+		Reconciling       bool   `json:"reconciling"`
 		NetworkInterfaces []struct {
 			PublicIPAddress struct {
 				Address string `json:"address"`
@@ -780,6 +781,13 @@ func (c *Nebius) instance(raw nebiusInstance) Instance {
 }
 
 func (i nebiusInstance) status() Status {
+	// A newly accepted create can first be STOPPED while its asynchronous
+	// operation is still preparing the instance, before STARTING. It has
+	// not been preempted. Once that operation finishes, a stopped spot VM
+	// is still treated as interrupted and removed as before.
+	if i.Status.State == "STOPPED" && i.Status.Reconciling {
+		return StatusPending
+	}
 	switch i.Status.State {
 	case "CREATING", "STARTING", "UPDATING":
 		return StatusPending
