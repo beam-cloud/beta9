@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
@@ -1992,6 +1994,138 @@ func TestProvidersNoPoolBuysFromAreSweptLessOften(t *testing.T) {
 	w.clock.Advance(time.Minute)
 	p.Tick(w.ctx)
 	require.Equal(t, []string{first, second}, nebius.Deletes())
+}
+
+// What the disabled Vast of these tests is configured with, and the
+// instances it has: one that a machine's record names, one that a purchase
+// without an answer left, one that nobody recorded, and another control
+// plane's.
+const (
+	disabledVastName = "vast"
+	disabledVastKey  = "synthetic-key"
+
+	vastInstancesPath = "/api/v1/instances/"
+	vastInstancePath  = "/api/v0/instances/"
+
+	vastRecorded   = "101"
+	vastUnanswered = "102"
+	vastOrphan     = "103"
+	vastForeign    = "104"
+
+	recordedMachine   = "existing"
+	unansweredMachine = "unanswered"
+)
+
+// disabledVast stands in for Vast behind a registry that disables it, and
+// counts what the registry's real client asks of it.
+type disabledVast struct {
+	mu                           sync.Mutex
+	lists, gets, offers, creates int
+	deleted                      []string
+}
+
+// newDisabledVast returns a registry whose one provider is a disabled Vast,
+// and the stand-in its client talks to.
+func newDisabledVast(t *testing.T) (*providers.Registry, *disabledVast) {
+	t.Helper()
+	api := &disabledVast{}
+	instance := func(id, machine, owner string) map[string]any {
+		return map[string]any{"id": json.Number(id), "actual_status": "running", "is_bid": true,
+			"label": fmt.Sprintf("owned-vm %s=%s %s=%s", providers.OwnerTag, owner, MachineTag, machine)}
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		api.mu.Lock()
+		defer api.mu.Unlock()
+		if r.Header.Get("Authorization") != "Bearer "+disabledVastKey {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == vastInstancesPath:
+			api.lists++
+			// The recorded instance is not in the list yet, so that it is
+			// asked for by its ID. The purchase without an answer is found
+			// by its tag alone.
+			_ = json.NewEncoder(w).Encode(map[string]any{"instances": []any{
+				instance(vastUnanswered, unansweredMachine, testOwner),
+				instance(vastOrphan, "orphan", testOwner),
+				instance(vastForeign, "foreign", "another-owner"),
+			}})
+		case r.Method == http.MethodGet && r.URL.Path == vastInstancePath+vastRecorded+"/":
+			api.gets++
+			_ = json.NewEncoder(w).Encode(map[string]any{"instances": instance(vastRecorded, recordedMachine, testOwner)})
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, vastInstancePath):
+			api.deleted = append(api.deleted, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, vastInstancePath), "/"))
+			_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+		case r.Method == http.MethodPost:
+			// A search for offers.
+			api.offers++
+			w.WriteHeader(http.StatusBadRequest)
+		case r.Method == http.MethodPut:
+			// A bid for a machine.
+			api.creates++
+			w.WriteHeader(http.StatusBadRequest)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	registry := providers.NewRegistry(types.ProviderConfig{
+		Disabled: []string{disabledVastName}, Vast: types.VastProviderConfig{ApiKey: disabledVastKey, BaseURL: server.URL},
+	}, testOwner)
+	require.Empty(t, registry.Names(), "this is a genuinely disabled registry client")
+	require.Equal(t, []string{disabledVastName}, registry.ConfiguredNames())
+	return registry, api
+}
+
+func TestDisabledProviderLifecycleStillObservesExistingAndUnansweredPurchases(t *testing.T) {
+	registry, api := newDisabledVast(t)
+	ctx, now := context.Background(), time.Now()
+	p := &Provisioner{providers: registry, sweptAll: now}
+	existing := Machine{ID: recordedMachine, InstanceID: vastRecorded}
+	existing.Provider = disabledVastName
+	unanswered := Machine{ID: unansweredMachine}
+	unanswered.Provider = disabledVastName
+	listed := p.listInstances(ctx, snapshot{}, []Machine{existing, unanswered}, now)
+	require.Contains(t, listed, disabledVastName, "disabled providers with existing records still need lifecycle inspection")
+	state, known := p.instanceOf(ctx, existing, listed)
+	require.Equal(t, present, state)
+	require.Equal(t, vastRecorded, known.ID, "a stale list must still reach the real disabled provider's Get")
+	state, found := p.instanceOf(ctx, unanswered, listed)
+	require.Equal(t, present, state)
+	require.Equal(t, vastUnanswered, found.ID, "an unanswered purchase is rediscovered by its machine tag")
+	p.deleteUnrecorded(ctx, listed, map[string]string{existing.ID: existing.InstanceID, unanswered.ID: ""})
+	client, ok := registry.Get(disabledVastName)
+	require.True(t, ok)
+	// Once the rediscovered purchase is released, its disabled client can
+	// still delete it; the orphan sweep already deleted the unrecorded VM.
+	require.NoError(t, client.Delete(ctx, found.ID))
+	offers, err := client.Offers(ctx, providers.OfferFilter{})
+	require.NoError(t, err)
+	require.Empty(t, offers)
+	_, err = client.Create(ctx, providers.CreateRequest{})
+	require.ErrorIs(t, err, providers.ErrDisabled)
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	require.Equal(t, 1, api.lists)
+	require.Equal(t, 1, api.gets)
+	require.ElementsMatch(t, []string{vastOrphan, vastUnanswered}, api.deleted)
+	require.Zero(t, api.offers)
+	require.Zero(t, api.creates)
+}
+
+func TestDisabledProviderWithoutPoolsIsStillSweptForOrphans(t *testing.T) {
+	registry, api := newDisabledVast(t)
+	p := &Provisioner{providers: registry}
+	ctx := context.Background()
+	listed := p.listInstances(ctx, snapshot{}, nil, time.Now())
+	p.deleteUnrecorded(ctx, listed, nil)
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	require.Equal(t, 1, api.lists, "the periodic full sweep includes disabled providers even without records or pools")
+	require.ElementsMatch(t, []string{vastUnanswered, vastOrphan}, api.deleted, "foreign-owner instances never reach cleanup")
+	require.Zero(t, api.offers)
+	require.Zero(t, api.creates)
 }
 
 func TestMachinesOfAPoolThatNoLongerBuysAreDrained(t *testing.T) {

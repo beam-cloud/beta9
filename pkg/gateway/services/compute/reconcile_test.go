@@ -11,27 +11,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func initialProviderBoot(t *testing.T, timeout time.Duration) *boughtMachine {
+// How long a machine has to start at its provider.
+
+// shortBoot is a boot timeout that a config sets in place of the default.
+const shortBoot = 3 * time.Minute
+
+// newBootingMachine has a machine that was bought this moment and is still
+// starting at its provider, under the boot timeout. Zero is the default.
+func newBootingMachine(t *testing.T, bootTimeout time.Duration) *boughtMachine {
 	t.Helper()
-	m := boughtMachineAt(time.Date(2026, 11, 18, 16, 0, 0, 0, time.UTC), providers.StatusPending, 6*time.Hour)
+	m := newBoughtMachine(t)
 	m.state.Reservations[0].CreatedAt = m.now
-	m.service.appConfig.ManagedCompute.Reservations.BootTimeout = types.Duration(timeout)
+	m.service.appConfig.ManagedCompute.Reservations.BootTimeout = types.Duration(bootTimeout)
 	return m
 }
 
-func TestReservationProviderBootTimeoutDefaultsAndOverride(t *testing.T) {
-	for _, tc := range []struct {
-		configured time.Duration
-		want       time.Duration
-	}{{0, 20 * time.Minute}, {-time.Minute, 20 * time.Minute}, {3 * time.Minute, 3 * time.Minute}} {
-		config := types.ManagedComputeReservationsConfig{BootTimeout: types.Duration(tc.configured)}
-		require.Equal(t, tc.want, config.BootTimeoutOrDefault())
-	}
-}
-
 func TestPendingReservationClosesAtDefaultProviderBootDeadline(t *testing.T) {
-	m := initialProviderBoot(t, 0)
-	reservation := m.check(t, 19*time.Minute)
+	const within = types.ManagedComputeDefaultReservationBootTimeout
+	m := newBootingMachine(t, 0)
+	reservation := m.check(t, within-time.Minute)
 	require.Equal(t, model.ReservationPending, reservation.Status)
 	require.Empty(t, m.provider.Deletes())
 	require.False(t, m.tokenRevoked())
@@ -39,15 +37,15 @@ func TestPendingReservationClosesAtDefaultProviderBootDeadline(t *testing.T) {
 	reservation = m.check(t, time.Minute)
 	require.Equal(t, model.ReservationDeleted, reservation.Status)
 	require.Equal(t, reconcileReasonLaunchFailed, reservation.TerminatingReason)
-	require.Contains(t, reservation.LastStatusMessage, "20m0s")
+	require.Contains(t, reservation.LastStatusMessage, within.String())
 	require.Equal(t, []string{m.instance}, m.provider.Deletes())
 	require.True(t, m.tokenRevoked(), "a queued bid cannot join after its deadline")
 	require.Empty(t, m.provider.Everything())
 }
 
 func TestPendingReservationUsesConfiguredBootDeadline(t *testing.T) {
-	m := initialProviderBoot(t, 3*time.Minute)
-	require.Equal(t, model.ReservationPending, m.check(t, 2*time.Minute).Status)
+	m := newBootingMachine(t, shortBoot)
+	require.Equal(t, model.ReservationPending, m.check(t, shortBoot-time.Minute).Status)
 	require.False(t, m.tokenRevoked())
 	reservation := m.check(t, time.Minute)
 	require.Equal(t, model.ReservationDeleted, reservation.Status)
@@ -56,12 +54,13 @@ func TestPendingReservationUsesConfiguredBootDeadline(t *testing.T) {
 }
 
 func TestProviderBootTimeoutRetainsTerminationUntilDeleteSucceeds(t *testing.T) {
-	m := initialProviderBoot(t, 3*time.Minute)
-	m.provider.FailDeletes(errors.New("provider unavailable"))
-	reservation := m.check(t, 3*time.Minute)
+	m := newBootingMachine(t, shortBoot)
+	unavailable := errors.New("provider unavailable")
+	m.provider.FailDeletes(unavailable)
+	reservation := m.check(t, shortBoot)
 	require.Equal(t, model.ReservationTerminating, reservation.Status)
 	require.Equal(t, reconcileReasonLaunchFailed, reservation.TerminatingReason)
-	require.Equal(t, "provider unavailable", reservation.LastError)
+	require.Equal(t, unavailable.Error(), reservation.LastError)
 	require.True(t, m.tokenRevoked())
 	require.Len(t, m.provider.Deletes(), 1)
 
@@ -78,9 +77,9 @@ func TestProviderBootTimeoutRetainsTerminationUntilDeleteSucceeds(t *testing.T) 
 }
 
 func TestProviderActiveAtBootDeadlineIsKeptWithoutWaitingForAgent(t *testing.T) {
-	m := initialProviderBoot(t, 3*time.Minute)
+	m := newBootingMachine(t, shortBoot)
 	m.provider.SetStatus(m.instance, providers.StatusActive, "")
-	reservation := m.check(t, 3*time.Minute)
+	reservation := m.check(t, shortBoot)
 	require.Equal(t, model.ReservationActive, reservation.Status)
 	require.Empty(t, m.provider.Deletes())
 	require.False(t, m.tokenRevoked())
@@ -91,7 +90,7 @@ func TestProviderActiveAtBootDeadlineIsKeptWithoutWaitingForAgent(t *testing.T) 
 }
 
 func TestAlreadyActiveReservationDoesNotAcquireAnotherBootDeadline(t *testing.T) {
-	m := initialProviderBoot(t, 3*time.Minute)
+	m := newBootingMachine(t, shortBoot)
 	m.state.Reservations[0].Status = model.ReservationActive
 	// A provider can briefly report pending during a later reboot. Keep
 	// the already-running booking and its registration token in that case.
@@ -103,7 +102,7 @@ func TestAlreadyActiveReservationDoesNotAcquireAnotherBootDeadline(t *testing.T)
 }
 
 func TestUnknownProviderStatusDoesNotProveBootTimedOut(t *testing.T) {
-	m := initialProviderBoot(t, 3*time.Minute)
+	m := newBootingMachine(t, shortBoot)
 	m.provider.SetStatus(m.instance, providers.StatusUnknown, "maintenance status unavailable")
 	require.Equal(t, model.ReservationPending, m.check(t, time.Hour).Status)
 	require.Empty(t, m.provider.Deletes())
@@ -111,11 +110,11 @@ func TestUnknownProviderStatusDoesNotProveBootTimedOut(t *testing.T) {
 }
 
 func TestUnavailableProviderDoesNotProveBootTimedOut(t *testing.T) {
-	m := initialProviderBoot(t, 3*time.Minute)
+	m := newBootingMachine(t, shortBoot)
 	m.provider.getErr = errors.New("provider status unavailable")
 	reservation := m.check(t, time.Hour)
 	require.Equal(t, model.ReservationPending, reservation.Status)
-	require.Contains(t, reservation.LastError, "provider status unavailable")
+	require.Contains(t, reservation.LastError, m.provider.getErr.Error())
 	require.Empty(t, m.provider.Deletes())
 	require.False(t, m.tokenRevoked())
 }

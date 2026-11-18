@@ -30,6 +30,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -1208,6 +1209,81 @@ func TestRegistryOfHoldsWhatItIsGiven(t *testing.T) {
 	provider, ok := registry.Get("a")
 	require.True(t, ok)
 	require.Equal(t, "a", provider.Name())
+}
+
+func TestConfiguredNamesIsNilSafeSortedAndCallerOwned(t *testing.T) {
+	var missing *Registry
+	require.Nil(t, missing.ConfiguredNames())
+	require.Empty(t, RegistryOf().ConfiguredNames())
+	registry := RegistryOf(NewFake("z", testOwner), NewFake("a", testOwner), NewFake("m", testOwner))
+	names := registry.ConfiguredNames()
+	require.Equal(t, []string{"a", "m", "z"}, names)
+	names[0] = "changed"
+	require.Equal(t, []string{"a", "m", "z"}, registry.ConfiguredNames())
+}
+
+func TestConfiguredNamesIncludesDisabledWithoutEnablingDiscovery(t *testing.T) {
+	registry := NewRegistry(types.ProviderConfig{
+		Disabled:  []string{"VAST"},
+		Vast:      types.VastProviderConfig{ApiKey: "synthetic-key"},
+		Shadeform: types.ShadeformProviderConfig{ApiKey: "synthetic-key"},
+		Hetzner:   types.HetznerProviderConfig{ApiToken: "synthetic-key"},
+	}, testOwner)
+	require.Equal(t, []string{hetznerName, shadeformName, vastName}, registry.ConfiguredNames())
+	require.Equal(t, []string{hetznerName, shadeformName}, registry.Names())
+	require.False(t, registry.IsEnabled(vastName))
+	_, configured := registry.Get(vastName)
+	require.True(t, configured)
+}
+
+// The names under providers.disabled are written as an operator writes them:
+// in any case, with spaces around them, and more than once.
+func TestDisabledProvidersKeepCredentialsWithoutSellingMachines(t *testing.T) {
+	var requests atomic.Int32
+	vastAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer vastAPI.Close()
+	registry := NewRegistry(types.ProviderConfig{
+		Disabled:  []string{" AWS ", "gcp", "aws", "VAST"},
+		AWS:       types.AWSProviderConfig{Regions: []types.AWSProviderRegionConfig{{Name: "us-east-1"}}},
+		GCP:       types.GCPProviderConfig{ServiceAccountKey: gcpTestKeyJSON(t, "https://oauth2.googleapis.com/token")},
+		Shadeform: types.ShadeformProviderConfig{ApiKey: "synthetic-key"},
+		Vast:      types.VastProviderConfig{ApiKey: "synthetic-key", BaseURL: vastAPI.URL},
+	}, testOwner)
+	require.Equal(t, []string{shadeformName}, registry.Names())
+	for _, name := range []string{awsName, gcpName, vastName} {
+		client, ok := registry.Get(name)
+		require.True(t, ok, "credentials remain available for existing-machine cleanup")
+		require.False(t, registry.IsEnabled(name))
+		offers, err := client.Offers(context.Background(), OfferFilter{})
+		require.NoError(t, err)
+		require.Empty(t, offers, "disabling must not contact a provider or expose offers")
+		_, err = client.Create(context.Background(), CreateRequest{})
+		require.ErrorIs(t, err, ErrDisabled)
+		require.False(t, Unanswered(err), "a disabled create buys nothing")
+	}
+	require.Zero(t, requests.Load(), "disabled Vast discovery and purchases must consume no API quota")
+}
+
+func TestDisabledProviderStillManagesAndDeletesExistingMachines(t *testing.T) {
+	fake := NewFake(awsName, testOwner)
+	id := fake.Plant(testOwner, StatusActive, map[string]string{"beam-machine": "existing"})
+	registry := RegistryOf(disabledProvider{Provider: fake})
+	client, ok := registry.Get(awsName)
+	require.True(t, ok)
+	ctx := context.Background()
+	got, err := client.Get(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, StatusActive, got.Status)
+	listed, err := client.List(ctx)
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	require.NoError(t, client.Extend(ctx, id, time.Now().Add(time.Hour)))
+	require.NoError(t, client.Delete(ctx, id))
+	_, err = client.Get(ctx, id)
+	require.ErrorIs(t, err, ErrNotFound)
 }
 
 // loggedError is a line of the log at the error level.
@@ -5354,9 +5430,8 @@ func newNebiusSite(t *testing.T) site {
 		refuse: func(reason error) { api.refuse(nebiusRefusals[reason]) },
 		lose:   api.lose,
 		bought: func() (string, string) {
-			create := api.lastCreate()
-			userData, _ := create["spec"].(map[string]any)["cloudInitUserData"].(string)
-			return create["metadata"].(map[string]any)["name"].(string), nebiusStartupCommand(t, userData)[2]
+			name := api.lastCreate()["metadata"].(map[string]any)["name"].(string)
+			return name, nebiusStartupCommand(t, nebiusUserData(api))[2]
 		},
 		plantForeign: func() string {
 			offers, err := api.client(foreignOwner).Offers(context.Background(), OfferFilter{})
@@ -5501,7 +5576,7 @@ func TestNebiusCreateSendsWhatNebiusNeeds(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, Instance{ID: "computeinstance-e000001", Status: StatusPending, Tags: map[string]string{"beam-machine": "a1b2c3d4"}}, created)
-	userData := api.lastCreate()["spec"].(map[string]any)["cloudInitUserData"].(string)
+	userData := nebiusUserData(api)
 	require.Equal(t, "#!/usr/bin/env bash\nset -euo pipefail\ncurl -fsSL https://gateway.example/join | sh\n", nebiusStartupCommand(t, userData)[2])
 
 	require.Equal(t, map[string]any{
@@ -7546,6 +7621,11 @@ func TestVastReadsTheCountryOfAPlace(t *testing.T) {
 const (
 	verdaTestClientID = "verda-test-client"
 	verdaTestSecret   = "verda-test-secret"
+
+	// The IDs the stand-in gives the scripts and instances it makes, which
+	// it numbers together, from one.
+	verdaScriptIDFormat   = "4f74ddc3-0293-4f7e-80e6-%012d"
+	verdaInstanceIDFormat = "0a6842d1-bc59-4e8d-abd7-%012d"
 )
 
 // verdaAPI stands in for Verda. It answers with the shapes of Verda's
@@ -7694,7 +7774,7 @@ func (a *verdaAPI) addScript(w http.ResponseWriter, r *http.Request) {
 	var body map[string]any
 	assert.NoError(a.t, json.NewDecoder(r.Body).Decode(&body))
 	a.nextID++
-	body["id"] = fmt.Sprintf("4f74ddc3-0293-4f7e-80e6-%012d", a.nextID)
+	body["id"] = fmt.Sprintf(verdaScriptIDFormat, a.nextID)
 	body["created_at"] = a.now.Format(time.RFC3339Nano)
 	a.scripts = append(a.scripts, body)
 	writeJSON(w, http.StatusCreated, body["id"])
@@ -7740,7 +7820,7 @@ func (a *verdaAPI) create(w http.ResponseWriter, r *http.Request) {
 	a.nextID++
 	instance := map[string]any{}
 	assert.NoError(a.t, json.Unmarshal(sample(a.t, "verda/instance"), &instance))
-	instance["id"] = fmt.Sprintf("0a6842d1-bc59-4e8d-abd7-%012d", a.nextID)
+	instance["id"] = fmt.Sprintf(verdaInstanceIDFormat, a.nextID)
 	instance["status"] = "ordered"
 	instance["ip"] = nil
 	instance["os_volume_id"] = fmt.Sprintf("95cec4c3-af69-42eb-a790-%012d", a.nextID)

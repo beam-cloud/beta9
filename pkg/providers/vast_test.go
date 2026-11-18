@@ -8,6 +8,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// vastAsksPath is where Vast takes a bid for a machine.
+const vastAsksPath = "/api/v0/asks/"
+
 // A real VM bid returned HTTP 200, success:false, and a positive contract.
 // Rejecting that answer loses the purchased resource and prevents startup.
 func TestVastCreateRetainsQueuedContractDespiteFalseSuccess(t *testing.T) {
@@ -18,13 +21,12 @@ func TestVastCreateRetainsQueuedContractDespiteFalseSuccess(t *testing.T) {
 			"instance_api_key": "synthetic-response-secret",
 		}}
 	})
-	created, err := api.client(testOwner).Create(context.Background(), CreateRequest{
-		Offer: vast5090, Name: "beam-vast-queued", Tags: map[string]string{"beam-pool": "vast"},
-	})
+	tags := map[string]string{"beam-pool": "vast"}
+	created, err := api.client(testOwner).Create(context.Background(), CreateRequest{Offer: vast5090, Name: "beam-vast-queued", Tags: tags})
 	require.NoError(t, err)
-	require.Equal(t, Instance{ID: "61274519", Status: StatusPending, Tags: map[string]string{"beam-pool": "vast"}}, created)
+	require.Equal(t, Instance{ID: "61274519", Status: StatusPending, Tags: tags}, created)
 	require.Equal(t, false, api.lastCreate()["cancel_unavail"])
-	require.Equal(t, 1, api.sent("PUT", "/api/v0/asks/"), "the purchase is never retried")
+	require.Equal(t, 1, api.sent(http.MethodPut, vastAsksPath), "the purchase is never retried")
 }
 
 func TestVastCreateMissingContractRemainsUnanswered(t *testing.T) {
@@ -41,28 +43,28 @@ func TestVastCreateMissingContractRemainsUnanswered(t *testing.T) {
 			_, err := api.client(testOwner).Create(context.Background(), CreateRequest{Offer: vast5090, Name: "beam-vast-unknown"})
 			require.Error(t, err)
 			require.True(t, Unanswered(err), "an accepted response without an ID cannot prove no purchase occurred")
-			require.Equal(t, 1, api.sent("PUT", "/api/v0/asks/"))
+			require.Equal(t, 1, api.sent(http.MethodPut, vastAsksPath))
 		})
 	}
 }
 
 func TestVastInitialBidBootPrecedesStoppedIntent(t *testing.T) {
-	for _, state := range []string{"", "created", "loading"} {
+	for _, state := range []string{"", vastCreated, vastLoading} {
 		t.Run("initial "+state, func(t *testing.T) {
 			// These stopped fields and null/loading actual states were
 			// observed before the first boot of a real VM bid.
-			instance := vastInstance{Bid: true, ActualStatus: state, State: "stopped", IntendedStatus: "stopped"}
+			instance := vastInstance{Bid: true, ActualStatus: state, State: vastStopped, IntendedStatus: vastStopped}
 			require.Equal(t, StatusPending, instance.status())
 		})
 	}
 	for name, instance := range map[string]vastInstance{
-		"running with stopped intent": {Bid: true, ActualStatus: "running", IntendedStatus: "stopped"},
-		"running with stopped state":  {Bid: true, ActualStatus: "running", State: "stopped"},
-		"exited after running":        {Bid: true, ActualStatus: "exited"},
-		"waiting after interruption":  {Bid: true, ActualStatus: "scheduling"},
+		"running with stopped intent": {Bid: true, ActualStatus: vastRunning, IntendedStatus: vastStopped},
+		"running with stopped state":  {Bid: true, ActualStatus: vastRunning, State: vastStopped},
+		"exited after running":        {Bid: true, ActualStatus: vastExited},
+		"waiting after interruption":  {Bid: true, ActualStatus: vastScheduling},
 	} {
 		t.Run(name, func(t *testing.T) { require.Equal(t, StatusInterrupted, instance.status()) })
 	}
 	// The initial-VM exception does not change on-demand stopped states.
-	require.Equal(t, StatusFailed, (vastInstance{ActualStatus: "loading", State: "stopped"}).status())
+	require.Equal(t, StatusFailed, (vastInstance{ActualStatus: vastLoading, State: vastStopped}).status())
 }
