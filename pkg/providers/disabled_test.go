@@ -2,6 +2,9 @@ package providers
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,14 +13,21 @@ import (
 )
 
 func TestDisabledProvidersKeepCredentialsWithoutSellingMachines(t *testing.T) {
+	var requests atomic.Int32
+	vastAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer vastAPI.Close()
 	registry := NewRegistry(types.ProviderConfig{
-		Disabled:  []string{" AWS ", "gcp", "aws"},
+		Disabled:  []string{" AWS ", "gcp", "aws", "VAST"},
 		AWS:       types.AWSProviderConfig{Regions: []types.AWSProviderRegionConfig{{Name: "us-east-1"}}},
 		GCP:       types.GCPProviderConfig{ServiceAccountKey: gcpTestKeyJSON(t, "https://oauth2.googleapis.com/token")},
 		Shadeform: types.ShadeformProviderConfig{ApiKey: "synthetic-key"},
+		Vast:      types.VastProviderConfig{ApiKey: "synthetic-key", BaseURL: vastAPI.URL},
 	}, testOwner)
 	require.Equal(t, []string{"shadeform"}, registry.Names())
-	for _, name := range []string{"aws", "gcp"} {
+	for _, name := range []string{"aws", "gcp", "vast"} {
 		client, ok := registry.Get(name)
 		require.True(t, ok, "credentials remain available for existing-machine cleanup")
 		require.False(t, registry.IsEnabled(name))
@@ -28,6 +38,7 @@ func TestDisabledProvidersKeepCredentialsWithoutSellingMachines(t *testing.T) {
 		require.ErrorIs(t, err, ErrDisabled)
 		require.False(t, Unanswered(err), "a disabled create buys nothing")
 	}
+	require.Zero(t, requests.Load(), "disabled Vast discovery and purchases must consume no API quota")
 }
 
 func TestDisabledProviderStillManagesAndDeletesExistingMachines(t *testing.T) {

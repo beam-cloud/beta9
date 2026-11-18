@@ -10772,6 +10772,7 @@ const sampleAnswers = `{
       "manufacturer": "AMD",
       "display_name": "Rome/Milan",
       "supported_os": [
+        "24.04.base",
         "ubuntu-24.04",
         "ubuntu-24.04-cuda-12.6",
         "ubuntu-24.04-cuda-12.6-docker",

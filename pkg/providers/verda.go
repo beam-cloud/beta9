@@ -40,7 +40,7 @@ const (
 	verdaDeletePermanently = "delete_permanently"
 )
 
-// verdaImages are the images a machine boots, best first: Ubuntu with the
+// verdaImages are the images a GPU machine boots, best first: Ubuntu with the
 // NVIDIA driver and Docker. Verda's older GPUs run the older driver only.
 var verdaImages = []string{
 	"24.04.cuda13.0.docker",
@@ -52,6 +52,10 @@ var verdaImages = []string{
 	"ubuntu-24.04-cuda-12.8-open-docker",
 	"ubuntu-24.04-cuda-12.6-docker",
 }
+
+// CPU machines use plain Ubuntu without GPU image initialization or driver
+// requirements.
+var verdaCPUImages = []string{"24.04.base"}
 
 // Verda buys from Verda, formerly DataCrunch: on-demand machines, and spot
 // machines that Verda takes back without notice.
@@ -83,11 +87,6 @@ func NewVerda(config types.VerdaProviderConfig, owner string) (*Verda, error) {
 		return nil, errors.New("providers.verda.clientSecret is not set")
 	}
 	config.BaseURL = cmp.Or(config.BaseURL, verdaBaseURL)
-	// A machine boots the first of the images that its instance type
-	// supports, and a type that supports none is not offered.
-	if len(config.Images) == 0 {
-		config.Images = verdaImages
-	}
 	if config.DiskGB <= 0 {
 		config.DiskGB = defaultDiskGB
 	}
@@ -191,10 +190,21 @@ func (c *Verda) knownCatalogue(ctx context.Context) (verdaCatalogue, error) {
 	})
 }
 
-// image returns the image a machine of the type boots, or "" when the type
-// supports none of the configured ones.
+// images preserves an explicit preference for either kind of machine. With
+// no override, only GPU machines are eligible for the default CUDA images.
+func (c *Verda) images(instanceType verdaInstanceType) []string {
+	if len(c.config.Images) > 0 {
+		return c.config.Images
+	}
+	if instanceType.GPU.Count == 0 {
+		return verdaCPUImages
+	}
+	return verdaImages
+}
+
+// image returns the first supported image, or "" when none is compatible.
 func (c *Verda) image(instanceType verdaInstanceType) string {
-	for _, image := range c.config.Images {
+	for _, image := range c.images(instanceType) {
 		if slices.Contains(instanceType.SupportedOS, image) {
 			return image
 		}
@@ -327,7 +337,7 @@ func (c *Verda) Create(ctx context.Context, req CreateRequest) (Instance, error)
 	}
 	image := c.image(catalogue.types[at])
 	if image == "" {
-		return Instance{}, fmt.Errorf("Verda instance type %q boots none of the images %v", req.Offer.ID, c.config.Images)
+		return Instance{}, fmt.Errorf("Verda instance type %q boots none of the images %v", req.Offer.ID, c.images(catalogue.types[at]))
 	}
 
 	body := verdaCreate{
