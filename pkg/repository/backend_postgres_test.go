@@ -786,3 +786,161 @@ func receiveTaskEventStatus(t *testing.T, statuses <-chan types.TaskStatus) type
 		return ""
 	}
 }
+
+func customDomainRows(domain, deploymentName string, version uint, port uint32, status types.CustomDomainStatus) *sqlmock.Rows {
+	now := time.Now().UTC()
+	return sqlmock.NewRows([]string{
+		"id", "external_id", "workspace_id", "domain", "deployment_name", "stub_type",
+		"version", "port", "status", "source", "verification_token", "verified_at", "created_at", "updated_at", "subdomain",
+	}).AddRow(
+		uint(1), "dom-ext-1", uint(7), domain, deploymentName, types.StubTypeEndpointDeployment,
+		version, port, string(status), string(types.CustomDomainSourceAPI), "beta9-verify-tok", nil, now, now, deploymentName+"-abc1234",
+	)
+}
+
+func TestCustomDomainSQLAndTransactions(t *testing.T) {
+	t.Run("CreateCustomDomain inserts pending claim and maps conflict", func(t *testing.T) {
+		repo, mock := NewBackendPostgresRepositoryForTest()
+		mock.ExpectQuery(`ON CONFLICT \(workspace_id, domain\) DO NOTHING`).
+			WithArgs(uint(7), "api.customer.io", "my-api", types.StubTypeEndpointDeployment, uint(0), uint32(0), "pending", "api", "tok-1").
+			WillReturnRows(customDomainRows("api.customer.io", "my-api", 0, 0, types.CustomDomainStatusPending))
+
+		cd, err := repo.CreateCustomDomain(context.Background(), &types.CustomDomain{
+			WorkspaceId:       7,
+			Domain:            "API.Customer.IO.",
+			DeploymentName:    "my-api",
+			StubType:          types.StubTypeEndpointDeployment,
+			VerificationToken: "tok-1",
+		})
+		require.NoError(t, err)
+		require.Equal(t, "api.customer.io", cd.Domain)
+		require.NoError(t, mock.ExpectationsWereMet())
+
+		mock.ExpectQuery(`ON CONFLICT \(workspace_id, domain\) DO NOTHING`).
+			WillReturnError(sql.ErrNoRows)
+		_, err = repo.CreateCustomDomain(context.Background(), &types.CustomDomain{
+			WorkspaceId:       7,
+			Domain:            "api.customer.io",
+			DeploymentName:    "my-api",
+			VerificationToken: "tok-1",
+		})
+		require.ErrorIs(t, err, types.ErrCustomDomainAlreadyExists)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("UpsertCustomDomains commits all domains in one transaction", func(t *testing.T) {
+		repo, mock := NewBackendPostgresRepositoryForTest()
+		mock.ExpectBegin()
+		mock.ExpectQuery(`custom_domain\.deployment_name = EXCLUDED\.deployment_name`).
+			WithArgs(uint(7), "a.customer.io", "my-api", types.StubTypeEndpointDeployment, uint(0), uint32(0), "pending", "deploy", "tok-a").
+			WillReturnRows(customDomainRows("a.customer.io", "my-api", 0, 0, types.CustomDomainStatusPending))
+		mock.ExpectQuery(`custom_domain\.deployment_name = EXCLUDED\.deployment_name`).
+			WithArgs(uint(7), "b.customer.io", "my-api", types.StubTypeEndpointDeployment, uint(0), uint32(0), "pending", "deploy", "tok-b").
+			WillReturnRows(customDomainRows("b.customer.io", "my-api", 0, 0, types.CustomDomainStatusPending))
+		mock.ExpectCommit()
+
+		out, err := repo.UpsertCustomDomains(context.Background(), []*types.CustomDomain{
+			{WorkspaceId: 7, Domain: "a.customer.io", DeploymentName: "my-api", StubType: types.StubTypeEndpointDeployment, Source: types.CustomDomainSourceDeploy, VerificationToken: "tok-a"},
+			{WorkspaceId: 7, Domain: "b.customer.io", DeploymentName: "my-api", StubType: types.StubTypeEndpointDeployment, Source: types.CustomDomainSourceDeploy, VerificationToken: "tok-b"},
+		})
+		require.NoError(t, err)
+		require.Len(t, out, 2)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("UpsertCustomDomains rolls back transaction when domain belongs to another deployment", func(t *testing.T) {
+		repo, mock := NewBackendPostgresRepositoryForTest()
+		mock.ExpectBegin()
+		mock.ExpectQuery(`INSERT INTO custom_domain`).
+			WillReturnRows(customDomainRows("a.customer.io", "my-api", 0, 0, types.CustomDomainStatusPending))
+		mock.ExpectQuery(`INSERT INTO custom_domain`).
+			WillReturnError(sql.ErrNoRows)
+		mock.ExpectRollback()
+
+		_, err := repo.UpsertCustomDomains(context.Background(), []*types.CustomDomain{
+			{WorkspaceId: 7, Domain: "a.customer.io", DeploymentName: "my-api", StubType: types.StubTypeEndpointDeployment, Source: types.CustomDomainSourceDeploy, VerificationToken: "tok-a"},
+			{WorkspaceId: 7, Domain: "taken.customer.io", DeploymentName: "my-api", StubType: types.StubTypeEndpointDeployment, Source: types.CustomDomainSourceDeploy, VerificationToken: "tok-b"},
+		})
+		require.ErrorIs(t, err, types.ErrCustomDomainBoundToOtherDeployment)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("PruneDeployCustomDomains deletes only deploy-sourced domains not in keep list", func(t *testing.T) {
+		repo, mock := NewBackendPostgresRepositoryForTest()
+		mock.ExpectQuery(`DELETE FROM custom_domain[\s\S]*AND source = 'deploy'[\s\S]*AND NOT \(domain = ANY\(\$4\)\)`).
+			WithArgs(uint(7), "my-api", types.StubTypeEndpointDeployment, pq.StringArray{"kept.customer.io"}).
+			WillReturnRows(customDomainRows("old.customer.io", "my-api", 0, 0, types.CustomDomainStatusPending))
+
+		pruned, err := repo.PruneDeployCustomDomains(context.Background(), 7, "my-api", types.StubTypeEndpointDeployment, []string{"Kept.Customer.IO."})
+		require.NoError(t, err)
+		require.Len(t, pruned, 1)
+		require.Equal(t, "old.customer.io", pruned[0].Domain)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("ActivateCustomDomain locks domain rows, demotes prior active claim, and activates target", func(t *testing.T) {
+		repo, mock := NewBackendPostgresRepositoryForTest()
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT id, domain FROM custom_domain`).
+			WithArgs(uint(7), "dom-ext-1").
+			WillReturnRows(sqlmock.NewRows([]string{"id", "domain"}).AddRow(uint(1), "api.customer.io"))
+		mock.ExpectExec(`SELECT id FROM custom_domain WHERE domain = \$1 ORDER BY id FOR UPDATE`).
+			WithArgs("api.customer.io").
+			WillReturnResult(sqlmock.NewResult(0, 2))
+		mock.ExpectExec(`UPDATE custom_domain[\s\S]*SET status = 'failed'[\s\S]*WHERE domain = \$1 AND status = 'active' AND id <> \$2`).
+			WithArgs("api.customer.io", uint(1)).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectQuery(`SET status = 'active'`).
+			WithArgs(uint(1)).
+			WillReturnRows(customDomainRows("api.customer.io", "my-api", 0, 0, types.CustomDomainStatusActive))
+		mock.ExpectCommit()
+
+		cd, err := repo.ActivateCustomDomain(context.Background(), 7, "dom-ext-1")
+		require.NoError(t, err)
+		require.Equal(t, types.CustomDomainStatusActive, cd.Status)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("GetDeploymentByCustomDomain distinguishes missing domain from inactive deployment", func(t *testing.T) {
+		repo, mock := NewBackendPostgresRepositoryForTest()
+		mock.ExpectQuery(`FROM custom_domain cd`).
+			WithArgs("missing.customer.io").
+			WillReturnError(sql.ErrNoRows)
+		_, _, err := repo.GetDeploymentByCustomDomain(context.Background(), "missing.customer.io")
+		require.ErrorIs(t, err, types.ErrCustomDomainNotFound)
+		require.NoError(t, mock.ExpectationsWereMet())
+
+		mock.ExpectQuery(`FROM custom_domain cd[\s\S]*AND \(cd\.version = 0 OR version = cd\.version\)`).
+			WithArgs("stopped.customer.io").
+			WillReturnRows(customDomainRows("stopped.customer.io", "my-api", 0, 0, types.CustomDomainStatusActive))
+		mock.ExpectQuery(`FROM deployment d`).
+			WithArgs(uint(7), "my-api", types.StubTypeEndpointDeployment, uint(0)).
+			WillReturnError(sql.ErrNoRows)
+		_, cd, err := repo.GetDeploymentByCustomDomain(context.Background(), "stopped.customer.io")
+		require.ErrorIs(t, err, types.ErrCustomDomainDeploymentInactive)
+		require.NotNil(t, cd)
+		require.NoError(t, mock.ExpectationsWereMet())
+
+		mock.ExpectQuery(`FROM custom_domain cd`).
+			WithArgs("active.customer.io").
+			WillReturnRows(customDomainRows("active.customer.io", "my-api", 0, 0, types.CustomDomainStatusActive))
+		mock.ExpectQuery(`FROM deployment d`).
+			WithArgs(uint(7), "my-api", types.StubTypeEndpointDeployment, uint(0)).
+			WillReturnRows(sqlmock.NewRows([]string{
+				"id", "name", "subdomain", "workspace_id", "version", "active",
+				"workspace.external_id", "workspace.name",
+				"stub.external_id", "stub.name", "stub.type", "stub.config",
+			}).AddRow(
+				uint(10), "my-api", "my-api-abc1234", uint(7), uint(1), true,
+				"ws-ext-7", "ws-seven",
+				"stub-ext-10", "my-api", types.StubTypeEndpointDeployment, `{"authorized":true}`,
+			))
+		dep, activeCD, err := repo.GetDeploymentByCustomDomain(context.Background(), "active.customer.io")
+		require.NoError(t, err)
+		require.NotNil(t, activeCD)
+		require.NotNil(t, dep)
+		require.Equal(t, "ws-ext-7", dep.Workspace.ExternalId)
+		require.Equal(t, "stub-ext-10", dep.Stub.ExternalId)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}

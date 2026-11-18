@@ -10,10 +10,12 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/gofrs/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseAndValidateDeploymentStubId(t *testing.T) {
@@ -153,6 +155,54 @@ func TestParseAndValidateDeploymentStubId(t *testing.T) {
 			assert.Equal(t, tt.expectedStubId, stubId)
 		})
 	}
+}
+
+func TestParseAndValidateDeploymentStubIdEnforcesExpectedWorkspace(t *testing.T) {
+	backendRepoForTest, sqlmock := repository.NewBackendPostgresRepositoryForTest()
+	cache := NewDeploymentStubCache()
+
+	wsA := uuid.Must(uuid.NewV4()).String()
+	wsB := uuid.Must(uuid.NewV4()).String()
+	stubA := uuid.Must(uuid.NewV4()).String()
+	stubB := uuid.Must(uuid.NewV4()).String()
+
+	authA := &auth.AuthInfo{
+		Workspace: &types.Workspace{Id: 1, ExternalId: wsA},
+		Token:     &types.Token{TokenType: types.TokenTypeWorkspacePrimary, Workspace: &types.Workspace{ExternalId: wsA}},
+	}
+	authB := &auth.AuthInfo{
+		Workspace: &types.Workspace{Id: 2, ExternalId: wsB},
+		Token:     &types.Token{TokenType: types.TokenTypeWorkspacePrimary, Workspace: &types.Workspace{ExternalId: wsB}},
+	}
+	adminB := &auth.AuthInfo{
+		Workspace: &types.Workspace{Id: 2, ExternalId: wsB},
+		Token:     &types.Token{TokenType: types.TokenTypeClusterAdmin, Workspace: &types.Workspace{ExternalId: wsB}},
+	}
+
+	// Warm the cache for Workspace B's own "api" v1 deployment via direct path (no expected workspace).
+	sqlmock.ExpectQuery("SELECT").WillReturnRows(sqlmock.NewRows([]string{"id", "stub.external_id", "active", "version"}).AddRow(2, stubB, true, 1))
+	mockStubQuery(sqlmock, stubB, wsB)
+	gotB, err := ParseAndValidateDeploymentStubId(context.Background(), cache, authB, "", "api", "1", types.StubTypeEndpointDeployment, backendRepoForTest)
+	require.NoError(t, err)
+	require.Equal(t, stubB, gotB)
+
+	// Calling Workspace A's routed host with Workspace B's token (or ClusterAdmin scoped to WS B)
+	// must fail with 401 even when WS B's deployment is cached.
+	ctxForA := common.WithExpectedWorkspaceExternalID(context.Background(), wsA)
+	for _, caller := range []*auth.AuthInfo{authB, adminB, nil} {
+		got, err := ParseAndValidateDeploymentStubId(ctxForA, cache, caller, "", "api", "1", types.StubTypeEndpointDeployment, backendRepoForTest)
+		require.Error(t, err)
+		require.Equal(t, apiv1.HTTPUnauthorized("Invalid token").Error(), err.Error())
+		require.Empty(t, got)
+	}
+
+	// Workspace A's token matches the expected workspace and resolves Workspace A's stub.
+	sqlmock.ExpectQuery("SELECT").WillReturnRows(sqlmock.NewRows([]string{"id", "stub.external_id", "active", "version"}).AddRow(1, stubA, true, 1))
+	mockStubQuery(sqlmock, stubA, wsA)
+	gotA, err := ParseAndValidateDeploymentStubId(ctxForA, cache, authA, "", "api", "1", types.StubTypeEndpointDeployment, backendRepoForTest)
+	require.NoError(t, err)
+	require.Equal(t, stubA, gotA)
+	require.NoError(t, sqlmock.ExpectationsWereMet())
 }
 
 func mockStubQuery(sqlmock sqlmock.Sqlmock, stubId, workspaceId string) {

@@ -3,6 +3,7 @@ package gatewayservices
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -438,4 +439,244 @@ func TestCheckpointCacheEnvLeavesHubTransportSelectionToRuntime(t *testing.T) {
 	require.NotContains(t, env, "HF_HUB_DISABLE_XET=1")
 	require.NotContains(t, env, "HF_HUB_ENABLE_HF_TRANSFER=0")
 	require.Contains(t, env, "HF_XET_CACHE=/tmp/beam-checkpoint-compile-cache/hf-xet")
+}
+
+type deployStubCustomDomainRepo struct {
+	repository.BackendRepository
+	stub              *types.StubWithRelated
+	existingDomains   map[string]*types.CustomDomain
+	latestDeployment  *types.DeploymentWithRelated
+	activeDeployments []types.DeploymentWithRelated
+	upsertErr         error
+	upserted          []*types.CustomDomain
+	created           []types.Deployment
+	deleted           []types.Deployment
+	updated           []types.Deployment
+	listedDomains     []types.CustomDomain
+}
+
+func (r *deployStubCustomDomainRepo) GetStubByExternalId(_ context.Context, externalId string, _ ...types.QueryFilter) (*types.StubWithRelated, error) {
+	if r.stub == nil || r.stub.ExternalId != externalId {
+		return nil, errors.New("not found")
+	}
+	return r.stub, nil
+}
+
+func (r *deployStubCustomDomainRepo) GetLatestDeploymentByName(_ context.Context, _ uint, _ string, _ string, _ bool) (*types.DeploymentWithRelated, error) {
+	return r.latestDeployment, nil
+}
+
+func (r *deployStubCustomDomainRepo) ListDeploymentsWithRelated(_ context.Context, _ types.DeploymentFilter) ([]types.DeploymentWithRelated, error) {
+	return r.activeDeployments, nil
+}
+
+func (r *deployStubCustomDomainRepo) GetCustomDomainByIdentifier(_ context.Context, workspaceId uint, idOrDomain string) (*types.CustomDomain, error) {
+	if r.existingDomains == nil {
+		return nil, nil
+	}
+	if cd, ok := r.existingDomains[idOrDomain]; ok && cd != nil && (cd.WorkspaceId == 0 || cd.WorkspaceId == workspaceId) {
+		return cd, nil
+	}
+	return nil, nil
+}
+
+func (r *deployStubCustomDomainRepo) PruneDeployCustomDomains(_ context.Context, workspaceId uint, deploymentName, stubType string, keep []string) ([]types.CustomDomain, error) {
+	keepSet := make(map[string]struct{}, len(keep))
+	for _, k := range keep {
+		keepSet[types.NormalizeDomain(k)] = struct{}{}
+	}
+	var pruned []types.CustomDomain
+	remaining := make([]types.CustomDomain, 0, len(r.listedDomains))
+	for _, cd := range r.listedDomains {
+		if cd.WorkspaceId == workspaceId && cd.DeploymentName == deploymentName && (cd.StubType == "" || stubType == "" || cd.StubType == stubType) && cd.Source == types.CustomDomainSourceDeploy {
+			if _, ok := keepSet[cd.Domain]; !ok {
+				pruned = append(pruned, cd)
+				continue
+			}
+		}
+		remaining = append(remaining, cd)
+	}
+	r.listedDomains = remaining
+	return pruned, nil
+}
+
+func (r *deployStubCustomDomainRepo) CreateDeployment(_ context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string, appId uint) (*types.Deployment, error) {
+	dep := types.Deployment{
+		Id:          99,
+		ExternalId:  "dep-new",
+		Name:        name,
+		Active:      true,
+		Subdomain:   name + "-abc1234",
+		WorkspaceId: workspaceId,
+		StubId:      stubId,
+		StubType:    stubType,
+		Version:     version,
+		AppId:       appId,
+	}
+	r.created = append(r.created, dep)
+	return &dep, nil
+}
+
+func (r *deployStubCustomDomainRepo) UpdateDeployment(_ context.Context, dep types.Deployment) (*types.Deployment, error) {
+	r.updated = append(r.updated, dep)
+	return &dep, nil
+}
+
+func (r *deployStubCustomDomainRepo) DeleteDeployment(_ context.Context, dep types.Deployment) error {
+	r.deleted = append(r.deleted, dep)
+	return nil
+}
+
+func (r *deployStubCustomDomainRepo) UpsertCustomDomains(_ context.Context, domains []*types.CustomDomain) ([]types.CustomDomain, error) {
+	if r.upsertErr != nil {
+		return nil, r.upsertErr
+	}
+	r.upserted = append(r.upserted, domains...)
+	out := make([]types.CustomDomain, len(domains))
+	for i, d := range domains {
+		out[i] = *d
+		r.listedDomains = append(r.listedDomains, *d)
+	}
+	return out, nil
+}
+
+func (r *deployStubCustomDomainRepo) ListCustomDomains(_ context.Context, _ uint, _ string) ([]types.CustomDomain, error) {
+	return r.listedDomains, nil
+}
+
+func TestDeployStubCustomDomainValidationAndRollback(t *testing.T) {
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Workspace: &types.Workspace{Id: 1, ExternalId: "ws-1", Name: "default"},
+	})
+	rdb, err := repository.NewRedisClientForTest()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	// 1. Rejects unsupported stub types and raw TCP / portless pods without creating a deployment.
+	for _, tc := range []struct {
+		name     string
+		stubType string
+		cfg      string
+		errPart  string
+	}{
+		{"function", types.StubTypeFunctionDeployment, `{"extra":{"custom_domain":["a.customer.io"]}}`, "not supported"},
+		{"taskqueue", types.StubTypeTaskQueueDeployment, `{"extra":{"custom_domain":["a.customer.io"]}}`, "not supported"},
+		{"tcp_pod", types.StubTypePodDeployment, `{"ports":[5432],"tcp":true,"extra":{"custom_domain":["db.customer.io"]}}`, "raw TCP"},
+		{"portless_pod", types.StubTypePodDeployment, `{"extra":{"custom_domain":["pod.customer.io"]}}`, "exposed port"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &deployStubCustomDomainRepo{
+				stub: &types.StubWithRelated{
+					Stub:      types.Stub{Id: 1, ExternalId: "stub-1", Type: types.StubType(tc.stubType), Config: tc.cfg},
+					Workspace: types.Workspace{Id: 1, ExternalId: "ws-1"},
+				},
+			}
+			svc := &GatewayService{backendRepo: repo, redisClient: rdb}
+			resp, callErr := svc.DeployStub(ctx, &pb.DeployStubRequest{StubId: "stub-1", Name: "my-app"})
+			require.NoError(t, callErr)
+			require.False(t, resp.Ok)
+			require.Contains(t, resp.ErrMsg, tc.errPart)
+			require.Empty(t, repo.created)
+		})
+	}
+
+	// 2. Rolls back newly created deployment and restores stopped previous deployment if UpsertCustomDomains fails.
+	prevDep := types.DeploymentWithRelated{
+		Deployment: types.Deployment{
+			Id: 10, ExternalId: "dep-v1", Name: "my-api", Active: true,
+			WorkspaceId: 1, StubType: types.StubTypeEndpointDeployment, Version: 1,
+		},
+		Stub: types.Stub{ExternalId: "stub-v1", Type: types.StubType(types.StubTypeEndpointDeployment), Config: `{}`},
+	}
+	durableDiskCfg, err := json.Marshal(types.StubConfigV1{
+		Disks: []*pb.DurableDisk{{Name: "data"}},
+		Extra: json.RawMessage(`{"custom_domain":["a.customer.io","b.customer.io"]}`),
+	})
+	require.NoError(t, err)
+	rollbackRepo := &deployStubCustomDomainRepo{
+		stub: &types.StubWithRelated{
+			Stub:      types.Stub{Id: 2, ExternalId: "stub-v2", Type: types.StubType(types.StubTypeEndpointDeployment), Config: string(durableDiskCfg)},
+			Workspace: types.Workspace{Id: 1, ExternalId: "ws-1"},
+		},
+		latestDeployment:  &prevDep,
+		activeDeployments: []types.DeploymentWithRelated{prevDep},
+		upsertErr:         types.ErrCustomDomainAlreadyExists,
+	}
+	svc := &GatewayService{backendRepo: rollbackRepo, containerRepo: &deploymentLifecycleContainerRepo{}, redisClient: rdb}
+	resp, err := svc.DeployStub(ctx, &pb.DeployStubRequest{StubId: "stub-v2", Name: "my-api"})
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrMsg, "Failed to bind custom domains")
+	require.Len(t, rollbackRepo.deleted, 1)
+	require.Equal(t, "dep-new", rollbackRepo.deleted[0].ExternalId)
+	// First UpdateDeployment deactivated v1 in stopDeployments; second restored Active=true on rollback.
+	require.Len(t, rollbackRepo.updated, 2)
+	require.False(t, rollbackRepo.updated[0].Active)
+	require.True(t, rollbackRepo.updated[1].Active)
+
+	// 3. Happy path binds all custom domains atomically with source='deploy' and invalidates Redis cache.
+	require.NoError(t, rdb.Set(ctx, common.CustomDomainHandlerCacheKey("a.customer.io"), "-", time.Minute).Err())
+	happyRepo := &deployStubCustomDomainRepo{
+		stub: &types.StubWithRelated{
+			Stub:      types.Stub{Id: 3, ExternalId: "stub-ep", Type: types.StubType(types.StubTypeEndpointDeployment), Config: `{"extra":{"custom_domain":["a.customer.io","b.customer.io"]}}`},
+			Workspace: types.Workspace{Id: 1, ExternalId: "ws-1"},
+		},
+	}
+	happySvc := &GatewayService{backendRepo: happyRepo, redisClient: rdb}
+	resp, err = happySvc.DeployStub(ctx, &pb.DeployStubRequest{StubId: "stub-ep", Name: "my-api"})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Len(t, happyRepo.upserted, 2)
+	require.Equal(t, types.CustomDomainSourceDeploy, happyRepo.upserted[0].Source)
+	require.Equal(t, types.CustomDomainSourceDeploy, happyRepo.upserted[1].Source)
+	exists, err := rdb.Exists(ctx, common.CustomDomainHandlerCacheKey("a.customer.io")).Result()
+	require.NoError(t, err)
+	require.Equal(t, int64(0), exists)
+
+	// 4. Rejects binding a domain already owned by another deployment in the same workspace.
+	conflictRepo := &deployStubCustomDomainRepo{
+		stub: &types.StubWithRelated{
+			Stub:      types.Stub{Id: 4, ExternalId: "stub-conflict", Type: types.StubType(types.StubTypeEndpointDeployment), Config: `{"extra":{"custom_domain":["taken.customer.io"]}}`},
+			Workspace: types.Workspace{Id: 1, ExternalId: "ws-1"},
+		},
+		existingDomains: map[string]*types.CustomDomain{
+			"taken.customer.io": {
+				WorkspaceId:    1,
+				Domain:         "taken.customer.io",
+				DeploymentName: "other-api",
+				StubType:       types.StubTypeEndpointDeployment,
+			},
+		},
+	}
+	conflictSvc := &GatewayService{backendRepo: conflictRepo, redisClient: rdb}
+	resp, err = conflictSvc.DeployStub(ctx, &pb.DeployStubRequest{StubId: "stub-conflict", Name: "my-api"})
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrMsg, "other-api")
+	require.Empty(t, conflictRepo.created)
+
+	// 5. Re-deploying with fewer domains prunes removed deploy-sourced domains but keeps API-sourced domains, and invalidates pruned cache.
+	require.NoError(t, rdb.Set(ctx, common.CustomDomainHandlerCacheKey("removed.customer.io"), "/endpoint/my-api/latest", time.Minute).Err())
+	pruneRepo := &deployStubCustomDomainRepo{
+		stub: &types.StubWithRelated{
+			Stub:      types.Stub{Id: 5, ExternalId: "stub-prune", Type: types.StubType(types.StubTypeEndpointDeployment), Config: `{"extra":{"custom_domain":["kept.customer.io"]}}`},
+			Workspace: types.Workspace{Id: 1, ExternalId: "ws-1"},
+		},
+		listedDomains: []types.CustomDomain{
+			{WorkspaceId: 1, Domain: "kept.customer.io", DeploymentName: "my-api", StubType: types.StubTypeEndpointDeployment, Source: types.CustomDomainSourceDeploy},
+			{WorkspaceId: 1, Domain: "removed.customer.io", DeploymentName: "my-api", StubType: types.StubTypeEndpointDeployment, Source: types.CustomDomainSourceDeploy},
+			{WorkspaceId: 1, Domain: "manual.customer.io", DeploymentName: "my-api", StubType: types.StubTypeEndpointDeployment, Source: types.CustomDomainSourceAPI},
+		},
+	}
+	pruneSvc := &GatewayService{backendRepo: pruneRepo, redisClient: rdb}
+	resp, err = pruneSvc.DeployStub(ctx, &pb.DeployStubRequest{StubId: "stub-prune", Name: "my-api"})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	remainingNames := common.CustomDomainNames(pruneRepo.listedDomains)
+	require.Contains(t, remainingNames, "kept.customer.io")
+	require.Contains(t, remainingNames, "manual.customer.io")
+	require.NotContains(t, remainingNames, "removed.customer.io")
+	prunedExists, err := rdb.Exists(ctx, common.CustomDomainHandlerCacheKey("removed.customer.io")).Result()
+	require.NoError(t, err)
+	require.Equal(t, int64(0), prunedExists)
 }

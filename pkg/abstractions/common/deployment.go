@@ -9,6 +9,7 @@ import (
 
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	expirable "github.com/hashicorp/golang-lru/v2/expirable"
@@ -37,6 +38,12 @@ func ParseAndValidateDeploymentStubId(
 	stubType string,
 	backendRepo repository.BackendRepository,
 ) (string, error) {
+	if expectedWorkspaceID, ok := common.ExpectedWorkspaceExternalID(ctx); ok {
+		if authInfo == nil || authInfo.Workspace == nil || authInfo.Workspace.ExternalId != expectedWorkspaceID {
+			return "", apiv1.HTTPUnauthorized("Invalid token")
+		}
+	}
+
 	cacheKey := makeCacheKey(authInfo, stubId, deploymentName, version, stubType)
 	// A name without a pinned version must resolve the current deployment.
 	cacheable := deploymentName == "" || version != ""

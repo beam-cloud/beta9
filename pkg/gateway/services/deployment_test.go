@@ -143,6 +143,10 @@ func (r *deploymentLifecycleBackendRepo) DeleteDeployment(_ context.Context, dep
 	return nil
 }
 
+func (r *deploymentLifecycleBackendRepo) ListCustomDomains(_ context.Context, _ uint, _ string) ([]types.CustomDomain, error) {
+	return nil, nil
+}
+
 func (r *deploymentLifecycleBackendRepo) UpdateStubConfig(_ context.Context, stubID uint, config *types.StubConfigV1) error {
 	r.stubConfigs[stubID] = config
 	deployment := r.deployments["deployment-id"]

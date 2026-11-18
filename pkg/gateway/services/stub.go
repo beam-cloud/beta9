@@ -1065,6 +1065,48 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		}, nil
 	}
 
+	customDomains := config.CustomDomains()
+	if len(customDomains) > 0 {
+		if !types.SupportsCustomDomain(stub.Type) {
+			return &pb.DeployStubResponse{
+				Ok:     false,
+				ErrMsg: fmt.Sprintf("Custom domains are not supported for %s deployments", stub.Type.Kind()),
+			}, nil
+		}
+		if stub.Type.Kind() == types.StubTypePod {
+			if config.TCP {
+				return &pb.DeployStubResponse{
+					Ok:     false,
+					ErrMsg: "Custom domains are not supported for raw TCP pods",
+				}, nil
+			}
+			if len(config.Ports) == 0 {
+				return &pb.DeployStubResponse{
+					Ok:     false,
+					ErrMsg: "Custom domains on Pods require at least one exposed port",
+				}, nil
+			}
+		}
+	}
+	for _, domain := range customDomains {
+		if err := common.ValidateCustomDomainName(domain, common.ReservedDomains(gws.appConfig)...); err != nil {
+			return &pb.DeployStubResponse{
+				Ok:     false,
+				ErrMsg: fmt.Sprintf("Invalid custom domain %q: %v", domain, err),
+			}, nil
+		}
+		existing, err := gws.backendRepo.GetCustomDomainByIdentifier(ctx, authInfo.Workspace.Id, domain)
+		if err != nil {
+			return &pb.DeployStubResponse{Ok: false, ErrMsg: "Unable to check custom domain availability"}, nil
+		}
+		if existing != nil && (existing.DeploymentName != in.Name || (existing.StubType != "" && existing.StubType != string(stub.Type))) {
+			return &pb.DeployStubResponse{
+				Ok:     false,
+				ErrMsg: fmt.Sprintf("Custom domain %q is already bound to deployment %q", domain, existing.DeploymentName),
+			}, nil
+		}
+	}
+
 	if stub.Type.IsManagedEndpoint() {
 		current, err := gws.managedDeployment(ctx, stub, &config)
 		if err != nil {
@@ -1088,8 +1130,9 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 			ErrMsg: err.Error(),
 		}, nil
 	}
+	var deploymentsToStop []types.DeploymentWithRelated
 	if rolloutPlan.stopLatest {
-		deploymentsToStop := activeDeployments
+		deploymentsToStop = activeDeployments
 		if len(deploymentsToStop) == 0 && rolloutLatestDeployment != nil {
 			deploymentsToStop = []types.DeploymentWithRelated{*rolloutLatestDeployment}
 		}
@@ -1107,6 +1150,56 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 			Ok: false,
 		}, nil
 	}
+
+	// Domains are bound atomically after deployment creation; any binding
+	// failure rolls back the new deployment and reactivates stopped versions.
+	if len(customDomains) > 0 {
+		domainsToBind := make([]*types.CustomDomain, 0, len(customDomains))
+		for _, domain := range customDomains {
+			domainsToBind = append(domainsToBind, &types.CustomDomain{
+				WorkspaceId:    authInfo.Workspace.Id,
+				Domain:         domain,
+				DeploymentName: in.Name,
+				StubType:       string(stub.Type),
+				Status:         types.CustomDomainStatusPending,
+				Source:         types.CustomDomainSourceDeploy,
+			})
+		}
+		if _, err := gws.backendRepo.UpsertCustomDomains(ctx, domainsToBind); err != nil {
+			log.Error().Err(err).Str("deployment", in.Name).Msg("failed to bind custom domains; rolling back deployment")
+			var rollbackFailures []string
+			if rbErr := gws.backendRepo.DeleteDeployment(ctx, *deployment); rbErr != nil {
+				log.Error().Err(rbErr).Str("deployment_id", deployment.ExternalId).Msg("failed to roll back deployment")
+				rollbackFailures = append(rollbackFailures, fmt.Sprintf("new deployment %s could not be removed", deployment.ExternalId))
+			}
+			for _, prev := range deploymentsToStop {
+				prev.Deployment.Active = true
+				if _, restoreErr := gws.backendRepo.UpdateDeployment(ctx, prev.Deployment); restoreErr != nil {
+					log.Error().Err(restoreErr).Str("deployment_id", prev.ExternalId).Msg("failed to restore previous deployment")
+					rollbackFailures = append(rollbackFailures, fmt.Sprintf("previous deployment %s could not be reactivated", prev.ExternalId))
+				} else {
+					gws.reloadInstances(prev.Stub.ExternalId, prev.StubType)
+				}
+			}
+			gws.invalidateDeploymentCustomDomains(ctx, authInfo.Workspace.Id, in.Name)
+			errMsg := fmt.Sprintf("Failed to bind custom domains: %v", err)
+			if len(rollbackFailures) > 0 {
+				errMsg += fmt.Sprintf(" (rollback incomplete: %s; check your deployments)", strings.Join(rollbackFailures, "; "))
+			}
+			return &pb.DeployStubResponse{
+				Ok:     false,
+				ErrMsg: errMsg,
+			}, nil
+		}
+	}
+	if types.SupportsCustomDomain(stub.Type) {
+		if pruned, pruneErr := gws.backendRepo.PruneDeployCustomDomains(ctx, authInfo.Workspace.Id, in.Name, string(stub.Type), customDomains); pruneErr != nil {
+			log.Warn().Err(pruneErr).Str("deployment", in.Name).Msg("failed to prune removed deploy custom domains")
+		} else if len(pruned) > 0 {
+			common.InvalidateCustomDomainCache(ctx, gws.redisClient, common.CustomDomainNames(pruned)...)
+		}
+	}
+	gws.invalidateDeploymentCustomDomains(ctx, authInfo.Workspace.Id, in.Name)
 
 	if stub.Type.IsManagedEndpoint() {
 		if err := gws.registerManagedDeployment(ctx, stub, &config, deployment); err != nil {

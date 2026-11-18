@@ -116,3 +116,15 @@ func BuildSandboxURL(externalUrl, urlType string, stub *types.StubWithRelated, c
 
 	return fmt.Sprintf("%s://%s/%s/container/%s/%s/%d", parsedUrl.Scheme, parsedUrl.Host, stub.Type.RouteKind(), stub.ExternalId, containerId, port)
 }
+
+func BuildCustomDomainURL(externalUrl, domain string) string {
+	normalized := NormalizeDomain(domain)
+	if normalized == "" {
+		return ""
+	}
+	scheme := "https"
+	if parsedUrl, err := url.Parse(externalUrl); err == nil && parsedUrl.Scheme != "" {
+		scheme = parsedUrl.Scheme
+	}
+	return fmt.Sprintf("%s://%s", scheme, normalized)
+}

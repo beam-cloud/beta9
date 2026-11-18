@@ -73,6 +73,15 @@ gateway:
     tls: false
     port: 1994
     enablePrettyLogs: true
+    # Shared secret required by /api/v1/domain/check (X-Domain-Check-Token,
+    # Authorization: Bearer, or ?token=...). Set this in production so only your
+    # reverse proxy can query on-demand TLS eligibility.
+    domainCheckToken: ""
+    # Local development only: answer /api/v1/domain/check without a token.
+    # When domainCheckToken is empty and this is false, the endpoint is disabled.
+    domainCheckAllowUnauthenticated: false
+    # Extra hostnames (e.g. load balancer DNS names) never treated as custom domains.
+    reservedHosts: []
     cors:
       allowOrigins: "*"
       allowHeaders: "*"

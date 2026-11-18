@@ -15,6 +15,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
@@ -353,4 +354,61 @@ func TestGatewayShutdownDeadlineClosesActiveHTTPConnections(t *testing.T) {
 		t.Fatal("HTTP shutdown deadline left the active connection open")
 	}
 	require.Error(t, <-requestDone)
+}
+
+type panicRecoveryTestRepo struct {
+	repository.BackendRepository
+}
+
+func (r *panicRecoveryTestRepo) GetDeploymentByCustomDomain(_ context.Context, domain string) (*types.DeploymentWithRelated, *types.CustomDomain, error) {
+	if domain != "panic.customer.io" {
+		return nil, nil, types.ErrCustomDomainNotFound
+	}
+	return &types.DeploymentWithRelated{
+			Deployment: types.Deployment{
+				Name:      "panic-app",
+				Subdomain: "panic-app-abc1234",
+			},
+			Workspace: types.Workspace{
+				ExternalId: "ws-1",
+			},
+			Stub: types.Stub{
+				ExternalId: "stub-1",
+				Type:       types.StubType(types.StubTypeEndpointDeployment),
+				Config:     `{"authorized":false}`,
+			},
+		}, &types.CustomDomain{
+			Domain: "panic.customer.io",
+			Status: types.CustomDomainStatusActive,
+		}, nil
+}
+
+func TestGatewayHTTPMiddlewareRecoversPanicOnCustomDomainRoute(t *testing.T) {
+	g := &Gateway{
+		BackendRepo: &panicRecoveryTestRepo{},
+		Config: types.AppConfig{
+			GatewayService: types.GatewayServiceConfig{
+				HTTP: types.HTTPConfig{
+					ExternalHost: "app.example.com",
+					ExternalPort: 443,
+					TLS:          true,
+				},
+			},
+		},
+	}
+
+	e := echo.New()
+	g.registerHTTPMiddleware(e)
+	e.GET("/endpoint/public/stub-1", func(c echo.Context) error {
+		panic("boom on custom domain")
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "panic.customer.io"
+	rec := httptest.NewRecorder()
+
+	require.NotPanics(t, func() {
+		e.ServeHTTP(rec, req)
+	})
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
 }

@@ -241,3 +241,18 @@ func TestStubConfigResourceLimitOverridePreservesUnknownFields(t *testing.T) {
 		t.Fatal("ordinary stub config unexpectedly forces resource limits")
 	}
 }
+
+func TestStubConfigCustomDomainsAndSupportsCustomDomain(t *testing.T) {
+	cfg := StubConfigV1{
+		Extra: json.RawMessage(`{"custom_domain":"API.Example.COM., b.example.com","custom_domains":["b.example.com","c.example.com"]}`),
+	}
+	require.Equal(t, []string{"api.example.com", "b.example.com", "c.example.com"}, cfg.CustomDomains())
+
+	require.True(t, SupportsCustomDomain(StubType(StubTypeEndpointDeployment)))
+	require.True(t, SupportsCustomDomain(StubType(StubTypeASGIDeployment)))
+	require.True(t, SupportsCustomDomain(StubType(StubTypePodDeployment)))
+	require.False(t, SupportsCustomDomain(StubType(StubTypeFunctionDeployment)))
+	require.False(t, SupportsCustomDomain(StubType(StubTypeTaskQueueDeployment)))
+	require.False(t, SupportsCustomDomain(StubType(StubTypeManagedEndpointDeployment)))
+	require.False(t, SupportsCustomDomain(StubType(StubTypeEndpointServe)))
+}

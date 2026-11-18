@@ -100,6 +100,7 @@ class Beta9Command(click.Command):
         "memory": "Memory, such as 512Mi or 2Gi.",
         "gpu": "GPU type, such as T4.",
         "port": "Port to expose; repeat for multiple ports.",
+        "custom_domain": "Custom domain to bind to the deployment; repeat or comma-separate for multiple.",
         "env": "Environment variable; repeat for multiple values.",
         "detach": "Submit and return without attaching to logs.",
         "replicas": "Fixed number of service replicas.",
@@ -249,7 +250,7 @@ class CommandGroupCollection(click.CommandCollection):
     def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         groups = {
             "Work": "run deploy dev serve shell logs doctor".split(),
-            "Resources": "container deployment image task volume disk db ls cp rm mv".split(),
+            "Resources": "container deployment domain image task volume disk db ls cp rm mv".split(),
         }
         remaining = set(self.list_commands(ctx)) - {
             name for names in groups.values() for name in names
@@ -260,6 +261,7 @@ class CommandGroupCollection(click.CommandCollection):
             "shell": "Open a shell in a container.",
             "logs": "Read or follow workload logs.",
             "doctor": "Check your connection and credentials.",
+            "domain": "Manage custom domains.",
             "disk": "Manage durable disks.",
             "mv": "Move files within a volume.",
             "machine": "Browse and manage machines.",
@@ -609,6 +611,13 @@ def override_config_options(func: click.Command):
         is_flag=True,
         default=False,
     )(f)
+    f = click.option(
+        "--custom-domain",
+        "custom_domain",
+        type=CommaSeparatedList(click.STRING),
+        multiple=True,
+        help="Bind a custom domain to the deployment (repeatable or comma-separated).",
+    )(f)
     return f
 
 
@@ -630,6 +639,10 @@ def handle_config_override(func, kwargs: Dict[str, str]) -> bool:
 
         for key, value in kwargs.items():
             current_key = key
+            if key == "custom_domain" and value and key not in init_kwargs:
+                raise ValueError(
+                    f"custom_domain is not supported on {type(config_class_instance).__name__}"
+                )
             if value is not None and key in init_kwargs:
                 if isinstance(value, (list, tuple)):
                     value = list(value)
@@ -689,6 +702,20 @@ def handle_config_override(func, kwargs: Dict[str, str]) -> bool:
             )
             kwargs["dockerfile"] = image
             config_class_instance.image = image
+
+        if getattr(config_class_instance, "tcp", False) and getattr(
+            config_class_instance, "custom_domain", None
+        ):
+            current_key = "custom_domain"
+            raise ValueError("custom_domain is not supported when tcp=True")
+
+        if (
+            "ports" in init_kwargs
+            and getattr(config_class_instance, "custom_domain", None)
+            and not getattr(config_class_instance, "ports", None)
+        ):
+            current_key = "custom_domain"
+            raise ValueError("custom_domain on Pods requires at least one exposed port")
 
         return True
     except BaseException as e:

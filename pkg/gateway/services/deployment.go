@@ -262,6 +262,7 @@ func (gws *GatewayService) StartDeployment(ctx context.Context, in *pb.StartDepl
 	}
 
 	gws.reloadInstances(deploymentWithRelated.Stub.ExternalId, deploymentWithRelated.StubType)
+	gws.invalidateDeploymentCustomDomains(ctx, authInfo.Workspace.Id, deploymentWithRelated.Name)
 
 	return &pb.StartDeploymentResponse{
 		Ok: true,
@@ -310,6 +311,8 @@ func (gws *GatewayService) DeleteDeployment(ctx context.Context, in *pb.DeleteDe
 		}, nil
 	}
 
+	gws.invalidateDeploymentCustomDomains(ctx, authInfo.Workspace.Id, deploymentWithRelated.Name)
+
 	return &pb.DeleteDeploymentResponse{
 		Ok: true,
 	}, nil
@@ -330,6 +333,7 @@ func (gws *GatewayService) stopDeployments(deployments []types.DeploymentWithRel
 		}
 
 		gws.reloadInstances(deployment.Stub.ExternalId, deployment.StubType)
+		gws.invalidateDeploymentCustomDomains(ctx, deployment.Deployment.WorkspaceId, deployment.Name)
 
 		if err := gws.stopActiveDeploymentContainers(deployment, false); err != nil {
 			return err
@@ -378,6 +382,13 @@ func (gws *GatewayService) scaleDeployment(ctx context.Context, deployment types
 
 func (gws *GatewayService) reloadInstances(stubId, stubType string) {
 	common.PublishReloadInstance(gws.redisClient, stubId, stubType)
+}
+
+func (gws *GatewayService) invalidateDeploymentCustomDomains(ctx context.Context, workspaceID uint, deploymentName string) {
+	if gws == nil || gws.backendRepo == nil {
+		return
+	}
+	common.InvalidateDeploymentCustomDomains(ctx, gws.backendRepo, gws.redisClient, workspaceID, deploymentName)
 }
 
 func (gws *GatewayService) stopActiveDeploymentContainers(deployment types.DeploymentWithRelated, force bool) error {

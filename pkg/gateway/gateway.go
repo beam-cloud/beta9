@@ -328,19 +328,16 @@ func (g *Gateway) ensureWorkspaceStorage(ctx context.Context, workspace *types.W
 	})
 }
 
-func (g *Gateway) initHttp() error {
-	e := echo.New()
-	e.HideBanner = true
-	e.HidePort = true
-
-	if g.Config.DebugMode {
-		pprof.Register(e)
-	}
+func (g *Gateway) registerHTTPMiddleware(e *echo.Echo) {
+	reservedDomains := common.ReservedDomains(g.Config)
+	baseDomain := gatewaymiddleware.ParseHostFromURL(g.Config.GatewayService.HTTP.GetExternalURL())
 
 	skipSubdomainRoutes := func(c echo.Context) bool {
-		baseDomain := gatewaymiddleware.ParseHostFromURL(g.Config.GatewayService.HTTP.GetExternalURL())
 		subdomain := gatewaymiddleware.ParseSubdomain(c.Request().Host, baseDomain)
-		return subdomain != ""
+		if subdomain != "" {
+			return true
+		}
+		return gatewaymiddleware.IsCandidateCustomDomain(c.Request().Host, baseDomain, reservedDomains...)
 	}
 
 	e.Pre(middleware.RemoveTrailingSlashWithConfig(middleware.TrailingSlashConfig{
@@ -353,10 +350,23 @@ func (g *Gateway) initHttp() error {
 		AllowHeaders: g.Config.GatewayService.HTTP.CORS.AllowedHeaders,
 		AllowMethods: g.Config.GatewayService.HTTP.CORS.AllowedMethods,
 	}))
-	// Subdomain middleware can dispatch requests directly, so drain handling must run first.
+	// Subdomain middleware can dispatch requests directly, so drain and panic
+	// recovery middleware must wrap it.
 	e.Use(g.drainMiddleware)
-	e.Use(gatewaymiddleware.Subdomain(g.Config.GatewayService.HTTP.GetExternalURL(), g.BackendRepo, g.RedisClient))
 	e.Use(middleware.Recover())
+	e.Use(gatewaymiddleware.SubdomainWithReservedHosts(g.Config.GatewayService.HTTP.GetExternalURL(), reservedDomains, g.BackendRepo, g.RedisClient))
+}
+
+func (g *Gateway) initHttp() error {
+	e := echo.New()
+	e.HideBanner = true
+	e.HidePort = true
+
+	if g.Config.DebugMode {
+		pprof.Register(e)
+	}
+
+	g.registerHTTPMiddleware(e)
 	e.GET("/install/agent", agentInstallScriptHandler())
 	e.GET("/install/agent/:os/:arch", agentBinaryHandler())
 	registryProxy := echo.WrapHandler(newRegistryProxy(g.Config, g.BackendRepo, g.WorkspaceRepo, g.ContainerRepo))
@@ -390,6 +400,7 @@ func (g *Gateway) initHttp() error {
 	apiv1.NewStubGroup(g.baseRouteGroup.Group("/stub", authMiddleware), g.BackendRepo, g.ContainerRepo, g.EventRepo, g.RedisClient, g.Config)
 	apiv1.NewConcurrencyLimitGroup(g.baseRouteGroup.Group("/concurrency-limit", authMiddleware), g.BackendRepo, g.WorkspaceRepo)
 	apiv1.NewDeploymentGroup(g.baseRouteGroup.Group("/deployment", authMiddleware), g.BackendRepo, g.ContainerRepo, *g.Scheduler, g.RedisClient, g.Config)
+	apiv1.NewDomainGroup(g.baseRouteGroup.Group("/domain"), authMiddleware, g.BackendRepo, g.RedisClient, g.Config)
 	apiv1.NewAppGroup(g.baseRouteGroup.Group("/app", authMiddleware), g.BackendRepo, g.Config, g.ContainerRepo, *g.Scheduler, g.RedisClient)
 	apiv1.NewPoolGroup(g.baseRouteGroup.Group("/pools", authMiddleware), g.ComputeService)
 	apiv1.NewMarketGroup(g.baseRouteGroup.Group("/market", authMiddleware), g.market.reader)

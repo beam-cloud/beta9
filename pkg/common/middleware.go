@@ -2,12 +2,18 @@ package common
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -31,20 +37,302 @@ var (
 	)
 
 	ErrSubdomainDoesNotMatchRegex = errors.New("subdomain does not match regex")
+	domainLabelRegex              = regexp.MustCompile(`^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$`)
 )
 
 type SubdomainFields struct {
-	Name        string
-	Version     uint
-	StubId      string
-	ContainerId string
-	Subdomain   string
-	Port        uint32
+	Name                string
+	Version             uint
+	StubId              string
+	ContainerId         string
+	Subdomain           string
+	Port                uint32
+	WorkspaceExternalId string
+}
+
+type expectedWorkspaceExternalIDContextKey struct{}
+
+// WithExpectedWorkspaceExternalID attaches the workspace external ID that owns
+// the routed host (custom domain or deployment subdomain) to ctx.
+func WithExpectedWorkspaceExternalID(ctx context.Context, workspaceExternalID string) context.Context {
+	if ctx == nil || workspaceExternalID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, expectedWorkspaceExternalIDContextKey{}, workspaceExternalID)
+}
+
+// ExpectedWorkspaceExternalID returns the owning workspace external ID attached
+// by host routing middleware, if any.
+func ExpectedWorkspaceExternalID(ctx context.Context) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	val, ok := ctx.Value(expectedWorkspaceExternalIDContextKey{}).(string)
+	if !ok || val == "" {
+		return "", false
+	}
+	return val, true
 }
 
 type SubdomainBackendRepo interface {
 	GetStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error)
 	GetDeploymentBySubdomain(ctx context.Context, subdomain string, version uint) (*types.DeploymentWithRelated, error)
+	GetDeploymentByCustomDomain(ctx context.Context, domain string) (*types.DeploymentWithRelated, *types.CustomDomain, error)
+}
+
+// NormalizeDomain is kept for callers in this package tree; see types.NormalizeDomain.
+func NormalizeDomain(host string) string {
+	return types.NormalizeDomain(host)
+}
+
+// ReservedDomains returns the platform-owned hostnames that custom domains must
+// never be able to claim (gateway, gRPC and pod TCP external hosts, plus any
+// operator-configured hosts such as load balancer hostnames).
+func ReservedDomains(cfg types.AppConfig) []string {
+	candidates := []string{
+		cfg.GatewayService.Host,
+		cfg.GatewayService.HTTP.ExternalHost,
+		cfg.GatewayService.GRPC.ExternalHost,
+		cfg.Abstractions.Pod.TCP.ExternalHost,
+	}
+	candidates = append(candidates, cfg.GatewayService.HTTP.ReservedHosts...)
+	if parsed, err := url.Parse(cfg.GatewayService.HTTP.GetExternalURL()); err == nil {
+		candidates = append(candidates, parsed.Hostname())
+	}
+
+	seen := map[string]struct{}{}
+	reserved := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		n := NormalizeDomain(c)
+		if n == "" {
+			continue
+		}
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
+		reserved = append(reserved, n)
+	}
+	return reserved
+}
+
+// CustomDomainNames extracts the domain names from a list of custom domains.
+func CustomDomainNames(domains []types.CustomDomain) []string {
+	names := make([]string, 0, len(domains))
+	for _, d := range domains {
+		names = append(names, d.Domain)
+	}
+	return names
+}
+
+type customDomainLister interface {
+	ListCustomDomains(ctx context.Context, workspaceId uint, deploymentName string) ([]types.CustomDomain, error)
+}
+
+// InvalidateDeploymentCustomDomains drops cached routing for every custom domain bound to a deployment.
+func InvalidateDeploymentCustomDomains(ctx context.Context, repo customDomainLister, redisClient *RedisClient, workspaceId uint, deploymentName string) {
+	if repo == nil || workspaceId == 0 || deploymentName == "" {
+		return
+	}
+	domains, err := repo.ListCustomDomains(ctx, workspaceId, deploymentName)
+	if err != nil || len(domains) == 0 {
+		return
+	}
+	InvalidateCustomDomainCache(ctx, redisClient, CustomDomainNames(domains)...)
+}
+
+// customDomainMisses is an in-process negative cache fallback when Redis is
+// unavailable so unknown hosts cannot hit the database on every request.
+type missEntry struct {
+	err     error
+	expires time.Time
+}
+
+type missCache struct {
+	mu      sync.Mutex
+	entries map[string]missEntry
+	ttl     time.Duration
+	max     int
+}
+
+var customDomainMisses = &missCache{entries: map[string]missEntry{}, ttl: 30 * time.Second, max: 10000}
+
+func (m *missCache) get(key string) (error, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, ok := m.entries[key]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(entry.expires) {
+		delete(m.entries, key)
+		return nil, false
+	}
+	return entry.err, true
+}
+
+func (m *missCache) add(key string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.entries) >= m.max {
+		now := time.Now()
+		for k, entry := range m.entries {
+			if now.After(entry.expires) {
+				delete(m.entries, k)
+			}
+		}
+		if len(m.entries) >= m.max {
+			m.entries = map[string]missEntry{}
+		}
+	}
+	m.entries[key] = missEntry{err: err, expires: time.Now().Add(m.ttl)}
+}
+
+func (m *missCache) remove(keys ...string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, k := range keys {
+		delete(m.entries, k)
+	}
+}
+
+func ValidateCustomDomainName(domain string, reservedDomains ...string) error {
+	trimmed := strings.TrimSpace(domain)
+	if trimmed == "" || strings.ContainsAny(trimmed, ":/\\@?# \t\n\r") {
+		return types.ErrInvalidCustomDomain
+	}
+
+	normalized := NormalizeDomain(trimmed)
+	if normalized == "" || len(normalized) > 253 {
+		return types.ErrInvalidCustomDomain
+	}
+	if normalized == "localhost" || strings.HasSuffix(normalized, ".localhost") ||
+		normalized == "cluster.local" || strings.HasSuffix(normalized, ".cluster.local") {
+		return types.ErrInvalidCustomDomain
+	}
+	if net.ParseIP(normalized) != nil {
+		return types.ErrInvalidCustomDomain
+	}
+	if !domainLabelRegex.MatchString(normalized) {
+		return types.ErrInvalidCustomDomain
+	}
+	for _, reserved := range reservedDomains {
+		base := NormalizeDomain(reserved)
+		if base != "" && (normalized == base || strings.HasSuffix(normalized, "."+base)) {
+			return types.ErrInvalidCustomDomain
+		}
+	}
+	return nil
+}
+
+func CustomDomainHandlerCacheKey(domain string) string {
+	return fmt.Sprintf("middleware:custom_domain:%s:handler", NormalizeDomain(domain))
+}
+
+func CustomDomainCheckCacheKey(domain string) string {
+	return fmt.Sprintf("api:custom_domain:%s:check", NormalizeDomain(domain))
+}
+
+func InvalidateCustomDomainCache(ctx context.Context, redisClient *RedisClient, domains ...string) {
+	if len(domains) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(domains)*2)
+	normalizedDomains := make([]string, 0, len(domains))
+	for _, domain := range domains {
+		normalized := NormalizeDomain(domain)
+		if normalized == "" {
+			continue
+		}
+		normalizedDomains = append(normalizedDomains, normalized)
+		keys = append(keys, CustomDomainHandlerCacheKey(normalized), CustomDomainCheckCacheKey(normalized))
+	}
+	if len(keys) == 0 {
+		return
+	}
+	customDomainMisses.remove(normalizedDomains...)
+	if redisClient == nil {
+		return
+	}
+	_ = redisClient.Del(ctx, keys...).Err()
+}
+
+// LookupStubForCustomDomain resolves a custom domain directly from repo
+// without consulting the process-local miss cache (for callers backed by Redis).
+func LookupStubForCustomDomain(ctx context.Context, repo SubdomainBackendRepo, domain string) (*types.Stub, *SubdomainFields, error) {
+	if repo == nil {
+		return nil, nil, types.ErrCustomDomainNotFound
+	}
+	normalized := NormalizeDomain(domain)
+	if normalized == "" {
+		return nil, nil, types.ErrCustomDomainNotFound
+	}
+	deployment, customDomain, err := repo.GetDeploymentByCustomDomain(ctx, normalized)
+	if err != nil {
+		return nil, nil, err
+	}
+	if deployment == nil || customDomain == nil {
+		if customDomain != nil {
+			return nil, nil, types.ErrCustomDomainDeploymentInactive
+		}
+		return nil, nil, types.ErrCustomDomainNotFound
+	}
+
+	if !types.SupportsCustomDomain(deployment.Stub.Type) {
+		return nil, nil, types.ErrCustomDomainDeploymentInactive
+	}
+
+	var port uint32
+	if deployment.Stub.Type.Kind() == types.StubTypePod {
+		port = customDomain.Port
+		var stubConfig types.StubConfigV1
+		if err := json.Unmarshal([]byte(deployment.Stub.Config), &stubConfig); err != nil {
+			return nil, nil, types.ErrCustomDomainDeploymentInactive
+		}
+		if stubConfig.TCP || len(stubConfig.Ports) == 0 {
+			return nil, nil, types.ErrCustomDomainDeploymentInactive
+		}
+		if port == 0 {
+			port = stubConfig.Ports[0]
+		} else if !slices.Contains(stubConfig.Ports, port) {
+			return nil, nil, types.ErrCustomDomainDeploymentInactive
+		}
+		if port == 0 {
+			return nil, nil, types.ErrCustomDomainDeploymentInactive
+		}
+	}
+
+	fields := &SubdomainFields{
+		Name:                deployment.Name,
+		Version:             customDomain.Version,
+		Subdomain:           deployment.Subdomain,
+		Port:                port,
+		WorkspaceExternalId: deployment.Workspace.ExternalId,
+	}
+	return &deployment.Stub, fields, nil
+}
+
+// GetStubForCustomDomain resolves a custom domain with an in-process negative
+// cache fallback for callers without a healthy shared Redis cache.
+func GetStubForCustomDomain(ctx context.Context, repo SubdomainBackendRepo, domain string) (*types.Stub, *SubdomainFields, error) {
+	if repo == nil {
+		return nil, nil, types.ErrCustomDomainNotFound
+	}
+	normalized := NormalizeDomain(domain)
+	if cachedErr, ok := customDomainMisses.get(normalized); ok {
+		return nil, nil, cachedErr
+	}
+	stub, fields, err := LookupStubForCustomDomain(ctx, repo, normalized)
+	if err != nil {
+		if errors.Is(err, types.ErrCustomDomainNotFound) {
+			customDomainMisses.add(normalized, types.ErrCustomDomainNotFound)
+		} else if errors.Is(err, types.ErrCustomDomainDeploymentInactive) {
+			customDomainMisses.add(normalized, types.ErrCustomDomainDeploymentInactive)
+		}
+		return nil, nil, err
+	}
+	customDomainMisses.remove(normalized)
+	return stub, fields, nil
 }
 
 func GetStubForSubdomain(ctx context.Context, repo SubdomainBackendRepo, fields *SubdomainFields) (*types.Stub, error) {
@@ -57,6 +345,7 @@ func GetStubForSubdomain(ctx context.Context, repo SubdomainBackendRepo, fields 
 			return nil, errors.New("stub not found")
 		}
 
+		fields.WorkspaceExternalId = stubRelated.Workspace.ExternalId
 		return &stubRelated.Stub, nil
 	}
 
@@ -66,6 +355,7 @@ func GetStubForSubdomain(ctx context.Context, repo SubdomainBackendRepo, fields 
 	}
 
 	fields.Name = deployment.Name
+	fields.WorkspaceExternalId = deployment.Workspace.ExternalId
 	return &deployment.Stub, nil
 }
 

@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -304,14 +306,85 @@ type Deployment struct {
 
 type DeploymentWithRelated struct {
 	Deployment
-	Workspace   Workspace `db:"workspace" json:"workspace" serializer:"workspace"`
-	Stub        Stub      `db:"stub" json:"stub" serializer:"stub"`
-	App         App       `db:"app" json:"app" serializer:"app"`
-	StubId      string    `serializer:"stub_id,source:stub.id"`
-	AppId       string    `serializer:"app_id,source:app.id"`
-	WorkspaceId string    `serializer:"workspace_id,source:workspace.id"`
-	URL         string    `db:"-" json:"url,omitempty" serializer:"url,omitempty"`
-	InvokeURL   string    `db:"-" json:"invoke_url,omitempty" serializer:"invoke_url,omitempty"`
+	Workspace     Workspace `db:"workspace" json:"workspace" serializer:"workspace"`
+	Stub          Stub      `db:"stub" json:"stub" serializer:"stub"`
+	App           App       `db:"app" json:"app" serializer:"app"`
+	StubId        string    `serializer:"stub_id,source:stub.id"`
+	AppId         string    `serializer:"app_id,source:app.id"`
+	WorkspaceId   string    `serializer:"workspace_id,source:workspace.id"`
+	URL           string    `db:"-" json:"url,omitempty" serializer:"url,omitempty"`
+	InvokeURL     string    `db:"-" json:"invoke_url,omitempty" serializer:"invoke_url,omitempty"`
+	CustomDomains []string  `db:"-" json:"custom_domains,omitempty" serializer:"custom_domains,omitempty"`
+}
+
+type CustomDomainStatus string
+
+const (
+	CustomDomainStatusPending CustomDomainStatus = "pending"
+	CustomDomainStatusActive  CustomDomainStatus = "active"
+	CustomDomainStatusFailed  CustomDomainStatus = "failed"
+)
+
+// CustomDomainSource records how a custom domain binding was created. Bindings
+// created from deployment code (`custom_domain=`) are reconciled on every
+// deploy; bindings created through the API/CLI are never pruned implicitly.
+type CustomDomainSource string
+
+const (
+	CustomDomainSourceAPI    CustomDomainSource = "api"
+	CustomDomainSourceDeploy CustomDomainSource = "deploy"
+)
+
+var (
+	ErrCustomDomainAlreadyExists          = errors.New("custom domain is already registered in this workspace")
+	ErrCustomDomainBoundToOtherDeployment = errors.New("custom domain is already bound to another deployment in this workspace")
+	ErrCustomDomainNotFound               = errors.New("custom domain not found")
+	ErrCustomDomainDeploymentInactive     = errors.New("custom domain deployment is not active")
+	ErrInvalidCustomDomain                = errors.New("invalid custom domain")
+)
+
+// NormalizeDomain lowercases a host, strips an optional port, surrounding
+// whitespace and a trailing root dot. It is the single normalization used for
+// custom domains everywhere (API, deploy path, repository and routing).
+func NormalizeDomain(host string) string {
+	trimmed := strings.TrimSpace(host)
+	if h, _, err := net.SplitHostPort(trimmed); err == nil {
+		trimmed = h
+	}
+	trimmed = strings.TrimSuffix(strings.TrimSpace(trimmed), ".")
+	return strings.ToLower(trimmed)
+}
+
+// SupportsCustomDomain reports whether stubType exposes an HTTP/WebSocket
+// deployment surface that custom domains can route to.
+func SupportsCustomDomain(stubType StubType) bool {
+	switch string(stubType) {
+	case StubTypeEndpointDeployment, StubTypeASGIDeployment, StubTypePodDeployment:
+		return true
+	default:
+		return false
+	}
+}
+
+type CustomDomain struct {
+	Id                uint               `db:"id" json:"-" serializer:"-"`
+	ExternalId        string             `db:"external_id" json:"id" serializer:"id"`
+	WorkspaceId       uint               `db:"workspace_id" json:"-" serializer:"-"`
+	Domain            string             `db:"domain" json:"domain" serializer:"domain"`
+	DeploymentName    string             `db:"deployment_name" json:"deployment_name" serializer:"deployment_name"`
+	StubType          string             `db:"stub_type" json:"stub_type,omitempty" serializer:"stub_type,omitempty"`
+	Version           uint               `db:"version" json:"version,omitempty" serializer:"version,omitempty"`
+	Port              uint32             `db:"port" json:"port,omitempty" serializer:"port,omitempty"`
+	Status            CustomDomainStatus `db:"status" json:"status" serializer:"status"`
+	Source            CustomDomainSource `db:"source" json:"source,omitempty" serializer:"source,omitempty"`
+	VerificationToken string             `db:"verification_token" json:"verification_token" serializer:"verification_token"`
+	VerifiedAt        NullTime           `db:"verified_at" json:"verified_at,omitempty" serializer:"verified_at,omitempty"`
+	CreatedAt         Time               `db:"created_at" json:"created_at" serializer:"created_at"`
+	UpdatedAt         Time               `db:"updated_at" json:"updated_at" serializer:"updated_at"`
+	Subdomain         string             `db:"subdomain" json:"subdomain,omitempty" serializer:"subdomain,omitempty"`
+	CNAMETarget       string             `db:"-" json:"cname_target,omitempty" serializer:"cname_target,omitempty"`
+	TXTRecordName     string             `db:"-" json:"txt_record_name,omitempty" serializer:"txt_record_name,omitempty"`
+	URL               string             `db:"-" json:"url,omitempty" serializer:"url,omitempty"`
 }
 
 // @go2proto
@@ -632,6 +705,54 @@ func (c *StubConfigV1) UnmarshalJSON(data []byte) error {
 		return json.Unmarshal(value.KeepWarmSeconds, &c.KeepWarmSeconds)
 	}
 	return nil
+}
+
+// CustomDomains extracts normalized, deduplicated custom domains from Extra.
+func (c *StubConfigV1) CustomDomains() []string {
+	if c == nil || len(c.Extra) == 0 {
+		return nil
+	}
+
+	var extra map[string]json.RawMessage
+	if err := json.Unmarshal(c.Extra, &extra); err != nil || len(extra) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	var domains []string
+	appendDomain := func(raw string) {
+		normalized := NormalizeDomain(raw)
+		if normalized == "" {
+			return
+		}
+		if _, exists := seen[normalized]; exists {
+			return
+		}
+		seen[normalized] = struct{}{}
+		domains = append(domains, normalized)
+	}
+
+	for _, key := range []string{"custom_domain", "custom_domains"} {
+		raw, ok := extra[key]
+		if !ok || len(raw) == 0 || string(raw) == "null" {
+			continue
+		}
+		var single string
+		if err := json.Unmarshal(raw, &single); err == nil {
+			for _, part := range strings.Split(single, ",") {
+				appendDomain(part)
+			}
+			continue
+		}
+		var list []string
+		if err := json.Unmarshal(raw, &list); err == nil {
+			for _, item := range list {
+				appendDomain(item)
+			}
+		}
+	}
+
+	return domains
 }
 
 const (
