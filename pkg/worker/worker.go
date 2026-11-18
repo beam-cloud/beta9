@@ -591,7 +591,6 @@ func NewWorker() (_ *Worker, err error) {
 	}
 
 	// Create container runtimes based on pool configuration
-	// Always create runc as a fallback
 	runcRuntime, err := runtime.New(runtime.Config{
 		Type:  types.ContainerRuntimeRunc.String(),
 		Debug: config.DebugMode,
@@ -647,15 +646,13 @@ func NewWorker() (_ *Worker, err error) {
 			Debug:          config.DebugMode,
 		})
 		if err != nil {
-			log.Warn().Err(err).Msg("failed to create gvisor runtime, falling back to runc")
-			defaultRuntime = runcRuntime
-		} else {
-			defaultRuntime = gvisorRuntime
-			log.Info().
-				Str("platform", gvisorConfig.GVisorPlatform).
-				Str("root", gvisorConfig.GVisorRoot).
-				Msg("gVisor runtime initialized successfully")
+			return nil, fmt.Errorf("failed to create gvisor runtime: %w", err)
 		}
+		defaultRuntime = gvisorRuntime
+		log.Info().
+			Str("platform", gvisorConfig.GVisorPlatform).
+			Str("root", gvisorConfig.GVisorRoot).
+			Msg("gVisor runtime initialized successfully")
 	case types.ContainerRuntimeMicroVM.String():
 		// A pool declared as microvm must be one: falling back to runc would
 		// silently downgrade the isolation the sandbox asked for.
@@ -668,8 +665,7 @@ func NewWorker() (_ *Worker, err error) {
 		}
 		log.Info().Str("pool", workerPoolName).Msg("microvm runtime initialized")
 	default:
-		log.Warn().Str("runtime", runtimeType).Msg("unknown runtime type, using runc")
-		defaultRuntime = runcRuntime
+		return nil, runtime.ErrUnsupportedRuntime{Runtime: runtimeType}
 	}
 
 	containerStartLimit := containerStartLimitForPoolRuntime(poolConfig, config.Worker.ContainerRuntime, defaultRuntime.Name(), cpuLimit)
