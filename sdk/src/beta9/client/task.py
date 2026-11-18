@@ -80,6 +80,7 @@ class Task:
         try:
             with requests.get(f"{self.url}/subscribe", headers=headers, stream=True) as response:
                 response.raise_for_status()
+                response.encoding = "utf-8"
                 buffer = ""
 
                 for chunk in response.iter_content(chunk_size=1024, decode_unicode=True):
