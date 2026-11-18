@@ -23,6 +23,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog/log"
+	"go.yaml.in/yaml/v3"
 )
 
 const (
@@ -232,6 +233,20 @@ func (r *githubRunners) startCompaction(ctx context.Context, row types.GitHubCom
 	}
 	if head != site.Commit {
 		return r.finishCompaction(ctx, row, "Default branch changed", false, nil, "", "")
+	}
+	files, title, body, err := r.compactPipeline(ctx, row, site, token)
+	if err != nil {
+		return err
+	}
+	if len(files) > 0 {
+		pr, err := r.github.publishCompaction(ctx, row, token, files, title, body)
+		if err != nil {
+			if pr != nil {
+				row.BranchSHA = pr.SHA
+			}
+			return r.failCompactionPublication(ctx, row, err)
+		}
+		return r.finishCompaction(ctx, row, "Pull request open", true, pr, "Superseded workflow time", "")
 	}
 	repoToken, err := r.github.compactionCloneToken(ctx, row)
 	if err != nil {
@@ -641,4 +656,307 @@ func (g *githubApp) checkCompactionPaths(ctx context.Context, row types.GitHubCo
 		return errors.New("compaction may only edit an existing regular file")
 	}
 	return nil
+}
+
+const pipelineHistoryDays = 30
+
+const pipelineBranchPush = "github.event_name == 'push' && github.ref_type == 'branch' && github.event.repository.default_branch != '' && github.ref_name != github.event.repository.default_branch"
+
+// workflow_ref includes the workflow path and the triggering ref. Give exempt
+// runs their own groups because GitHub replaces pending runs even when it
+// doesn't cancel the one already in progress.
+const pipelineConcurrency = "concurrency:\n" +
+	"  group: ${{ " + pipelineBranchPush + " && format('beam-ci:{0}', github.workflow_ref) || format('beam-ci-run:{0}', github.run_id) }}\n" +
+	"  cancel-in-progress: ${{ " + pipelineBranchPush + " }}\n"
+
+type pipelineRun struct {
+	githubRun
+	ID         int64     `json:"id"`
+	WorkflowID int64     `json:"workflow_id"`
+	Number     int       `json:"run_number"`
+	Attempt    int       `json:"run_attempt"`
+	Path       string    `json:"path"`
+	SHA        string    `json:"head_sha"`
+	Status     string    `json:"status"`
+	Conclusion string    `json:"conclusion"`
+	Started    time.Time `json:"run_started_at"`
+	Updated    time.Time `json:"updated_at"`
+}
+
+type pipelineRunGroup struct {
+	workflow int64
+	file     string
+	branch   string
+}
+
+type pipelineSavings struct {
+	runs, superseded int
+	runtime, wasted  time.Duration
+}
+
+func (s pipelineSavings) worthChanging() bool {
+	return s.wasted >= compactionMinimumTime && s.wasted >= s.runtime*compactionMinimumPercent/100
+}
+
+func (r *githubRunners) compactPipeline(ctx context.Context, row types.GitHubCompaction, site compactionHead, token string) (map[string]string, string, string, error) {
+	until := time.Now().UTC().Truncate(time.Second)
+	repo := r.github.apiURL + "/repos/" + row.Repository
+	runs, err := r.github.pipelineRuns(ctx, row.InstallationID, repo, token, until.AddDate(0, 0, -pipelineHistoryDays), until)
+	if err != nil {
+		return nil, "", "", err
+	}
+
+	// REST run history gives a name that can denote either a branch or a tag.
+	// Only count savings on refs that GitHub can still identify as branches.
+	savings := map[string]pipelineSavings{}
+	branches := map[string]bool{}
+	for group, stats := range pipelineOverlaps(runs, row.Repository, site.Branch) {
+		total := savings[group.file]
+		total.runtime += stats.runtime
+		total.runs += stats.runs
+		if stats.wasted > 0 {
+			branch, checked := branches[group.branch]
+			if !checked {
+				branch, err = r.github.pipelineBranch(ctx, row.InstallationID, repo, token, group.branch)
+				if err != nil {
+					return nil, "", "", err
+				}
+				branches[group.branch] = branch
+			}
+			if branch {
+				total.superseded += stats.superseded
+				total.wasted += stats.wasted
+			}
+		}
+		savings[group.file] = total
+	}
+
+	files := map[string]string{}
+	var paths []string
+	for file, stats := range savings {
+		if stats.worthChanging() {
+			paths = append(paths, file)
+		}
+	}
+	slices.Sort(paths)
+
+	var body strings.Builder
+	body.WriteString("CI Compaction found push runs that kept going after a newer push on the same branch started.\n\n")
+	body.WriteString("| Workflow | Superseded push runs | Elapsed time after a newer run started |\n")
+	body.WriteString("| --- | ---: | ---: |\n")
+	for _, file := range paths {
+		original, err := r.github.pipelineFile(ctx, row.InstallationID, repo, token, file, site.Commit)
+		if err != nil {
+			return nil, "", "", err
+		}
+		update, ok := addPipelineConcurrency(original)
+		if !ok {
+			continue
+		}
+		files[file] = update
+		stats := savings[file]
+		fmt.Fprintf(&body, "| `%s` | %d of %d | %s |\n", file, stats.superseded, stats.runs, stats.wasted)
+	}
+	if len(files) == 0 {
+		return nil, "", "", nil
+	}
+	fmt.Fprintf(&body, "\nFigures use GitHub Actions workflow timestamps for the last %d days. Each change adds workflow concurrency for non-default branch pushes.\n", pipelineHistoryDays)
+	body.WriteString("\nTurn off CI Compaction in the workspace's GitHub runners settings.\n")
+	return files, "CI Compaction: cancel superseded workflow runs", body.String(), nil
+}
+
+func (g *githubApp) pipelineRuns(ctx context.Context, installation int64, repo, token string, from, until time.Time) ([]pipelineRun, error) {
+	query := url.Values{
+		"event":    {"push"},
+		"created":  {from.Format(time.RFC3339) + ".." + until.Format(time.RFC3339)},
+		"per_page": {"100"},
+	}
+	var runs []pipelineRun
+	for page := repo + "/actions/runs?" + query.Encode(); page != ""; {
+		var result struct {
+			Total int           `json:"total_count"`
+			Runs  []pipelineRun `json:"workflow_runs"`
+		}
+		header, err := g.ask(ctx, installation, http.MethodGet, page, token, nil, &result)
+		if err != nil {
+			return nil, err
+		}
+		// GitHub returns at most 1,000 runs for a filtered query. Split the
+		// time range at second precision to keep the full history.
+		if result.Total >= 1000 {
+			if !from.Before(until) {
+				return nil, fmt.Errorf("more workflow runs than GitHub can list at %s", from.Format(time.RFC3339))
+			}
+			mid := from.Add(until.Sub(from) / 2).Truncate(time.Second)
+			early, err := g.pipelineRuns(ctx, installation, repo, token, from, mid)
+			if err != nil {
+				return nil, err
+			}
+			late, err := g.pipelineRuns(ctx, installation, repo, token, mid.Add(time.Second), until)
+			return append(early, late...), err
+		}
+		runs = append(runs, result.Runs...)
+		page = nextPage(header.Get("Link"))
+	}
+	return runs, nil
+}
+
+func pipelineOverlaps(runs []pipelineRun, repo, defaultBranch string) map[pipelineRunGroup]pipelineSavings {
+	groups := map[pipelineRunGroup][]pipelineRun{}
+	seen := map[int64]bool{}
+	for _, run := range runs {
+		branch := run.HeadBranch
+		if run.ID == 0 || seen[run.ID] || run.WorkflowID == 0 || run.Number == 0 || run.Attempt != 1 ||
+			run.Event != "push" || !strings.EqualFold(run.HeadRepository.FullName, repo) ||
+			branch == "" || strings.EqualFold(branch, defaultBranch) || run.SHA == "" || run.Started.IsZero() ||
+			(run.Status != "in_progress" && (run.Status != "completed" || run.Conclusion == "skipped" || !run.Updated.After(run.Started))) {
+			continue
+		}
+		file := pipelineWorkflowPath(run.Path, branch)
+		if file == "" {
+			continue
+		}
+		seen[run.ID] = true
+		group := pipelineRunGroup{workflow: run.WorkflowID, file: file, branch: branch}
+		groups[group] = append(groups[group], run)
+	}
+
+	result := map[pipelineRunGroup]pipelineSavings{}
+	for group, runs := range groups {
+		slices.SortFunc(runs, func(a, b pipelineRun) int { return a.Started.Compare(b.Started) })
+		var savings pipelineSavings
+		for index, old := range runs {
+			if old.Status != "completed" {
+				continue
+			}
+			savings.runs++
+			savings.runtime += old.Updated.Sub(old.Started)
+			for _, next := range runs[index+1:] {
+				if !next.Started.Before(old.Updated) {
+					break
+				}
+				if next.Number > old.Number && next.SHA != old.SHA && next.Started.After(old.Started) {
+					savings.superseded++
+					savings.wasted += old.Updated.Sub(next.Started)
+					break
+				}
+			}
+		}
+		result[group] = savings
+	}
+	return result
+}
+
+func pipelineWorkflowPath(file, branch string) string {
+	if strings.HasSuffix(file, "@refs/tags/"+branch) {
+		return ""
+	}
+	file = strings.TrimSuffix(strings.TrimSuffix(file, "@refs/heads/"+branch), "@"+branch)
+	name := path.Base(file)
+	ext := path.Ext(name)
+	if file != ".github/workflows/"+name || (ext != ".yml" && ext != ".yaml") || strings.ContainsAny(name, "\x00\r\n\\`|") {
+		return ""
+	}
+	return file
+}
+
+func (g *githubApp) pipelineBranch(ctx context.Context, installation int64, repo, token, branch string) (bool, error) {
+	for _, kind := range []string{"heads", "tags"} {
+		ref := kind + "/" + branch
+		_, err := g.ask(ctx, installation, http.MethodGet, repo+"/git/ref/"+kind+"/"+url.PathEscape(branch), token, nil, nil)
+		if githubStatus(err) == http.StatusNotFound {
+			return kind == "tags", nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("check %s: %w", ref, err)
+		}
+	}
+	return false, nil
+}
+
+func (g *githubApp) pipelineFile(ctx context.Context, installation int64, repo, token, file, commit string) (string, error) {
+	var result struct {
+		Type     string `json:"type"`
+		Encoding string `json:"encoding"`
+		Content  string `json:"content"`
+	}
+	endpoint := repo + "/contents/.github/workflows/" + url.PathEscape(path.Base(file)) + "?ref=" + url.QueryEscape(commit)
+	_, err := g.ask(ctx, installation, http.MethodGet, endpoint, token, nil, &result)
+	if githubStatus(err) == http.StatusNotFound {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if result.Type != "file" || result.Encoding != "base64" {
+		return "", nil
+	}
+	content, err := base64.StdEncoding.DecodeString(result.Content)
+	return string(content), err
+}
+
+// addPipelineConcurrency preserves the original bytes. Verify the appended
+// block still lives at the root of one workflow, with no existing concurrency.
+func addPipelineConcurrency(source string) (string, bool) {
+	root := pipelineMapping(source)
+	if root == nil || pipelineHasConcurrency(root) {
+		return "", false
+	}
+	eol := "\n"
+	if strings.Contains(source, "\r\n") && !strings.Contains(strings.ReplaceAll(source, "\r\n", ""), "\n") {
+		eol = "\r\n"
+	}
+	updated := source
+	if !strings.HasSuffix(updated, "\n") {
+		updated += eol
+	}
+	updated += strings.ReplaceAll(pipelineConcurrency, "\n", eol)
+	appended := pipelineMapping(updated)
+	if appended == nil || len(appended.Content) != len(root.Content)+2 || appended.Content[len(root.Content)].Value != "concurrency" {
+		return "", false
+	}
+	return updated, true
+}
+
+func pipelineMapping(source string) *yaml.Node {
+	decoder := yaml.NewDecoder(strings.NewReader(source))
+	var node, extra yaml.Node
+	if err := decoder.Decode(&node); err != nil || len(node.Content) != 1 || decoder.Decode(&extra) != io.EOF {
+		return nil
+	}
+	root := node.Content[0]
+	if root.Kind != yaml.MappingNode || root.Style&yaml.FlowStyle != 0 || root.Tag != "!!map" || len(root.Content) == 0 {
+		return nil
+	}
+	return root
+}
+
+func pipelineHasConcurrency(root *yaml.Node) bool {
+	jobs := false
+	for i := 0; i < len(root.Content); i += 2 {
+		key, value := root.Content[i], root.Content[i+1]
+		if key.Kind != yaml.ScalarNode || key.Value == "<<" || key.Value == "concurrency" {
+			return true
+		}
+		if key.Value != "jobs" {
+			continue
+		}
+		if jobs || value.Kind != yaml.MappingNode || len(value.Content) == 0 {
+			return true
+		}
+		jobs = true
+		for j := 0; j < len(value.Content); j += 2 {
+			job, config := value.Content[j], value.Content[j+1]
+			if job.Kind != yaml.ScalarNode || job.Value == "<<" || config.Kind != yaml.MappingNode {
+				return true
+			}
+			for k := 0; k < len(config.Content); k += 2 {
+				key := config.Content[k]
+				if key.Kind != yaml.ScalarNode || key.Value == "<<" || key.Value == "concurrency" {
+					return true
+				}
+			}
+		}
+	}
+	return !jobs
 }

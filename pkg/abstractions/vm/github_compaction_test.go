@@ -7,8 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"encoding/base64"
+	"fmt"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
+	"net/http"
+	"net/http/httptest"
 )
 
 const (
@@ -253,5 +257,128 @@ func TestCompactionRejectsNonRegularPathsBeforeWriting(t *testing.T) {
 				require.True(t, strings.HasPrefix(call, "GET "), call)
 			}
 		})
+	}
+}
+
+const pipelineTestRepository = "beam-cloud/proof"
+const pipelineTestWorkflow = "name: CI\non: [push]\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: go test ./...\n"
+
+func testPipelineRun(id int64, branch, sha, file string, start, end time.Time) pipelineRun {
+	run := pipelineRun{
+		ID: id, WorkflowID: 1, Number: int(id), Attempt: 1,
+		Path: file, SHA: sha, Status: "completed", Started: start, Updated: end,
+	}
+	run.Event = "push"
+	run.HeadBranch = branch
+	run.HeadRepository.FullName = pipelineTestRepository
+	return run
+}
+
+func TestPipelineOverlap(t *testing.T) {
+	now := time.Now()
+	file := ".github/workflows/ci.yml"
+	older := testPipelineRun(4, "feature", "older", file, now, now.Add(time.Minute))
+	sameSHA := testPipelineRun(5, "feature", "older", file, now.Add(time.Second), now.Add(5*time.Second))
+	outOfOrder := testPipelineRun(3, "feature", "out-of-order", file, now.Add(3*time.Second), now.Add(5*time.Second))
+	newer := testPipelineRun(10, "feature", "newer", file+"@refs/heads/feature", now.Add(20*time.Second), now.Add(30*time.Second))
+	otherWorkflow := testPipelineRun(8, "feature", "other", file, now.Add(4*time.Second), now.Add(5*time.Second))
+	otherWorkflow.WorkflowID = 2
+	otherFile := testPipelineRun(6, "feature", "other", ".github/workflows/other.yml", now.Add(4*time.Second), now.Add(5*time.Second))
+	otherBranch := testPipelineRun(7, "other", "other", file, now.Add(4*time.Second), now.Add(5*time.Second))
+	rerun := testPipelineRun(9, "feature", "other", file, now.Add(4*time.Second), now.Add(5*time.Second))
+	rerun.Attempt = 2
+	queued := testPipelineRun(9, "feature", "other", file, now.Add(4*time.Second), now.Add(5*time.Second))
+	queued.Status = "queued"
+	manual := queued
+	manual.Event, manual.Status = "workflow_dispatch", "completed"
+	mixture := []pipelineRun{newer, otherWorkflow, otherFile, otherBranch, rerun, queued, manual, older, older, sameSHA, outOfOrder}
+	overlaps := pipelineOverlaps(mixture, pipelineTestRepository, "main")
+	got := overlaps[pipelineRunGroup{workflow: 1, branch: "feature", file: file}]
+	// The newer push is the first distinct, newer run for each of the
+	// overlapping candidates. A duplicate page and other refs don't count.
+	if got.superseded != 1 || got.runs != 4 || got.wasted != 40*time.Second || got.runtime != 76*time.Second {
+		t.Fatalf("wrong overlap: %+v", got)
+	}
+	if len(pipelineOverlaps(mixture, pipelineTestRepository, "feature")) != 1 {
+		t.Fatal("default branch runs must be left out")
+	}
+}
+
+func TestPipelineConcurrencyAppend(t *testing.T) {
+	for _, original := range []string{pipelineTestWorkflow + "# trailing comment\n", strings.TrimSpace(pipelineTestWorkflow), strings.ReplaceAll(pipelineTestWorkflow, "\n", "\r\n")} {
+		updated, ok := addPipelineConcurrency(original)
+		if !ok || !strings.HasPrefix(updated, original) || !strings.Contains(updated, "github.workflow_ref") || !strings.Contains(updated, "github.run_id") {
+			t.Fatalf("workflow did not keep its original bytes and add concurrency:\n%s", updated)
+		}
+		originalRoot := pipelineMapping(original)
+		updatedRoot := pipelineMapping(updated)
+		if len(updatedRoot.Content) != len(originalRoot.Content)+2 || updatedRoot.Content[len(originalRoot.Content)].Value != "concurrency" {
+			t.Fatal("concurrency did not append at the top level")
+		}
+		if _, ok := addPipelineConcurrency(updated); ok {
+			t.Fatal("workflow with top-level concurrency must be left alone")
+		}
+	}
+	for _, original := range []string{
+		pipelineTestWorkflow + "...\n",
+		pipelineTestWorkflow + "---\nextra: document\n",
+		strings.Replace(pipelineTestWorkflow, "    runs-on:", "    concurrency: existing\n    runs-on:", 1),
+		"jobs:\n  check:\n    <<: {concurrency: from-merge}\n",
+		"{jobs: {check: {runs-on: ubuntu-latest}}}\n",
+	} {
+		if _, ok := addPipelineConcurrency(original); ok {
+			t.Errorf("unsafe workflow shape accepted:\n%s", original)
+		}
+	}
+}
+
+func TestPipelineProposal(t *testing.T) {
+	now := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+	file := ".github/workflows/ci.yml"
+	quietFile := ".github/workflows/quiet.yml"
+	first := testPipelineRun(1, "probe/pipeline", "old", file, now.Add(-90*time.Second), now)
+	second := testPipelineRun(2, "probe/pipeline", "new", file, now.Add(-30*time.Second), now)
+	quiet := testPipelineRun(3, "probe/pipeline", "old", quietFile, now.Add(-20*time.Second), now)
+	quiet.WorkflowID = 2
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet || req.Header.Get("Authorization") != "Bearer staged-token" {
+			t.Errorf("unexpected request %s %s", req.Method, req.URL)
+		}
+		const prefix = "/repos/" + pipelineTestRepository
+		switch req.URL.Path {
+		case prefix + "/actions/runs":
+			var runs []pipelineRun
+			if req.URL.Query().Get("page") == "2" {
+				runs = []pipelineRun{second}
+			} else {
+				runs = []pipelineRun{first, quiet}
+				if req.URL.Query().Get("event") != "push" || req.URL.Query().Get("created") == "" {
+					t.Errorf("expected a push date range in query %q", req.URL.RawQuery)
+				}
+				w.Header().Set("Link", fmt.Sprintf("<http://%s%s/actions/runs?page=2>; rel=\"next\"", req.Host, prefix))
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"total_count": 3, "workflow_runs": runs})
+		case prefix + "/git/ref/heads/probe/pipeline":
+			_, _ = w.Write([]byte(`{"ref":"refs/heads/probe/pipeline"}`))
+		case prefix + "/git/ref/tags/probe/pipeline":
+			http.NotFound(w, req)
+		case prefix + "/contents/" + file:
+			if req.URL.Query().Get("ref") != "pinned-commit" {
+				t.Errorf("workflow contents were not pinned: %s", req.URL)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"type": "file", "encoding": "base64", "content": base64.StdEncoding.EncodeToString([]byte(pipelineTestWorkflow))})
+		default:
+			t.Errorf("unexpected call to GitHub: %s", req.URL)
+			http.NotFound(w, req)
+		}
+	}))
+	defer fake.Close()
+	runner := &githubRunners{github: &githubApp{apiURL: fake.URL, client: fake.Client()}}
+	files, title, body, err := runner.compactPipeline(context.Background(), types.GitHubCompaction{Repository: pipelineTestRepository, InstallationID: 11}, compactionHead{Branch: "main", Commit: "pinned-commit"}, "staged-token")
+	if err != nil || len(files) != 1 || !strings.HasPrefix(files[file], pipelineTestWorkflow) {
+		t.Fatalf("unexpected pipeline proposal: %s %q %v", title, files, err)
+	}
+	if !strings.Contains(body, "1 of 2 | 30s") {
+		t.Fatalf("incorrect workflow overlap in report: %s", body)
 	}
 }
