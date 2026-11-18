@@ -255,7 +255,8 @@ worker:
     #   mode: local
     #   gpuType: any
     #   runtime: nvidia  # Kubernetes RuntimeClass for GPU support
-    #   containerRuntime: gvisor  # Pool-specific container runtime: "runc", "gvisor", or "microvm" (Cloud Hypervisor; use_vm sandboxes only, needs /dev/kvm)
+    #   containerRuntime: gvisor  # Local GPU runtime: "gvisor" or "microvm" (Cloud Hypervisor; use_vm sandboxes only, needs /dev/kvm)
+    #   allowedNvidiaDriverVersions: []  # Required exact kernel module versions for local gVisor GPU workers.
     #   containerRuntimeConfig:
     #     gvisorPlatform: systrap
     #     gvisorRoot: /run/gvisor

@@ -1268,6 +1268,48 @@ func TestMaterializeArchiveObjectUsesBrokeredURL(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestMaterializeWorkspaceObjectUsesScopedGrantAndVerifiesHash(t *testing.T) {
+	ctx := context.Background()
+	content := []byte("workspace object")
+	sum := sha256.Sum256(content)
+	hash := hex.EncodeToString(sum[:])
+	reads := atomic.Int32{}
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.RequestURI() != "/disks/chunk?grant=test" {
+			http.NotFound(w, r)
+			return
+		}
+		reads.Add(1)
+		_, _ = w.Write(content)
+	}))
+	t.Cleanup(origin.Close)
+
+	cfg := testCacheManagerConfig(t.TempDir()).Cache
+	server, err := cache.NewServerWithOptions(ctx, cfg, "locality-a", cache.WithServerMetadataStore(cache.NewMockCacheMetadataStore()), cache.WithServerHostID("local-host"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+	workerRepo := &fakeImageCredentialWorkerRepo{resp: &pb.GetCacheOriginCredentialsResponse{
+		Ok:                 true,
+		WorkspaceObjectUrl: origin.URL + "/disks/chunk?grant=test",
+	}}
+	manager := &WorkerCacheManager{workerRepo: workerRepo, locality: "locality-a"}
+	stub := cache.RecentStub{WorkspaceID: "workspace-a", StubID: "stub-a"}
+	item := types.CacheRequiredContentItem{Hash: hash, Source: "disks/chunk", SourceBucket: "bucket-a"}
+	require.Equal(t, types.CacheAuditStatusMaterialized, manager.materializeWorkspaceObject(ctx, server, stub, item))
+	require.True(t, server.HasCompleteContent(hash, int64(len(content))))
+	require.Equal(t, []*pb.GetCacheOriginCredentialsRequest{{
+		WorkspaceId: "workspace-a", StubId: "stub-a", CacheLocality: "locality-a",
+		Source: "disks/chunk", SourceBucket: "bucket-a", SourceHash: hash,
+	}}, workerRepo.requests)
+
+	item.Hash = strings.Repeat("f", 64)
+	require.Equal(t, types.CacheAuditStatusOriginFailure, manager.materializeWorkspaceObject(ctx, server, stub, item))
+	require.False(t, server.HasCompleteContent(item.Hash, 0))
+	workerRepo.resp.WorkspaceObjectUrl = ""
+	require.Equal(t, types.CacheAuditStatusOriginFailure, manager.materializeWorkspaceObject(ctx, server, stub, item))
+	require.Equal(t, int32(2), reads.Load())
+}
+
 func TestMaterializeDerivedArchivePreservesOriginalAndVerifiesHash(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1336,34 +1378,6 @@ func TestMaterializeDerivedArchivePreservesOriginalAndVerifiesHash(t *testing.T)
 	require.Empty(t, leftovers)
 }
 
-func TestMaterializeOCILayerPrivateWorkerRequiresGatewayRegistryCredentials(t *testing.T) {
-	workerRepo := &fakeImageCredentialWorkerRepo{
-		resp: &pb.GetCacheOriginCredentialsResponse{Ok: true},
-	}
-	manager := &WorkerCacheManager{
-		ctx:              context.Background(),
-		poolConfig:       types.WorkerPoolConfig{Mode: types.PoolModePrivate},
-		workerRepo:       workerRepo,
-		originCredsCache: make(map[string]*originCredentials),
-	}
-	stub := cache.RecentStub{WorkspaceID: "workspace-a", StubID: "stub-a"}
-	item := types.CacheRequiredContentItem{
-		Hash:    strings.Repeat("b", 64),
-		ImageID: "image-a",
-		Source:  "registry.example.com/team/image@sha256:" + strings.Repeat("a", 64),
-		Kind:    types.CacheContentKindClipV2,
-	}
-
-	status := manager.materializeOCILayer(context.Background(), nil, stub, item)
-
-	require.Equal(t, types.CacheAuditStatusOriginFailure, status)
-	require.Len(t, workerRepo.requests, 1)
-	require.Equal(t, "workspace-a", workerRepo.requests[0].WorkspaceId)
-	require.Equal(t, "stub-a", workerRepo.requests[0].StubId)
-	require.Equal(t, "image-a", workerRepo.requests[0].ImageId)
-	require.Equal(t, "registry.example.com", workerRepo.requests[0].Registry)
-}
-
 func TestMaterializeOCILayerStoresDecompressedLayer(t *testing.T) {
 	ctx := context.Background()
 	origin := httptest.NewServer(ggcrregistry.New())
@@ -1403,7 +1417,7 @@ func TestMaterializeOCILayerStoresDecompressedLayer(t *testing.T) {
 				Kind:   types.CacheContentKindClipV2,
 			}
 
-			status := manager.materializeOCILayer(ctx, server, cache.RecentStub{WorkspaceID: "workspace", StubID: "stub"}, item)
+			status := manager.materializeOCILayer(ctx, server, item)
 
 			require.Equal(t, types.CacheAuditStatusMaterialized, status)
 			require.True(t, server.HasCompleteContent(item.Hash, int64(len(content))))

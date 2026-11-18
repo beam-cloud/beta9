@@ -755,6 +755,8 @@ type WorkerPoolConfig struct {
 	// poolSizing.minFree* the pool keeps that much free, and with alsoServes
 	// it takes overflow, like any other pool.
 	Provisioning WorkerPoolProvisioningConfig `key:"provisioning" json:"provisioning,omitzero"`
+	// AllowedNVIDIADriverVersions lists exact loaded module versions for local gVisor GPU workers.
+	AllowedNVIDIADriverVersions []string `key:"allowedNvidiaDriverVersions" json:"allowed_nvidia_driver_versions,omitempty"`
 }
 
 // WorkerPoolProvisioningConfig is where and how a pool buys machines.
@@ -868,6 +870,25 @@ func (c *WorkerPoolConfig) ApplyProvisioning() {
 // AgentHosted reports whether this concrete pool uses the agent control path.
 func (c WorkerPoolConfig) AgentHosted() bool {
 	return c.Mode.AgentHosted() || c.Mode == PoolModeExternal || c.Buys()
+}
+
+// ValidateLocalGPURuntime validates the policy for a local worker with GPUs.
+// A GPU microVM uses an assigned device and its own guest driver.
+func (c WorkerPoolConfig) ValidateLocalGPURuntime() error {
+	if c.Mode != PoolModeLocal {
+		return nil
+	}
+	switch c.ContainerRuntime {
+	case string(ContainerRuntimeMicroVM):
+		return nil
+	case string(ContainerRuntimeGvisor):
+		if len(c.AllowedNVIDIADriverVersions) == 0 {
+			return fmt.Errorf("local gVisor GPU pools require allowedNvidiaDriverVersions")
+		}
+		return nil
+	default:
+		return fmt.Errorf("local GPU pools require an explicit gvisor or microvm containerRuntime")
+	}
 }
 
 // Serves reports whether the pool lists the GPU type in alsoServes.

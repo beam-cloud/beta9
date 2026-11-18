@@ -94,8 +94,8 @@ func TestLocalWorkerJobOmitsControlPlaneCredentials(t *testing.T) {
 	controller.config.ManagedCompute.Billing.PoolRoutes = []types.ManagedComputeBillingPoolRouteConfig{{AuthToken: "billing-route-token"}}
 	controller.config.ImageService.BuildRegistryCredentials.Credentials = map[string]string{"AWS_SECRET_ACCESS_KEY": "build-registry-secret"}
 	controller.config.ImageService.Registries.Docker.Password = "docker-password"
-	controller.config.ImageService.Registries.S3.AccessKey = "image-bucket-access-key"
-	controller.config.ImageService.Registries.S3.SecretKey = "image-bucket-secret"
+	controller.config.ImageService.Runner.BaseImageRegistry = "base-registry.example"
+	controller.config.ImageService.Runner.PythonStandalone.InstallScriptTemplate = "gateway-install-template"
 	controller.config.Cache.Server.Metadata.RedisPasswd = "cache-redis-password"
 	controller.config.Cache.Server.Metadata.ValkeyConfig.Password = "valkey-password"
 	controller.config.Cache.Coordinator.Token = "coordinator-token"
@@ -139,13 +139,13 @@ func TestLocalWorkerJobOmitsControlPlaneCredentials(t *testing.T) {
 		"hetzner-token", "tailscale-key", "tailscale-agent-key", "credit-gate-token", "build-registry-secret",
 		"docker-password", "cache-redis-password", "valkey-password", "coordinator-token", "prometheus-agent-password",
 		"billing-token", "app-private-key", "app-client-secret", "app-webhook-secret",
-		"metrics-write-password", "geese-access-key", "geese-secret-key", "other-pool-token",
+		"metrics-write-password", "geese-access-key", "geese-secret-key", "other-pool-token", "gateway-install-template",
 	} {
 		if strings.Contains(configJSON, secret) {
 			t.Errorf("worker config contains %q", secret)
 		}
 	}
-	for _, credential := range []string{"s2-key", "image-bucket-access-key", "image-bucket-secret", "cache-client-token", "billing-route-token", "metrics-push-token"} {
+	for _, credential := range []string{"s2-key", "cache-client-token", "billing-route-token", "metrics-push-token"} {
 		if !strings.Contains(configJSON, credential) {
 			t.Errorf("worker config lacks %q", credential)
 		}
@@ -156,8 +156,83 @@ func TestLocalWorkerJobOmitsControlPlaneCredentials(t *testing.T) {
 	if poolSetting != "local-pool-setting" || len(controller.config.Worker.Pools["other-pool"].JobSpec.Env) != 1 {
 		t.Fatal("worker config changed Job environment settings")
 	}
-	if config := workerConfigFromEnvironment(t, pod.Containers[0].Env); config.Worker.Pools["other-pool"].ContainerRuntime != "gvisor" {
+	config := workerConfigFromEnvironment(t, pod.Containers[0].Env)
+	if config.Worker.Pools["other-pool"].ContainerRuntime != "gvisor" {
 		t.Fatal("worker config lost named pool runtime settings")
+	}
+	if config.ImageService.Runner.BaseImageRegistry != "base-registry.example" {
+		t.Fatal("worker config lost the runner base registry")
+	}
+}
+
+func TestLocalWorkerJobArchiveCredentialsFollowPoolMode(t *testing.T) {
+	archive := types.S3ImageRegistryConfig{
+		BucketName:     "images",
+		Region:         "us-east-1",
+		Endpoint:       "https://archive.example",
+		ForcePathStyle: true,
+		AccessKey:      "image-bucket-access-key",
+		SecretKey:      "image-bucket-secret",
+	}
+	for _, test := range []struct {
+		name string
+		mode types.PoolMode
+	}{
+		{"shared worker", types.PoolModeLocal},
+		{"default worker", ""},
+		{"private legacy worker", types.PoolModePrivate},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			controller := &LocalKubernetesWorkerPoolController{
+				config: types.AppConfig{ImageService: types.ImageServiceConfig{
+					RegistryStore: "s3", Registries: types.ImageRegistriesConfig{S3: archive},
+				}},
+				workerPoolConfig: types.WorkerPoolConfig{Mode: test.mode},
+			}
+			job, _ := controller.createWorkerJob("worker-1", 0, 0, "", 0, "token")
+			config := workerConfigFromEnvironment(t, job.Spec.Template.Spec.Containers[0].Env)
+			want := archive
+			if test.mode != types.PoolModePrivate {
+				want.AccessKey, want.SecretKey = "", ""
+			}
+			if config.ImageService.RegistryStore != "s3" || config.ImageService.Registries.S3 != want {
+				t.Fatal("worker Job has incorrect archive origin settings")
+			}
+			if controller.config.ImageService.Registries.S3 != archive {
+				t.Fatal("worker Job changed the gateway archive configuration")
+			}
+		})
+	}
+}
+
+func TestLocalWorkerJobUsesSeparateServiceAccount(t *testing.T) {
+	for _, test := range []struct {
+		name, gatewayAccount, workerNamespace, workerAccount string
+		wantCollision                                        bool
+	}{
+		{"same identity", "gateway", "beta9", "gateway", true},
+		{"implicit default worker account", "default", "beta9", "", true},
+		{"same name in different namespace", "gateway", "worker", "gateway", false},
+		{"different account", "gateway", "beta9", "worker", false},
+		{"external gateway without identity metadata", "", "beta9", "default", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv(gatewayNamespaceEnv, "beta9")
+			t.Setenv(gatewayServiceAccountEnv, test.gatewayAccount)
+			controller := &LocalKubernetesWorkerPoolController{
+				config: types.AppConfig{Worker: types.WorkerConfig{
+					Namespace: test.workerNamespace, ServiceAccountName: test.workerAccount,
+				}},
+			}
+			if got := controller.workerUsesGatewayServiceAccount(); got != test.wantCollision {
+				t.Fatalf("service account collision = %v, want %v", got, test.wantCollision)
+			}
+			if test.wantCollision {
+				if _, err := controller.addWorkerWithId("worker-1", 0, 0, "", 0); err == nil || !strings.Contains(err.Error(), "different service account") {
+					t.Fatalf("expected a service account error before token issuance, got %v", err)
+				}
+			}
+		})
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"path"
 	"slices"
 	"strconv"
@@ -28,6 +29,9 @@ import (
 )
 
 const (
+	gatewayServiceAccountEnv = "BETA9_GATEWAY_SERVICE_ACCOUNT"
+	gatewayNamespaceEnv      = "BETA9_GATEWAY_NAMESPACE"
+
 	// workerJobCreateTimeout is how long the cluster is given to accept a
 	// worker Job.
 	workerJobCreateTimeout = 30 * time.Second
@@ -139,6 +143,9 @@ func (wpc *LocalKubernetesWorkerPoolController) AddWorker(cpu int64, memory int6
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
+	if wpc.workerUsesGatewayServiceAccount() {
+		return nil, fmt.Errorf("worker pool %s: workers must use a different service account from the gateway", wpc.name)
+	}
 	if err := validateLocalWorkerJobSpec(wpc.workerPoolConfig.JobSpec); err != nil {
 		return nil, fmt.Errorf("worker pool %s: %w", wpc.name, err)
 	}
@@ -184,6 +191,18 @@ func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string,
 	}
 
 	return worker, nil
+}
+
+func (wpc *LocalKubernetesWorkerPoolController) workerUsesGatewayServiceAccount() bool {
+	gatewayNamespace := os.Getenv(gatewayNamespaceEnv)
+	if gatewayNamespace == "" || gatewayNamespace != wpc.config.Worker.Namespace {
+		return false
+	}
+	workerServiceAccount := wpc.config.Worker.ServiceAccountName
+	if workerServiceAccount == "" {
+		workerServiceAccount = "default"
+	}
+	return workerServiceAccount == os.Getenv(gatewayServiceAccountEnv)
 }
 
 func validateLocalWorkerJobSpec(spec types.WorkerPoolJobSpecConfig) error {
@@ -363,6 +382,13 @@ func (wpc *LocalKubernetesWorkerPoolController) workerPodConfig() types.AppConfi
 	source := &wpc.config
 	storage := source.Storage.WorkspaceStorage
 	monitoring := source.Monitoring
+	image := source.ImageService
+	imageArchive := image.Registries.S3
+	if wpc.workerPoolConfig.Mode != types.PoolModePrivate {
+		// Shared workers use their workload identity for direct archive I/O.
+		imageArchive.AccessKey = ""
+		imageArchive.SecretKey = ""
+	}
 	config := types.AppConfig{
 		ClusterName: source.ClusterName,
 		DebugMode:   source.DebugMode,
@@ -374,7 +400,20 @@ func (wpc *LocalKubernetesWorkerPoolController) workerPodConfig() types.AppConfi
 			GRPC: source.GatewayService.GRPC,
 			HTTP: source.GatewayService.HTTP,
 		},
-		ImageService: source.ImageService,
+		ImageService: types.ImageServiceConfig{
+			LocalCacheEnabled:     image.LocalCacheEnabled,
+			RegistryStore:         image.RegistryStore,
+			Registries:            types.ImageRegistriesConfig{S3: imageArchive},
+			Runner:                types.RunnerConfig{BaseImageRegistry: image.Runner.BaseImageRegistry},
+			EnableTLS:             image.EnableTLS,
+			ClipVersion:           image.ClipVersion,
+			BuildRegistry:         image.BuildRegistry,
+			BuildRepositoryName:   image.BuildRepositoryName,
+			BuildRegistryInsecure: image.BuildRegistryInsecure,
+			LayeredBuilds:         image.LayeredBuilds,
+			BuildApt:              image.BuildApt,
+			BuildLayerCacheMaxPct: image.BuildLayerCacheMaxPct,
+		},
 		Storage: types.StorageConfig{WorkspaceStorage: types.WorkspaceStorageConfig{
 			BaseMountPath:      storage.BaseMountPath,
 			DefaultStorageMode: storage.DefaultStorageMode,
@@ -419,8 +458,6 @@ func (wpc *LocalKubernetesWorkerPoolController) workerPodConfig() types.AppConfi
 	config.Cache.Coordinator.Token = ""
 	config.Storage.WorkspaceStorage.Geese.AccessKey = ""
 	config.Storage.WorkspaceStorage.Geese.SecretKey = ""
-	config.ImageService.BuildRegistryCredentials = types.BuildRegistryCredentialsConfig{}
-	config.ImageService.Registries.Docker = types.DockerImageRegistryConfig{}
 
 	// JobSpec is applied when creating each Job. The worker only needs the
 	// pool's runtime settings, and never needs another pool's Job environment.

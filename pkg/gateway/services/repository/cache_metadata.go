@@ -98,6 +98,10 @@ func (s *WorkerRepositoryService) AddRecentCacheStub(ctx context.Context, req *p
 	if err := s.authorizeCacheMetadata(ctx); err != nil {
 		return &pb.AddRecentCacheStubResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
+	worker, err := auth.WorkerFromContext(ctx)
+	if req == nil || err != nil || !worker.InWorkspace(req.WorkspaceId) {
+		return &pb.AddRecentCacheStubResponse{ErrorMsg: "only a worker in the workspace may report recent stubs"}, nil
+	}
 	if err := s.cacheMetadata.AddRecentStub(ctx, s.scopedCacheLocality(ctx, req.Locality), req.WorkspaceId, req.StubId, time.Duration(req.TtlSeconds)*time.Second); err != nil {
 		return &pb.AddRecentCacheStubResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -195,6 +199,13 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 	if err := s.authorizeOriginCredentials(ctx, req); err != nil {
 		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
+	if req.Source != "" || req.SourceHash != "" || req.SourceBucket != "" {
+		url, err := s.cacheWorkspaceObjectURL(ctx, req)
+		if err != nil {
+			return &pb.GetCacheOriginCredentialsResponse{ErrorMsg: err.Error()}, nil
+		}
+		return &pb.GetCacheOriginCredentialsResponse{Ok: true, WorkspaceObjectUrl: url}, nil
+	}
 	if req.ImageArchiveUploadId != "" {
 		url, err := s.imageArchiveUploadURL(ctx, req)
 		if err != nil {
@@ -204,6 +215,13 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 	}
 
 	if req.Registry != "" {
+		worker, err := auth.WorkerFromContext(ctx)
+		if err != nil || req.CacheLocality != "" {
+			return &pb.GetCacheOriginCredentialsResponse{ErrorMsg: "cache servers cannot request registry credentials"}, nil
+		}
+		if worker.Trusted && !s.workerHasCacheOriginAssignment(worker, req) {
+			return &pb.GetCacheOriginCredentialsResponse{ErrorMsg: "cache origin stub is not assigned to this worker"}, nil
+		}
 		// Direct OCI pulls only need registry credentials. Resolving workspace
 		// storage and presigning image archives here adds database and object
 		// store round trips to every cold mount without producing used data.
@@ -228,10 +246,20 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 	}
 
 	if req.ImageId == "" {
-		return &pb.GetCacheOriginCredentialsResponse{
-			Ok:               true,
-			WorkspaceStorage: s.workspaceStorageCredentials(ctx, req.WorkspaceId),
-		}, nil
+		return &pb.GetCacheOriginCredentialsResponse{ErrorMsg: "cache object origin requires a recorded content item"}, nil
+	}
+	worker, err := auth.WorkerFromContext(ctx)
+	if err != nil || req.CacheLocality != "" {
+		if err := s.authorizeCacheArchiveRead(ctx, req); err != nil {
+			return &pb.GetCacheOriginCredentialsResponse{ErrorMsg: err.Error()}, nil
+		}
+	} else if worker.Trusted {
+		if !s.workerHasCacheOriginAssignment(worker, req) {
+			return &pb.GetCacheOriginCredentialsResponse{ErrorMsg: "cache origin stub is not assigned to this worker"}, nil
+		}
+		if err := s.authorizeCacheArchiveImage(ctx, req); err != nil {
+			return &pb.GetCacheOriginCredentialsResponse{ErrorMsg: err.Error()}, nil
+		}
 	}
 
 	imageArchiveObjectKey, imageArchiveURL, imageArchiveDataURL := s.imageArchiveCredentials(ctx, req.ImageId)

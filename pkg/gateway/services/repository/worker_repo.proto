@@ -254,6 +254,8 @@ message SetWorkerKeepAliveRequest {
   bool idle = 3;
   string checkpoint_compatibility_key = 4;
   uint32 cpu_tier_protocol = 5;
+  string verified_local_gpu_runtime = 6;
+  string nvidia_driver_version = 7;
 }
 
 message SetWorkerKeepAliveResponse {
@@ -425,6 +427,11 @@ message GetCacheOriginCredentialsRequest {
   // Publish a filesystem export under this stub's generated image ID.
   string image_archive_upload_id = 5;
   bool image_archive_upload_data = 6;
+  // The recorded content item to restore during cache reconciliation.
+  string cache_locality = 7;
+  string source = 8;
+  string source_bucket = 9;
+  string source_hash = 10;
 }
 
 message GetCacheOriginCredentialsResponse {
@@ -446,6 +453,8 @@ message GetCacheOriginCredentialsResponse {
   string build_registry = 10;
   string build_repository_name = 11;
   bool build_registry_insecure = 12;
+  // Short-lived GET URL for the authorized workspace cache object.
+  string workspace_object_url = 13;
 }
 
 message RuntimeMountCredentialRequest {

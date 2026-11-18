@@ -7,4 +7,6 @@ of `cacheServer.configSecretName` to point to this Secret.
 
 For cloud access, bind a cache-scoped workload identity through Helm's
 `cacheServer.serviceAccount.annotations` or patch the Kustomize service account.
+If reconciliation reads from S2, give the DaemonSet a separate credential
+restricted to the required cache streams and operations.
 Roll the DaemonSet after changes to `config.yaml`.

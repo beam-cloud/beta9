@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -61,6 +62,7 @@ const (
 	stuckContainerAbortDelay       time.Duration = 2 * time.Minute
 	gvisorShmemTHPPath                           = "/sys/kernel/mm/transparent_hugepage/shmem_enabled"
 	gvisorMaxMapCountPath                        = "/proc/sys/vm/max_map_count"
+	hostNVIDIAModuleVersionPath                  = "/sys/module/nvidia/version"
 	// Match runsc's recommended host VMA limit.
 	gvisorMinMaxMapCount int64 = 4194304
 
@@ -104,6 +106,28 @@ func ensureGVisorMaxMapCount(path string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func verifyLocalGPURuntime(pool types.WorkerPoolConfig, hasGPU bool, driverVersionPath string) (runtimeName, driverVersion string, err error) {
+	if pool.Mode != types.PoolModeLocal || !hasGPU {
+		return "", "", nil
+	}
+	if err := pool.ValidateLocalGPURuntime(); err != nil {
+		return "", "", err
+	}
+	if pool.ContainerRuntime == types.ContainerRuntimeMicroVM.String() {
+		return pool.ContainerRuntime, "", nil
+	}
+
+	loaded, err := os.ReadFile(driverVersionPath)
+	if err != nil {
+		return "", "", fmt.Errorf("read loaded NVIDIA kernel module version: %w", err)
+	}
+	version := strings.TrimSpace(string(loaded))
+	if version == "" || !slices.Contains(pool.AllowedNVIDIADriverVersions, version) {
+		return "", "", fmt.Errorf("loaded NVIDIA kernel module version %q is not approved for this pool", version)
+	}
+	return pool.ContainerRuntime, version, nil
 }
 
 type Worker struct {
@@ -542,6 +566,13 @@ func NewWorker() (_ *Worker, err error) {
 		return nil, err
 	}
 	config := configManager.GetConfig()
+	poolConfig, poolFound := config.Worker.Pools[workerPoolName]
+	if !poolFound {
+		return nil, errors.New("invalid worker pool name")
+	}
+	if _, _, err := verifyLocalGPURuntime(poolConfig, gpuCount > 0, hostNVIDIAModuleVersionPath); err != nil {
+		return nil, fmt.Errorf("worker pool %q: %w", workerPoolName, err)
+	}
 
 	// The delivery stream keeps this authenticated HTTP/2 connection live.
 	// Repository RPCs share it instead of paying for independent idle transports.
@@ -565,10 +596,6 @@ func NewWorker() (_ *Worker, err error) {
 
 	eventRepo := repo.NewWorkerEventClientRepo(config, workerRepoClient, workerId)
 
-	poolConfig, poolFound := config.Worker.Pools[workerPoolName]
-	if !poolFound {
-		return nil, errors.New("invalid worker pool name")
-	}
 	if err := hydrateManagedWorkerMetering(ctx, workerId, &config, poolConfig, workerRepoClient); err != nil {
 		return nil, err
 	}
@@ -1077,6 +1104,12 @@ func (s *Worker) runContainerRequestWithRunner(
 	if err := ctx.Err(); err != nil {
 		failRequest(err)
 		return
+	}
+	if request.RequiresGPU() {
+		if _, _, err := verifyLocalGPURuntime(s.poolConfig, true, hostNVIDIAModuleVersionPath); err != nil {
+			failRequest(err)
+			return
+		}
 	}
 
 	s.startContainerStatusHeartbeat(request)
@@ -1691,6 +1724,12 @@ func (s *Worker) setWorkerKeepAlive() error {
 	ctx, cancel := context.WithTimeout(s.ctx, workerShutdownRPCTimeout)
 	defer cancel()
 
+	verifiedRuntime, driverVersion, gpuErr := verifyLocalGPURuntime(s.poolConfig, s.gpuCount > 0, hostNVIDIAModuleVersionPath)
+	if verifiedRuntime != "" && (s.runtime == nil || verifiedRuntime != s.runtime.Name()) {
+		verifiedRuntime, driverVersion = "", ""
+		gpuErr = errors.New("worker did not initialize its configured GPU runtime")
+	}
+
 	// Borrowed CPU tier work does not stop a worker from counting as idle.
 	_, idle := s.borrowedContainers()
 	resp, err := handleGRPCResponse(s.workerRepoClient.SetWorkerKeepAlive(ctx, &pb.SetWorkerKeepAliveRequest{
@@ -1699,6 +1738,8 @@ func (s *Worker) setWorkerKeepAlive() error {
 		CheckpointCompatibilityKey: s.checkpointCompatibilityKey,
 		Idle:                       idle,
 		CpuTierProtocol:            types.CPUTierProtocolVersion,
+		VerifiedLocalGpuRuntime:    verifiedRuntime,
+		NvidiaDriverVersion:        driverVersion,
 	}))
 	if err != nil {
 		return err
@@ -1706,7 +1747,7 @@ func (s *Worker) setWorkerKeepAlive() error {
 	if headroom := resp.GetPoolHeadroom(); headroom != s.poolHeadroom.Swap(headroom) {
 		log.Info().Bool("pool_headroom", headroom).Str("worker_id", s.workerId).Msg("worker pool headroom changed")
 	}
-	return nil
+	return gpuErr
 }
 
 func (s *Worker) profile() {

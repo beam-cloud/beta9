@@ -143,6 +143,12 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 			log.Debug().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("deferring agent-hosted pool until workspace state is reconciled")
 			continue
 		}
+		if gpuType := types.NormalizeGPUType(pool.GPUType); gpuType != "" && gpuType != types.NO_GPU {
+			if err := pool.ValidateLocalGPURuntime(); err != nil {
+				log.Error().Str("pool_name", name).Err(err).Msg("local GPU pool is unavailable")
+				continue
+			}
+		}
 
 		controllerOptions := WorkerPoolControllerOptions{
 			Context:         ctx,
@@ -1067,6 +1073,48 @@ func workerPoolSelector(worker *types.Worker) string {
 	return worker.PoolName
 }
 
+// filterWorkersByLocalGPUVerification checks actual worker verification even
+// when placement is machine-pinned or the worker is from an older release.
+func (s *Scheduler) filterWorkersByLocalGPUVerification(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
+	if !request.RequiresGPU() {
+		return workers
+	}
+
+	verified := make([]*types.Worker, 0, len(workers))
+	for _, worker := range workers {
+		poolName := workerPoolSelector(worker)
+		pool, found := s.PoolConfig(poolName)
+		if !found {
+			pool, found = s.config.Worker.Pools[poolName]
+		}
+		// An agent supplies a selector even before reconciliation. A leftover
+		// local worker whose pool was removed has no policy to verify against.
+		if !found && worker.PoolSelector == "" && !workspaceOwned(worker) {
+			continue
+		}
+		if workspaceOwned(worker) || pool.Mode != types.PoolModeLocal {
+			verified = append(verified, worker)
+			continue
+		}
+		if workerRuntime(worker) != pool.ContainerRuntime || pool.ValidateLocalGPURuntime() != nil {
+			continue
+		}
+		// Pending workers may start and report their verification before becoming
+		// eligible for placement, but cannot run work while still pending.
+		if worker.Status != types.WorkerStatusPending {
+			if worker.VerifiedLocalGPURuntime != pool.ContainerRuntime {
+				continue
+			}
+			if pool.ContainerRuntime == types.ContainerRuntimeGvisor.String() &&
+				(worker.NVIDIADriverVersion == "" || !slices.Contains(pool.AllowedNVIDIADriverVersions, worker.NVIDIADriverVersion)) {
+				continue
+			}
+		}
+		verified = append(verified, worker)
+	}
+	return verified
+}
+
 // filterWorkersByResources keeps the workers that are able to run the
 // request and have room for it. Which GPU types the request may use is the
 // route's question (see route.eligible).
@@ -1340,6 +1388,7 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	filteredWorkers = filterWorkersByMachine(filteredWorkers, request) // Machine-pinned requests only see their machine's worker
 	filteredWorkers = s.filterWorkersByWorkspaceScope(filteredWorkers, request)
 	filteredWorkers = route.eligible(filteredWorkers) // Only pools the request may run on, and GPUs it can use there
+	filteredWorkers = s.filterWorkersByLocalGPUVerification(filteredWorkers, request)
 	filteredWorkers = s.filterAgentWorkersByStorage(filteredWorkers, request)
 	filteredWorkers = s.filterProviderWorkers(filteredWorkers, request)
 	filteredWorkers = s.filterLivePrivateAgentWorkers(filteredWorkers, request)

@@ -169,6 +169,8 @@ func poolCanRun(pool *WorkerPool, query routeQuery) bool {
 	switch {
 	case !runtimeMatchesCheckpoint(request, runtime), !runtimeAcceptsRequest(request, runtime):
 		return false
+	case request.RequiresGPU() && config.ValidateLocalGPURuntime() != nil:
+		return false
 	case !request.StorageAvailable() && config.AgentHosted():
 		// Machines outside the cluster reach workspace files through storage
 		// the workspace has to have.
@@ -350,7 +352,7 @@ func (s *Scheduler) HasManagedPoolForGPU(gpuType string) bool {
 	query := newRouteQuery(&types.ContainerRequest{Gpu: gpuType, GpuCount: 1}, "")
 	for _, pool := range s.workerPoolManager.SharedPools() {
 		_, serves := poolServes(pool, query)
-		if serves && pool.Config.Mode != types.PoolModeProvider {
+		if serves && pool.Config.Mode != types.PoolModeProvider && pool.Config.ValidateLocalGPURuntime() == nil {
 			return true
 		}
 	}

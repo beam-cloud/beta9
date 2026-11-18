@@ -107,7 +107,6 @@ func (c *ImageClient) originCredentials(ctx context.Context, request *types.Cont
 
 	creds := &originCredentials{
 		registryCredentials:   resp.RegistryCredentials,
-		workspaceStorage:      resp.WorkspaceStorage,
 		imageArchiveStorage:   resp.ImageArchiveStorage,
 		imageArchiveObjectKey: resp.ImageArchiveObjectKey,
 		imageArchiveURL:       resp.ImageArchiveUrl,
