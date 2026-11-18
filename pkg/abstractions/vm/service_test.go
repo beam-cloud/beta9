@@ -722,6 +722,26 @@ func TestRemoveEndsAVMWhoseRootCannotBeSnapshotted(t *testing.T) {
 	require.Equal(t, 1, s.backend.(*vmBackend).deletedDisks)
 }
 
+// A VM whose worker keeps none of its disks has nothing to recover from a
+// failed finalization, as when its guest is killed, and is removed.
+func TestFinalizationErrorOfAVMThatKeepsNoDisks(t *testing.T) {
+	s, v, info, _, _ := fixture()
+	containers := s.containers.(*vmContainers)
+	captures := false
+	v.Spec.CaptureExitSnapshot, v.Spec.Disks = &captures, nil
+	delete(containers.states, v.ContainerID)
+	containers.exitCode = int(types.ContainerExitCodeUnknownError)
+
+	state, err := s.runtimeState(v)
+	require.NoError(t, err)
+	require.Nil(t, state)
+
+	v.DesiredState = types.VMStateDeleted
+	require.NoError(t, s.stopOrDelete(auth.ContextWithAuthInfo(context.Background(), info), v))
+	require.Empty(t, v.ContainerID)
+	require.Equal(t, types.VMStateDeleted, v.Status)
+}
+
 func TestStopRejectsFinalSyncFailure(t *testing.T) {
 	s, v, info, _, _ := fixture()
 	s.containers.(*vmContainers).exitCode = int(types.ContainerExitCodeUnknownError)

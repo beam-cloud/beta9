@@ -182,7 +182,7 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 			return fmt.Errorf("read VM finalization proof before retiring runtime %s: %w", retiredContainerID, err)
 		}
 		retiredProofObserved = err == nil
-		if retiredProofObserved && retiredCode == int(types.ContainerExitCodeUnknownError) {
+		if retiredProofObserved && retiredCode == int(types.ContainerExitCodeUnknownError) && keepsDisks(v) {
 			return fmt.Errorf("VM runtime finalization failed; retaining runtime %s for recovery", retiredContainerID)
 		}
 	}
@@ -240,7 +240,7 @@ func (s *Service) runtimeState(v *types.VM) (*types.ContainerState, error) {
 			return nil, err
 		}
 
-		if code, err := s.containers.GetContainerExitCode(v.ContainerID); err == nil && code == int(types.ContainerExitCodeUnknownError) {
+		if code, err := s.containers.GetContainerExitCode(v.ContainerID); err == nil && code == int(types.ContainerExitCodeUnknownError) && keepsDisks(v) {
 			return nil, fmt.Errorf("VM runtime finalization failed; retaining runtime %s for recovery", v.ContainerID)
 		}
 
@@ -248,6 +248,14 @@ func (s *Service) runtimeState(v *types.VM) (*types.ContainerState, error) {
 	}
 
 	return state, nil
+}
+
+// keepsDisks reports whether a VM's worker keeps any of its disks when it
+// exits. Only then is there anything to recover from a runtime whose
+// finalization failed: the worker removes the disks of any other VM, such
+// as a runner whose guest was killed, however it exits.
+func keepsDisks(v *types.VM) bool {
+	return types.CapturesExitSnapshot(v.Spec.CaptureExitSnapshot) || len(v.Spec.Disks) > 0
 }
 
 // Launch completion is visible before the reconciler persists it. Project only
@@ -415,7 +423,7 @@ func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
 				code = int(types.ContainerExitCodeScheduler)
 			}
 
-			if code == int(types.ContainerExitCodeUnknownError) {
+			if code == int(types.ContainerExitCodeUnknownError) && keepsDisks(v) {
 				return fmt.Errorf("VM exited with a finalization error; inspect worker logs before restarting")
 			}
 

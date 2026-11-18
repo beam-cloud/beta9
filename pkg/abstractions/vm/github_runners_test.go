@@ -400,6 +400,25 @@ func fakeGitHub(t *testing.T, r *githubRunners, routes map[string]string) func()
 
 var beamLabels = []string{"beam-4vcpu-ubuntu-2404"}
 
+// A runner whose guest is killed in its job, as when the job takes more
+// memory than the VM has, exits as a failed finalization does. It keeps
+// nothing to recover, and is deleted as any runner that is done.
+func TestGitHubRunnerKilledInItsJobIsDeleted(t *testing.T) {
+	r, store, _, runtime := runnerFixture(t)
+	ctx := context.Background()
+	fakeGitHub(t, r, map[string]string{registersRunner: `201 {"encoded_jit_config":"jit-secret"}`})
+	v := startRunner(t, r, store, 1, false)
+	running := *store.jobs[1]
+	running.Status, running.RunnerName = "in_progress", v.Name
+	require.Equal(t, 202, deliver(t, r, "workflow_job", "in_progress", beamLabels, &running, true))
+
+	delete(runtime.containers.states, v.ContainerID)
+	runtime.containers.exitCode = int(types.ContainerExitCodeUnknownError)
+	require.NoError(t, r.s.reconcileVM(ctx, v))
+	require.Equal(t, types.VMStateDeleted, v.Status)
+	require.Empty(t, v.ContainerID)
+}
+
 func queuedJob(id int64) *types.GitHubRunnerJob {
 	return &types.GitHubRunnerJob{ID: id, InstallationID: 42, WorkspaceID: 7, Repository: "acme/repo", Label: beamLabels[0], Status: types.GitHubJobQueued}
 }
