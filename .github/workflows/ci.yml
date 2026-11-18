@@ -9,7 +9,7 @@ jobs:
       run:
         working-directory: sdk
 
-    runs-on: runs-on: beam-16vcpu-ubuntu-2404
+    runs-on: beam-16vcpu-ubuntu-2404
     strategy:
       max-parallel: 4
 
@@ -49,7 +49,7 @@ jobs:
         run: make tests
 
   lint_and_test_go_pkg:
-    runs-on: runs-on: beam-16vcpu-ubuntu-2404
+    runs-on: beam-16vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v3
 
@@ -80,7 +80,7 @@ jobs:
           sudo /tmp/cachefs.test -test.v -test.run '^TestCacheFSProcessExitWithOpenFile$' -test.count=50
   
   verify_microvm_image_pin:
-    runs-on: runs-on: beam-16vcpu-ubuntu-2404
+    runs-on: beam-16vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v3
 
@@ -109,7 +109,7 @@ jobs:
           PY
 
   verify_protobufs:
-    runs-on: runs-on: beam-16vcpu-ubuntu-2404
+    runs-on: beam-16vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v3
 
