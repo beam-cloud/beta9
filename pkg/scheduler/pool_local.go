@@ -347,6 +347,7 @@ func (wpc *LocalKubernetesWorkerPoolController) workerPodConfig() types.AppConfi
 	config.GatewayService.CreditGate = types.CreditGateConfig{}
 	config.Providers = types.ProviderConfig{}
 	config.Tailscale = types.TailscaleConfig{}
+	config.Abstractions.VM.GitHubRunners = types.GitHubRunnerConfig{}
 	config.Monitoring.Prometheus.AgentPassword = ""
 
 	// Workers report sandbox usage to the billing pool routes, so each route

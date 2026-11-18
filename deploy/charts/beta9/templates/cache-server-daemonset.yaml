@@ -1,4 +1,27 @@
 {{- if .Values.cacheServer.enabled -}}
+{{- $configSecretName := required "cacheServer.configSecretName must name a dedicated cache-server Secret" .Values.cacheServer.configSecretName -}}
+{{- if has $configSecretName (list "beta9-config-helm" "beta9-config") -}}
+{{- fail "cacheServer.configSecretName cannot reference a gateway configuration Secret" -}}
+{{- end -}}
+{{- $serviceAccountName := printf "%s-cache-server" .Release.Name -}}
+{{- if eq $serviceAccountName .Values.serviceAccount.name -}}
+{{- fail "cache-server and gateway must use different service accounts" -}}
+{{- end -}}
+{{- $gatewayConfig := .Values.config | default dict -}}
+{{- $workerConfig := $gatewayConfig.worker | default dict -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $serviceAccountName }}
+  {{- with (.Values.cacheServer.serviceAccount | default dict).annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  labels:
+    {{- include "bjw-s.common.lib.metadata.allLabels" . | nindent 4 }}
+    app.kubernetes.io/component: cache-server
+automountServiceAccountToken: false
+---
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -17,8 +40,8 @@ spec:
         {{- include "bjw-s.common.lib.metadata.allLabels" . | nindent 8 }}
         app.kubernetes.io/component: cache-server
     spec:
-      serviceAccountName: {{ .Values.serviceAccount.name }}
-      automountServiceAccountToken: true
+      serviceAccountName: {{ $serviceAccountName }}
+      automountServiceAccountToken: false
       terminationGracePeriodSeconds: 60
       {{- with .Values.cacheServer.priorityClassName }}
       priorityClassName: {{ . | quote }}
@@ -58,7 +81,7 @@ spec:
         {{- end }}
         env:
         - name: CONFIG_PATH
-          value: /etc/beta9/config.yaml
+          value: /etc/beta9-cache-server/config.yaml
         - name: CACHE_SERVER_ONLY
           value: "true"
         - name: WORKER_POOL_NAME
@@ -91,8 +114,7 @@ spec:
           {{- end }}
         volumeMounts:
         - name: config
-          mountPath: /etc/beta9/config.yaml
-          subPath: config.yaml
+          mountPath: /etc/beta9-cache-server
           readOnly: true
         - name: cache
           mountPath: {{ .Values.cacheServer.mountPath }}
@@ -105,15 +127,18 @@ spec:
       volumes:
       - name: config
         secret:
-          secretName: {{ .Values.cacheServer.configSecretName }}
+          secretName: {{ $configSecretName | quote }}
+          items:
+          - key: config.yaml
+            path: config.yaml
       - name: cache
         hostPath:
           path: {{ .Values.cacheServer.hostPath }}
           type: DirectoryOrCreate
       - name: images
-        {{- if .Values.config.worker.imagePVCName }}
+        {{- with $workerConfig.imagePVCName }}
         persistentVolumeClaim:
-          claimName: {{ .Values.config.worker.imagePVCName }}
+          claimName: {{ . }}
         {{- else }}
         hostPath:
           path: {{ .Values.cacheServer.imagesHostPath }}

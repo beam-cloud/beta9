@@ -21,6 +21,13 @@ func main() {
 	}
 	configureGOMAXPROCS()
 
+	if enabled, _ := strconv.ParseBool(os.Getenv(types.CacheServerOnlyEnv)); enabled {
+		if err := worker.RunCacheServer(); err != nil {
+			log.Fatal().Err(err).Msg("cache server failed")
+		}
+		return
+	}
+
 	configManager, err := common.NewConfigManager[types.AppConfig]()
 	if err != nil {
 		log.Fatal().Err(err).Msg("error creating config manager")
@@ -36,13 +43,6 @@ func main() {
 	}
 
 	metrics.InitializeMetricsRepository(config.Monitoring.VictoriaMetrics)
-
-	if enabled, _ := strconv.ParseBool(os.Getenv("CACHE_SERVER_ONLY")); enabled {
-		if err := worker.RunCacheServer(); err != nil {
-			log.Fatal().Err(err).Msg("cache server failed")
-		}
-		return
-	}
 
 	notFoundErr := &types.ErrWorkerNotFound{}
 	s, err := worker.NewWorker()

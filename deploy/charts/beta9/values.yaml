@@ -43,7 +43,11 @@ images:
 
 cacheServer:
   enabled: false
-  configSecretName: beta9-config-helm
+  # Existing Secret in the release namespace with a dedicated cache-only config.yaml.
+  configSecretName: beta9-cache-server-config
+  serviceAccount:
+    # Optional cache-specific workload identity annotations.
+    annotations: {}
   poolName: default
   locality: default
   serverPort: 2050
