@@ -1337,6 +1337,73 @@ test "$(stat -c %a /etc/alpine-release)" = 600
 	require.Contains(t, vm2.output.String(), "persisted")
 }
 
+func TestMicroVMDurableRootFullReturnsENOSPC(t *testing.T) {
+	rt := requireMicroVMEnv(t)
+	dir, err := os.MkdirTemp(testWorkRoot, "qcow-full-")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
+	manager := disk.NewManager(disk.Config{Root: dir})
+	ctx := context.Background()
+	t.Cleanup(func() { require.NoError(t, manager.Close(ctx)) })
+	volume, err := manager.Attach(ctx, disk.AttachSpec{
+		Key:              "root",
+		VirtualSizeBytes: 128 << 20,
+		Export:           disk.ExportVhostUser,
+	}, nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, volume.ExportSocket())
+
+	vm := newTestVM(t, rt, vmOptions{
+		image:       "python",
+		annotations: map[string]string{MicroVMRootDiskAnnotation: volume.ExportSocket()},
+		args: []string{"python3", "-c", `
+import errno
+import os
+from pathlib import Path
+
+sentinel = Path("/root-sentinel")
+sentinel.write_bytes(b"before capacity was reached")
+os.sync()
+
+filler = Path("/root-fill")
+chunk = os.urandom(1 << 20)
+try:
+    with filler.open("wb", buffering=0) as disk:
+        for _ in range(256):
+            disk.write(chunk)
+            os.fsync(disk.fileno())
+except OSError as err:
+    if err.errno != errno.ENOSPC:
+        raise
+else:
+    raise AssertionError("writes exceeded the virtual root disk capacity")
+
+stats = os.statvfs("/")
+available = stats.f_bavail * stats.f_frsize
+assert available < len(chunk), f"ENOSPC with {available} bytes still available"
+assert sentinel.read_bytes() == b"before capacity was reached"
+os.sync()
+print("full root returned ENOSPC and remains readable", flush=True)
+
+filler.unlink()
+with sentinel.open("wb") as disk:
+    disk.write(b"after reclaiming space")
+    disk.flush()
+    os.fsync(disk.fileno())
+assert sentinel.read_bytes() == b"after reclaiming space"
+`},
+	})
+	vm.start()
+	res := vm.wait(90 * time.Second)
+	output := vm.output.String()
+	require.NoError(t, res.err, output)
+	require.Zero(t, res.code, output)
+	require.Contains(t, output, "full root returned ENOSPC and remains readable")
+	console := strings.ToLower(output)
+	require.NotContains(t, console, "i/o error", output)
+	require.NotContains(t, console, "aborting journal", output)
+}
+
 func TestMicroVMResourcesAndOOM(t *testing.T) {
 	rt := requireMicroVMEnv(t)
 	vm := newTestVM(t, rt, vmOptions{image: "alpine", goproc: true, memoryMiB: 512, cpuCores: 2})
