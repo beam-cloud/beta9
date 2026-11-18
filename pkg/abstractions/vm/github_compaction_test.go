@@ -2,17 +2,17 @@ package vm
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"encoding/base64"
-	"fmt"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
-	"net/http"
-	"net/http/httptest"
 )
 
 const (
@@ -55,30 +55,57 @@ func TestCompactionRunToken(t *testing.T) {
 
 func TestCompactionPathAllowlist(t *testing.T) {
 	for _, test := range []struct {
-		name     string
-		workflow bool
-		want     bool
+		name, framework string
+		want            bool
 	}{
-		{testCompactionPath, false, true},
-		{"orders_test.go", false, true},
-		{"pkg/orders/orders.go", false, false},
-		{"pkg/orders/testdata/fixture_test.go", false, false},
-		{"pkg/../orders_test.go", false, false},
-		{"/pkg/orders/orders_test.go", false, false},
-		{"pkg//orders_test.go", false, false},
-		{"pkg\\orders_test.go", false, false},
-		{"pkg/.git/config_test.go", false, false},
-		{"go.mod", false, false},
-		{".github/workflows/ci.yml", false, false},
-		{".github/workflows/ci.yml", true, true},
-		{".github/workflows/ci.yaml", true, true},
-		{".github/workflows/local/ci.yml", true, false},
-		{"ci.yml", true, false},
-		{".github/workflows/ci.yml/../other.yml", true, false},
+		{testCompactionPath, "go", true},
+		{"orders_test.go", "go", true},
+		{"pkg/orders/orders.go", "go", false},
+		{"pkg/orders/testdata/fixture_test.go", "go", false},
+		{"pkg/../orders_test.go", "go", false},
+		{"/pkg/orders/orders_test.go", "go", false},
+		{"pkg//orders_test.go", "go", false},
+		{"pkg\\orders_test.go", "go", false},
+		{"pkg/.git/config_test.go", "go", false},
+		{"go.mod", "go", false},
+		{".github/workflows/ci.yml", "go", false},
+		{"tests/test_orders.py", "pytest", true},
+		{"packages/orders/test/orders_test.py", "pytest", true},
+		{"test_orders.py", "pytest", false},
+		{"src/orders/test_orders.py", "pytest", false},
+		{"tests/orders.py", "pytest", false},
+		{"tests/conftest.py", "pytest", false},
+		{"tests/test_helper_test.py", "pytest", false},
+		{"tests/Fixtures/test_orders.py", "pytest", false},
+		{"tests/pyproject.toml", "pytest", false},
+		{"tests/test_orders.py", "jest", false},
+		{"src/orders.test.ts", "jest", true},
+		{"src/components/order.spec.tsx", "vitest", true},
+		{"orders.test.mjs", "jest", true},
+		{"__tests__/orders.js", "jest", false},
+		{"src/orders.ts", "vitest", false},
+		{"src/orders.test.d.ts", "vitest", false},
+		{"tests/vitest.config.test.ts", "vitest", false},
+		{"tests/setupTests.test.ts", "jest", false},
+		{"tests/package-lock.json", "jest", false},
+		{"tests/__snapshots__/orders.test.ts", "jest", false},
+		{"tests/__fixtures__/orders.test.ts", "vitest", false},
+		{"node_modules/orders/orders.test.js", "jest", false},
+		{"tests/.cache/orders.spec.js", "vitest", false},
+		{"tests/\torders.test.ts", "jest", false},
+		{".GitHub/orders.test.js", "vitest", false},
+		{"tests/orders_test.rs", "cargo", false},
+		{".github/workflows/ci.yml", "workflow", false},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			require.Equal(t, test.want, validCompactionPath(test.name, test.workflow))
+		t.Run(test.framework+"/"+test.name, func(t *testing.T) {
+			require.Equal(t, test.want, validCompactionTestPath(test.name, test.framework))
 		})
+	}
+	for _, file := range []string{".github/workflows/ci.yml", ".github/workflows/ci.yaml"} {
+		require.Equal(t, file, pipelineWorkflowPath(file, "main"))
+	}
+	for _, file := range []string{".github/workflows/local/ci.yml", "ci.yml", ".github/workflows/ci.yml/../other.yml"} {
+		require.Empty(t, pipelineWorkflowPath(file, "main"))
 	}
 }
 
@@ -120,6 +147,37 @@ func TestCompactionResultVerification(t *testing.T) {
 		})
 	}
 	require.True(t, validCompactionResult(compactionResult{Commit: testCompactionCommit, Status: "unchanged"}))
+}
+
+func TestCompactionResultVerifiesEachFramework(t *testing.T) {
+	result := compactionTestResult() // Old Go groups omit the framework.
+	for _, change := range []struct{ file, framework, source string }{
+		{"tests/test_orders.py", "pytest", "def test_orders(): pass\n"},
+		{"src/orders.test.ts", "jest", "test('orders', () => {});\n"},
+	} {
+		result.Files[change.file] = change.source
+		group := result.Report.Groups[0]
+		group.File, group.Framework = change.file, change.framework
+		result.Report.Groups = append(result.Report.Groups, group)
+	}
+	result.Report.TestsBefore, result.Report.TestsAfter = 6, 3
+	require.True(t, validCompactionResult(result))
+
+	group := &result.Report.Groups[1]
+	group.Framework = ""
+	require.False(t, validCompactionResult(result), "only Go paths work without a framework")
+	group.Framework = "go"
+	require.False(t, validCompactionResult(result), "changing the label does not grant access")
+	group.Framework = "pytest"
+	group.File = "src/orders.py"
+	result.Files[group.File] = result.Files["tests/test_orders.py"]
+	delete(result.Files, "tests/test_orders.py")
+	require.False(t, validCompactionResult(result), "reject the entire result when one group changes product code")
+
+	group.File, group.Framework = ".github/workflows/ci.yml", "workflow"
+	result.Files[group.File] = "jobs: {}\n"
+	delete(result.Files, "src/orders.py")
+	require.False(t, validCompactionResult(result), "only the gateway pipeline can change workflows")
 }
 
 func TestCompactionSavingsThresholds(t *testing.T) {

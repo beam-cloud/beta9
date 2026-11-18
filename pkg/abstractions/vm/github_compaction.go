@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
@@ -37,6 +38,7 @@ const (
 	compactionMinimumLines   = 200
 	compactionMaxFile        = 512 << 10
 	compactionMaxResult      = 4 << 20
+	compactionFrameworks     = "go,pytest,jest,vitest"
 )
 
 var (
@@ -89,28 +91,36 @@ type compactionCase struct {
 }
 
 type compactionGroup struct {
-	File    string           `json:"file"`
-	NewTest string           `json:"new_test"`
-	Status  string           `json:"status"`
-	Cases   []compactionCase `json:"cases"`
+	File      string           `json:"file"`
+	Framework string           `json:"framework,omitempty"`
+	NewTest   string           `json:"new_test"`
+	Status    string           `json:"status"`
+	Cases     []compactionCase `json:"cases"`
+}
+
+type compactionProject struct {
+	Framework string `json:"framework"`
+	Directory string `json:"directory"`
 }
 
 type compactionReport struct {
-	Reason          string            `json:"reason,omitempty"`
-	SkippedPackages json.RawMessage   `json:"skipped_packages,omitempty"`
-	BeforeMS        int64             `json:"median_before_ms"`
-	AfterMS         int64             `json:"median_after_ms"`
-	SpreadMS        int64             `json:"baseline_spread_ms"`
-	LinesBefore     int               `json:"test_lines_before"`
-	LinesAfter      int               `json:"test_lines_after"`
-	TestsBefore     int               `json:"tests_before"`
-	TestsAfter      int               `json:"tests_after"`
-	CoveredBefore   int               `json:"coverage_lines_before"`
-	CoveredAfter    int               `json:"coverage_lines_after"`
-	Coverable       int               `json:"coverage_lines_total"`
-	Caught          int               `json:"mutations_caught"`
-	Preserved       int               `json:"mutations_preserved"`
-	Groups          []compactionGroup `json:"groups"`
+	DetectedProjects []compactionProject `json:"detected_projects,omitempty"`
+	Outcome          string              `json:"outcome,omitempty"`
+	Reason           string              `json:"reason,omitempty"`
+	SkippedPackages  json.RawMessage     `json:"skipped_packages,omitempty"`
+	BeforeMS         int64               `json:"median_before_ms"`
+	AfterMS          int64               `json:"median_after_ms"`
+	SpreadMS         int64               `json:"baseline_spread_ms"`
+	LinesBefore      int                 `json:"test_lines_before"`
+	LinesAfter       int                 `json:"test_lines_after"`
+	TestsBefore      int                 `json:"tests_before"`
+	TestsAfter       int                 `json:"tests_after"`
+	CoveredBefore    int                 `json:"coverage_lines_before"`
+	CoveredAfter     int                 `json:"coverage_lines_after"`
+	Coverable        int                 `json:"coverage_lines_total"`
+	Caught           int                 `json:"mutations_caught"`
+	Preserved        int                 `json:"mutations_preserved"`
+	Groups           []compactionGroup   `json:"groups"`
 }
 
 type compactionResult struct {
@@ -278,6 +288,7 @@ func (r *githubRunners) startCompaction(ctx context.Context, row types.GitHubCom
 		"COMPACTION_CLONE_TOKEN=" + repoToken,
 		"COMPACTION_COMMIT=" + row.RunCommit,
 		"COMPACTION_PREVIOUS_COMMIT=" + row.LastCommit,
+		"COMPACTION_ADAPTERS=" + compactionFrameworks,
 	}
 	return r.launchRunnerVM(ctx, info, compactionPrefix+row.RunID, row.Repository, size, env, nil)
 }
@@ -339,8 +350,14 @@ func (r *githubRunners) compactionResult(c echo.Context) error {
 	case result.Status == "failed":
 		log.Warn().Str("repository", row.Repository).Str("reason", compactionText(result.Report.Reason, 240)).Msg("CI compaction VM reported a failure")
 		err = r.finishCompaction(ctx, *row, "Analysis failed", false, nil, "", string(report))
+	case result.Status == "unchanged":
+		err = r.finishCompaction(ctx, *row, "No test changes", true, nil, "", string(report))
 	case len(result.Files) == 0 || !result.Report.worthwhile():
-		err = r.finishCompaction(ctx, *row, "No worthwhile change", true, nil, "", string(report))
+		status := "No worthwhile change"
+		if len(result.Files) == 0 && result.Report.Outcome == "unsupported" {
+			status = "Test verification unavailable"
+		}
+		err = r.finishCompaction(ctx, *row, status, true, nil, "", string(report))
 	default:
 		err = r.publishTestCompaction(ctx, *row, result, string(report))
 	}
@@ -352,19 +369,77 @@ func (r *githubRunners) compactionResult(c echo.Context) error {
 
 func validCompactionPath(name string, workflow bool) bool {
 	if name == "." || name == "" || name != path.Clean(name) || strings.HasPrefix(name, "/") ||
-		strings.ContainsAny(name, "\\:\x00\r\n") {
+		strings.ContainsAny(name, "\\:") || strings.ContainsFunc(name, unicode.IsControl) {
 		return false
 	}
 	for _, component := range strings.Split(name, "/") {
-		if component == ".." || strings.EqualFold(component, ".git") || component == "testdata" ||
-			(!workflow && component == ".github") {
+		if component == ".." || strings.EqualFold(component, ".git") || strings.EqualFold(component, "testdata") ||
+			(!workflow && strings.EqualFold(component, ".github")) {
 			return false
 		}
 	}
-	if workflow {
-		return path.Dir(name) == ".github/workflows" && slices.Contains([]string{".yml", ".yaml"}, path.Ext(name))
+	return !workflow || path.Dir(name) == ".github/workflows" && slices.Contains([]string{".yml", ".yaml"}, path.Ext(name))
+}
+
+// A reported framework selects a gateway rule. It never supplies paths or
+// patterns for that rule. Only Go's naming rule excludes tests from builds, so
+// the other adapters also need the framework's own discovery and verification.
+func validCompactionTestPath(name, framework string) bool {
+	if !validCompactionPath(name, false) {
+		return false
 	}
-	return strings.HasSuffix(name, "_test.go")
+	base := path.Base(name)
+	if framework == "go" {
+		return strings.HasSuffix(base, "_test.go")
+	}
+	var inTests bool
+	for _, dir := range strings.Split(path.Dir(name), "/") {
+		dir = strings.ToLower(dir)
+		if dir != "." && strings.HasPrefix(dir, ".") {
+			return false
+		}
+		switch dir {
+		case "__fixtures__", "__mocks__", "__pycache__", "__snapshots__", "build", "config", "coverage", "dist",
+			"fixtures", "generated", "helpers", "mocks", "node_modules", "snapshots", "support", "vendor", "venv":
+			return false
+		case "test", "tests":
+			inTests = true
+		}
+	}
+
+	ext := path.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	switch framework {
+	case "pytest":
+		if ext != ".py" || !inTests {
+			return false
+		}
+		if name, ok := strings.CutPrefix(stem, "test_"); ok {
+			return validCompactionTestStem(strings.TrimSuffix(name, "_test"))
+		}
+		name, ok := strings.CutSuffix(stem, "_test")
+		return ok && validCompactionTestStem(name)
+	case "jest", "vitest":
+		if !slices.Contains([]string{".js", ".jsx", ".ts", ".tsx", ".cjs", ".mjs", ".cts", ".mts"}, ext) {
+			return false
+		}
+		if name, ok := strings.CutSuffix(stem, ".test"); ok {
+			return validCompactionTestStem(name)
+		}
+		name, ok := strings.CutSuffix(stem, ".spec")
+		return ok && validCompactionTestStem(name)
+	}
+	return false
+}
+
+func validCompactionTestStem(stem string) bool {
+	stem = strings.ToLower(stem)
+	switch stem {
+	case "", "config", "configuration", "conftest", "fixture", "fixtures", "helper", "helpers", "mock", "mocks",
+		"setup", "setup_tests", "setuptests", "snapshot", "snapshots", "support", "teardown", "test_utils", "testutils":
+		return false
+	}
+	return !strings.HasPrefix(stem, ".") && !strings.HasSuffix(stem, ".config")
 }
 
 func validCompactionResult(result compactionResult) bool {
@@ -388,18 +463,28 @@ func validCompactionResult(result compactionResult) bool {
 		rep.TestsBefore <= rep.TestsAfter || rep.TestsAfter < 1 || rep.LinesBefore < 1 || rep.LinesAfter < 1 {
 		return false
 	}
+	verified := make(map[string]string, len(result.Files))
 	for _, group := range rep.Groups {
-		if group.Status == "merged" && (len(group.Cases) < 2 || len(group.Cases) > 6) {
+		if group.Status != "merged" {
+			continue
+		}
+		framework := group.Framework
+		if framework == "" {
+			framework = "go" // Reports from existing analysis VMs only contain Go test edits.
+		}
+		if group.NewTest == "" || len(group.Cases) < 2 || len(group.Cases) > 6 || !validCompactionTestPath(group.File, framework) {
 			return false
 		}
+		if _, changed := result.Files[group.File]; !changed {
+			return false
+		}
+		if previous := verified[group.File]; previous != "" && previous != framework {
+			return false
+		}
+		verified[group.File] = framework
 	}
 	for name, data := range result.Files {
-		if !validCompactionPath(name, false) || len(data) == 0 || len(data) > compactionMaxFile {
-			return false
-		}
-		if !slices.ContainsFunc(rep.Groups, func(group compactionGroup) bool {
-			return group.File == name && group.Status == "merged" && group.NewTest != "" && len(group.Cases) >= 2
-		}) {
+		if verified[name] == "" || len(data) == 0 || len(data) > compactionMaxFile {
 			return false
 		}
 	}
@@ -866,9 +951,7 @@ func pipelineWorkflowPath(file, branch string) string {
 		return ""
 	}
 	file = strings.TrimSuffix(strings.TrimSuffix(file, "@refs/heads/"+branch), "@"+branch)
-	name := path.Base(file)
-	ext := path.Ext(name)
-	if file != ".github/workflows/"+name || (ext != ".yml" && ext != ".yaml") || strings.ContainsAny(name, "\x00\r\n\\`|") {
+	if !validCompactionPath(file, true) || strings.ContainsAny(file, "`|") {
 		return ""
 	}
 	return file
