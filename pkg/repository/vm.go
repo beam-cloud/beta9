@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"database/sql/driver"
@@ -72,6 +73,15 @@ type VMRepository interface {
 	ListRetiredGitHubRunnerCaches(context.Context, time.Duration) ([]types.GitHubRunnerCache, error)
 	DeleteGitHubRunnerCache(context.Context, uint, string) error
 	GetGitHubRunnerJobByRunner(context.Context, uint, string) (*types.GitHubRunnerJob, error)
+
+	SetGitHubRunnerCICompaction(context.Context, uint, bool) (*types.GitHubRunnerInstallation, error)
+	MarkGitHubCompaction(context.Context, types.GitHubCompaction) error
+	ListGitHubCompactions(context.Context, uint) ([]types.GitHubCompaction, error)
+	ClaimGitHubCompaction(context.Context, types.GitHubCompaction) (bool, error)
+	AcceptGitHubCompactionResult(context.Context, string, string, string) (*types.GitHubCompaction, error)
+	FinishGitHubCompaction(context.Context, types.GitHubCompaction, time.Time) error
+	SetGitHubCompactionPROpen(context.Context, int64, string, int, bool) error
+	CountGitHubCompactionRuns(context.Context, uint, string, time.Time) (int, error)
 }
 
 // PublicVMRepository is required only when public VM networking is enabled.
@@ -677,7 +687,7 @@ func (r *PostgresBackendRepository) TryLockVM(ctx context.Context, id string) (f
 var ErrGitHubRunnerConflict = errors.New("GitHub runner connection conflict")
 
 const (
-	githubRunnerInstallationColumns = `id, workspace_id, token_id, account, account_type, paused, enhanced_cache, created_at`
+	githubRunnerInstallationColumns = `id, workspace_id, token_id, account, account_type, paused, enhanced_cache, ci_compaction, created_at`
 	githubRunnerJobColumns          = `id, run_id, installation_id, workspace_id, repository, workflow, name, url, label, status,
 	conclusion, runner_name, created_at, started_at, completed_at, vm, attempts, provision_at, error, waiting,
 	received_at, registered_at, vm_ready_at, default_branch`
@@ -1367,4 +1377,105 @@ func (r *PostgresBackendRepository) GetGitHubRunnerJobByRunner(ctx context.Conte
 	}
 
 	return &job, nil
+}
+
+// CI compaction holds one row for a repository of a connected account.
+func (r *PostgresBackendRepository) SetGitHubRunnerCICompaction(ctx context.Context, workspaceID uint, enabled bool) (*types.GitHubRunnerInstallation, error) {
+	query := `UPDATE github_runner_installation SET ci_compaction = $2 WHERE workspace_id = $1 RETURNING ` + githubRunnerInstallationColumns
+	return r.getGitHubRunnerInstallation(ctx, query, workspaceID, enabled)
+}
+
+func (r *PostgresBackendRepository) MarkGitHubCompaction(ctx context.Context, row types.GitHubCompaction) error {
+	_, err := r.client.NamedExecContext(ctx, `
+INSERT INTO github_compaction (installation_id, workspace_id, repository, branch, label, head, marked_at)
+SELECT id, workspace_id, :repository, :branch, :label, :head, :marked_at
+FROM github_runner_installation WHERE id = :installation_id AND workspace_id = :workspace_id AND ci_compaction
+ON CONFLICT (installation_id, repository) DO UPDATE
+SET head = EXCLUDED.head, branch = EXCLUDED.branch, label = EXCLUDED.label, marked_at = EXCLUDED.marked_at
+WHERE github_compaction.marked_at < EXCLUDED.marked_at;`, row)
+	return err
+}
+
+const compactionColumns = `c.installation_id, c.workspace_id, c.repository, c.branch, c.label, c.head,
+	c.marked_at, c.last_commit, c.wait_weeks, c.run_id, c.run_commit, c.run_expires,
+	c.status, c.pr_number, c.pr_url, c.pr_open, c.branch_sha, c.savings`
+
+const compactionDue = `i.ci_compaction AND NOT i.paused AND c.run_id = '' AND
+	NOT c.pr_open AND c.head <> c.last_commit AND c.next_at <= NOW() AND
+	NOT EXISTS (SELECT 1 FROM github_compaction a WHERE a.workspace_id = c.workspace_id AND a.run_id <> '') AND
+	NOT EXISTS (SELECT 1 FROM github_runner_job j WHERE j.workspace_id = c.workspace_id AND j.status = 'queued')`
+
+func (r *PostgresBackendRepository) ListGitHubCompactions(ctx context.Context, workspaceID uint) ([]types.GitHubCompaction, error) {
+	query := `SELECT ` + compactionColumns + ` FROM github_compaction c
+		JOIN github_runner_installation i ON i.id = c.installation_id `
+	args := []any{workspaceID}
+	if workspaceID != 0 {
+		query += `WHERE c.workspace_id = $1 ORDER BY c.repository`
+	} else {
+		query += `WHERE (c.run_expires <= NOW() OR (` + compactionDue + `)) ORDER BY c.next_at LIMIT 20`
+		args = nil
+	}
+	var rows []types.GitHubCompaction
+	err := r.client.SelectContext(ctx, &rows, query, args...)
+	return rows, err
+}
+
+func (r *PostgresBackendRepository) ClaimGitHubCompaction(ctx context.Context, row types.GitHubCompaction) (bool, error) {
+	result, err := r.client.NamedExecContext(ctx, `
+UPDATE github_compaction c
+SET run_id = :run_id, run_commit = :run_commit, run_expires = :run_expires, status = 'Analyzing'
+FROM github_runner_installation i
+WHERE c.installation_id = :installation_id AND i.id = c.installation_id
+	AND c.repository = :repository AND c.head = :run_commit AND (`+compactionDue+`);`, row)
+	var refusal *pq.Error
+	if errors.As(err, &refusal) && refusal.Constraint == "github_compaction_active" {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	return n == 1, err
+}
+
+func (r *PostgresBackendRepository) AcceptGitHubCompactionResult(ctx context.Context, workspace, run, commit string) (*types.GitHubCompaction, error) {
+	var row types.GitHubCompaction
+	err := r.client.GetContext(ctx, &row, `
+UPDATE github_compaction c SET status = 'Verifying result'
+FROM workspace w, github_runner_installation i
+WHERE w.id = c.workspace_id AND w.external_id = $1 AND c.run_id = $2 AND c.run_commit = $3
+	AND c.status = 'Analyzing' AND c.run_expires > NOW()
+	AND i.id = c.installation_id AND i.ci_compaction AND NOT i.paused
+RETURNING `+compactionColumns, workspace, run, commit)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return &row, err
+}
+
+func (r *PostgresBackendRepository) FinishGitHubCompaction(ctx context.Context, row types.GitHubCompaction, due time.Time) error {
+	_, err := r.client.ExecContext(ctx, `
+UPDATE github_compaction
+SET last_commit = $4, next_at = $5, wait_weeks = $6, status = $7, pr_number = $8, pr_url = $9,
+    pr_open = $10, branch_sha = $11, savings = $12, report = $13::jsonb,
+    run_id = '', run_commit = '', run_expires = NULL
+WHERE installation_id = $1 AND repository = $2 AND run_id = $3;`,
+		row.InstallationID, row.Repository, row.RunID, row.LastCommit, due, row.WaitWeeks, row.Status,
+		row.PRNumber, row.PRURL, row.PROpen, row.BranchSHA, row.Savings, cmp.Or(row.Report, "{}"))
+	return err
+}
+
+func (r *PostgresBackendRepository) SetGitHubCompactionPROpen(ctx context.Context, installationID int64, repo string, number int, open bool) error {
+	_, err := r.client.ExecContext(ctx, `
+UPDATE github_compaction SET pr_open = $4, status = CASE WHEN $4 THEN 'Pull request open' ELSE 'Pull request closed' END
+WHERE installation_id = $1 AND repository = $2 AND pr_number = $3 AND pr_number > 0;`, installationID, repo, number, open)
+	return err
+}
+
+func (r *PostgresBackendRepository) CountGitHubCompactionRuns(ctx context.Context, workspaceID uint, repo string, since time.Time) (int, error) {
+	var runs int
+	err := r.client.GetContext(ctx, &runs, `
+SELECT COUNT(DISTINCT run_id) FROM github_runner_job
+WHERE workspace_id = $1 AND lower(repository) = $2 AND created_at >= $3 AND run_id > 0 AND conclusion = 'success';`, workspaceID, repo, since)
+	return runs, err
 }

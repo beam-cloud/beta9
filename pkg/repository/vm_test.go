@@ -1580,7 +1580,7 @@ func TestGitHubRunnerCacheStatements(t *testing.T) {
 	installation := strings.Split(strings.ReplaceAll(githubRunnerInstallationColumns, " ", ""), ",")
 	mock.ExpectQuery(statement(`UPDATE github_runner_installation SET enhanced_cache = $2 WHERE workspace_id = $1`, `RETURNING`)).
 		WithArgs(uint(8), false).
-		WillReturnRows(sqlmock.NewRows(installation).AddRow(int64(42), 8, "token", "acme", "Organization", false, false, created))
+		WillReturnRows(sqlmock.NewRows(installation).AddRow(int64(42), 8, "token", "acme", "Organization", false, false, false, created))
 	account, err := r.SetGitHubRunnerEnhancedCache(ctx, 8, false)
 	require.NoError(t, err)
 	require.Equal(t, &types.GitHubRunnerInstallation{ID: 42, WorkspaceID: 8, TokenID: "token", Account: "acme", AccountType: "Organization", CreatedAt: created}, account)

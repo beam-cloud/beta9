@@ -44,8 +44,9 @@ type githubApp struct {
 }
 
 type githubToken struct {
-	Token     string    `json:"token"`
-	ExpiresAt time.Time `json:"expires_at"`
+	Token       string            `json:"token"`
+	ExpiresAt   time.Time         `json:"expires_at"`
+	Permissions map[string]string `json:"permissions"`
 }
 
 type githubAccount struct {
@@ -548,4 +549,30 @@ func (g *githubApp) call(ctx context.Context, method, endpoint, token string, in
 	}
 
 	return resp.Header, nil
+}
+
+func (g *githubApp) compactionAllowed(ctx context.Context, installation int64) bool {
+	if _, err := g.installationToken(ctx, installation); err != nil {
+		return false
+	}
+	g.lock.Lock()
+	permissions := g.tokens[installation].Permissions
+	g.lock.Unlock()
+	return permissions["contents"] == "write" && permissions["pull_requests"] == "write" && permissions["workflows"] == "write"
+}
+
+// A fresh token for one repository is the only GitHub credential the VM receives.
+func (g *githubApp) compactionCloneToken(ctx context.Context, row types.GitHubCompaction) (string, error) {
+	jwt, err := g.jwt()
+	if err != nil {
+		return "", err
+	}
+	_, name, _ := strings.Cut(row.Repository, "/")
+	var token githubToken
+	input := map[string]any{"repositories": []string{name}, "permissions": map[string]string{"contents": "read"}}
+	header, err := g.call(ctx, http.MethodPost, fmt.Sprintf("%s/app/installations/%d/access_tokens", g.apiURL, row.InstallationID), jwt, input, &token)
+	if err := g.heed(row.InstallationID, header, err); err != nil {
+		return "", err
+	}
+	return token.Token, nil
 }

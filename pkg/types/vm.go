@@ -400,6 +400,7 @@ type GitHubRunnerInstallation struct {
 	AccountType   string    `db:"account_type" json:"account_type"`
 	Paused        bool      `db:"paused" json:"paused"`
 	EnhancedCache bool      `db:"enhanced_cache" json:"-"`
+	CICompaction  bool      `db:"ci_compaction" json:"-"`
 	CreatedAt     time.Time `db:"created_at" json:"created_at"`
 }
 
@@ -546,4 +547,27 @@ type GitHubRunner struct {
 	JobStatus      string `db:"job_status"`
 	Waiting        string `db:"waiting"`
 	Ready          bool   `db:"ready"`
+}
+
+// GitHubCompaction is the schedule and last result of one repository.
+type GitHubCompaction struct {
+	InstallationID int64      `db:"installation_id"`
+	WorkspaceID    uint       `db:"workspace_id"`
+	Repository     string     `db:"repository"`
+	Branch         string     `db:"branch"`
+	Label          string     `db:"label"`
+	Head           string     `db:"head"`
+	MarkedAt       time.Time  `db:"marked_at"`
+	LastCommit     string     `db:"last_commit"`
+	WaitWeeks      int        `db:"wait_weeks"`
+	RunID          string     `db:"run_id"`
+	RunCommit      string     `db:"run_commit"`
+	RunExpires     *time.Time `db:"run_expires"`
+	Status         string     `db:"status"`
+	PRNumber       int        `db:"pr_number"`
+	PRURL          string     `db:"pr_url"`
+	PROpen         bool       `db:"pr_open"`
+	BranchSHA      string     `db:"branch_sha"`
+	Savings        string     `db:"savings"`
+	Report         string     `db:"-"`
 }
