@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 from unittest import TestCase
@@ -15,6 +16,7 @@ from beta9.clients.gateway import (
     ObjectUploadPart,
 )
 from beta9.sync import (
+    TIMESTAMP_TICK_NS,
     FileSyncer,
     FileSyncResult,
     _Manifest,
@@ -141,6 +143,15 @@ class TestIncrementalSync(TestCase):
     def _sync(self, gw):
         syncer = FileSyncer(gateway_stub=gw, root_dir=str(self.root))
         return syncer.sync()
+
+    def _settle(self):
+        """Waits until the timestamps of the files written so far cannot
+        repeat, so that a sync records them. The tick is cut to that of the
+        filesystems tests run on, to keep the wait short."""
+        tick = patch("beta9.sync.TIMESTAMP_TICK_NS", 20_000_000)
+        tick.start()
+        self.addCleanup(tick.stop)
+        time.sleep(0.025)
 
     def test_dockerfile_upload_reincludes_files_under_excluded_directories(self):
         dockerfile = self.root / "Dockerfile"
@@ -382,6 +393,7 @@ class TestIncrementalSync(TestCase):
 
     def test_unchanged_files_are_not_rehashed(self):
         gw = _FakeGateway()
+        self._settle()
         self._sync(gw)
         with patch.object(
             FileSyncer, "_calculate_sha256", wraps=FileSyncer._calculate_sha256
@@ -406,10 +418,27 @@ class TestIncrementalSync(TestCase):
         self.assertEqual(len(gw.deltas), 1, "the rewrite is seen and uploaded")
         self.assertEqual(self.puts[-1], ("https://put/delta", ["app/f1.bin"]))
 
+    def test_ctime_is_recorded_only_once_it_cannot_repeat(self):
+        # A write in the same tick of the filesystem's clock as the one before
+        # it leaves size, mtime and ctime where they were, and a tick is 4 ms
+        # on most Linux kernels before 6.13. A sync that starts within a tick
+        # of a file's last change leaves the file for the next sync to hash.
+        gw = _FakeGateway()
+        changed_ns = (self.root / "main.py").stat().st_ctime_ns
+        for since_change_ns, recorded in (
+            (TIMESTAMP_TICK_NS - 1, 0),
+            (TIMESTAMP_TICK_NS, changed_ns),
+        ):
+            with patch("beta9.sync.time.time_ns", return_value=changed_ns + since_change_ns):
+                self._sync(gw)
+            entry = _SyncCache.load(self.root, []).manifest.entries["main.py"]
+            self.assertEqual(entry.ctime_ns, recorded)
+
     def test_cache_entry_without_ctime_is_rehashed_once_then_reused(self):
         # An entry written by an SDK that did not record ctime cannot be
         # trusted; hash it once and record ctime so the next sync reuses it.
         gw = _FakeGateway()
+        self._settle()
         self._sync(gw)
         cache = _SyncCache.load(self.root, [])
         entries = {
