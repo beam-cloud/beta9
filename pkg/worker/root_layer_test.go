@@ -15,6 +15,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -191,6 +192,72 @@ func TestRootLayerExportIsBounded(t *testing.T) {
 	out, err = exec.Command("losetup", "--noheadings", "--associated", dir+".img").Output()
 	require.NoError(t, err)
 	require.Empty(t, strings.TrimSpace(string(out)), "no loop device is left")
+}
+
+// A worker in a container has the loop devices that its host had when it
+// started. With all of those in use the kernel adds one, which /dev has no
+// file for until the worker makes it.
+func TestRootLayerExportAddsTheLoopDeviceItNeeds(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("mounting an export needs root")
+	}
+	if _, err := exec.LookPath("mkfs.ext4"); err != nil {
+		t.Skip("mounting an export needs mkfs.ext4")
+	}
+	// Only a container's own /dev is taken apart: a host's is its devices.
+	if out, err := exec.Command("findmnt", "-no", "FSTYPE", "/dev").Output(); err != nil || strings.TrimSpace(string(out)) != "tmpfs" {
+		t.Skip("needs a /dev of its own, as a container has")
+	}
+	devices, err := filepath.Glob("/dev/loop[0-9]*")
+	require.NoError(t, err)
+	require.NotEmpty(t, devices)
+	for _, device := range devices {
+		require.NoError(t, os.Remove(device))
+	}
+	t.Cleanup(addLoopDevices)
+
+	dir := filepath.Join(t.TempDir(), "vm-1")
+	t.Cleanup(func() { removeRootLayerExport(dir) })
+	require.NoError(t, makeRootLayerExport(dir, 64<<20))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "entries.tar"), []byte("entries"), 0o600))
+	for _, device := range devices {
+		require.FileExists(t, device)
+	}
+}
+
+// A start can fail after the export of its VM is mounted: the worker waits
+// for a VM that it evicts, or is told to stop. No exit collects that export,
+// so the failure removes it, with its loop device.
+func TestRootLayerExportOfAStartThatFailedIsRemoved(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("mounting an export needs root")
+	}
+	if _, err := exec.LookPath("mkfs.ext4"); err != nil {
+		t.Skip("mounting an export needs mkfs.ext4")
+	}
+	worker := rootLayerWorker(t, runtime.Capabilities{BlockRoot: true})
+	request := rootLayerRequest(t, &types.RootLayer{DiskName: types.RootLayerDiskPrefix + "0123456789abcdef", Size: "1Gi",
+		Paths: []string{"/home/runner/.cache/go-build"}, Publish: true}, true)
+	dir := worker.rootLayerExportDir(request.ContainerId)
+	t.Cleanup(func() { removeRootLayerExport(dir) })
+
+	spec := &specs.Spec{Annotations: map[string]string{}}
+	require.NoError(t, worker.annotateRootLayer(request, spec))
+	require.Len(t, spec.Mounts, 1)
+	require.Equal(t, dir, spec.Mounts[0].Source)
+	require.FileExists(t, dir+".img")
+
+	worker.discardRootLayerExport(request.ContainerId, request)
+	require.NoDirExists(t, dir)
+	require.NoFileExists(t, dir+".img")
+	out, err := exec.Command("losetup", "--noheadings", "--associated", dir+".img").Output()
+	require.NoError(t, err)
+	require.Empty(t, strings.TrimSpace(string(out)), "no loop device is left")
+
+	// A VM that does not add to its layer has no export to remove.
+	reader := rootLayerRequest(t, &types.RootLayer{DiskName: types.RootLayerDiskPrefix + "0123456789abcdef", Size: "1Gi"}, true)
+	require.NoError(t, worker.annotateRootLayer(reader, &specs.Spec{Annotations: map[string]string{}}))
+	require.NoDirExists(t, dir)
 }
 
 // VMs that were told of an older generation can start after ones that were

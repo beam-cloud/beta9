@@ -17,6 +17,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sys/unix"
 )
 
 // A root layer is a generation of a workspace's durable disk under a VM's
@@ -477,11 +478,27 @@ func makeRootLayerExport(dir string, size int64) (err error) {
 	// The image is written past the page cache. What a guest writes is cached
 	// once, in the export's filesystem, as in a directory: cached again in
 	// the image, it would count twice against the VM's memory.
-	device, err := run("losetup", "--find", "--show", "--direct-io=on", image)
+	attach := []string{"losetup", "--find", "--show", "--direct-io=on", image}
+	device, err := run(attach...)
+	if err != nil {
+		// The kernel adds a loop device when all are in use, and a
+		// container's /dev has no file for one added since it started.
+		addLoopDevices()
+		device, err = run(attach...)
+	}
 	if err != nil {
 		return err
 	}
-	_, err = run("mount", "-t", "ext4", "-o", "noatime,nosuid,nodev,noexec", device, dir)
+	// A kernel that cannot write this image directly attaches it all the
+	// same, and caches it. No export is better than one that can have its
+	// VM killed.
+	direct, _ := os.ReadFile(filepath.Join("/sys/block", filepath.Base(device), "loop", "dio"))
+	if strings.TrimSpace(string(direct)) != "1" {
+		err = fmt.Errorf("%s is not written past the page cache", device)
+	}
+	if err == nil {
+		_, err = run("mount", "-t", "ext4", "-o", "noatime,nosuid,nodev,noexec", device, dir)
+	}
 	// A device that is mounted is detached once it is unmounted.
 	_, _ = run("losetup", "-d", device)
 	if err != nil {
@@ -490,14 +507,48 @@ func makeRootLayerExport(dir string, size int64) (err error) {
 	return os.Chmod(dir, 0o700)
 }
 
+// addLoopDevices makes the device files of the loop devices that the kernel
+// has and /dev lacks.
+func addLoopDevices() {
+	blocks, _ := filepath.Glob("/sys/block/loop*")
+	for _, block := range blocks {
+		device := filepath.Join("/dev", filepath.Base(block))
+		if _, err := os.Lstat(device); err == nil {
+			continue
+		}
+		number, err := os.ReadFile(filepath.Join(block, "dev"))
+		if err != nil {
+			continue
+		}
+		var major, minor uint32
+		if _, err := fmt.Sscanf(strings.TrimSpace(string(number)), "%d:%d", &major, &minor); err != nil {
+			continue
+		}
+		if err := unix.Mknod(device, unix.S_IFBLK|0o660, int(unix.Mkdev(major, minor))); err != nil {
+			log.Warn().Err(err).Str("device", device).Msg("unable to add a loop device")
+		}
+	}
+}
+
 // removeRootLayerExport unmounts and removes an export. One that is still in
 // use goes once it is not.
 func removeRootLayerExport(dir string) {
-	if exec.Command("umount", dir).Run() != nil {
-		_ = exec.Command("umount", "-l", dir).Run()
+	// Nothing is mounted where there is no directory.
+	if _, err := os.Lstat(dir); err == nil {
+		if exec.Command("umount", dir).Run() != nil {
+			_ = exec.Command("umount", "-l", dir).Run()
+		}
+		_ = os.RemoveAll(dir)
 	}
-	_ = os.RemoveAll(dir)
 	_ = os.Remove(dir + ".img")
+}
+
+// discardRootLayerExport removes the export of a VM that never ran: one
+// whose start failed after its spec was made, which no exit collects.
+func (s *Worker) discardRootLayerExport(containerID string, request *types.ContainerRequest) {
+	if layer := s.requestRootLayer(request); layer != nil && layer.Publish && containerID != "" {
+		removeRootLayerExport(s.rootLayerExportDir(containerID))
+	}
 }
 
 // removeRootLayerExports removes the exports that the VMs of an earlier

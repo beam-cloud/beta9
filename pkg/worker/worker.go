@@ -1199,6 +1199,7 @@ func (s *Worker) failContainerRequest(containerId string, request *types.Contain
 		exitCode = int(serr.ExitCode)
 	}
 
+	s.discardRootLayerExport(containerId, request)
 	s.clearContainer(containerId, request, exitCode, false)
 }
 
