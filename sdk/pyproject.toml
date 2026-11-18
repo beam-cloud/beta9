@@ -29,7 +29,7 @@ dependencies = [
     "jsonschema>=4.17.3,<5",
 ]
 name = "beta9"
-version = "0.1.299"
+version = "0.1.300"
 description = ""
 
 [project.scripts]
