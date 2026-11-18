@@ -1399,6 +1399,8 @@ class Machine(betterproto.Message):
     tailnet_hostname: str = betterproto.string_field(19)
     tailnet_ip: str = betterproto.string_field(20)
     tailnet_ssh: bool = betterproto.bool_field(21)
+    status_detail: str = betterproto.string_field(22)
+    """Why the machine has its status, when it cannot take work."""
 
 
 @dataclass(eq=False, repr=False)

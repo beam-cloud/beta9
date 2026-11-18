@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	model "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -509,7 +510,7 @@ func (s *Service) DeletePrivateMachine(ctx context.Context, in *pb.DeleteMachine
 
 	machine, pool, poolName, err := s.privateMachineForDelete(ctx, workspaceID, in.PoolName, in.MachineId)
 	if err != nil {
-		return &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return deleteMachineFailed(err), nil
 	}
 	if machine != nil {
 		if pool != nil && pool.Mode == string(types.PoolModeProvider) {
@@ -521,7 +522,7 @@ func (s *Service) DeletePrivateMachine(ctx context.Context, in *pb.DeleteMachine
 			s.stopWorkerContainers(ctx, model.AgentMachineWorkerID(machine.MachineID), reconcileReasonMachineReleased)
 		}
 		if err := s.releasePrivateMachine(ctx, machine); err != nil {
-			return &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
+			return deleteMachineFailed(err), nil
 		}
 		return &pb.DeleteMachineResponse{Ok: true}, nil
 	}
@@ -531,15 +532,25 @@ func (s *Service) DeletePrivateMachine(ctx context.Context, in *pb.DeleteMachine
 	}
 	reconciled, err := s.reconcileMissingBYOCMachineForDelete(ctx, workspaceID, poolName)
 	if err != nil {
-		return &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return deleteMachineFailed(err), nil
 	}
 	if reconciled {
 		return &pb.DeleteMachineResponse{Ok: true}, nil
 	}
 	if err := s.releasePrivateReservationForDelete(ctx, workspaceID, poolName, in.MachineId); err != nil {
-		return &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}, nil
+		return deleteMachineFailed(err), nil
 	}
 	return &pb.DeleteMachineResponse{Ok: true}, nil
+}
+
+// deleteMachineFailed answers a release that failed. A pool is locked while
+// the reconciler checks its machines with their providers, which can outlast
+// a release's wait for the lock; that is worth trying again.
+func deleteMachineFailed(err error) *pb.DeleteMachineResponse {
+	if common.IsRedisLockNotObtained(err) {
+		return &pb.DeleteMachineResponse{Ok: false, ErrMsg: "the pool is busy with another change; try again in a few seconds"}
+	}
+	return &pb.DeleteMachineResponse{Ok: false, ErrMsg: err.Error()}
 }
 
 func (s *Service) reconcileMissingBYOCMachineForDelete(ctx context.Context, workspaceID, poolName string) (bool, error) {

@@ -1506,6 +1506,8 @@ message Machine {
   string tailnet_hostname = 19;
   string tailnet_ip = 20;
   bool tailnet_ssh = 21;
+  // Why the machine has its status, when it cannot take work.
+  string status_detail = 22;
 }
 
 message MachineMetrics {

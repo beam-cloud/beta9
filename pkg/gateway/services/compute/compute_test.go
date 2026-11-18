@@ -7527,21 +7527,105 @@ func TestStatusCheckClosesAReservationWhoseMachineIsGone(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			m := newBoughtMachine(t)
 			m.state.Reservations[0].Status = model.ReservationActive
+			m.state.ReservedNodes = 1
 			lose(m)
 
-			reservation := m.check(t, 0)
+			// The machine went as its term ran out, so none of the term was
+			// lost with it.
+			reservation := m.check(t, m.expiry.Sub(m.now))
 			require.Equal(t, model.ReservationDeleted, reservation.Status)
 			require.Equal(t, instanceGoneMessage, reservation.LastStatusMessage)
 			require.Empty(t, reservation.LastError)
 			require.True(t, m.tokenRevoked(), "nothing can join the pool as a machine that is gone")
 			require.Equal(t, []string{string(model.ReservationDeleted)}, reported(m.events, types.EventComputeActionReservationStatusUpdated))
 			require.Empty(t, m.provider.Deletes(), "there is nothing left to delete")
+			require.Zero(t, m.repo.pools["workspace-1"][0].ReservedNodes, "a pool counts only the machines it still has")
 
 			// It is closed: the provider is not asked about it again.
 			m.check(t, 2*reconcileStatusCheckInterval)
 			require.Empty(t, reported(m.events, types.EventComputeActionReservationStatusUpdated))
 		})
 	}
+}
+
+func TestStatusCheckListsARunningMachineThatWentBeforeItsTerm(t *testing.T) {
+	for name, tc := range map[string]struct {
+		spot    bool
+		status  model.ReservationStatus
+		reason  string
+		message string
+		action  string
+	}{
+		"on demand": {
+			status: model.ReservationFailed, reason: reconcileReasonProviderFailed,
+			message: instanceGoneMessage, action: types.EventComputeActionReservationStatusUpdated,
+		},
+		"spot": {
+			spot: true, status: model.ReservationInterrupted, reason: reconcileReasonInterrupted,
+			message: instanceInterruptedMessage, action: types.EventComputeActionReservationInterrupted,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := newBoughtMachine(t)
+			m.state.Reservations[0].Status = model.ReservationActive
+			m.state.Reservations[0].Spot = tc.spot
+			m.state.ReservedNodes = 1
+			m.provider.SetStatus(m.instance, providers.StatusDeleted, "Instance deleted successfully.")
+
+			reservation := m.check(t, time.Hour)
+			require.Equal(t, tc.status, reservation.Status)
+			require.Equal(t, tc.reason, reservation.TerminatingReason)
+			require.Equal(t, tc.message, reservation.LastStatusMessage, "the provider's words say nothing of where the machine went")
+			require.True(t, reservation.Dismissable(), "it is listed until its tenant dismisses it")
+			require.True(t, m.tokenRevoked())
+			require.Equal(t, []string{string(tc.status)}, reported(m.events, tc.action))
+			require.Empty(t, m.provider.Deletes(), "there is nothing left to delete")
+			require.Zero(t, m.repo.pools["workspace-1"][0].ReservedNodes)
+		})
+	}
+}
+
+func TestStatusCheckClosesAMachineThatNeverCameUpWithoutListingIt(t *testing.T) {
+	m := newBoughtMachine(t)
+	m.provider.SetStatus(m.instance, providers.StatusDeleted, "")
+
+	reservation := m.check(t, time.Hour)
+	require.Equal(t, model.ReservationDeleted, reservation.Status)
+	require.Empty(t, reservation.TerminatingReason)
+}
+
+func TestReconcileCountsOnlyTheNodesOfOpenReservations(t *testing.T) {
+	m := newBoughtMachine(t)
+	// A record saved before closing a reservation recounted the pool's nodes.
+	m.state.Reservations[0].Status = model.ReservationDeleted
+	m.state.ReservedNodes = 1
+
+	m.check(t, 0)
+	require.Zero(t, m.repo.pools["workspace-1"][0].ReservedNodes)
+	require.True(t, m.repo.savedPool, "the corrected count is saved")
+}
+
+func TestReleasingAMachineStopsCountingItAtOnce(t *testing.T) {
+	m := boughtMachineAt(time.Now().UTC(), providers.StatusActive, 6*time.Hour)
+	m.state.ReservedNodes = 1
+
+	res, err := m.service.DeletePrivateMachine(
+		testAuthContext("workspace-1", "owner-token"),
+		&pb.DeleteMachineRequest{PoolName: "pool-1", MachineId: "machine-1"},
+	)
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Equal(t, model.ReservationDeleted, m.state.Reservations[0].Status)
+	require.Zero(t, m.repo.pools["workspace-1"][0].ReservedNodes, "the count does not wait for the reconciler")
+}
+
+func TestDeleteMachineFailureAsksToRetryWhenThePoolIsBusy(t *testing.T) {
+	busy := deleteMachineFailed(fmt.Errorf("release machine: %w", errors.New("redislock: not obtained")))
+	require.False(t, busy.Ok)
+	require.Equal(t, "the pool is busy with another change; try again in a few seconds", busy.ErrMsg)
+
+	other := deleteMachineFailed(errors.New("provider unavailable"))
+	require.Equal(t, "provider unavailable", other.ErrMsg)
 }
 
 func TestStatusCheckWaitsForAProviderToKnowOfAMachineItHasJustSold(t *testing.T) {
