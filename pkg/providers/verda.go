@@ -3,6 +3,7 @@ package providers
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 )
 
@@ -336,21 +338,41 @@ func (c *Verda) Create(ctx context.Context, req CreateRequest) (Instance, error)
 	if req.StartupScript != "" {
 		// Verda runs a script it has stored, and takes none with the create.
 		script := map[string]string{"name": c.scriptPrefix() + req.Name, "script": bootScript(req.StartupScript)}
-		if err := c.api.do(ctx, call{method: http.MethodPost, path: "/scripts", body: script, out: &body.StartupScriptID}); err != nil {
+		body.StartupScriptID, err = c.createID(ctx, "/scripts", script)
+		if err != nil {
 			return Instance{}, fmt.Errorf("store the startup script: %w", err)
 		}
 	}
 
-	var id string
-	if err := c.api.do(ctx, call{method: http.MethodPost, path: "/instances", body: body, out: &id}); err != nil {
+	id, err := c.createID(ctx, "/instances", body)
+	if err != nil {
 		// The script stays: Verda may have taken the order all the same,
 		// and the machine then needs it. List removes one nothing runs.
 		return Instance{}, verdaRefusal(err)
 	}
-	if id == "" {
-		return Instance{}, fmt.Errorf("Verda accepted the create without returning an instance id")
-	}
 	return Instance{ID: id, Status: StatusPending, Tags: req.Tags}, nil
+}
+
+// createID reads Verda's resource ID. Its published examples encode it as a
+// JSON string, but the live create endpoints also return an unquoted UUID.
+// Only a UUID is accepted as plain text: an unexpected response must not be
+// mistaken for the ID of an instance that may already have been bought.
+func (c *Verda) createID(ctx context.Context, path string, body any) (string, error) {
+	var data []byte
+	if err := c.api.do(ctx, call{method: http.MethodPost, path: path, body: body, rawOut: &data}); err != nil {
+		return "", err
+	}
+	var id string
+	if err := json.Unmarshal(data, &id); err == nil && strings.TrimSpace(id) != "" {
+		return id, nil
+	}
+	id = strings.TrimSpace(string(data))
+	if len(id) == 36 {
+		if _, err := uuid.Parse(id); err == nil {
+			return id, nil
+		}
+	}
+	return "", fmt.Errorf("Verda accepted POST %s without returning a resource ID", path)
 }
 
 func (c *Verda) instance(raw verdaInstance) Instance {

@@ -485,6 +485,9 @@ type call struct {
 	// form is sent as a form when not nil, in place of body.
 	form url.Values
 	out  any // the JSON response is decoded into it when not nil
+	// rawOut receives the response without JSON decoding. A provider whose
+	// response is not JSON must opt in and validate it itself.
+	rawOut *[]byte
 
 	// repeatable marks a call that does no harm when the provider receives
 	// it twice. Reads always are. A call that buys something is not: when it
@@ -617,6 +620,9 @@ func (a *api) send(ctx context.Context, c call, payload []byte) (time.Duration, 
 			data = data[:maxErrorBodyBytes]
 		}
 		return retryAfter(resp.Header), &StatusError{Method: c.method, Path: c.path, Status: resp.StatusCode, Body: strings.TrimSpace(string(data))}
+	}
+	if c.rawOut != nil {
+		*c.rawOut = data
 	}
 	if c.out == nil || len(data) == 0 {
 		return 0, nil

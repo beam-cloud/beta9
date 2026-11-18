@@ -44,7 +44,15 @@ const (
 	// that a subnet that was replaced is noticed. What could not be read is
 	// not kept at all, and is asked for again the next time.
 	nebiusProjectsFor = time.Hour
+
+	// A billing policy is created asynchronously. Wait for it to become
+	// active before Compute can use it, without holding a reservation open
+	// indefinitely if billing never finishes the change.
+	nebiusPolicyReadyTimeout = 45 * time.Second
 )
+
+var nebiusPolicyWaits = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 15 * time.Second}
+var nebiusPolicyPropagationWaits = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}
 
 // Nebius buys preemptible VMs from Nebius, which takes them back with a
 // minute's notice and leaves them stopped.
@@ -386,8 +394,21 @@ func (c *Nebius) Create(ctx context.Context, req CreateRequest) (Instance, error
 		"spec":     c.spec(req, platform, preset, project.subnet, policy),
 	}
 	var started nebiusOperation
-	if err := c.api.do(ctx, call{method: http.MethodPost, path: "/compute/v1/instances", body: body, out: &started}); err != nil {
-		return Instance{}, nebiusRefusal(err)
+	for attempt := 0; ; attempt++ {
+		err := c.api.do(ctx, call{method: http.MethodPost, path: "/compute/v1/instances", body: body, out: &started})
+		if err == nil {
+			break
+		}
+		// Even an active billing policy can take a moment to reach Compute.
+		// Retry only the exact validation that proves this request was
+		// rejected before creating anything. An unanswered create, another
+		// validation, or an operation that started must never be repeated.
+		if attempt == len(nebiusPolicyPropagationWaits) || !nebiusPolicyNotVisible(err, policy) {
+			return Instance{}, nebiusRefusal(err)
+		}
+		if err := c.api.sleep(ctx, nebiusPolicyPropagationWaits[attempt]); err != nil {
+			return Instance{}, err
+		}
 	}
 	if err := started.failure(); err != nil {
 		c.deleteLeftover(ctx, started.ResourceID)
@@ -491,8 +512,10 @@ func (c *Nebius) priceLimit(ctx context.Context, project nebiusProject, platform
 		// both make it. Nebius keeps the first and turns the second down,
 		// and the first is as good. When this look finds nothing either,
 		// why the policy could not be made is what there is to say.
-		if theirs, _ := c.findPolicy(ctx, project.id, platform, perGPU); theirs != "" {
-			return theirs, nil
+		if statusOf(err) == http.StatusConflict {
+			if theirs, _ := c.findPolicy(ctx, project.id, platform, perGPU); theirs != "" {
+				return theirs, nil
+			}
 		}
 		return "", err
 	}
@@ -502,41 +525,92 @@ func (c *Nebius) priceLimit(ctx context.Context, project nebiusProject, platform
 // findPolicy returns the project's pricing policy that limits a GPU of the
 // platform to perGPU micros an hour, or "" when it has none.
 func (c *Nebius) findPolicy(ctx context.Context, project, platform string, perGPU int64) (string, error) {
-	type policy struct {
-		Metadata struct {
-			ID string `json:"id"`
-		} `json:"metadata"`
-		Spec struct {
-			ComputeInstanceSpec struct {
-				V1 struct {
-					Platform string `json:"platform"`
-				} `json:"v1"`
-			} `json:"computeInstanceSpec"`
-			Pricing struct {
-				MaxPriceV1 struct {
-					MaxPrice dollars `json:"maxPrice"`
-				} `json:"maxPriceV1"`
-			} `json:"pricing"`
-		} `json:"spec"`
-		Status struct {
-			State string `json:"state"`
-		} `json:"status"`
-	}
-	policies, err := nebiusPages[policy](ctx, c.api, "/billing/v1/pricing-policies", project)
+	policies, err := nebiusPages[nebiusPolicy](ctx, c.api, "/billing/v1/pricing-policies", project)
 	if err != nil {
 		return "", fmt.Errorf("the pricing policies of Nebius project %q: %w", project, err)
 	}
+	pending := ""
 	for _, existing := range policies {
-		samePlatform := existing.Spec.ComputeInstanceSpec.V1.Platform == platform
-		sameLimit := int64(existing.Spec.Pricing.MaxPriceV1.MaxPrice) == perGPU
-		if samePlatform && sameLimit && existing.Status.State != "STATE_DELETING" {
-			return existing.Metadata.ID, nil
+		if existing.matches(platform, perGPU) && existing.Status.State != "STATE_DELETING" {
+			if existing.Status.State == "STATE_ACTIVE" {
+				return existing.Metadata.ID, nil
+			}
+			pending = existing.Metadata.ID
 		}
+	}
+	if pending != "" {
+		return c.readyPolicy(ctx, project, pending, platform, perGPU)
 	}
 	return "", nil
 }
 
-// makePolicy makes that pricing policy in the project, and returns its ID.
+type nebiusPolicy struct {
+	Metadata struct {
+		ID string `json:"id"`
+	} `json:"metadata"`
+	Spec struct {
+		ComputeInstanceSpec struct {
+			V1 struct {
+				Platform string `json:"platform"`
+			} `json:"v1"`
+		} `json:"computeInstanceSpec"`
+		Pricing struct {
+			MaxPriceV1 struct {
+				MaxPrice dollars `json:"maxPrice"`
+			} `json:"maxPriceV1"`
+		} `json:"pricing"`
+	} `json:"spec"`
+	Status struct {
+		State string `json:"state"`
+	} `json:"status"`
+}
+
+func (p nebiusPolicy) matches(platform string, perGPU int64) bool {
+	return p.Spec.ComputeInstanceSpec.V1.Platform == platform && int64(p.Spec.Pricing.MaxPriceV1.MaxPrice) == perGPU
+}
+
+// readyPolicy waits for the resource's documented ready state rather than
+// treating an unfinished operation's resourceId as evidence of completion.
+// STATE_CREATING and STATE_UPDATING cannot yet back VMs. The policy is read
+// from its project so a stale or changed price limit cannot be substituted.
+func (c *Nebius) readyPolicy(ctx context.Context, project, id, platform string, perGPU int64) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, nebiusPolicyReadyTimeout)
+	defer cancel()
+	state := "not visible"
+	for attempt := 0; ; attempt++ {
+		policies, err := nebiusPages[nebiusPolicy](ctx, c.api, "/billing/v1/pricing-policies", project)
+		if err != nil {
+			return "", fmt.Errorf("wait for Nebius pricing policy %q: %w", id, err)
+		}
+		for _, policy := range policies {
+			if policy.Metadata.ID != id {
+				continue
+			}
+			if !policy.matches(platform, perGPU) {
+				return "", fmt.Errorf("Nebius pricing policy %q no longer has the requested platform and price limit", id)
+			}
+			state = policy.Status.State
+			switch state {
+			case "STATE_ACTIVE":
+				return id, nil
+			case "", "STATE_UNSPECIFIED", "STATE_CREATING", "STATE_UPDATING":
+				// A newly created resource can be absent or incomplete in a
+				// list before billing finishes publishing it.
+			default:
+				return "", fmt.Errorf("Nebius pricing policy %q cannot back a VM in state %q", id, state)
+			}
+		}
+		if attempt == len(nebiusPolicyWaits) {
+			return "", fmt.Errorf("Nebius pricing policy %q is not ready (state %q)", id, state)
+		}
+		if err := c.api.sleep(ctx, nebiusPolicyWaits[attempt]); err != nil {
+			return "", fmt.Errorf("wait for Nebius pricing policy %q: %w", id, err)
+		}
+	}
+}
+
+// makePolicy makes that pricing policy in the project and waits until it
+// can back a VM. Nebius's create operation completes only once it is ready.
 func (c *Nebius) makePolicy(ctx context.Context, project, platform string, perGPU int64) (string, error) {
 	limit := fmt.Sprintf("%d.%03d", perGPU/1_000_000, perGPU%1_000_000/1000)
 	// Nebius takes letters and digits in a policy's name, and nothing else.
@@ -559,7 +633,41 @@ func (c *Nebius) makePolicy(ctx context.Context, project, platform string, perGP
 	if made.ResourceID == "" {
 		return "", fmt.Errorf("Nebius made a pricing policy without returning its id")
 	}
-	return made.ResourceID, nil
+	return c.readyPolicy(ctx, project, made.ResourceID, platform, perGPU)
+}
+
+// nebiusPolicyNotVisible recognizes only the observed pre-create validation
+// for the exact policy just read from billing. General errors may have bought
+// a VM already and are deliberately not retryable here.
+func nebiusPolicyNotVisible(err error, policy string) bool {
+	var response *StatusError
+	if policy == "" || !errors.As(err, &response) || response.Method != http.MethodPost || response.Path != "/compute/v1/instances" || response.Status != http.StatusBadRequest {
+		return false
+	}
+	var status struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Details []struct {
+			Service    string `json:"service"`
+			Code       string `json:"code"`
+			BadRequest struct {
+				Violations []struct {
+					Field   string `json:"field"`
+					Message string `json:"message"`
+				} `json:"violations"`
+			} `json:"badRequest"`
+		} `json:"details"`
+	}
+	response.decode(&status)
+	if status.Code != 3 || status.Message != "spec.spot_pricing_policy.id is invalid" || len(status.Details) != 1 {
+		return false
+	}
+	detail := status.Details[0]
+	if detail.Service != "compute" || detail.Code != "BadRequest" || len(detail.BadRequest.Violations) != 1 {
+		return false
+	}
+	violation := detail.BadRequest.Violations[0]
+	return violation.Field == "spec.spot_pricing_policy.id" && violation.Message == fmt.Sprintf("pricing policy not found by id %q", policy)
 }
 
 func lettersAndDigits(text string) string {
