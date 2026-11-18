@@ -202,6 +202,9 @@ var (
 	ErrQuota = errors.New("quota exceeded")
 	// ErrNotFound: the provider no longer has the instance.
 	ErrNotFound = errors.New("instance not found")
+	// ErrDisabled: the provider is listed under providers.disabled, and
+	// sells nothing new. Nothing was bought.
+	ErrDisabled = errors.New("provider is disabled for new purchases")
 )
 
 // LaunchGrace is how long after a purchase its provider may not yet know of
@@ -334,7 +337,8 @@ type Registry struct {
 }
 
 // NewRegistry builds a client for every provider the config has credentials
-// for. Owner identifies this control plane on the instances they buy.
+// for. Owner identifies this control plane on the instances they buy. A
+// provider the config disables keeps its client and sells nothing new.
 //
 // It does not fail, so that a gateway starts whatever its config says of
 // providers. What is wrong is logged as an error, once, here: an owner that
@@ -377,19 +381,25 @@ func NewRegistry(config types.ProviderConfig, owner string) *Registry {
 		client, err := NewGCP(gcp, owner)
 		registry.use(gcpName, client, err)
 	}
-	for _, configured := range config.Disabled {
-		name := strings.ToLower(strings.TrimSpace(configured))
-		if provider, ok := registry.byName[name]; ok && registry.IsEnabled(name) {
-			registry.byName[name] = disabledProvider{Provider: provider}
-		}
+	for _, written := range config.Disabled {
+		registry.disable(written)
 	}
 	return registry
 }
 
-var ErrDisabled = errors.New("provider is disabled for new purchases")
+// disable stops the provider written under providers.disabled from selling.
+// One that has no credentials sells nothing as it is.
+func (r *Registry) disable(written string) {
+	name := strings.ToLower(strings.TrimSpace(written))
+	if provider, configured := r.byName[name]; configured && r.IsEnabled(name) {
+		r.byName[name] = disabledProvider{Provider: provider}
+	}
+}
 
-// Keep lifecycle operations available after disabling a provider. Removing
-// its client would strand existing reservations and their cleanup.
+// disabledProvider is a provider that sells nothing new: it lists no offers
+// and refuses every create, without a call to the provider. What was bought
+// from it before is still read, kept for longer and deleted through its
+// client. Leaving the client out would strand those machines.
 type disabledProvider struct{ Provider }
 
 func (p disabledProvider) Offers(context.Context, OfferFilter) ([]Offer, error) {
@@ -400,8 +410,8 @@ func (p disabledProvider) Create(context.Context, CreateRequest) (Instance, erro
 	return Instance{}, fmt.Errorf("%s: %w", p.Name(), ErrDisabled)
 }
 
-// IsEnabled reports whether a configured provider can sell new machines.
-// Get also returns disabled providers, for existing-machine lifecycle work.
+// IsEnabled reports whether the provider is configured and sells new
+// machines. Get also returns a disabled provider, for what it sold before.
 func (r *Registry) IsEnabled(name string) bool {
 	provider, ok := r.Get(name)
 	if !ok {
@@ -443,24 +453,16 @@ func (r *Registry) Get(name string) (Provider, bool) {
 	return provider, ok
 }
 
-// Names lists providers enabled for discovery and purchases in a fixed order.
+// Names lists the providers that sell new machines, in a fixed order. It is
+// what discovery and purchases go by.
 func (r *Registry) Names() []string {
-	if r == nil {
-		return nil
-	}
-	names := make([]string, 0, len(r.byName))
-	for name := range r.byName {
-		if r.IsEnabled(name) {
-			names = append(names, name)
-		}
-	}
-	slices.Sort(names)
-	return names
+	return slices.DeleteFunc(r.ConfiguredNames(), func(name string) bool { return !r.IsEnabled(name) })
 }
 
-// ConfiguredNames includes disabled providers. Lifecycle reconciliation must
-// still inspect and clean up their existing, ambiguous and orphaned purchases.
-// Discovery and new purchases use Names instead.
+// ConfiguredNames lists every provider that has a client, in a fixed order,
+// the disabled ones too. It is what looking after machines goes by: what a
+// disabled provider sold before, and what it may have sold without saying,
+// is still to be read and deleted.
 func (r *Registry) ConfiguredNames() []string {
 	if r == nil {
 		return nil

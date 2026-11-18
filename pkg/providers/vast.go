@@ -366,10 +366,36 @@ func (c *Vast) instance(raw vastInstance) Instance {
 	return instance
 }
 
+// Vast's words for what an instance is doing, and for what it is meant to
+// be doing.
+const (
+	vastCreated    = "created"
+	vastLoading    = "loading"
+	vastConnecting = "connecting"
+	vastRebooting  = "rebooting"
+	vastRecycling  = "recycling"
+	vastRunning    = "running"
+	vastExited     = "exited"
+	vastScheduling = "scheduling"
+	vastOffline    = "offline"
+	vastUnknown    = "unknown"
+	vastStopped    = "stopped"
+)
+
+// unstarted reports whether the instance has yet to run: Vast does not know
+// what it is doing, or is still making it or loading its image.
+func (i vastInstance) unstarted() bool {
+	switch i.ActualStatus {
+	case "", vastCreated, vastLoading:
+		return true
+	}
+	return false
+}
+
 func (i vastInstance) status() Status {
 	// A new VM bid can be reported as stopped while its image is still
 	// loading. It has not run yet, so this is startup, not an interruption.
-	if i.Bid && (i.ActualStatus == "" || i.ActualStatus == "created" || i.ActualStatus == "loading") {
+	if i.Bid && i.unstarted() {
 		return StatusPending
 	}
 	// Nothing here stops an instance. Vast stops an interruptible one when
@@ -379,17 +405,20 @@ func (i vastInstance) status() Status {
 	if i.Bid {
 		stopped = StatusInterrupted
 	}
-	if i.IntendedStatus == "stopped" || i.State == "stopped" {
+	if i.IntendedStatus == vastStopped || i.State == vastStopped {
 		return stopped
 	}
-	switch i.ActualStatus {
-	case "", "created", "loading", "connecting", "rebooting", "recycling":
+	if i.unstarted() {
 		return StatusPending
-	case "running":
+	}
+	switch i.ActualStatus {
+	case vastConnecting, vastRebooting, vastRecycling:
+		return StatusPending
+	case vastRunning:
 		return StatusActive
-	case "exited", "scheduling":
+	case vastExited, vastScheduling:
 		return stopped
-	case "offline", "unknown":
+	case vastOffline, vastUnknown:
 		// Vast has lost the machine, or cannot tell what the instance is
 		// doing: neither comes back.
 		return StatusFailed

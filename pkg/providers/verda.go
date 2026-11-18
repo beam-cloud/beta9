@@ -27,6 +27,10 @@ const (
 
 	verdaPageSize = 100
 
+	// Where Verda keeps its instances and the startup scripts they run.
+	verdaInstancesPath = "/instances"
+	verdaScriptsPath   = "/scripts"
+
 	// Instance types, prices and images change rarely. Stock does not, and
 	// is asked for every time.
 	verdaCatalogueFor = 10 * time.Minute
@@ -40,9 +44,9 @@ const (
 	verdaDeletePermanently = "delete_permanently"
 )
 
-// verdaImages are the images a GPU machine boots, best first: Ubuntu with the
-// NVIDIA driver and Docker. Verda's older GPUs run the older driver only.
-var verdaImages = []string{
+// verdaGPUImages are the images a GPU machine boots, best first: Ubuntu with
+// the NVIDIA driver and Docker. Verda's older GPUs run the older driver only.
+var verdaGPUImages = []string{
 	"24.04.cuda13.0.docker",
 	"24.04.cuda12.9.docker",
 	"24.04.cuda12.9-v100.docker",
@@ -53,8 +57,8 @@ var verdaImages = []string{
 	"ubuntu-24.04-cuda-12.6-docker",
 }
 
-// CPU machines use plain Ubuntu without GPU image initialization or driver
-// requirements.
+// verdaCPUImages are the images a machine without a GPU boots: plain Ubuntu,
+// without GPU image initialization or driver requirements.
 var verdaCPUImages = []string{"24.04.base"}
 
 // Verda buys from Verda, formerly DataCrunch: on-demand machines, and spot
@@ -199,7 +203,7 @@ func (c *Verda) images(instanceType verdaInstanceType) []string {
 	if instanceType.GPU.Count == 0 {
 		return verdaCPUImages
 	}
-	return verdaImages
+	return verdaGPUImages
 }
 
 // image returns the first supported image, or "" when none is compatible.
@@ -335,9 +339,10 @@ func (c *Verda) Create(ctx context.Context, req CreateRequest) (Instance, error)
 	if at < 0 {
 		return Instance{}, fmt.Errorf("Verda has no instance type %q", req.Offer.ID)
 	}
-	image := c.image(catalogue.types[at])
+	instanceType := catalogue.types[at]
+	image := c.image(instanceType)
 	if image == "" {
-		return Instance{}, fmt.Errorf("Verda instance type %q boots none of the images %v", req.Offer.ID, c.images(catalogue.types[at]))
+		return Instance{}, fmt.Errorf("Verda instance type %q boots none of the images %v", req.Offer.ID, c.images(instanceType))
 	}
 
 	body := verdaCreate{
@@ -363,13 +368,13 @@ func (c *Verda) Create(ctx context.Context, req CreateRequest) (Instance, error)
 	if req.StartupScript != "" {
 		// Verda runs a script it has stored, and takes none with the create.
 		script := map[string]string{"name": c.scriptPrefix() + req.Name, "script": bootScript(req.StartupScript)}
-		body.StartupScriptID, err = c.createID(ctx, "/scripts", script)
+		body.StartupScriptID, err = c.createID(ctx, verdaScriptsPath, script)
 		if err != nil {
 			return Instance{}, fmt.Errorf("store the startup script: %w", err)
 		}
 	}
 
-	id, err := c.createID(ctx, "/instances", body)
+	id, err := c.createID(ctx, verdaInstancesPath, body)
 	if err != nil {
 		// The script stays: Verda may have taken the order all the same,
 		// and the machine then needs it. List removes one nothing runs.
@@ -391,11 +396,11 @@ func (c *Verda) createID(ctx context.Context, path string, body any) (string, er
 	if err := json.Unmarshal(data, &id); err == nil && strings.TrimSpace(id) != "" {
 		return id, nil
 	}
+	// The parser also reads a UUID in braces, as a URN and without its
+	// dashes. Verda writes none of those, so only the usual form is taken.
 	id = strings.TrimSpace(string(data))
-	if len(id) == 36 {
-		if _, err := uuid.Parse(id); err == nil {
-			return id, nil
-		}
+	if parsed, err := uuid.Parse(id); err == nil && strings.EqualFold(parsed.String(), id) {
+		return id, nil
 	}
 	// A successful mutation without an ID may still have created the resource.
 	// Keep that uncertainty so delayed instance visibility cannot erase the
@@ -452,7 +457,7 @@ func (raw verdaInstance) going() bool {
 
 func (c *Verda) get(ctx context.Context, id string) (verdaInstance, error) {
 	var found verdaInstance
-	err := c.api.do(ctx, call{method: http.MethodGet, path: "/instances/" + url.PathEscape(id), out: &found})
+	err := c.api.do(ctx, call{method: http.MethodGet, path: verdaInstancesPath + "/" + url.PathEscape(id), out: &found})
 	return found, notFound(err)
 }
 
@@ -470,7 +475,7 @@ func (c *Verda) Get(ctx context.Context, id string) (Instance, error) {
 // only here is it known which are in use.
 func (c *Verda) List(ctx context.Context) ([]Instance, error) {
 	var listed []verdaInstance
-	path := "/instances?tag=" + url.QueryEscape(OwnerTag+"="+c.owner)
+	path := verdaInstancesPath + "?tag=" + url.QueryEscape(OwnerTag+"="+c.owner)
 	if err := c.api.do(ctx, call{method: http.MethodGet, path: path, out: &listed}); err != nil {
 		return nil, err
 	}
@@ -515,7 +520,7 @@ func (c *Verda) Delete(ctx context.Context, id string) error {
 		Error      string `json:"error"`
 		StatusCode int    `json:"statusCode"`
 	}
-	if err := unlessGone(c.api.do(ctx, call{method: http.MethodPut, path: "/instances", body: action, out: &results, repeatable: true})); err != nil {
+	if err := unlessGone(c.api.do(ctx, call{method: http.MethodPut, path: verdaInstancesPath, body: action, out: &results, repeatable: true})); err != nil {
 		return err
 	}
 	for _, result := range results {
@@ -533,7 +538,7 @@ func (c *Verda) scriptPrefix() string { return OwnerTag + "=" + c.owner + " " }
 // deleteScript removes a startup script. One that stays is removed by a later
 // List.
 func (c *Verda) deleteScript(ctx context.Context, id string) {
-	err := unlessGone(c.api.do(ctx, call{method: http.MethodDelete, path: "/scripts/" + url.PathEscape(id), repeatable: true}))
+	err := unlessGone(c.api.do(ctx, call{method: http.MethodDelete, path: verdaScriptsPath + "/" + url.PathEscape(id), repeatable: true}))
 	if err != nil {
 		log.Warn().Err(err).Str("provider", verdaName).Str("script", id).Msg("could not delete a startup script")
 	}
@@ -565,7 +570,7 @@ func (c *Verda) unusedScripts(ctx context.Context, inUse map[string]bool) ([]str
 	var unused []string
 	for page := 1; page <= maxPages; page++ {
 		var scripts []script
-		path := fmt.Sprintf("/scripts?page=%d&pageSize=%d&name=%s", page, verdaPageSize, url.QueryEscape(c.scriptPrefix()))
+		path := fmt.Sprintf("%s?page=%d&pageSize=%d&name=%s", verdaScriptsPath, page, verdaPageSize, url.QueryEscape(c.scriptPrefix()))
 		if err := c.api.do(ctx, call{method: http.MethodGet, path: path, out: &scripts}); err != nil {
 			return nil, err
 		}
@@ -579,7 +584,7 @@ func (c *Verda) unusedScripts(ctx context.Context, inUse map[string]bool) ([]str
 			return unused, nil
 		}
 	}
-	return nil, tooManyPages("GET /scripts")
+	return nil, tooManyPages(http.MethodGet + " " + verdaScriptsPath)
 }
 
 // verdaProblem is the body of an answer Verda turned a call down with.
