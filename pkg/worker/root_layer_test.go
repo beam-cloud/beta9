@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -180,9 +181,16 @@ func TestRootLayerExportIsBounded(t *testing.T) {
 	require.NoError(t, syscall.Stat(dir+".img", &image))
 	require.LessOrEqual(t, image.Blocks*512, int64(size), "the worker's disk gives no more than the export's size")
 
+	out, err := exec.Command("losetup", "--noheadings", "--output", "DIO,AUTOCLEAR", "--associated", dir+".img").Output()
+	require.NoError(t, err)
+	require.Equal(t, []string{"1", "1"}, strings.Fields(string(out)), "the image is written past the page cache, and detached with the export")
+
 	removeRootLayerExport(dir)
 	require.NoDirExists(t, dir)
 	require.NoFileExists(t, dir+".img")
+	out, err = exec.Command("losetup", "--noheadings", "--associated", dir+".img").Output()
+	require.NoError(t, err)
+	require.Empty(t, strings.TrimSpace(string(out)), "no loop device is left")
 }
 
 // VMs that were told of an older generation can start after ones that were

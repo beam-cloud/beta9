@@ -464,13 +464,28 @@ func makeRootLayerExport(dir string, size int64) (err error) {
 	if err != nil {
 		return err
 	}
-	for _, command := range [][]string{
-		{"mkfs.ext4", "-F", "-q", "-m", "0", "-N", "64", "-O", "^has_journal", "-E", "nodiscard", image},
-		{"mount", "-t", "ext4", "-o", "loop,noatime,nosuid,nodev,noexec", image, dir},
-	} {
-		if out, err := exec.Command(command[0], command[1:]...).CombinedOutput(); err != nil {
-			return fmt.Errorf("%s: %w: %s", command[0], err, strings.TrimSpace(string(out)))
+	run := func(command ...string) (string, error) {
+		out, err := exec.Command(command[0], command[1:]...).CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("%s: %w: %s", command[0], err, strings.TrimSpace(string(out)))
 		}
+		return strings.TrimSpace(string(out)), nil
+	}
+	if _, err := run("mkfs.ext4", "-F", "-q", "-m", "0", "-N", "64", "-O", "^has_journal", "-E", "nodiscard", image); err != nil {
+		return err
+	}
+	// The image is written past the page cache. What a guest writes is cached
+	// once, in the export's filesystem, as in a directory: cached again in
+	// the image, it would count twice against the VM's memory.
+	device, err := run("losetup", "--find", "--show", "--direct-io=on", image)
+	if err != nil {
+		return err
+	}
+	_, err = run("mount", "-t", "ext4", "-o", "noatime,nosuid,nodev,noexec", device, dir)
+	// A device that is mounted is detached once it is unmounted.
+	_, _ = run("losetup", "-d", device)
+	if err != nil {
+		return err
 	}
 	return os.Chmod(dir, 0o700)
 }
