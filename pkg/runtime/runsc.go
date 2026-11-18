@@ -31,6 +31,7 @@ const (
 	// release-20260714.0-beam.9 and later) the total memory, in bytes, to report
 	// to the application instead of the sandbox cgroup's limit.
 	RunscTotalMemoryAnnotation    = "dev.gvisor.internal.total-memory"
+	runscAllowUnsupportedDriver   = "--nvproxy-allow-unsupported-driver"
 	cudaCheckpointContainerPath   = "/usr/local/bin/cuda-checkpoint"
 	runscCheckpointImageName      = "checkpoint.img"
 	runscCheckpointSpecsKey       = "container_specs"
@@ -79,6 +80,10 @@ func NewRunsc(cfg Config) (*Runsc, error) {
 	if cfg.RunscRoot == "" {
 		cfg.RunscRoot = "/run/gvisor"
 	}
+	if !hasRunscFlag(cfg.RunscExtraArgs, runscAllowUnsupportedDriver) {
+		cfg.RunscExtraArgs = append(append([]string(nil), cfg.RunscExtraArgs...), runscAllowUnsupportedDriver)
+	}
+
 	// Check if runsc is available
 	if _, err := exec.LookPath(cfg.RunscPath); err != nil {
 		return nil, ErrRuntimeNotAvailable{
@@ -91,6 +96,15 @@ func NewRunsc(cfg Config) (*Runsc, error) {
 		cfg:                   cfg,
 		dockerPacketWriteFlag: selectDockerPacketWriteFlag(runscFlags(cfg.RunscPath)),
 	}, nil
+}
+
+func hasRunscFlag(args []string, name string) bool {
+	for _, arg := range args {
+		if arg == name || strings.HasPrefix(arg, name+"=") {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runsc) Name() string {

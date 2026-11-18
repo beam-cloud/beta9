@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewRunscUsesOnlyConfiguredExtraArgs(t *testing.T) {
+func TestNewRunscDefaultsUnsupportedDriverCompatibility(t *testing.T) {
 	dir := t.TempDir()
 	runscPath := filepath.Join(dir, "runsc")
 	require.NoError(t, os.WriteFile(runscPath, []byte("#!/bin/sh\nexit 0\n"), 0o755))
@@ -26,15 +26,17 @@ func TestNewRunscUsesOnlyConfiguredExtraArgs(t *testing.T) {
 	tests := []struct {
 		name string
 		args []string
+		want string
 	}{
-		{name: "no extra flags by default"},
-		{name: "preserves explicit extra flags", args: []string{"--nvproxy-allow-unsupported-driver=false"}},
+		{name: "enabled by default", want: runscAllowUnsupportedDriver},
+		{name: "explicit opt out", args: []string{runscAllowUnsupportedDriver + "=false"}, want: runscAllowUnsupportedDriver + "=false"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			rt, err := NewRunsc(Config{RunscPath: runscPath, RunscExtraArgs: test.args})
 			require.NoError(t, err)
-			require.Equal(t, test.args, rt.cfg.RunscExtraArgs)
+			require.Contains(t, rt.cfg.RunscExtraArgs, test.want)
+			require.Len(t, rt.cfg.RunscExtraArgs, 1)
 		})
 	}
 }
