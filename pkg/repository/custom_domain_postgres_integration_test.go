@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -268,4 +269,122 @@ func TestCustomDomainPostgresIntegration(t *testing.T) {
 
 	_, err = repo.DeleteCustomDomain(ctx, ws1ID, "api.example.com")
 	require.ErrorIs(t, err, types.ErrCustomDomainNotFound)
+}
+
+func TestSyncDeployCustomDomainsPostgres(t *testing.T) {
+	repo := openIntegrationPostgresRepo(t)
+	ctx := context.Background()
+
+	wsID, _, stubID, _ := seedWorkspaceAndDeployment(
+		t, repo.client, "ws-sync", "sync-api", types.StubTypeEndpointDeployment, "sync-api-v1", 1, true,
+	)
+	// Newer version of the same deployment.
+	_, err := repo.client.Exec(
+		`INSERT INTO deployment (external_id, name, active, version, stub_id, stub_type, workspace_id, subdomain)
+		 VALUES ($1, 'sync-api', true, 2, $2, $3::stub_type, $4, 'sync-api-v2')`,
+		uuid.NewString(), stubID, types.StubTypeEndpointDeployment, wsID,
+	)
+	require.NoError(t, err)
+
+	domain := func(name string) *types.CustomDomain {
+		return &types.CustomDomain{
+			WorkspaceId: wsID, Domain: name, DeploymentName: "sync-api",
+			StubType: types.StubTypeEndpointDeployment, Status: types.CustomDomainStatusPending,
+			Source: types.CustomDomainSourceDeploy,
+		}
+	}
+	names := func(cds []types.CustomDomain) []string {
+		out := make([]string, 0, len(cds))
+		for _, cd := range cds {
+			out = append(out, cd.Domain)
+		}
+		return out
+	}
+	listed := func() []string {
+		cds, err := repo.ListCustomDomains(ctx, wsID, "sync-api")
+		require.NoError(t, err)
+		return names(cds)
+	}
+
+	// 1. The newest version binds its declared domains.
+	res, err := repo.SyncDeployCustomDomains(ctx, wsID, "sync-api", types.StubTypeEndpointDeployment, 2,
+		[]*types.CustomDomain{domain("a.customer.io"), domain("b.customer.io")})
+	require.NoError(t, err)
+	require.False(t, res.Stale)
+	require.ElementsMatch(t, []string{"a.customer.io", "b.customer.io"}, names(res.Bound))
+	require.Empty(t, res.Pruned)
+
+	// 2. A deploy older than the newest live version is stale: it neither binds
+	// nor prunes, so it cannot delete bindings that belong to the newer deploy.
+	res, err = repo.SyncDeployCustomDomains(ctx, wsID, "sync-api", types.StubTypeEndpointDeployment, 1,
+		[]*types.CustomDomain{domain("old.customer.io")})
+	require.NoError(t, err)
+	require.True(t, res.Stale)
+	require.ElementsMatch(t, []string{"a.customer.io", "b.customer.io"}, listed())
+
+	// 3. Binding and pruning are one transaction: a later deploy that drops b and
+	// adds c ends with exactly a and c, and reports b as pruned.
+	res, err = repo.SyncDeployCustomDomains(ctx, wsID, "sync-api", types.StubTypeEndpointDeployment, 2,
+		[]*types.CustomDomain{domain("a.customer.io"), domain("c.customer.io")})
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"b.customer.io"}, names(res.Pruned))
+	require.ElementsMatch(t, []string{"a.customer.io", "c.customer.io"}, listed())
+
+	// 4. A failure rolls back both halves: a domain bound to another deployment
+	// makes the sync fail and the previous bindings stay untouched.
+	_, err = repo.client.Exec(
+		`INSERT INTO deployment (external_id, name, active, version, stub_id, stub_type, workspace_id, subdomain)
+		 VALUES ($1, 'other-api', true, 1, $2, $3::stub_type, $4, 'other-api-v1')`,
+		uuid.NewString(), stubID, types.StubTypeEndpointDeployment, wsID,
+	)
+	require.NoError(t, err)
+	_, err = repo.CreateCustomDomain(ctx, &types.CustomDomain{
+		WorkspaceId: wsID, Domain: "taken.customer.io", DeploymentName: "other-api",
+		StubType: types.StubTypeEndpointDeployment, Status: types.CustomDomainStatusPending,
+		Source: types.CustomDomainSourceAPI, VerificationToken: "tok",
+	})
+	require.NoError(t, err)
+	_, err = repo.SyncDeployCustomDomains(ctx, wsID, "sync-api", types.StubTypeEndpointDeployment, 2,
+		[]*types.CustomDomain{domain("taken.customer.io")})
+	require.Error(t, err)
+	require.ElementsMatch(t, []string{"a.customer.io", "c.customer.io"}, listed())
+
+	// 5. Concurrent syncs are serialized; whichever finishes last wins and the
+	// result is always one of the two declared sets, never a mix.
+	var wg sync.WaitGroup
+	for _, set := range [][]string{{"x1.customer.io", "x2.customer.io"}, {"y1.customer.io"}} {
+		set := set
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			doms := make([]*types.CustomDomain, 0, len(set))
+			for _, n := range set {
+				doms = append(doms, domain(n))
+			}
+			_, err := repo.SyncDeployCustomDomains(ctx, wsID, "sync-api", types.StubTypeEndpointDeployment, 2, doms)
+			require.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+	final := listed()
+	require.True(t,
+		(len(final) == 2 && final[0] != "" && assertSet(final, "x1.customer.io", "x2.customer.io")) ||
+			(len(final) == 1 && final[0] == "y1.customer.io"),
+		"unexpected final set: %v", final)
+}
+
+func assertSet(got []string, want ...string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, g := range got {
+		seen[g] = true
+	}
+	for _, w := range want {
+		if !seen[w] {
+			return false
+		}
+	}
+	return true
 }

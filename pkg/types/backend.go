@@ -1371,3 +1371,12 @@ func (p *ScheduledJobPayload) Scan(value interface{}) error {
 func (p ScheduledJobPayload) Value() (driver.Value, error) {
 	return json.Marshal(p)
 }
+
+// DeployCustomDomainSync is the outcome of syncing the domains declared by one
+// deploy. Stale means a newer version of the deployment already exists, so
+// nothing was changed.
+type DeployCustomDomainSync struct {
+	Bound  []CustomDomain
+	Pruned []CustomDomain
+	Stale  bool
+}

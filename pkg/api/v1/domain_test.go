@@ -23,14 +23,6 @@ import (
 type domainTestDNSResolver struct {
 	txtRecords map[string][]string
 	cnames     map[string]string
-	hosts      map[string][]string
-}
-
-func (r *domainTestDNSResolver) LookupHost(_ context.Context, host string) ([]string, error) {
-	if addrs, ok := r.hosts[host]; ok {
-		return addrs, nil
-	}
-	return nil, errors.New("not found")
 }
 
 func (r *domainTestDNSResolver) LookupTXT(_ context.Context, name string) ([]string, error) {
@@ -759,25 +751,22 @@ func TestDomainCheckDisabledWithoutToken(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, rec.Code)
 }
 
-func TestVerifyCustomDomainDNSAddressOverlap(t *testing.T) {
-	cd := &types.CustomDomain{Domain: "api.customer.io", CNAMETarget: "dep.app.example.com", VerificationToken: "tok"}
+// Deployment targets share gateway addresses, so matching IPs must never count
+// as proof of ownership (it would let any workspace claim a domain that already
+// points at the gateway).
+func TestVerifyCustomDomainDNSSharedAddressIsNotProof(t *testing.T) {
+	cd := &types.CustomDomain{Domain: "victim.customer.io", CNAMETarget: "attacker-dep.app.example.com", VerificationToken: "attacker-token"}
 
 	ok, _ := verifyCustomDomainDNS(context.Background(), &domainTestDNSResolver{
-		cnames: map[string]string{"api.customer.io": "edge.cdn.net."},
-		hosts: map[string][]string{
-			"api.customer.io":     {"203.0.113.10"},
-			"dep.app.example.com": {"203.0.113.10", "203.0.113.11"},
-		},
-	}, cd)
-	require.True(t, ok)
-
-	ok, _ = verifyCustomDomainDNS(context.Background(), &domainTestDNSResolver{
-		hosts: map[string][]string{
-			"api.customer.io":     {"198.51.100.1"},
-			"dep.app.example.com": {"203.0.113.10"},
-		},
+		// The victim's domain points at the victim's own deployment target.
+		cnames: map[string]string{"victim.customer.io": "victim-dep.app.example.com."},
 	}, cd)
 	require.False(t, ok)
+
+	ok, _ = verifyCustomDomainDNS(context.Background(), &domainTestDNSResolver{
+		cnames: map[string]string{"victim.customer.io": "attacker-dep.app.example.com."},
+	}, cd)
+	require.True(t, ok)
 }
 
 func TestDomainCheckClusterRateLimit(t *testing.T) {
@@ -829,10 +818,7 @@ func (r *domainSlowTXTResolver) LookupTXT(ctx context.Context, _ string) ([]stri
 func TestVerifyCustomDomainDNSSlowTXTDoesNotStarveOtherChecks(t *testing.T) {
 	cd := &types.CustomDomain{Domain: "api.customer.io", CNAMETarget: "dep.app.example.com", VerificationToken: "tok"}
 	resolver := &domainSlowTXTResolver{domainTestDNSResolver{
-		hosts: map[string][]string{
-			"api.customer.io":     {"203.0.113.10"},
-			"dep.app.example.com": {"203.0.113.10"},
-		},
+		cnames: map[string]string{"api.customer.io": "dep.app.example.com."},
 	}}
 
 	start := time.Now()

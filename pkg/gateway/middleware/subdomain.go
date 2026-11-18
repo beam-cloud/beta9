@@ -109,6 +109,9 @@ func SubdomainWithReservedHosts(externalURL string, reservedHosts []string, back
 				isCustomDomain = true
 				normalizedHost := common.NormalizeDomain(host)
 				handlerKey := common.CustomDomainHandlerCacheKey(normalizedHost)
+				// Read the binding revision before anything else: cache writes below
+				// only land if the binding did not change while we were looking it up.
+				rev := common.CustomDomainRevision(ctx.Request().Context(), redisClient, normalizedHost)
 				redisHealthy := false
 				if redisClient != nil {
 					val, err := redisClient.Get(ctx.Request().Context(), handlerKey).Result()
@@ -143,13 +146,11 @@ func SubdomainWithReservedHosts(externalURL string, reservedHosts []string, back
 					}
 					if err != nil || stub == nil {
 						if errors.Is(err, types.ErrCustomDomainDeploymentInactive) {
-							if redisClient != nil {
-								redisClient.Set(ctx.Request().Context(), handlerKey, inactiveHandlerValue, negativeHandlerKeyTtl)
-							}
+							common.SetCustomDomainCacheIfCurrent(ctx.Request().Context(), redisClient, normalizedHost, rev, handlerKey, inactiveHandlerValue, negativeHandlerKeyTtl)
 							return echo.NewHTTPError(http.StatusNotFound)
 						}
-						if redisClient != nil && errors.Is(err, types.ErrCustomDomainNotFound) {
-							redisClient.Set(ctx.Request().Context(), handlerKey, negativeHandlerValue, negativeHandlerKeyTtl)
+						if errors.Is(err, types.ErrCustomDomainNotFound) {
+							common.SetCustomDomainCacheIfCurrent(ctx.Request().Context(), redisClient, normalizedHost, rev, handlerKey, negativeHandlerValue, negativeHandlerKeyTtl)
 						}
 						return next(ctx)
 					}
@@ -159,13 +160,11 @@ func SubdomainWithReservedHosts(externalURL string, reservedHosts []string, back
 						return echo.NewHTTPError(http.StatusNotFound)
 					}
 					expectedWorkspaceID = fields.WorkspaceExternalId
-					if redisClient != nil {
-						ttl := handlerKeyTtl
-						if fields.Version == 0 {
-							ttl = latestHandlerKeyTtl
-						}
-						redisClient.Set(ctx.Request().Context(), handlerKey, encodeCachedHandler(handlerPath, expectedWorkspaceID), ttl)
+					ttl := handlerKeyTtl
+					if fields.Version == 0 {
+						ttl = latestHandlerKeyTtl
 					}
+					common.SetCustomDomainCacheIfCurrent(ctx.Request().Context(), redisClient, normalizedHost, rev, handlerKey, encodeCachedHandler(handlerPath, expectedWorkspaceID), ttl)
 				}
 			} else {
 				return next(ctx)

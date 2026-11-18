@@ -448,6 +448,9 @@ type deployStubCustomDomainRepo struct {
 	latestDeployment  *types.DeploymentWithRelated
 	activeDeployments []types.DeploymentWithRelated
 	upsertErr         error
+	pruneErr          error
+	syncStale         bool
+	synced            int
 	upserted          []*types.CustomDomain
 	created           []types.Deployment
 	deleted           []types.Deployment
@@ -538,6 +541,31 @@ func (r *deployStubCustomDomainRepo) UpsertCustomDomains(_ context.Context, doma
 		r.listedDomains = append(r.listedDomains, *d)
 	}
 	return out, nil
+}
+
+// SyncDeployCustomDomains mirrors the real repository: bind then prune as one
+// step, failing as a whole, and doing nothing for a stale (older) deploy.
+func (r *deployStubCustomDomainRepo) SyncDeployCustomDomains(ctx context.Context, workspaceId uint, deploymentName, stubType string, _ uint, domains []*types.CustomDomain) (*types.DeployCustomDomainSync, error) {
+	r.synced++
+	if r.syncStale {
+		return &types.DeployCustomDomainSync{Stale: true}, nil
+	}
+	if r.pruneErr != nil {
+		return nil, r.pruneErr
+	}
+	bound, err := r.UpsertCustomDomains(ctx, domains)
+	if err != nil {
+		return nil, err
+	}
+	keep := make([]string, 0, len(domains))
+	for _, d := range domains {
+		keep = append(keep, d.Domain)
+	}
+	pruned, err := r.PruneDeployCustomDomains(ctx, workspaceId, deploymentName, stubType, keep)
+	if err != nil {
+		return nil, err
+	}
+	return &types.DeployCustomDomainSync{Bound: bound, Pruned: pruned}, nil
 }
 
 func (r *deployStubCustomDomainRepo) ListCustomDomains(_ context.Context, _ uint, _ string) ([]types.CustomDomain, error) {
@@ -679,4 +707,61 @@ func TestDeployStubCustomDomainValidationAndRollback(t *testing.T) {
 	prunedExists, err := rdb.Exists(ctx, common.CustomDomainHandlerCacheKey("removed.customer.io")).Result()
 	require.NoError(t, err)
 	require.Equal(t, int64(0), prunedExists)
+}
+
+func TestDeployStubCustomDomainSyncFailureAndStaleDeploy(t *testing.T) {
+	ctx := auth.ContextWithAuthInfo(context.Background(), &auth.AuthInfo{
+		Workspace: &types.Workspace{Id: 1, ExternalId: "ws-1", Name: "default"},
+	})
+	rdb, err := repository.NewRedisClientForTest()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	prevDep := types.DeploymentWithRelated{
+		Deployment: types.Deployment{
+			Id: 10, ExternalId: "dep-v1", Name: "my-api", Active: true,
+			WorkspaceId: 1, StubType: types.StubTypeEndpointDeployment, Version: 1,
+		},
+		Stub: types.Stub{ExternalId: "stub-v1", Type: types.StubType(types.StubTypeEndpointDeployment), Config: `{}`},
+	}
+	cfg, err := json.Marshal(types.StubConfigV1{
+		Extra: json.RawMessage(`{"custom_domain":["a.customer.io"]}`),
+	})
+	require.NoError(t, err)
+	newRepo := func() *deployStubCustomDomainRepo {
+		return &deployStubCustomDomainRepo{
+			stub: &types.StubWithRelated{
+				Stub:      types.Stub{Id: 2, ExternalId: "stub-v2", Type: types.StubType(types.StubTypeEndpointDeployment), Config: string(cfg)},
+				Workspace: types.Workspace{Id: 1, ExternalId: "ws-1"},
+			},
+			latestDeployment:  &prevDep,
+			activeDeployments: []types.DeploymentWithRelated{prevDep},
+		}
+	}
+
+	// A failed prune is part of the same sync, so it fails the deploy and rolls it
+	// back instead of succeeding with removed domains still bound.
+	failing := newRepo()
+	failing.pruneErr = errors.New("prune failed")
+	svc := &GatewayService{backendRepo: failing, containerRepo: &deploymentLifecycleContainerRepo{}, redisClient: rdb}
+	resp, err := svc.DeployStub(ctx, &pb.DeployStubRequest{StubId: "stub-v2", Name: "my-api"})
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrMsg, "Failed to bind custom domains")
+	require.Contains(t, resp.ErrMsg, "prune failed")
+	require.Len(t, failing.deleted, 1)
+
+	// An older deploy that lost the race to a newer one succeeds without touching
+	// the bindings (the repository reports it as stale).
+	stale := newRepo()
+	stale.syncStale = true
+	stale.listedDomains = []types.CustomDomain{{WorkspaceId: 1, Domain: "newer.customer.io", DeploymentName: "my-api", Source: types.CustomDomainSourceDeploy}}
+	svc = &GatewayService{backendRepo: stale, containerRepo: &deploymentLifecycleContainerRepo{}, redisClient: rdb}
+	resp, err = svc.DeployStub(ctx, &pb.DeployStubRequest{StubId: "stub-v2", Name: "my-api"})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Equal(t, 1, stale.synced)
+	require.Empty(t, stale.upserted)
+	require.Len(t, stale.listedDomains, 1)
+	require.Equal(t, "newer.customer.io", stale.listedDomains[0].Domain)
 }

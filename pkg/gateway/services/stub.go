@@ -1151,9 +1151,11 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		}, nil
 	}
 
-	// Domains are bound atomically after deployment creation; any binding
-	// failure rolls back the new deployment and reactivates stopped versions.
-	if len(customDomains) > 0 {
+	// Domains are synced atomically after deployment creation: binding the
+	// declared domains and pruning the removed ones happen in one transaction.
+	// Any failure rolls back the new deployment and reactivates stopped versions
+	// instead of reporting success with domains in an unknown state.
+	if types.SupportsCustomDomain(stub.Type) {
 		domainsToBind := make([]*types.CustomDomain, 0, len(customDomains))
 		for _, domain := range customDomains {
 			domainsToBind = append(domainsToBind, &types.CustomDomain{
@@ -1165,8 +1167,9 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 				Source:         types.CustomDomainSourceDeploy,
 			})
 		}
-		if _, err := gws.backendRepo.UpsertCustomDomains(ctx, domainsToBind); err != nil {
-			log.Error().Err(err).Str("deployment", in.Name).Msg("failed to bind custom domains; rolling back deployment")
+		synced, err := gws.backendRepo.SyncDeployCustomDomains(ctx, authInfo.Workspace.Id, in.Name, string(stub.Type), deployment.Version, domainsToBind)
+		if err != nil {
+			log.Error().Err(err).Str("deployment", in.Name).Msg("failed to sync custom domains; rolling back deployment")
 			var rollbackFailures []string
 			if rbErr := gws.backendRepo.DeleteDeployment(ctx, *deployment); rbErr != nil {
 				log.Error().Err(rbErr).Str("deployment_id", deployment.ExternalId).Msg("failed to roll back deployment")
@@ -1191,12 +1194,11 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 				ErrMsg: errMsg,
 			}, nil
 		}
-	}
-	if types.SupportsCustomDomain(stub.Type) {
-		if pruned, pruneErr := gws.backendRepo.PruneDeployCustomDomains(ctx, authInfo.Workspace.Id, in.Name, string(stub.Type), customDomains); pruneErr != nil {
-			log.Warn().Err(pruneErr).Str("deployment", in.Name).Msg("failed to prune removed deploy custom domains")
-		} else if len(pruned) > 0 {
-			common.InvalidateCustomDomainCache(ctx, gws.redisClient, common.CustomDomainNames(pruned)...)
+		if synced.Stale {
+			// A newer deploy of this deployment already owns the bindings.
+			log.Info().Str("deployment", in.Name).Uint("version", deployment.Version).Msg("custom domains left unchanged by older deploy")
+		} else if len(synced.Pruned) > 0 {
+			common.InvalidateCustomDomainCache(ctx, gws.redisClient, common.CustomDomainNames(synced.Pruned)...)
 		}
 	}
 	gws.invalidateDeploymentCustomDomains(ctx, authInfo.Workspace.Id, in.Name)

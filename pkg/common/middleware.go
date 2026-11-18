@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/redis/go-redis/v9"
 )
 
 var (
@@ -226,11 +227,61 @@ func ValidateCustomDomainName(domain string, reservedDomains ...string) error {
 }
 
 func CustomDomainHandlerCacheKey(domain string) string {
-	return fmt.Sprintf("middleware:custom_domain:%s:handler", NormalizeDomain(domain))
+	return fmt.Sprintf("middleware:custom_domain:{%s}:handler", NormalizeDomain(domain))
 }
 
 func CustomDomainCheckCacheKey(domain string) string {
-	return fmt.Sprintf("api:custom_domain:%s:check", NormalizeDomain(domain))
+	return fmt.Sprintf("middleware:custom_domain:{%s}:check", NormalizeDomain(domain))
+}
+
+// CustomDomainRevisionKey holds a counter that is bumped every time a domain's
+// binding changes. Cache writers read it before they read the database and
+// only write if it is unchanged, so a slow request cannot restore a binding
+// that was removed or transferred while it was in flight. All keys of a domain
+// share a {hash tag} so the conditional write is a single-slot script on a
+// Redis cluster.
+func CustomDomainRevisionKey(domain string) string {
+	return fmt.Sprintf("middleware:custom_domain:{%s}:rev", NormalizeDomain(domain))
+}
+
+const customDomainRevisionTTL = 24 * time.Hour
+
+// CustomDomainRevision returns the current binding revision of a domain. An
+// unknown revision is the empty string. Errors are returned as the empty
+// string too: the matching conditional write then only succeeds if the
+// revision is still absent.
+func CustomDomainRevision(ctx context.Context, redisClient *RedisClient, domain string) string {
+	if redisClient == nil {
+		return ""
+	}
+	val, err := redisClient.Get(ctx, CustomDomainRevisionKey(domain)).Result()
+	if err != nil {
+		return ""
+	}
+	return val
+}
+
+var setIfRevisionUnchangedScript = redis.NewScript(`
+local cur = redis.call('GET', KEYS[1])
+if not cur then cur = '' end
+if cur ~= ARGV[1] then
+	return 0
+end
+redis.call('SET', KEYS[2], ARGV[2], 'PX', ARGV[3])
+return 1
+`)
+
+// SetCustomDomainCacheIfCurrent writes a routing/check cache entry only if the
+// domain's binding revision still equals rev (the value read before the
+// database lookup that produced the entry). It reports whether it wrote.
+func SetCustomDomainCacheIfCurrent(ctx context.Context, redisClient *RedisClient, domain, rev, key, value string, ttl time.Duration) bool {
+	if redisClient == nil {
+		return false
+	}
+	res, err := setIfRevisionUnchangedScript.Run(
+		ctx, redisClient, []string{CustomDomainRevisionKey(domain), key}, rev, value, ttl.Milliseconds(),
+	).Int()
+	return err == nil && res == 1
 }
 
 func InvalidateCustomDomainCache(ctx context.Context, redisClient *RedisClient, domains ...string) {
@@ -254,7 +305,16 @@ func InvalidateCustomDomainCache(ctx context.Context, redisClient *RedisClient, 
 	if redisClient == nil {
 		return
 	}
-	_ = redisClient.Del(ctx, keys...).Err()
+	// Bump the revisions first so any in-flight reader that started before this
+	// change loses its conditional write, then drop what is already cached.
+	pipe := redisClient.Pipeline()
+	for _, domain := range normalizedDomains {
+		revKey := CustomDomainRevisionKey(domain)
+		pipe.Incr(ctx, revKey)
+		pipe.Expire(ctx, revKey, customDomainRevisionTTL)
+	}
+	pipe.Del(ctx, keys...)
+	_, _ = pipe.Exec(ctx)
 }
 
 // LookupStubForCustomDomain resolves a custom domain directly from repo

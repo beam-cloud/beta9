@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 
@@ -214,6 +215,10 @@ func upsertCustomDomainWithRunner(ctx context.Context, runner sqlx.ExtContext, c
 // deploy of this deployment but are no longer declared in its code. Domains
 // added through the API/CLI (source = 'api') are never touched.
 func (r *PostgresBackendRepository) PruneDeployCustomDomains(ctx context.Context, workspaceId uint, deploymentName, stubType string, keep []string) ([]types.CustomDomain, error) {
+	return pruneDeployCustomDomainsWithRunner(ctx, r.client, workspaceId, deploymentName, stubType, keep)
+}
+
+func pruneDeployCustomDomainsWithRunner(ctx context.Context, runner sqlx.ExtContext, workspaceId uint, deploymentName, stubType string, keep []string) ([]types.CustomDomain, error) {
 	normalizedKeep := make([]string, 0, len(keep))
 	for _, d := range keep {
 		if n := types.NormalizeDomain(d); n != "" {
@@ -232,10 +237,65 @@ func (r *PostgresBackendRepository) PruneDeployCustomDomains(ctx context.Context
 	`
 
 	pruned := []types.CustomDomain{}
-	if err := r.client.SelectContext(ctx, &pruned, query, workspaceId, deploymentName, stubType, pq.StringArray(normalizedKeep)); err != nil {
+	if err := sqlx.SelectContext(ctx, runner, &pruned, query, workspaceId, deploymentName, stubType, pq.StringArray(normalizedKeep)); err != nil {
 		return nil, err
 	}
 	return pruned, nil
+}
+
+// SyncDeployCustomDomains makes the deploy-bound domains of a deployment match
+// the list declared by one deploy: it binds the declared domains and prunes
+// the ones no longer declared, in a single transaction. Syncs for the same
+// workspace, deployment name and stub type are serialized with an advisory
+// lock, so overlapping deploys cannot delete each other's bindings. A deploy
+// that is older than the newest live version of the deployment is stale and
+// changes nothing, so it can never prune a newer deploy's bindings.
+func (r *PostgresBackendRepository) SyncDeployCustomDomains(ctx context.Context, workspaceId uint, deploymentName, stubType string, deployVersion uint, domains []*types.CustomDomain) (*types.DeployCustomDomainSync, error) {
+	tx, err := r.client.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	lockKey := fmt.Sprintf("custom_domain_sync:%d:%s:%s", workspaceId, deploymentName, stubType)
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0));`, lockKey); err != nil {
+		return nil, err
+	}
+
+	var newest uint
+	if err := tx.GetContext(ctx, &newest, `
+		SELECT COALESCE(MAX(version), 0) FROM deployment
+		WHERE workspace_id = $1 AND name = $2 AND stub_type::text = $3 AND deleted_at IS NULL;
+	`, workspaceId, deploymentName, stubType); err != nil {
+		return nil, err
+	}
+	if newest > deployVersion {
+		return &types.DeployCustomDomainSync{Stale: true}, nil
+	}
+
+	result := &types.DeployCustomDomainSync{}
+	keep := make([]string, 0, len(domains))
+	for _, cd := range domains {
+		upserted, err := upsertCustomDomainWithRunner(ctx, tx, cd)
+		if err != nil {
+			return nil, err
+		}
+		result.Bound = append(result.Bound, *upserted)
+		keep = append(keep, upserted.Domain)
+	}
+
+	pruned, err := pruneDeployCustomDomainsWithRunner(ctx, tx, workspaceId, deploymentName, stubType, keep)
+	if err != nil {
+		return nil, err
+	}
+	result.Pruned = pruned
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (r *PostgresBackendRepository) GetCustomDomainByIdentifier(ctx context.Context, workspaceId uint, idOrDomain string) (*types.CustomDomain, error) {

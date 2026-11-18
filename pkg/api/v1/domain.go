@@ -29,7 +29,6 @@ import (
 type domainDNSResolver interface {
 	LookupTXT(ctx context.Context, name string) ([]string, error)
 	LookupCNAME(ctx context.Context, host string) (string, error)
-	LookupHost(ctx context.Context, host string) ([]string, error)
 }
 
 var domainStubTypeAliases = map[string]string{
@@ -332,6 +331,9 @@ func (g *DomainGroup) Check(ctx echo.Context) error {
 
 	reqCtx := ctx.Request().Context()
 	cacheKey := common.CustomDomainCheckCacheKey(domain)
+	// Read the binding revision before the cache and database lookups so a
+	// slow request cannot cache an answer for a binding that has since changed.
+	rev := common.CustomDomainRevision(reqCtx, g.redisClient, domain)
 	if g.redisClient != nil {
 		if val, err := g.redisClient.Get(reqCtx, cacheKey).Result(); err == nil {
 			switch val {
@@ -349,15 +351,11 @@ func (g *DomainGroup) Check(ctx echo.Context) error {
 	}
 	// Only verified domains are allowed; pending or failed domains must never obtain certificates.
 	if cd == nil || cd.Status != types.CustomDomainStatusActive {
-		if g.redisClient != nil {
-			_ = g.redisClient.Set(reqCtx, cacheKey, domainCheckDeniedValue, domainCheckNegativeCacheTTL).Err()
-		}
+		common.SetCustomDomainCacheIfCurrent(reqCtx, g.redisClient, domain, rev, cacheKey, domainCheckDeniedValue, domainCheckNegativeCacheTTL)
 		return HTTPNotFound()
 	}
 
-	if g.redisClient != nil {
-		_ = g.redisClient.Set(reqCtx, cacheKey, domainCheckAllowedValue, domainCheckPositiveCacheTTL).Err()
-	}
+	common.SetCustomDomainCacheIfCurrent(reqCtx, g.redisClient, domain, rev, cacheKey, domainCheckAllowedValue, domainCheckPositiveCacheTTL)
 
 	return ctx.JSON(http.StatusOK, map[string]any{"allowed": true})
 }
@@ -576,6 +574,11 @@ func verifyCustomDomainDNS(ctx context.Context, resolver domainDNSResolver, cd *
 	txtName := "_beta9-challenge." + cd.Domain
 	target := common.NormalizeDomain(cd.CNAMETarget)
 
+	// Ownership is proven only by the claim's own TXT token or by a CNAME to
+	// this deployment's own target. Matching IP addresses is deliberately not
+	// accepted: deployment targets share gateway addresses, so any domain that
+	// already points at the gateway would pass for every workspace.
+	//
 	// Each proof runs concurrently with its own deadline. A resolver that is
 	// slow or silent for one record type (TXT queries for names that do not
 	// exist are commonly dropped) must not starve the other checks.
@@ -603,25 +606,6 @@ func verifyCustomDomainDNS(ctx context.Context, resolver domainDNSResolver, cd *
 				// Must point at this deployment's own target, not any host under the base domain.
 				normalized := common.NormalizeDomain(cname)
 				return normalized != "" && normalized == target
-			},
-			// LookupCNAME can return the end of a CNAME chain (or fail behind
-			// flattened records), so also accept a domain that resolves to an
-			// address of this deployment's own target.
-			func(ctx context.Context) bool {
-				domainAddrs, err := resolver.LookupHost(ctx, cd.Domain)
-				if err != nil || len(domainAddrs) == 0 {
-					return false
-				}
-				targetAddrs, err := resolver.LookupHost(ctx, cd.CNAMETarget)
-				if err != nil {
-					return false
-				}
-				for _, a := range domainAddrs {
-					if slices.Contains(targetAddrs, a) {
-						return true
-					}
-				}
-				return false
 			},
 		)
 	}
