@@ -246,6 +246,8 @@ message UpdateWorkerCapacityResponse {
 }
 
 message SetWorkerKeepAliveRequest {
+  reserved 6, 7;
+  reserved "verified_local_gpu_runtime", "nvidia_driver_version";
   string worker_id = 1;
   string machine_id = 2;
   // idle is set when the worker runs no containers. Only an idle worker can
@@ -254,8 +256,6 @@ message SetWorkerKeepAliveRequest {
   bool idle = 3;
   string checkpoint_compatibility_key = 4;
   uint32 cpu_tier_protocol = 5;
-  string verified_local_gpu_runtime = 6;
-  string nvidia_driver_version = 7;
 }
 
 message SetWorkerKeepAliveResponse {

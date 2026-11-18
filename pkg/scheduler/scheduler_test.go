@@ -307,52 +307,6 @@ func TestDockerEnabledRequestRuntimeSelection(t *testing.T) {
 	assert.Equal(t, workers[1:], filteredWorkers)
 }
 
-func TestLocalGPUPlacementRequiresVerifiedRuntimeAndDriver(t *testing.T) {
-	gvisor := types.ContainerRuntimeGvisor.String()
-	runc := types.ContainerRuntimeRunc.String()
-	pools := map[string]types.WorkerPoolConfig{
-		"unsafe-direct":   {Mode: types.PoolModeLocal, GPUType: "A10G", ContainerRuntime: runc},
-		"unsafe-unset":    {Mode: types.PoolModeLocal, GPUType: "A10G"},
-		"no-driver-list":  {Mode: types.PoolModeLocal, GPUType: "A10G", ContainerRuntime: gvisor},
-		"approved-direct": {Mode: types.PoolModeLocal, GPUType: "A10G", ContainerRuntime: gvisor, AllowedNVIDIADriverVersions: []string{"580.200.01"}},
-		"unsafe-fallback": {Mode: types.PoolModeLocal, GPUType: "RTX4090", ContainerRuntime: runc, AlsoServes: []string{"A10G"}},
-		"safe-fallback":   {Mode: types.PoolModeLocal, GPUType: "RTX4090", ContainerRuntime: gvisor, AlsoServes: []string{"A10G"}, AllowedNVIDIADriverVersions: []string{"580.200.02"}},
-	}
-	request := &types.ContainerRequest{Gpu: "A10G", GpuCount: 1, Cpu: 1000, Memory: 1024}
-	require.Equal(t, []string{"approved-direct", "safe-fallback (1)"}, poolsAccepting(request, pools))
-
-	manager := NewWorkerPoolManager()
-	for name, pool := range pools {
-		manager.SetPool(name, pool, nil)
-	}
-	s := &Scheduler{workerPoolManager: manager}
-	worker := func(id, pool, gpu, configuredRuntime, verifiedRuntime, driver string) *types.Worker {
-		return &types.Worker{
-			Id: id, PoolName: pool, Gpu: gpu, Runtime: configuredRuntime,
-			VerifiedLocalGPURuntime: verifiedRuntime, NVIDIADriverVersion: driver,
-			Status: types.WorkerStatusAvailable, FreeGpuCount: 1, FreeCpu: 1000, FreeMemory: 2048,
-		}
-	}
-	legacy := worker("legacy", "approved-direct", "A10G", gvisor, "", "")
-	wrongDriver := worker("wrong-driver", "approved-direct", "A10G", gvisor, gvisor, "580.200.02")
-	wrongRuntime := worker("wrong-runtime", "approved-direct", "A10G", gvisor, types.ContainerRuntimeMicroVM.String(), "580.200.01")
-	orphan := worker("removed-pool", "old-pool", "A10G", gvisor, gvisor, "580.200.01")
-	fallback := worker("verified-fallback", "safe-fallback", "RTX4090", gvisor, gvisor, "580.200.02")
-	selected, err := s.selectWorkerFromWorkers([]*types.Worker{legacy, wrongDriver, wrongRuntime, orphan, fallback}, request)
-	require.NoError(t, err)
-	require.Same(t, fallback, selected)
-
-	// Machine pins can bypass the route rank, but must still honor the GPU gate.
-	legacy.MachineId = "pinned-machine"
-	request.MachineId = legacy.MachineId
-	_, err = s.selectWorkerFromWorkers([]*types.Worker{legacy, fallback}, request)
-	require.Error(t, err)
-	legacy.Status = types.WorkerStatusPending
-	pending, err := s.selectWorkerFromWorkersByStatus([]*types.Worker{legacy}, request, types.WorkerStatusPending)
-	require.NoError(t, err)
-	require.Same(t, legacy, pending)
-}
-
 // The microvm runtime is opt-in in both directions: only use_vm sandboxes
 // reach it, and use_vm sandboxes reach nothing else.
 func TestMicroVMRuntimeIsOptInBothWays(t *testing.T) {
@@ -2751,7 +2705,6 @@ func TestSelectGPUWorker(t *testing.T) {
 
 	newWorker := &types.Worker{
 		Status:       types.WorkerStatusAvailable,
-		PoolName:     "beta9-a10g",
 		FreeCpu:      1000,
 		FreeMemory:   1250,
 		FreeGpuCount: 1,
@@ -3063,7 +3016,6 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 				newWorker := &types.Worker{
 					Id:           uuid.New().String(),
 					Status:       types.WorkerStatusAvailable,
-					PoolSelector: "test-agent-pool",
 					FreeCpu:      1000,
 					FreeMemory:   1250,
 					FreeGpuCount: 1,
@@ -3076,7 +3028,6 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 			}
 
 			for i, req := range tt.requests {
-				req.Workspace = testWorkspaceWithStorage()
 				worker, err := wb.selectWorker(req)
 				if err != nil {
 					assert.EqualError(t, err, (&types.ErrNoSuitableWorkerFound{}).Error())
@@ -3131,7 +3082,6 @@ func TestCheckpointRuntimeSelection(t *testing.T) {
 	scheduler, err := NewSchedulerForTest()
 	assert.NoError(t, err)
 	request := &types.ContainerRequest{
-		Workspace:         testWorkspaceWithStorage(),
 		Cpu:               1000,
 		Memory:            1000,
 		GpuRequest:        []string{"RTX5090"},
@@ -3146,7 +3096,6 @@ func TestCheckpointRuntimeSelection(t *testing.T) {
 		return &types.Worker{
 			Id:           id,
 			Status:       types.WorkerStatusAvailable,
-			PoolSelector: "test-agent-pool",
 			FreeCpu:      1000,
 			FreeMemory:   2000,
 			FreeGpuCount: 1,
@@ -3419,7 +3368,6 @@ func TestSelectGPUWorkerDoesNotMutatePriority(t *testing.T) {
 	a10gWorker := &types.Worker{
 		Id:           uuid.New().String(),
 		Status:       types.WorkerStatusAvailable,
-		PoolName:     "beta9-a10g",
 		FreeCpu:      1000,
 		FreeMemory:   1250,
 		FreeGpuCount: 1,
@@ -3429,7 +3377,6 @@ func TestSelectGPUWorkerDoesNotMutatePriority(t *testing.T) {
 	t4Worker := &types.Worker{
 		Id:           uuid.New().String(),
 		Status:       types.WorkerStatusAvailable,
-		PoolName:     "beta9-t4",
 		FreeCpu:      1000,
 		FreeMemory:   1250,
 		FreeGpuCount: 1,
@@ -4688,19 +4635,12 @@ func TestPoolOfARequestedGPUTypeIsNotTreatedAsOverflow(t *testing.T) {
 
 func TestStorageBackedRequestPrefersManagedAgentCapacity(t *testing.T) {
 	scheduler := overflowSchedulerForTest(t)
-	gvisor := types.ContainerRuntimeGvisor.String()
-	scheduler.workerPoolManager.SetPool("legacy-4090", types.WorkerPoolConfig{
-		Mode: types.PoolModeLocal, GPUType: "RTX4090", ContainerRuntime: gvisor, AllowedNVIDIADriverVersions: []string{"580.200.01"},
-	}, nil)
 	agent := gpuWorkerForTest("managed-agent", "agent-4090", "RTX4090", 1)
 	agent.ControlPlaneManaged = true
 	agent.PoolSelector = "agent-4090"
 	agent.Priority = 2
 	legacy := gpuWorkerForTest("legacy-4090", "legacy-4090", "RTX4090", 1)
 	legacy.Priority = 3
-	legacy.Runtime = gvisor
-	legacy.VerifiedLocalGPURuntime = gvisor
-	legacy.NVIDIADriverVersion = "580.200.01"
 
 	request := &types.ContainerRequest{
 		GpuRequest: []string{"RTX4090", "A10G"},
@@ -4894,10 +4834,9 @@ func TestAnOldFailoverSectionNeverStopsTheSchedulerStarting(t *testing.T) {
 	manager, err := common.NewConfigManager[types.AppConfig]()
 	require.NoError(t, err)
 	config := manager.GetConfig()
-	gvisor := types.ContainerRuntimeGvisor.String()
 	config.Worker.Pools = map[string]types.WorkerPoolConfig{
-		"a10g": {GPUType: "A10G", Mode: types.PoolModeLocal, ContainerRuntime: gvisor, AllowedNVIDIADriverVersions: []string{"580.200.01"}},
-		"l40s": {GPUType: "L40S", Mode: types.PoolModeLocal, ContainerRuntime: gvisor, AllowedNVIDIADriverVersions: []string{"580.200.01"}},
+		"a10g": {GPUType: "A10G", Mode: types.PoolModeLocal},
+		"l40s": {GPUType: "L40S", Mode: types.PoolModeLocal},
 	}
 	config.Scheduling.Failover = types.FailoverConfig{Enabled: true, Chains: map[string]types.FailoverChain{
 		"H100": {},

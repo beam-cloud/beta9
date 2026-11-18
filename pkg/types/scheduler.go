@@ -102,8 +102,6 @@ type Worker struct {
 	RolloutPreviousStatus      WorkerStatus `json:"-" redis:"rollout_previous_status" go2proto:"ignore"`
 	CheckpointCompatibilityKey string       `json:"-" redis:"checkpoint_compatibility_key" go2proto:"ignore"`
 	CPUTierProtocol            uint32       `json:"-" redis:"cpu_tier_protocol" go2proto:"ignore"`
-	VerifiedLocalGPURuntime    string       `json:"-" redis:"verified_local_gpu_runtime" go2proto:"ignore"`
-	NVIDIADriverVersion        string       `json:"-" redis:"nvidia_driver_version" go2proto:"ignore"`
 	// CreatedAt is when the worker's state was first written, in Unix
 	// seconds. The worker repository sets it. Zero means unknown: the state
 	// was written by a release that did not record it.
@@ -114,8 +112,6 @@ type WorkerKeepAlive struct {
 	MachineId                  string `json:"machine_id"`
 	CheckpointCompatibilityKey string `json:"checkpoint_compatibility_key"`
 	CPUTierProtocol            uint32 `json:"cpu_tier_protocol"`
-	VerifiedLocalGPURuntime    string `json:"verified_local_gpu_runtime"`
-	NVIDIADriverVersion        string `json:"nvidia_driver_version"`
 	// RequestStreamOpen is set by the gateway that received the keepalive when
 	// it also holds this worker's container request stream. A worker opens
 	// that stream only after it has started.

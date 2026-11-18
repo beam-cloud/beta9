@@ -24,46 +24,28 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func TestVerifyLocalGPURuntime(t *testing.T) {
-	dir := t.TempDir()
-	driverPath := filepath.Join(dir, "version")
-	require.NoError(t, os.WriteFile(driverPath, []byte("580.200.01\n"), 0o600))
-	missingDriver := filepath.Join(dir, "missing")
-	gvisor := types.ContainerRuntimeGvisor.String()
-	microvm := types.ContainerRuntimeMicroVM.String()
-	runc := types.ContainerRuntimeRunc.String()
-
+func TestValidateLocalGPURuntime(t *testing.T) {
 	for _, tt := range []struct {
-		name        string
-		mode        types.PoolMode
-		runtime     string
-		hasGPU      bool
-		allow       []string
-		driverPath  string
-		wantRuntime string
-		wantDriver  string
-		wantError   string
+		name    string
+		mode    types.PoolMode
+		runtime string
+		hasGPU  bool
+		wantErr bool
 	}{
-		{name: "CPU runc", mode: types.PoolModeLocal, runtime: runc, driverPath: missingDriver},
-		{name: "private runc", mode: types.PoolModePrivate, runtime: runc, hasGPU: true, driverPath: missingDriver},
-		{name: "shared runc", mode: types.PoolModeLocal, runtime: runc, hasGPU: true, wantError: "explicit gvisor or microvm"},
-		{name: "shared unset", mode: types.PoolModeLocal, hasGPU: true, wantError: "explicit gvisor or microvm"},
-		{name: "shared gvisor without policy", mode: types.PoolModeLocal, runtime: gvisor, hasGPU: true, wantError: "allowedNvidiaDriverVersions"},
-		{name: "shared gvisor without loaded driver", mode: types.PoolModeLocal, runtime: gvisor, hasGPU: true, allow: []string{"580.200.01"}, driverPath: missingDriver, wantError: "read loaded NVIDIA kernel module version"},
-		{name: "same branch different build", mode: types.PoolModeLocal, runtime: gvisor, hasGPU: true, allow: []string{"580.200.02"}, driverPath: driverPath, wantError: "not approved"},
-		{name: "approved module build", mode: types.PoolModeLocal, runtime: gvisor, hasGPU: true, allow: []string{"580.200.01"}, driverPath: driverPath, wantRuntime: gvisor, wantDriver: "580.200.01"},
-		{name: "microVM uses guest driver", mode: types.PoolModeLocal, runtime: microvm, hasGPU: true, driverPath: missingDriver, wantRuntime: microvm},
+		{name: "CPU runc", mode: types.PoolModeLocal, runtime: types.ContainerRuntimeRunc.String()},
+		{name: "private GPU runc", mode: types.PoolModePrivate, runtime: types.ContainerRuntimeRunc.String(), hasGPU: true},
+		{name: "local GPU runc", mode: types.PoolModeLocal, runtime: types.ContainerRuntimeRunc.String(), hasGPU: true, wantErr: true},
+		{name: "local GPU unset", mode: types.PoolModeLocal, hasGPU: true, wantErr: true},
+		{name: "local GPU gVisor", mode: types.PoolModeLocal, runtime: types.ContainerRuntimeGvisor.String(), hasGPU: true},
+		{name: "local GPU microVM", mode: types.PoolModeLocal, runtime: types.ContainerRuntimeMicroVM.String(), hasGPU: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			pool := types.WorkerPoolConfig{Mode: tt.mode, ContainerRuntime: tt.runtime, AllowedNVIDIADriverVersions: tt.allow}
-			actualRuntime, driver, err := verifyLocalGPURuntime(pool, tt.hasGPU, tt.driverPath)
-			if tt.wantError != "" {
-				require.ErrorContains(t, err, tt.wantError)
+			err := validateLocalGPURuntime(types.WorkerPoolConfig{Mode: tt.mode, ContainerRuntime: tt.runtime}, tt.hasGPU)
+			if tt.wantErr {
+				require.ErrorContains(t, err, "explicit gvisor or microvm")
 			} else {
 				require.NoError(t, err)
 			}
-			require.Equal(t, tt.wantRuntime, actualRuntime)
-			require.Equal(t, tt.wantDriver, driver)
 		})
 	}
 }

@@ -859,34 +859,6 @@ func TestKeepAliveCPUTierProtocolIsReadBack(t *testing.T) {
 	assert.Equal(t, types.CPUTierProtocolVersion, workers[0].CPUTierProtocol)
 }
 
-func TestKeepAliveGPUVerificationIsReadBackAndWithdrawn(t *testing.T) {
-	rdb, err := NewRedisClientForTest()
-	assert.Nil(t, err)
-	repo := NewWorkerRedisRepositoryForTest(rdb)
-	worker := &types.Worker{Id: "gpu-worker", Status: types.WorkerStatusAvailable, PoolName: "pool-a"}
-	assert.Nil(t, repo.AddWorker(worker))
-
-	verified := types.WorkerKeepAlive{VerifiedLocalGPURuntime: types.ContainerRuntimeGvisor.String(), NVIDIADriverVersion: "580.200.01"}
-	assert.Nil(t, repo.SetWorkerKeepAlive(worker.Id, verified))
-	assert.Nil(t, repo.AddWorker(worker))
-	updated, err := repo.GetWorkerById(worker.Id)
-	assert.Nil(t, err)
-	assert.Equal(t, verified.VerifiedLocalGPURuntime, updated.VerifiedLocalGPURuntime)
-	assert.Equal(t, verified.NVIDIADriverVersion, updated.NVIDIADriverVersion)
-	assert.Nil(t, repo.SetWorkerKeepAlive(worker.Id, types.WorkerKeepAlive{}))
-	withoutVerification, err := repo.GetWorkerById(worker.Id)
-	assert.Nil(t, err)
-	assert.Empty(t, withoutVerification.VerifiedLocalGPURuntime)
-	assert.Empty(t, withoutVerification.NVIDIADriverVersion)
-	assert.Equal(t, updated.ResourceVersion+1, withoutVerification.ResourceVersion)
-	err = repo.ScheduleContainerRequest(updated, &types.ContainerRequest{
-		ContainerId: "gpu-request",
-		Gpu:         "A10G",
-		GpuCount:    1,
-	})
-	assert.True(t, errors.Is(err, ErrWorkerCapacityChanged), err)
-}
-
 func TestWorkerCheckpointCompatibilityKey(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.Nil(t, err)

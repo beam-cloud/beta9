@@ -7,11 +7,10 @@ The chart otherwise uses `config.worker.namespace` or the built-in `beta9`
 namespace. During an upgrade, verify the new RoleBinding and worker Job
 creation before removing any legacy wildcard ClusterRoleBinding that remains.
 
-Local GPU pools require an explicit `containerRuntime` of `gvisor` or
-`microvm`. For gVisor, set `allowedNvidiaDriverVersions` to the exact approved
-loaded NVIDIA module versions. Upgrade the gateway and worker images together.
-New gateways wait for runtime and driver verification from GPU workers before
-assigning GPU work. Drain old GPU workers before enabling the pool again.
+Local Kubernetes GPU pools must explicitly set `containerRuntime` to `gvisor`
+or `microvm`. GPU workers check this setting at startup. Validate the loaded
+NVIDIA driver during the node rollout. Drain and replace older GPU workers
+through the normal deployment process before reopening the pool.
 
 Run the gateway, workers, and cache servers under separate service accounts.
 Configure `worker.serviceAccountName` for the worker namespace and bind any

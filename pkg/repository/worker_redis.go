@@ -601,8 +601,6 @@ func (r *WorkerRedisRepository) addWorker(ctx context.Context, worker *types.Wor
 		if oldWorker.CheckpointCompatibilityKey != "" {
 			worker.CheckpointCompatibilityKey = oldWorker.CheckpointCompatibilityKey
 		}
-		worker.VerifiedLocalGPURuntime = oldWorker.VerifiedLocalGPURuntime
-		worker.NVIDIADriverVersion = oldWorker.NVIDIADriverVersion
 		worker.CordonRequested = oldWorker.CordonRequested
 		worker.RolloutGeneration = oldWorker.RolloutGeneration
 		worker.RolloutPreviousStatus = oldWorker.RolloutPreviousStatus
@@ -1108,12 +1106,7 @@ func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive ty
 	if keyChanged {
 		pipe.HSet(ctx, stateKey, "checkpoint_compatibility_key", keepAlive.CheckpointCompatibilityKey)
 	}
-	// Unlike the checkpoint key, a missing GPU verification withdraws eligibility.
-	gpuVerificationChanged := keepAlive.VerifiedLocalGPURuntime != worker.VerifiedLocalGPURuntime || keepAlive.NVIDIADriverVersion != worker.NVIDIADriverVersion
-	if gpuVerificationChanged {
-		pipe.HSet(ctx, stateKey, "verified_local_gpu_runtime", keepAlive.VerifiedLocalGPURuntime, "nvidia_driver_version", keepAlive.NVIDIADriverVersion)
-	}
-	if worker.MachineId != oldMachineID || keyChanged || gpuVerificationChanged || recovered {
+	if worker.MachineId != oldMachineID || keyChanged || recovered {
 		pipe.HIncrBy(ctx, stateKey, "resource_version", 1)
 	}
 	pipe.Expire(ctx, stateKey, time.Duration(types.WorkerStateTtlS)*time.Second)
@@ -1680,10 +1673,6 @@ func workerFromHash(key string, res map[string]string) *types.Worker {
 			worker.ControlPlaneManaged = boolean(v)
 		case "cpu_tier_protocol":
 			worker.CPUTierProtocol = u32(v)
-		case "verified_local_gpu_runtime":
-			worker.VerifiedLocalGPURuntime = v
-		case "nvidia_driver_version":
-			worker.NVIDIADriverVersion = v
 		case "created_at":
 			worker.CreatedAt = i64(v)
 		}
@@ -1981,10 +1970,6 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 		current, err := r.getWorkerFromKey(common.RedisKeys.SchedulerWorkerState(worker.Id))
 		if err != nil {
 			return err
-		}
-		if worker.VerifiedLocalGPURuntime != "" &&
-			(worker.VerifiedLocalGPURuntime != current.VerifiedLocalGPURuntime || worker.NVIDIADriverVersion != current.NVIDIADriverVersion) {
-			return ErrWorkerCapacityChanged
 		}
 		scheduledAt = r.now()
 		var cpu, memory, gpu int64

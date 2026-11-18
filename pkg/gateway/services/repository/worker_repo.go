@@ -429,8 +429,6 @@ func (s *WorkerRepositoryService) SetWorkerKeepAlive(ctx context.Context, req *p
 		MachineId:                  req.MachineId,
 		CheckpointCompatibilityKey: req.CheckpointCompatibilityKey,
 		CPUTierProtocol:            req.CpuTierProtocol,
-		VerifiedLocalGPURuntime:    req.VerifiedLocalGpuRuntime,
-		NVIDIADriverVersion:        req.NvidiaDriverVersion,
 		RequestStreamOpen:          s.workerEvents != nil && s.workerEvents.hasRequestStream(req.WorkerId),
 	})
 	if err != nil {
