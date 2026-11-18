@@ -270,8 +270,6 @@ worker:
     #     minFreeMemory:
     #     sharedMemoryLimitPct: 100%
     # Public/serverless agent pool, joined with `machine create`.
-    # A provider-backed pool can set provisioning.maxGPUs to cap total GPUs
-    # across its machines, including booting and deleting ones; zero is unlimited.
     # public-cpu:
     #   mode: external
     #   containerRuntime: runc

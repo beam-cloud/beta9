@@ -760,9 +760,10 @@ type WorkerPoolConfig struct {
 // WorkerPoolProvisioningConfig is where and how a pool buys machines.
 // Provider and MaxNodes are required.
 //
-// A pool that buys up to four spot L40S machines from Verda, keeps one GPU
-// free and takes the overflow of the A10G pools. Below it, what all such
-// pools together may spend, and the credentials of two providers:
+// A pool that buys up to four spot L40S machines from Verda, with no more
+// than four GPUs between them, keeps one GPU free and takes the overflow of
+// the A10G pools. Below it, what all such pools together may spend, and the
+// credentials of two providers:
 //
 //	worker:
 //	  pools:

@@ -678,9 +678,9 @@ func (wpc *AgentWorkerPoolController) keepBootingWorkers(joined []*compute.Agent
 type Provisioner interface {
 	// CanProvision reports whether the pool could buy a machine with room for
 	// need right now. It is false when the pool's provider has no matching
-	// stock, the pool is at maxNodes, a spend cap is reached, or a purchase
-	// for the pool has just failed for any reason but lack of stock. Lack of
-	// stock rules out only the offer that was asked for.
+	// stock, the pool is at maxNodes or maxGPUs, a spend cap is reached, or a
+	// purchase for the pool has just failed for any reason but lack of stock.
+	// Lack of stock rules out only the offer that was asked for.
 	CanProvision(ctx context.Context, pool string, need MachineNeed) bool
 
 	// Provision buys one machine for the pool and returns it before it has
