@@ -1,6 +1,7 @@
 {{- if .Values.cacheServer.enabled -}}
 {{- $configSecretName := required "cacheServer.configSecretName must name a dedicated cache-server Secret" .Values.cacheServer.configSecretName -}}
-{{- if has $configSecretName (list "beta9-config-helm" "beta9-config") -}}
+{{- $gatewayConfigVolume := (.Values.persistence | default dict).config | default dict -}}
+{{- if or (has $configSecretName (list "beta9-config-helm" "beta9-config")) (eq $configSecretName ($gatewayConfigVolume.name | default "")) -}}
 {{- fail "cacheServer.configSecretName cannot reference a gateway configuration Secret" -}}
 {{- end -}}
 {{- $serviceAccountName := printf "%s-cache-server" .Release.Name -}}
@@ -81,8 +82,10 @@ spec:
         {{- end }}
         env:
         - name: CONFIG_PATH
-          value: /etc/beta9-cache-server/config.yaml
+          value: /etc/beta9/config.yaml
         - name: CACHE_SERVER_ONLY
+          value: "true"
+        - name: BEAM_WORKER_MINIMAL_CONFIG
           value: "true"
         - name: WORKER_POOL_NAME
           value: {{ .Values.cacheServer.poolName | quote }}
@@ -114,7 +117,8 @@ spec:
           {{- end }}
         volumeMounts:
         - name: config
-          mountPath: /etc/beta9-cache-server
+          mountPath: /etc/beta9/config.yaml
+          subPath: config.yaml
           readOnly: true
         - name: cache
           mountPath: {{ .Values.cacheServer.mountPath }}

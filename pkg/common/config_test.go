@@ -165,6 +165,18 @@ func TestMinimalConfigEnabled(t *testing.T) {
 	require.False(t, minimalConfigEnabled())
 }
 
+func TestMinimalConfigUsesMountedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("cache:\n  coordinator:\n    token: mounted-token\n"), 0o600))
+	t.Setenv(types.WorkerMinimalConfigEnv, "true")
+	t.Setenv("CONFIG_PATH", path)
+	t.Setenv("CONFIG_JSON", `{"cache":{"coordinator":{"token":"overlay-token"}}}`)
+
+	manager, err := NewConfigManager[types.AppConfig]()
+	require.NoError(t, err)
+	require.Equal(t, "mounted-token", manager.GetConfig().Cache.Coordinator.Token)
+}
+
 func TestUnknownConfigKeysAreReportedWithTheirSource(t *testing.T) {
 	manager, err := NewConfigManager[types.AppConfig]()
 	require.NoError(t, err)
