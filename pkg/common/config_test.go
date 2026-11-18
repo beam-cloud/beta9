@@ -103,6 +103,7 @@ func TestSpotPoolExampleInTheDocsLoads(t *testing.T) {
 	require.Equal(t, "verda", pool.Provisioning.Provider)
 	require.True(t, pool.Provisioning.Spot)
 	require.Equal(t, 4, pool.Provisioning.MaxNodes)
+	require.Equal(t, 4, pool.Provisioning.MaxGPUs)
 	require.EqualValues(t, 150, pool.Provisioning.MaxNodeHourlyCents)
 	require.Equal(t, []string{"FIN-01"}, pool.Provisioning.Regions)
 	require.Equal(t, 10*time.Minute, pool.Provisioning.IdleAfter())
@@ -193,7 +194,7 @@ func TestUnknownConfigKeysInConfigJSONUseJSONNames(t *testing.T) {
 // A pool's durations are text in the config file, and in CONFIG_JSON either
 // text or the number of nanoseconds a marshalled config carries.
 func TestPoolDurationsLoadFromYAMLAndJSON(t *testing.T) {
-	want := types.WorkerPoolProvisioningConfig{Provider: "verda", MaxNodes: 2,
+	want := types.WorkerPoolProvisioningConfig{Provider: "verda", MaxNodes: 2, MaxGPUs: 8,
 		IdleTimeout: types.Duration(5 * time.Minute), BootTimeout: types.Duration(15 * time.Minute)}
 
 	t.Run("yaml", func(t *testing.T) {
@@ -206,6 +207,7 @@ worker:
       provisioning:
         provider: verda
         maxNodes: 2
+        maxGPUs: 8
         idleTimeout: 5m
         bootTimeout: 15m
     patient:
@@ -218,8 +220,8 @@ worker:
 	})
 
 	for name, overlay := range map[string]string{
-		"json text":        `{"worker":{"pools":{"spot":{"provisioning":{"provider":"verda","max_nodes":2,"idle_timeout":"5m","boot_timeout":"15m0s"}}}}}`,
-		"json nanoseconds": `{"worker":{"pools":{"spot":{"provisioning":{"provider":"verda","max_nodes":2,"idle_timeout":300000000000,"boot_timeout":900000000000}}}}}`,
+		"json text":        `{"worker":{"pools":{"spot":{"provisioning":{"provider":"verda","max_nodes":2,"max_gpus":8,"idle_timeout":"5m","boot_timeout":"15m0s"}}}}}`,
+		"json nanoseconds": `{"worker":{"pools":{"spot":{"provisioning":{"provider":"verda","max_nodes":2,"max_gpus":8,"idle_timeout":300000000000,"boot_timeout":900000000000}}}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("CONFIG_JSON", overlay)
