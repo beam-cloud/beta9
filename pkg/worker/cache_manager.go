@@ -21,6 +21,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/grpc"
 )
 
 const (
@@ -125,6 +126,9 @@ type WorkerCacheManager struct {
 	server                *cache.Server
 	serverLock            *os.File
 	registration          *gatewayCacheRegistration
+	cacheWorkerRoute      *pb.BackendRoute
+	cachePeerGRPCServer   *grpc.Server
+	cachePeerListener     net.Listener
 	registrationCancel    context.CancelFunc
 	registrationDone      <-chan struct{}
 	daemonSetPresenceDone <-chan struct{}
@@ -196,8 +200,11 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 	m.metadataStore = metadataStore
 
 	hostDirectory := &gatewayCacheHostDirectory{
-		client:   m.workerRepo,
-		poolName: m.poolName,
+		client:      m.workerRepo,
+		poolName:    m.poolName,
+		workerID:    m.workerID,
+		peerClient:  m.workerRepo,
+		agentWorker: envBool(types.WorkerPersistentEnv) && os.Getenv(types.WorkerMachineEnv) != "",
 	}
 	client, err := cache.NewClientWithHostDirectory(m.ctx, cacheConfig, metadataStore, hostDirectory, m.locality)
 	if err != nil {
@@ -455,10 +462,14 @@ func (m *WorkerCacheManager) Drain() error {
 		registration := m.registration
 		registrationDone := m.registrationDone
 		server := m.server
+		peerServer := m.cachePeerGRPCServer
 		m.mu.Unlock()
 
 		if server != nil {
 			server.Drain()
+		}
+		if peerServer != nil {
+			peerServer.Stop()
 		}
 		if cancel != nil {
 			cancel()
@@ -565,6 +576,9 @@ func (s nodeCacheServer) Start() (bool, error) {
 	}
 
 	registration := newGatewayCacheRegistration(m, server, s.config, advertisedAddr)
+	m.mu.Lock()
+	registration.workerRoute = m.cacheWorkerRoute
+	m.mu.Unlock()
 	if err := registration.registerOnce(m.ctx); err != nil {
 		_ = server.Close()
 		_ = releaseCacheServerLock(lock)

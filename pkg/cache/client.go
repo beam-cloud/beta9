@@ -246,6 +246,7 @@ func (c *Client) Cleanup() error {
 		delete(c.grpcConns, hostID)
 		delete(c.grpcClients, hostID)
 	}
+	clear(c.grpcClients)
 	for hostID, pool := range c.rawReadPools {
 		pool.close()
 		delete(c.rawReadPools, hostID)
@@ -526,6 +527,14 @@ func (c *Client) addHost(host *Host) error {
 		return nil
 	}
 
+	if requiresCachePeerRoute(host, c.localNodeID) {
+		client, err := newCachePeerClient(c.ctx, c.hostDirectory, host)
+		if err != nil {
+			return err
+		}
+		return c.installHostClient(host, client, nil)
+	}
+
 	addr := cacheHostDialAddr(host, c.localNodeID)
 
 	transportCredentials := grpc.WithTransportCredentials(insecure.NewCredentials())
@@ -584,20 +593,32 @@ func (c *Client) addHost(host *Host) error {
 	if err != nil {
 		return err
 	}
+	return c.installHostClient(host, proto.NewCacheClient(conn), conn)
+}
 
+func (c *Client) installHostClient(host *Host, client proto.CacheClient, conn *grpc.ClientConn) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		return ErrClientNotFound
+	}
 
 	if oldConn, ok := c.grpcConns[host.HostId]; ok {
 		_ = oldConn.Close()
+		delete(c.grpcConns, host.HostId)
 	}
 	if oldPool, ok := c.rawReadPools[host.HostId]; ok {
 		oldPool.close()
 		delete(c.rawReadPools, host.HostId)
 	}
 	c.hasher.Remove(host)
-	c.grpcClients[host.HostId] = proto.NewCacheClient(conn)
-	c.grpcConns[host.HostId] = conn
+	c.grpcClients[host.HostId] = client
+	if conn != nil {
+		c.grpcConns[host.HostId] = conn
+	}
 	c.hasher.Add(host)
 	for key, entry := range c.localHostCache {
 		if entry.host != nil && entry.host.HostId == host.HostId {
@@ -1215,7 +1236,7 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	if host == nil || !c.clientConfig.ReadTransport.Enabled {
+	if host == nil || !c.clientConfig.ReadTransport.Enabled || requiresCachePeerRoute(host, c.localNodeID) {
 		atomic.AddInt64(&cachePathStats.clientRawErrors, 1)
 		return 0, ErrUnableToReachHost
 	}
@@ -1917,7 +1938,7 @@ func (c *Client) readContentIntoFromHost(ctx context.Context, host *Host, hostIn
 		return 0, ErrSelectedHostUnavailable
 	}
 
-	if c.clientConfig.ReadTransport.Enabled {
+	if c.clientConfig.ReadTransport.Enabled && !requiresCachePeerRoute(host, c.localNodeID) {
 		// A busy answer means the host's raw-read admission is full for the
 		// moment, not that anything is wrong. Failing the read here makes the
 		// caller (a lazily loaded image) fall back to waiting for the whole
@@ -2900,6 +2921,9 @@ func (c *Client) StoreContentFromS3Source(source S3ContentSource, opts StoreCont
 }
 
 func (c *Client) storeContentFromSource(ctx context.Context, req *proto.CacheStoreContentFromSourceRequest, hash, routingKey string, lock bool) (string, error) {
+	if directory, ok := c.hostDirectory.(LocalOriginHostDirectory); ok && directory.LocalOriginFillRequired() {
+		return c.storeContentFromLocalOrigin(ctx, req, hash, routingKey, lock)
+	}
 	var lastErr error
 
 	for attempt := 0; attempt < c.getContentAttempts(0); attempt++ {

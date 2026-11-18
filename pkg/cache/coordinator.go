@@ -30,12 +30,14 @@ type CoordinatorHost struct {
 	Addr             string
 	PrivateAddr      string
 	CapacityUsagePct float64
+	CacheRouteID     string
 }
 
 func (h CoordinatorHost) LogicalOnly() CoordinatorHost {
 	h.RegistrationID = ""
 	h.Addr = ""
 	h.PrivateAddr = ""
+	h.CacheRouteID = ""
 	h.CapacityUsagePct = 0
 	return h
 }
@@ -69,7 +71,7 @@ func (c *Coordinator) RegisterHost(ctx context.Context, host CoordinatorHost, tt
 	if host.LogicalHostID == "" || host.RegistrationID == "" || host.PoolName == "" || host.Locality == "" {
 		return fmt.Errorf("%w: logical host, registration, pool, and locality are required", ErrInvalidHostRegistration)
 	}
-	if host.Addr == "" && host.PrivateAddr == "" {
+	if host.Addr == "" && host.PrivateAddr == "" && host.CacheRouteID == "" {
 		return fmt.Errorf("%w: host address is required", ErrInvalidHostRegistration)
 	}
 	if ttl <= 0 {

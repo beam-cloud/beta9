@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
@@ -17,8 +18,11 @@ import (
 const cacheCoordinatorRPCTimeout = 5 * time.Second
 
 type gatewayCacheHostDirectory struct {
-	client   pb.WorkerRepositoryServiceClient
-	poolName string
+	client      pb.WorkerRepositoryServiceClient
+	poolName    string
+	workerID    string
+	peerClient  pb.WorkerRepositoryServiceClient
+	agentWorker bool
 }
 
 func (d *gatewayCacheHostDirectory) GetAvailableHosts(ctx context.Context, locality string) ([]*cache.Host, error) {
@@ -52,6 +56,7 @@ func (d *gatewayCacheHostDirectory) GetAvailableHosts(ctx context.Context, local
 			Addr:             host.Addr,
 			PrivateAddr:      host.PrivateAddr,
 			CapacityUsagePct: float64(host.CapacityUsagePct),
+			CacheRouteID:     host.CacheRouteId,
 		})
 	}
 	if len(hosts) == 0 {
@@ -61,6 +66,8 @@ func (d *gatewayCacheHostDirectory) GetAvailableHosts(ctx context.Context, local
 }
 
 type gatewayCacheRegistration struct {
+	mu             sync.Mutex
+	workerRoute    *pb.BackendRoute
 	manager        *WorkerCacheManager
 	server         *cache.Server
 	cacheConfig    cache.Config
@@ -128,14 +135,17 @@ func (r *gatewayCacheRegistration) registerOnce(ctx context.Context) error {
 	if r == nil || r.manager == nil || r.manager.workerRepo == nil {
 		return errors.New("cache registration is not initialized")
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	rpcCtx, cancel := context.WithTimeout(ctx, cacheCoordinatorRPCTimeout)
 	defer cancel()
 
 	host := r.host()
 	_, err := handleGRPCResponse(r.manager.workerRepo.RegisterCacheHost(rpcCtx, &pb.RegisterCacheHostRequest{
-		Host:       host,
-		TtlSeconds: int32(cacheRegistrationTTL(r.cacheConfig) / time.Second),
+		Host:        host,
+		TtlSeconds:  int32(cacheRegistrationTTL(r.cacheConfig) / time.Second),
+		WorkerRoute: r.workerRoute,
 	}))
 	if err == nil {
 		logger := log.Trace()

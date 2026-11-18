@@ -34,6 +34,7 @@ type WorkerRepositoryService struct {
 	computeService        *computesvc.Service
 	eventRepo             repository.EventRepository
 	appConfig             types.AppConfig
+	cachePeer             cachePeerTransport
 	// holdsPoolHeadroom reports whether an idle worker keeps its pool at its
 	// floor (scheduler.WorkerHoldsPoolHeadroom). Nil: no worker does.
 	holdsPoolHeadroom func(worker *types.Worker) bool

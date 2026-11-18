@@ -16,6 +16,7 @@ const (
 	BackendRouteStateClosing         = "closing"
 	BackendRouteProtocolTCP          = "tcp"
 	BackendRouteKindWorker           = "worker"
+	BackendRouteKindCache            = "cache"
 	BackendRouteKindContainer        = "container"
 	DefaultAgentTSNetRouteProxyPort  = 29443
 	DefaultAgentWorkerContainerMode  = "worker-container"

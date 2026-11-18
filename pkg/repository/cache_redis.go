@@ -28,6 +28,7 @@ type cacheCoordinatorHostRecord struct {
 	Addr             string  `json:"addr"`
 	PrivateAddr      string  `json:"private_addr"`
 	CapacityUsagePct float64 `json:"capacity_usage_pct"`
+	CacheRouteID     string  `json:"cache_route_id,omitempty"`
 }
 
 func NewCacheRedisRepository(rdb *common.RedisClient) cache.CoordinatorRepository {

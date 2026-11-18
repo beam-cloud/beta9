@@ -488,6 +488,7 @@ func gatewayOutgoingHeaderMatcher(key string) (string, bool) {
 // Register repository services
 func (g *Gateway) registerRepositoryServices() error {
 	wr := repositoryservices.NewWorkerRepositoryService(g.ctx, g.workerRepo, g.ContainerRepo, g.BackendRepo, g.ComputeRepo, g.ComputeService, g.EventRepo, g.RedisClient, g.Config, g.Config.Cache.Coordinator.Token, g.Scheduler.WorkerHoldsPoolHeadroom)
+	wr.SetCachePeerDialer(network.NewBackendDialer(g.Tailscale, g.Config.Tailscale, g.ContainerRepo, 5*time.Second).Dial)
 	pb.RegisterWorkerRepositoryServiceServer(g.grpcServer, wr)
 
 	cr := repositoryservices.NewContainerRepositoryService(g.ctx, g.ContainerRepo)

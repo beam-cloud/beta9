@@ -420,6 +420,9 @@ cache:
     originFallbackEnabled: true
 
 providers:
+  # Disable new purchases and discovery by provider key (for example [aws, gcp]).
+  # Keep credentials configured so existing reservations can still be cleaned up.
+  disabled: []
   # Every provider is asked what it sells at this interval, by one gateway at
   # a time. What they answer is kept in Redis for the gateways, and as history
   # in S2 when database.s2 is configured.
@@ -488,6 +491,9 @@ managedCompute:
   # providers. Empty means every provider that is configured.
   reservations:
     providers: []
+    # Terminate new purchases still pending at the provider after this duration.
+    # Provider-active machines awaiting agent registration are not covered.
+    bootTimeout: 20m
   byoc:
     pricing:
       memoryHourlyMicrosPerGB: 4500
