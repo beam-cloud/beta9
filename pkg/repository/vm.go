@@ -1441,7 +1441,7 @@ WHERE c.installation_id = :installation_id AND i.id = c.installation_id
 func (r *PostgresBackendRepository) AcceptGitHubCompactionResult(ctx context.Context, workspace, run, commit string) (*types.GitHubCompaction, error) {
 	var row types.GitHubCompaction
 	err := r.client.GetContext(ctx, &row, `
-UPDATE github_compaction c SET status = 'Verifying result'
+UPDATE github_compaction c SET status = 'Verifying result', run_expires = NOW() + INTERVAL '3 minutes'
 FROM workspace w, github_runner_installation i
 WHERE w.id = c.workspace_id AND w.external_id = $1 AND c.run_id = $2 AND c.run_commit = $3
 	AND c.status = 'Analyzing' AND c.run_expires > NOW()

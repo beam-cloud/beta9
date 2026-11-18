@@ -314,6 +314,9 @@ func (r *githubRunners) compactionResult(c echo.Context) error {
 	if row == nil {
 		return echo.NewHTTPError(http.StatusConflict, "no active compaction for this commit")
 	}
+	// Once claimed, finish publication even if the reporting VM disconnects.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	defer cancel()
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
@@ -376,11 +379,16 @@ func validCompactionResult(result compactionResult) bool {
 		return true
 	}
 	rep := result.Report
-	if len(result.Files) > 8 || rep.Caught <= 0 || rep.Preserved != rep.Caught ||
+	if len(result.Files) > 8 || len(rep.Groups) > 8 || rep.Caught <= 0 || rep.Preserved != rep.Caught ||
 		rep.CoveredBefore <= 0 || rep.CoveredAfter < rep.CoveredBefore || rep.Coverable < rep.CoveredAfter ||
 		rep.BeforeMS <= 0 || rep.AfterMS <= 0 || rep.SpreadMS < 0 ||
 		rep.TestsBefore <= rep.TestsAfter || rep.TestsAfter < 1 || rep.LinesBefore < 1 || rep.LinesAfter < 1 {
 		return false
+	}
+	for _, group := range rep.Groups {
+		if group.Status == "merged" && (len(group.Cases) < 2 || len(group.Cases) > 6) {
+			return false
+		}
 	}
 	for name, data := range result.Files {
 		if !validCompactionPath(name, false) || len(data) == 0 || len(data) > compactionMaxFile {

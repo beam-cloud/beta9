@@ -382,3 +382,79 @@ func TestPipelineProposal(t *testing.T) {
 		t.Fatalf("incorrect workflow overlap in report: %s", body)
 	}
 }
+
+type compactionScheduleStore struct {
+	*runnerStore
+	marked   types.GitHubCompaction
+	finished types.GitHubCompaction
+	due      time.Time
+}
+
+func (s *compactionScheduleStore) MarkGitHubCompaction(_ context.Context, row types.GitHubCompaction) error {
+	s.marked = row
+	return nil
+}
+
+func (s *compactionScheduleStore) FinishGitHubCompaction(_ context.Context, row types.GitHubCompaction, due time.Time) error {
+	s.finished, s.due = row, due
+	return nil
+}
+
+func TestCompactionScheduleMarksOnlyOptedInDefaultBranchJobs(t *testing.T) {
+	r, runners, _, _ := runnerFixture(t)
+	store := &compactionScheduleStore{runnerStore: runners}
+	r.s.repo = store
+	r.config.CompactionURL, r.config.CompactionSecret = "https://compaction.test", "secret"
+	event := runnerEvent{Action: types.GitHubJobCompleted}
+	event.Repository.FullName, event.Repository.DefaultBranch = "Acme/Example", "main"
+	event.Job.HeadBranch, event.Job.HeadSHA, event.Job.Conclusion = "feature", strings.Repeat("a", 40), "success"
+	label := "beam-4vcpu-ubuntu-2404"
+
+	require.NoError(t, r.markCompaction(t.Context(), runners.installation, event, label))
+	require.Empty(t, store.marked.Head)
+	runners.installation.CICompaction = true
+	require.NoError(t, r.markCompaction(t.Context(), runners.installation, event, label))
+	require.Empty(t, store.marked.Head)
+
+	event.Job.HeadBranch = "main"
+	r.config.CompactionRepository = "acme/other"
+	require.NoError(t, r.markCompaction(t.Context(), runners.installation, event, label))
+	require.Empty(t, store.marked.Head)
+	r.config.CompactionRepository = ""
+	require.NoError(t, r.markCompaction(t.Context(), runners.installation, event, label))
+	require.Equal(t, event.Job.HeadSHA, store.marked.Head)
+	require.Equal(t, "acme/example", store.marked.Repository)
+	require.Equal(t, label, store.marked.Label)
+}
+
+func TestCompactionScheduleBacksOffAndKeepsUnprocessedCommits(t *testing.T) {
+	r, runners, _, _ := runnerFixture(t)
+	store := &compactionScheduleStore{runnerStore: runners}
+	r.s.repo = store
+	for _, tc := range []struct {
+		name          string
+		current, next int
+		processed     bool
+		pr            *compactionPR
+	}{
+		{name: "first empty report", current: 1, next: 2, processed: true},
+		{name: "repeated empty report", current: 4, next: 8, processed: true},
+		{name: "capped", current: 8, next: 8, processed: true},
+		{name: "failed", current: 2, next: 1},
+		{name: "opened", current: 4, next: 1, processed: true, pr: &compactionPR{Number: 15}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := types.GitHubCompaction{LastCommit: "previous", RunCommit: "current", WaitWeeks: tc.current}
+			start := time.Now()
+			require.NoError(t, r.finishCompaction(t.Context(), row, tc.name, tc.processed, tc.pr, "", ""))
+			require.Equal(t, tc.next, store.finished.WaitWeeks)
+			require.WithinDuration(t, start.Add(time.Duration(tc.next)*compactionWeek), store.due, time.Second)
+			want := row.LastCommit
+			if tc.processed {
+				want = row.RunCommit
+			}
+			require.Equal(t, want, store.finished.LastCommit)
+			require.Equal(t, tc.pr != nil, store.finished.PROpen)
+		})
+	}
+}

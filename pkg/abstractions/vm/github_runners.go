@@ -1164,6 +1164,11 @@ func (r *githubRunners) runnerAuth(ctx context.Context, installation *types.GitH
 }
 
 func (r *githubRunners) launchRunnerVM(ctx context.Context, info *auth.AuthInfo, name, repository string, size runnerSize, env []string, layer *types.RootLayer) error {
+	compaction := strings.HasPrefix(name, compactionPrefix)
+	metadata := map[string]string{"github.repository": repository}
+	if compaction {
+		metadata["github.compaction"] = "true"
+	}
 	captureExitSnapshot := false
 	_, err := r.s.createVM(auth.ContextWithAuthInfo(ctx, info), info, types.VMCreateOptions{
 		Name: name,
@@ -1172,7 +1177,7 @@ func (r *githubRunners) launchRunnerVM(ctx context.Context, info *auth.AuthInfo,
 			CPU:           size.CPU,
 			Memory:        size.Memory,
 			DiskSize:      size.DiskSize,
-			DockerEnabled: !strings.HasPrefix(name, compactionPrefix),
+			DockerEnabled: !compaction,
 			// A job finds no port of its machine taken, as on GitHub's.
 			Headless: true,
 			Env:      env,
@@ -1181,7 +1186,7 @@ func (r *githubRunners) launchRunnerVM(ctx context.Context, info *auth.AuthInfo,
 			CaptureExitSnapshot: &captureExitSnapshot,
 			RootLayer:           layer,
 		},
-		Metadata: map[string]string{"github.repository": repository},
+		Metadata: metadata,
 	})
 	return err
 }
@@ -1191,7 +1196,8 @@ func (r *githubRunners) launchRunnerVM(ctx context.Context, info *auth.AuthInfo,
 // which the reconciler then leaves alone otherwise.
 func (s *Service) reconcileRunner(ctx context.Context, v *types.VM) (bool, error) {
 	r := s.runners
-	if r != nil && v.DesiredState != types.VMStateDeleted && strings.HasPrefix(v.Name, compactionPrefix) {
+	if r != nil && v.DesiredState != types.VMStateDeleted && strings.HasPrefix(v.Name, compactionPrefix) &&
+		v.Metadata["github.compaction"] == "true" {
 		return r.reconcileCompaction(ctx, v)
 	}
 	if r == nil || v.DesiredState == types.VMStateDeleted || !strings.HasPrefix(v.Name, runnerPrefix) {
