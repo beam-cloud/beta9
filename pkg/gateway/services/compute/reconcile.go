@@ -750,7 +750,7 @@ func (s *Service) reconcileReservationStatus(ctx context.Context, workspaceID st
 		// A running machine that went before its term was lost, not given
 		// back, and stays listed like one the provider reported as taken back
 		// or failed, so that the tenant sees where it went.
-		if before.Status == model.ReservationActive && (reservation.ExpiresAt.IsZero() || now.Before(reservation.ExpiresAt)) {
+		if before.Status == model.ReservationActive && before.ActiveAt(now) {
 			reservation.Status = model.ReservationFailed
 			reservation.TerminatingReason = reconcileReasonProviderFailed
 			reservation.LastStatusMessage = instanceGoneMessage
@@ -891,12 +891,9 @@ func (s *Service) terminateReservation(ctx context.Context, workspaceID string, 
 }
 
 // syncReservedNodes counts the nodes of a pool's open reservations again,
-// which change as reservations close or run out. A pool without reservations
-// counts its nodes some other way. It reports whether the count changed.
+// which change as reservations close or run out. It reports whether the
+// count changed.
 func syncReservedNodes(state *model.PoolState, now time.Time) bool {
-	if state == nil || len(state.Reservations) == 0 {
-		return false
-	}
 	nodes := activeReservationNodes(state.Reservations, now)
 	if nodes == state.ReservedNodes {
 		return false

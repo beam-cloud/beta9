@@ -413,7 +413,7 @@ func agentMachineStatus(state *model.AgentTokenState, worker *types.Worker, now 
 	}
 	// An agent that is in touch but does not offer the machine for work may
 	// still be checking it before it does.
-	if !model.AgentMachineConnected(state, now) {
+	if !state.Schedulable {
 		return types.MachineStatusRegistered
 	}
 	if state.Cordoned {

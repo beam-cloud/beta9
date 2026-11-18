@@ -7530,8 +7530,8 @@ func TestStatusCheckClosesAReservationWhoseMachineIsGone(t *testing.T) {
 			m.state.ReservedNodes = 1
 			lose(m)
 
-			// The machine went at the end of its term, as the provider's own
-			// deletion timer has it go.
+			// The machine went as its term ran out, so none of the term was
+			// lost with it.
 			reservation := m.check(t, m.expiry.Sub(m.now))
 			require.Equal(t, model.ReservationDeleted, reservation.Status)
 			require.Equal(t, instanceGoneMessage, reservation.LastStatusMessage)
@@ -7596,16 +7596,27 @@ func TestStatusCheckClosesAMachineThatNeverCameUpWithoutListingIt(t *testing.T) 
 
 func TestReconcileCountsOnlyTheNodesOfOpenReservations(t *testing.T) {
 	m := newBoughtMachine(t)
-	m.provider.SetStatus(m.instance, providers.StatusActive, "")
-	m.check(t, 0)
-	m.state = m.repo.pools["workspace-1"][0]
 	// A record saved before closing a reservation recounted the pool's nodes.
 	m.state.Reservations[0].Status = model.ReservationDeleted
 	m.state.ReservedNodes = 1
 
-	m.check(t, 2*reconcileStatusCheckInterval)
+	m.check(t, 0)
 	require.Zero(t, m.repo.pools["workspace-1"][0].ReservedNodes)
 	require.True(t, m.repo.savedPool, "the corrected count is saved")
+}
+
+func TestReleasingAMachineStopsCountingItAtOnce(t *testing.T) {
+	m := boughtMachineAt(time.Now().UTC(), providers.StatusActive, 6*time.Hour)
+	m.state.ReservedNodes = 1
+
+	res, err := m.service.DeletePrivateMachine(
+		testAuthContext("workspace-1", "owner-token"),
+		&pb.DeleteMachineRequest{PoolName: "pool-1", MachineId: "machine-1"},
+	)
+	require.NoError(t, err)
+	require.True(t, res.Ok, res.ErrMsg)
+	require.Equal(t, model.ReservationDeleted, m.state.Reservations[0].Status)
+	require.Zero(t, m.repo.pools["workspace-1"][0].ReservedNodes, "the count does not wait for the reconciler")
 }
 
 func TestDeleteMachineFailureAsksToRetryWhenThePoolIsBusy(t *testing.T) {
