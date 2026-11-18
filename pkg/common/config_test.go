@@ -1,16 +1,41 @@
 package common
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/knadh/koanf/providers/rawbytes"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDebugModeDoesNotLogConfigValues(t *testing.T) {
+	const password = "test-config-password-marker"
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("debugMode: true\ndatabase:\n  postgres:\n    password: "+password+"\n"), 0o600))
+	t.Setenv("CONFIG_PATH", path)
+	t.Setenv("CONFIG_JSON", "")
+	t.Setenv(types.WorkerMinimalConfigEnv, "")
+
+	var output bytes.Buffer
+	previousLogger := log.Logger
+	log.Logger = zerolog.New(&output).Level(zerolog.DebugLevel)
+	t.Cleanup(func() { log.Logger = previousLogger })
+
+	manager, err := NewConfigManager[types.AppConfig]()
+	require.NoError(t, err)
+	config := manager.GetConfig()
+	require.True(t, config.DebugMode)
+	require.Equal(t, password, config.Database.Postgres.Password)
+	require.NotContains(t, output.String(), password)
+}
 
 func TestGeeseFileModes(t *testing.T) {
 	t.Setenv("CONFIG_PATH", "")

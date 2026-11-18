@@ -1,11 +1,38 @@
 {{- if .Values.cacheServer.enabled -}}
 {{- $configSecretName := required "cacheServer.configSecretName must name a dedicated cache-server Secret" .Values.cacheServer.configSecretName -}}
-{{- $gatewayConfigVolume := (.Values.persistence | default dict).config | default dict -}}
-{{- if or (eq $configSecretName "beta9-config-helm") (eq $configSecretName ($gatewayConfigVolume.name | default "")) -}}
+{{- if eq $configSecretName "beta9-config-helm" -}}
 {{- fail "cacheServer.configSecretName cannot reference a gateway configuration Secret" -}}
 {{- end -}}
+{{- $gateway := .Values.controllers.gateway | default dict -}}
+{{- if dig "enabled" true $gateway -}}
+{{- $gatewayController := include "bjw-s.common.lib.controller.valuesToObject" (dict "rootContext" . "id" "gateway" "values" (deepCopy $gateway)) | fromYaml -}}
+{{- $gatewayPod := include "bjw-s.common.lib.pod.spec" (dict "rootContext" . "controllerObject" $gatewayController) | fromYaml -}}
+{{- range $gatewayPod.volumes -}}
+{{- if eq $configSecretName (dig "secret" "secretName" "" .) -}}
+{{- fail "cacheServer.configSecretName cannot reference a Secret mounted by the gateway" -}}
+{{- end -}}
+{{- range (dig "projected" "sources" (list) .) -}}
+{{- if eq $configSecretName (dig "secret" "name" "" .) -}}
+{{- fail "cacheServer.configSecretName cannot reference a Secret mounted by the gateway" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- range concat (default (list) $gatewayPod.containers) (default (list) $gatewayPod.initContainers) -}}
+{{- range .env -}}
+{{- if eq $configSecretName (dig "valueFrom" "secretKeyRef" "name" "" .) -}}
+{{- fail "cacheServer.configSecretName cannot reference a Secret used by the gateway environment" -}}
+{{- end -}}
+{{- end -}}
+{{- range .envFrom -}}
+{{- if eq $configSecretName (dig "secretRef" "name" "" .) -}}
+{{- fail "cacheServer.configSecretName cannot reference a Secret used by the gateway environment" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- $serviceAccountName := printf "%s-cache-server" .Release.Name -}}
-{{- if eq $serviceAccountName .Values.serviceAccount.name -}}
+{{- $gatewayServiceAccountName := include "bjw-s.common.lib.pod.field.serviceAccountName" (dict "ctx" (dict "rootContext" .)) | trim -}}
+{{- if eq $serviceAccountName $gatewayServiceAccountName -}}
 {{- fail "cache-server and gateway must use different service accounts" -}}
 {{- end -}}
 apiVersion: v1

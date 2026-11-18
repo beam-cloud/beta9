@@ -39,9 +39,6 @@ func (s *WorkerRepositoryService) vendRuntimeCredentials(ctx context.Context, re
 	resp := &pb.GetContainerRuntimeCredentialsResponse{Ok: true}
 
 	if req.RuntimeToken || len(req.SecretNames) > 0 {
-		if err := s.authorizeRuntimeEnv(ctx, req); err != nil {
-			return &pb.GetContainerRuntimeCredentialsResponse{Ok: false, ErrorMsg: err.Error()}
-		}
 		resp.Env, err = s.workerRuntimeEnv(ctx, workspace, req)
 		if err != nil {
 			return &pb.GetContainerRuntimeCredentialsResponse{Ok: false, ErrorMsg: err.Error()}
@@ -117,42 +114,6 @@ func (s *WorkerRepositoryService) authorizeWorkerRuntimeCredentialRequest(ctx co
 	return workspace, nil
 }
 
-// authorizeRuntimeEnv bounds what a worker may obtain for a managed endpoint
-// replica. Those containers live in the platform admin workspace and may run on
-// contributed (provider) hardware, so the host holding the worker token is not
-// trusted with the workspace: replicas authenticate with their own replica
-// secret and never receive a workspace token, and they may only read the
-// secrets their stub declares.
-func (s *WorkerRepositoryService) authorizeRuntimeEnv(ctx context.Context, req *pb.GetContainerRuntimeCredentialsRequest) error {
-	stub, err := s.workerRuntimeStub(ctx, req.StubId, req.WorkspaceId)
-	if err != nil {
-		return err
-	}
-	if stub.Type.IsSandbox() && req.RuntimeToken {
-		return fmt.Errorf("sandboxes do not receive automatic workspace tokens")
-	}
-	if !stub.Type.IsManagedEndpoint() {
-		return nil
-	}
-	if req.RuntimeToken {
-		return fmt.Errorf("managed endpoint replicas do not receive workspace tokens")
-	}
-	stubConfig, err := stub.UnmarshalConfig()
-	if err != nil {
-		return err
-	}
-	declared := make(map[string]struct{}, len(stubConfig.Secrets))
-	for _, secret := range stubConfig.Secrets {
-		declared[secret.Name] = struct{}{}
-	}
-	for _, name := range uniqueRuntimeSecretNames(req.SecretNames) {
-		if _, ok := declared[name]; !ok {
-			return fmt.Errorf("secret %q is not declared by stub %q", name, req.StubId)
-		}
-	}
-	return nil
-}
-
 func (s *WorkerRepositoryService) runtimeCredentialsContainerState(ctx context.Context, containerID string) (*types.ContainerState, error) {
 	var lastErr error
 	for attempt := 0; attempt <= runtimeCredentialStateRetries; attempt++ {
@@ -221,13 +182,20 @@ func (s *WorkerRepositoryService) workerWorkspaceID(ctx context.Context, worker 
 }
 
 func (s *WorkerRepositoryService) workerRuntimeEnv(ctx context.Context, workspace *types.Workspace, req *pb.GetContainerRuntimeCredentialsRequest) ([]string, error) {
+	stub, err := s.workerRuntimeStub(ctx, req.StubId, req.WorkspaceId)
+	if err != nil {
+		return nil, err
+	}
+	if req.RuntimeToken && stub.Type.IsSandbox() {
+		return nil, fmt.Errorf("sandboxes do not receive automatic workspace tokens")
+	}
+	if req.RuntimeToken && stub.Type.IsManagedEndpoint() {
+		return nil, fmt.Errorf("managed endpoint replicas do not receive workspace tokens")
+	}
+
 	env := make([]string, 0, len(req.SecretNames)+1)
 	if len(req.SecretNames) > 0 {
-		secrets, err := s.workerRuntimeSecrets(ctx, workspace, req)
-		if err != nil {
-			return nil, err
-		}
-		stub, err := s.workerRuntimeStub(ctx, req.StubId, req.WorkspaceId)
+		secrets, err := s.workerRuntimeSecrets(ctx, workspace, stub, req.SecretNames)
 		if err != nil {
 			return nil, err
 		}
@@ -249,26 +217,31 @@ func (s *WorkerRepositoryService) workerRuntimeEnv(ctx context.Context, workspac
 	return env, nil
 }
 
-func (s *WorkerRepositoryService) workerRuntimeSecrets(ctx context.Context, workspace *types.Workspace, req *pb.GetContainerRuntimeCredentialsRequest) ([]types.Secret, error) {
-	requested := uniqueRuntimeSecretNames(req.SecretNames)
-	byName := make(map[string]types.Secret, len(requested))
-	missing := make([]string, 0, len(requested))
-
-	stubConfig, err := s.workerRuntimeStubConfig(ctx, req.StubId, req.WorkspaceId)
+func (s *WorkerRepositoryService) workerRuntimeSecrets(ctx context.Context, workspace *types.Workspace, stub *types.StubWithRelated, names []string) ([]types.Secret, error) {
+	stubConfig, err := stub.UnmarshalConfig()
 	if err != nil {
 		return nil, err
+	}
+	declared := make(map[string]types.Secret, len(stubConfig.Secrets))
+	for _, secret := range stubConfig.Secrets {
+		declared[secret.Name] = secret
 	}
 
 	secretKey, err := common.ParseSecretKey(*workspace.SigningKey)
 	if err != nil {
 		return nil, err
 	}
-	wanted := make(map[string]struct{}, len(requested))
+	requested := uniqueRuntimeSecretNames(names)
+	byName := make(map[string]types.Secret, len(requested))
+	var missing []string
 	for _, name := range requested {
-		wanted[name] = struct{}{}
-	}
-	for _, secret := range stubConfig.Secrets {
-		if _, ok := wanted[secret.Name]; !ok {
+		secret, ok := declared[name]
+		if !ok {
+			return nil, fmt.Errorf("secret %q is not declared by stub %q", name, stub.ExternalId)
+		}
+		if secret.Value == "" {
+			// A declaration can reference a workspace secret by name alone.
+			missing = append(missing, name)
 			continue
 		}
 		value, err := common.Decrypt(secretKey, secret.Value)
@@ -277,12 +250,6 @@ func (s *WorkerRepositoryService) workerRuntimeSecrets(ctx context.Context, work
 		}
 		secret.Value = value
 		byName[secret.Name] = secret
-	}
-
-	for _, name := range requested {
-		if _, ok := byName[name]; !ok {
-			missing = append(missing, name)
-		}
 	}
 	if len(missing) > 0 {
 		secrets, err := s.backendRepo.GetSecretsByNameDecrypted(ctx, workspace, missing)

@@ -182,10 +182,9 @@ func (s *WorkerRepositoryService) ReleaseCacheReconcileLock(ctx context.Context,
 	return &pb.ReleaseCacheReconcileLockResponse{Ok: true}, nil
 }
 
-// GetCacheOriginCredentials vends short-lived origin credentials for cache
-// reconciliation so workers never store registry or workspace storage secrets.
-// Credentials are resolved from the backend/config here and used in-memory by
-// the worker only; they are never persisted to disk, Redis, or S2.
+// GetCacheOriginCredentials resolves the origin access needed for one operation.
+// OCI pulls, workspace object reads, and filesystem archive transfers have
+// separate response fields so callers only receive the access they need.
 func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context, req *pb.GetCacheOriginCredentialsRequest) (*pb.GetCacheOriginCredentialsResponse, error) {
 	if err := s.authorizeCacheRepositoryRequest(ctx); err != nil {
 		return &pb.GetCacheOriginCredentialsResponse{Ok: false, ErrorMsg: err.Error()}, nil
@@ -204,14 +203,13 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 		return &pb.GetCacheOriginCredentialsResponse{Ok: true, ImageArchiveUploadUrl: url}, nil
 	}
 
-	registryCredentials := s.registryOriginCredentials(ctx, req.WorkspaceId, req.ImageId, req.Registry)
 	if req.Registry != "" {
 		// Direct OCI pulls only need registry credentials. Resolving workspace
 		// storage and presigning image archives here adds database and object
 		// store round trips to every cold mount without producing used data.
 		resp := &pb.GetCacheOriginCredentialsResponse{
 			Ok:                    true,
-			RegistryCredentials:   registryCredentials,
+			RegistryCredentials:   s.registryOriginCredentials(ctx, req.WorkspaceId, req.ImageId, req.Registry),
 			BuildRegistry:         s.appConfig.ImageService.EffectiveBuildRegistry(),
 			BuildRepositoryName:   s.appConfig.ImageService.BuildRepositoryName,
 			BuildRegistryInsecure: s.appConfig.ImageService.BuildRegistryInsecure,
@@ -229,17 +227,19 @@ func (s *WorkerRepositoryService) GetCacheOriginCredentials(ctx context.Context,
 		return resp, nil
 	}
 
+	if req.ImageId == "" {
+		return &pb.GetCacheOriginCredentialsResponse{
+			Ok:               true,
+			WorkspaceStorage: s.workspaceStorageCredentials(ctx, req.WorkspaceId),
+		}, nil
+	}
+
 	imageArchiveObjectKey, imageArchiveURL, imageArchiveDataURL := s.imageArchiveCredentials(ctx, req.ImageId)
 	return &pb.GetCacheOriginCredentialsResponse{
 		Ok:                    true,
-		WorkspaceStorage:      s.workspaceStorageCredentials(ctx, req.WorkspaceId),
 		ImageArchiveObjectKey: imageArchiveObjectKey,
 		ImageArchiveUrl:       imageArchiveURL,
 		ImageArchiveDataUrl:   imageArchiveDataURL,
-		// Short-lived registry credentials for direct OCI pulls. Private image
-		// credentials are resolved by image/workspace; build-registry credentials
-		// are vended only for the exact configured build registry host.
-		RegistryCredentials: registryCredentials,
 	}, nil
 }
 
@@ -260,7 +260,7 @@ func (s *WorkerRepositoryService) authorizeOriginCredentials(ctx context.Context
 	if req.StubId == "" {
 		return fmt.Errorf("worker token credential request requires a stub")
 	}
-	if req.ImageArchiveUploadId != "" || s.platformWorkspace(ctx, req.WorkspaceId) {
+	if req.ImageArchiveUploadId == "" && s.platformWorkspace(ctx, req.WorkspaceId) {
 		if !worker.RunsStub(s.containerRepo, req.StubId) {
 			return fmt.Errorf("stub %q is not running on this worker", req.StubId)
 		}
@@ -441,6 +441,9 @@ func (s *WorkerRepositoryService) imageArchiveUploadURL(ctx context.Context, req
 	}
 	if stubID, ok := types.SnapshotImageStub(req.ImageArchiveUploadId); !ok || req.StubId == "" || stubID != req.StubId {
 		return "", fmt.Errorf("invalid filesystem export image ID")
+	}
+	if !worker.RunsStub(s.containerRepo, req.StubId) {
+		return "", fmt.Errorf("stub %q is not running on this worker", req.StubId)
 	}
 	if _, err := s.workerRuntimeStub(ctx, req.StubId, req.WorkspaceId); err != nil {
 		return "", err

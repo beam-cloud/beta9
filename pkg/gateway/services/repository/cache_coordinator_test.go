@@ -30,21 +30,24 @@ func TestFilesystemExportUploadCredentialsAreScoped(t *testing.T) {
 		}}}},
 	}
 	ctx := cacheRepositoryAuthContext(types.TokenTypeWorkerPrivate, "workspace-a")
+	trusted := cacheRepositoryAuthContext(types.TokenTypeWorker, "workspace-a")
 	request := &pb.GetCacheOriginCredentialsRequest{WorkspaceId: "workspace-a", StubId: "stub-id", ImageId: "image-id", ImageArchiveUploadId: "stub-id-1780000000"}
-	for _, data := range []bool{false, true} {
-		request.ImageArchiveUploadData = data
-		response, err := s.GetCacheOriginCredentials(ctx, request)
-		require.NoError(t, err)
-		require.True(t, response.Ok, response.ErrorMsg)
-		u, err := url.Parse(response.ImageArchiveUploadUrl)
-		require.NoError(t, err)
-		extension := reg.RemoteImageFileExtension
-		if data {
-			extension = reg.LocalImageFileExtension
+	for _, worker := range []context.Context{ctx, trusted} {
+		for _, data := range []bool{false, true} {
+			request.ImageArchiveUploadData = data
+			response, err := s.GetCacheOriginCredentials(worker, request)
+			require.NoError(t, err)
+			require.True(t, response.Ok, response.ErrorMsg)
+			u, err := url.Parse(response.ImageArchiveUploadUrl)
+			require.NoError(t, err)
+			extension := reg.RemoteImageFileExtension
+			if data {
+				extension = reg.LocalImageFileExtension
+			}
+			require.Equal(t, "/stub-id-1780000000."+extension, u.Path)
+			require.Equal(t, "900", u.Query().Get("X-Amz-Expires"))
+			require.Nil(t, response.ImageArchiveStorage)
 		}
-		require.Equal(t, "/stub-id-1780000000."+extension, u.Path)
-		require.Equal(t, "900", u.Query().Get("X-Amz-Expires"))
-		require.Nil(t, response.ImageArchiveStorage)
 	}
 	for _, id := range []string{"other-stub-1780000000", "stub-id-../private", "stub-id--1"} {
 		request.ImageArchiveUploadId = id
@@ -55,6 +58,10 @@ func TestFilesystemExportUploadCredentialsAreScoped(t *testing.T) {
 	}
 	idle := &pb.GetCacheOriginCredentialsRequest{WorkspaceId: "workspace-a", StubId: "idle-stub", ImageArchiveUploadId: "idle-stub-1780000000"}
 	response, err := s.GetCacheOriginCredentials(ctx, idle)
+	require.NoError(t, err)
+	require.False(t, response.Ok)
+	require.Contains(t, response.ErrorMsg, "not running")
+	response, err = s.GetCacheOriginCredentials(trusted, idle)
 	require.NoError(t, err)
 	require.False(t, response.Ok)
 	require.Contains(t, response.ErrorMsg, "not running")
@@ -759,10 +766,23 @@ func TestGetCacheOriginCredentialsDoesNotDecryptImageRegistrySecretWithoutSignin
 }
 
 func TestGetCacheOriginCredentialsVendsImageArchiveURL(t *testing.T) {
-	service := &WorkerRepositoryService{
-		backendRepo: &originCredentialsBackendRepo{
-			workspace: &types.Workspace{Id: 7, ExternalId: "workspace-id"},
+	t.Setenv("AWS_ROLE_ARN", "")
+	t.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", "")
+	storageID := uint(1)
+	storageBucket := "workspace-bucket"
+	storageAccess := "workspace-access"
+	storageSecret := "workspace-secret"
+	signingKey := "workspace-signing-key"
+	backend := &originCredentialsBackendRepo{
+		workspace: &types.Workspace{
+			Id: 7, ExternalId: "workspace-id", SigningKey: &signingKey,
+			Storage: &types.WorkspaceStorage{Id: &storageID, BucketName: &storageBucket, AccessKey: &storageAccess, SecretKey: &storageSecret},
 		},
+		secret: &types.Secret{Name: "registry-secret", Value: "registry-user:registry-pass"},
+	}
+	service := &WorkerRepositoryService{
+		backendRepo:           backend,
+		cacheCoordinatorToken: "test-coordinator",
 		appConfig: types.AppConfig{
 			ImageService: types.ImageServiceConfig{
 				RegistryStore: reg.S3ImageRegistryStore,
@@ -792,11 +812,25 @@ func TestGetCacheOriginCredentialsVendsImageArchiveURL(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resp.Ok)
 	require.Nil(t, resp.ImageArchiveStorage)
+	require.Nil(t, resp.WorkspaceStorage)
+	require.Empty(t, resp.RegistryCredentials)
+	require.Zero(t, backend.workspaceWithSigningCalls)
+	require.Zero(t, backend.workspaceCalls)
 	require.Equal(t, "image-id."+reg.RemoteImageFileExtension, resp.ImageArchiveObjectKey)
 	require.Contains(t, resp.ImageArchiveUrl, "image-id."+reg.RemoteImageFileExtension)
 	require.Contains(t, resp.ImageArchiveUrl, "X-Amz-Credential=")
 	require.Contains(t, resp.ImageArchiveDataUrl, "image-id."+reg.LocalImageFileExtension)
 	require.Contains(t, resp.ImageArchiveDataUrl, "X-Amz-Credential=")
+
+	coordinator := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer test-coordinator"))
+	resp, err = service.GetCacheOriginCredentials(coordinator, &pb.GetCacheOriginCredentialsRequest{WorkspaceId: "workspace-id", StubId: "stub-id"})
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.NotNil(t, resp.WorkspaceStorage)
+	require.Equal(t, storageAccess, resp.WorkspaceStorage.AccessKey)
+	require.Equal(t, storageSecret, resp.WorkspaceStorage.SecretKey)
+	require.Empty(t, resp.ImageArchiveUrl)
+	require.Empty(t, resp.RegistryCredentials)
 }
 
 func TestGetCacheOriginCredentialsRejectsWrongWorkerWorkspace(t *testing.T) {
