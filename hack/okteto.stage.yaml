@@ -17,6 +17,8 @@ dev:
         mkdir -p /tmp/beta9-dev/gomodcache &&
         while [ ! -f /workspace/hack/stage/gomodcache.tar ]; do sleep 1; done &&
         tar -xf /workspace/hack/stage/gomodcache.tar -C /tmp/beta9-dev/gomodcache &&
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /usr/local/bin/beam-agent-linux-amd64 /workspace/cmd/agent &&
+        CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /usr/local/bin/beam-agent-linux-arm64 /workspace/cmd/agent &&
         go build -o /tmp/beta9-dev/gateway /workspace/cmd/gateway/main.go
       BUILD_BINARY_PATH: /tmp/beta9-dev/gateway
       CONFIG_PATH: /etc/beta9/config.yaml
