@@ -354,6 +354,10 @@ class PodSandboxSnapshotDisksResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     error_msg: str = betterproto.string_field(2)
     snapshots: List["PodSandboxDiskSnapshot"] = betterproto.message_field(3)
+    guest_freeze_failed: bool = betterproto.bool_field(4)
+    """
+    The snapshot failed only because the guest could not freeze its disks.
+    """
 
 
 @dataclass(eq=False, repr=False)

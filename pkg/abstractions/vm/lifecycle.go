@@ -275,6 +275,8 @@ func (s *Service) launchStatus(v *types.VM) (string, error) {
 	return v.Status, nil
 }
 
+type rootSnapshotFreezeError struct{ error }
+
 func (s *Service) snapshotRoot(ctx context.Context, v *types.VM) error {
 	// The worker uploads nothing of a root that is not captured, so there
 	// is no snapshot to commit, or to take a template or a fork from.
@@ -296,7 +298,11 @@ func (s *Service) snapshotRoot(ctx context.Context, v *types.VM) error {
 	}
 
 	if !resp.Ok {
-		return fmt.Errorf("root snapshot failed: %s", resp.ErrorMsg)
+		err := fmt.Errorf("root snapshot failed: %s", resp.ErrorMsg)
+		if resp.GuestFreezeFailed {
+			return rootSnapshotFreezeError{err}
+		}
+		return err
 	}
 
 	for _, disk := range resp.Snapshots {
@@ -384,7 +390,13 @@ func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
 		// not keep the compute of a VM that is gone.
 		if state.Status == types.ContainerStatusRunning && v.StopReason != types.VMStopReasonPreempted && v.DesiredState != types.VMStateDeleted {
 			if err := s.snapshotRoot(ctx, v); err != nil {
-				return err
+				var freezeErr rootSnapshotFreezeError
+				if !errors.As(err, &freezeErr) {
+					return err
+				}
+				// A stuck guest may never freeze its filesystem. Let the
+				// worker stop the VM and require its normal final disk sync.
+				log.Warn().Err(err).Str("vm_id", v.ID).Msg("guest disk freeze failed before VM stop")
 			}
 		}
 

@@ -472,6 +472,7 @@ type vmRuntime struct {
 	memoryResponse  *pb.PodSandboxSnapshotMemoryResponse
 	guestAnswers    bool // the guest outlived a pause the worker refused
 	snapshotError   bool
+	freezeFailed    bool
 	snapshots       int
 	forwarded       string
 	diskName        string
@@ -524,6 +525,9 @@ func (r *vmRuntime) SandboxExposePort(_ context.Context, in *pb.PodSandboxExpose
 }
 func (r *vmRuntime) SandboxSnapshotDisks(_ context.Context, in *pb.PodSandboxSnapshotDisksRequest) (*pb.PodSandboxSnapshotDisksResponse, error) {
 	r.snapshots++
+	if r.freezeFailed {
+		return &pb.PodSandboxSnapshotDisksResponse{Ok: false, ErrorMsg: "freeze guest filesystem: I/O error", GuestFreezeFailed: true}, nil
+	}
 	if r.snapshotError {
 		return &pb.PodSandboxSnapshotDisksResponse{Ok: false, ErrorMsg: "upload failed"}, nil
 	}
@@ -710,6 +714,25 @@ func TestStopSnapshotFailureKeepsRuntimeAlive(t *testing.T) {
 	require.NotEmpty(t, v.ContainerID)
 }
 
+func TestStopWithStuckGuestUsesFinalRoot(t *testing.T) {
+	s, v, info, runtime, gateway := fixture()
+	v.RootSnapshotID = "previous-root"
+	runtime.freezeFailed = true
+	c, _ := actionContext(info, v.Name, "stop", `{}`)
+	require.NoError(t, s.action(c))
+
+	store := s.repo.(*vmStore)
+	stopped, err := store.GetVM(context.Background(), v.WorkspaceID, v.ID)
+	require.NoError(t, err)
+	require.Equal(t, types.VMStateStopped, stopped.Status)
+	require.Empty(t, stopped.ContainerID)
+	require.Equal(t, "root-after-shutdown", stopped.RootSnapshotID)
+	require.Equal(t, 1, runtime.snapshots)
+	require.Equal(t, 1, gateway.stops)
+	require.Len(t, store.artifacts, 1)
+	require.Equal(t, stopped.RootSnapshotID, store.artifacts[0].RootSnapshotID)
+}
+
 func TestRemoveEndsAVMWhoseRootCannotBeSnapshotted(t *testing.T) {
 	s, v, info, runtime, gateway := fixture()
 	runtime.snapshotError = true
@@ -743,10 +766,12 @@ func TestFinalizationErrorOfAVMThatKeepsNoDisks(t *testing.T) {
 }
 
 func TestStopRejectsFinalSyncFailure(t *testing.T) {
-	s, v, info, _, _ := fixture()
+	s, v, info, runtime, gateway := fixture()
+	runtime.freezeFailed = true
 	s.containers.(*vmContainers).exitCode = int(types.ContainerExitCodeUnknownError)
 	err := s.stop(auth.ContextWithAuthInfo(context.Background(), info), v, false)
 	require.ErrorContains(t, err, "finalization error")
+	require.Equal(t, 1, gateway.stops)
 	require.NotEmpty(t, v.ContainerID)
 }
 

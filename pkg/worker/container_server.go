@@ -485,6 +485,7 @@ func (s *ContainerRuntimeServer) ContainerSnapshotDisks(ctx context.Context, in 
 		// Return snapshots created before another mount failed.
 		log.Error().Err(err).Str("container_id", in.ContainerId).Msg("failed to snapshot durable disks")
 		response.ErrorMsg = err.Error()
+		response.GuestFreezeFailed = onlyGuestDiskFreezeErrors(err)
 	}
 	return response, nil
 }

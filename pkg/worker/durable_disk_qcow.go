@@ -394,6 +394,30 @@ func (s *Worker) runtimeOwnsBlockRoot() bool {
 	return s.runtime != nil && s.runtime.Capabilities().BlockRoot
 }
 
+type guestDiskFreezeError struct{ error }
+
+func (e guestDiskFreezeError) Unwrap() error { return e.error }
+
+// A snapshot can fail on several mounts. Allow stop to recover only when all
+// of those failures came from trying to freeze the guest.
+func onlyGuestDiskFreezeErrors(err error) bool {
+	switch err := err.(type) {
+	case guestDiskFreezeError:
+		return true
+	case interface{ Unwrap() []error }:
+		causes := err.Unwrap()
+		for _, cause := range causes {
+			if !onlyGuestDiskFreezeErrors(cause) {
+				return false
+			}
+		}
+		return len(causes) != 0
+	default:
+		cause := errors.Unwrap(err)
+		return cause != nil && onlyGuestDiskFreezeErrors(cause)
+	}
+}
+
 // guestDiskFreezer quiesces a qcow disk's filesystem inside the guest before
 // a seal pivots the chain. The root disk is frozen by default; other disks
 // by their guest mount path. A guest that has already exited has nothing to
@@ -412,7 +436,11 @@ func (s *Worker) guestDiskFreezer(containerID string, mount *types.Mount) func(c
 		if !ok {
 			return nil, fmt.Errorf("runtime %s cannot freeze guest disks", rt.Name())
 		}
-		return freezer.FreezeDisk(ctx, containerID, mountPath)
+		thaw, err := freezer.FreezeDisk(ctx, containerID, mountPath)
+		if err != nil {
+			return nil, guestDiskFreezeError{err}
+		}
+		return thaw, nil
 	}
 }
 
