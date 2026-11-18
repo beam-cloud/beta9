@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net/http"
 	"net/url"
@@ -33,6 +34,7 @@ const (
 	compactionResultRoute    = "/compaction/result"
 	compactionLifetime       = 45 * time.Minute
 	compactionWeek           = 7 * 24 * time.Hour
+	compactionHistoryDays    = 30
 	compactionMinimumTime    = 10 * time.Second
 	compactionMinimumPercent = 5
 	compactionMinimumLines   = 200
@@ -44,10 +46,20 @@ const (
 var (
 	compactionSHA        = regexp.MustCompile(`^[a-f0-9]{40}$`)
 	compactionRepository = regexp.MustCompile(`^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$`)
+	compactionEscaper    = strings.NewReplacer("@", "＠", "<", "‹", ">", "›", "[", "［", "]", "］", "`", "′")
 	errCompactionStale   = errors.New("the default branch advanced")
 )
 
-type compactionHead struct{ Branch, Commit string }
+type compactionProposal struct {
+	files                map[string]string
+	title, body, savings string
+}
+
+type compactionCompletion struct {
+	status, savings, report string
+	processed               bool
+	pr                      *compactionPR
+}
 
 type compactionClaims struct {
 	Workspace string `json:"workspace"`
@@ -203,7 +215,7 @@ func (r *githubRunners) compactDue(ctx context.Context) error {
 	}
 	for _, row := range rows {
 		if row.RunID != "" {
-			if err := r.finishCompaction(ctx, row, "Analysis expired", false, nil, "", ""); err != nil {
+			if err := r.finishCompaction(ctx, row, compactionCompletion{status: "Analysis expired"}); err != nil {
 				return err
 			}
 			continue
@@ -224,7 +236,7 @@ func (r *githubRunners) compactDue(ctx context.Context) error {
 		}
 		if err := r.startCompaction(ctx, row); err != nil {
 			log.Warn().Err(err).Str("repository", row.Repository).Msg("start GitHub CI compaction")
-			return r.finishCompaction(ctx, row, "Analysis could not start", false, nil, "", "")
+			return r.finishCompaction(ctx, row, compactionCompletion{status: "Analysis could not start"})
 		}
 	}
 	return nil
@@ -232,33 +244,24 @@ func (r *githubRunners) compactDue(ctx context.Context) error {
 
 func (r *githubRunners) startCompaction(ctx context.Context, row types.GitHubCompaction) error {
 	if !r.github.compactionAllowed(ctx, row.InstallationID) {
-		return r.finishCompaction(ctx, row, "GitHub permissions needed", false, nil, "", "")
+		return r.finishCompaction(ctx, row, compactionCompletion{status: "GitHub permissions needed"})
 	}
 	token, err := r.github.installationToken(ctx, row.InstallationID)
 	if err != nil {
 		return err
 	}
-	site := compactionHead{Branch: row.Branch, Commit: row.RunCommit}
-	head, err := r.github.compactionRef(ctx, row, token, site.Branch)
-	if err != nil {
-		return err
-	}
-	if head != site.Commit {
-		return r.finishCompaction(ctx, row, "Default branch changed", false, nil, "", "")
-	}
-	files, title, body, saved, err := r.compactPipeline(ctx, row, site, token)
-	if err != nil {
-		return err
-	}
-	if len(files) > 0 {
-		pr, err := r.github.publishCompaction(ctx, row, token, files, title, body)
-		if err != nil {
-			if pr != nil {
-				row.BranchSHA = pr.SHA
-			}
-			return r.failCompactionPublication(ctx, row, err)
+	if err := r.github.verifyCompactionHead(ctx, row, token); err != nil {
+		if errors.Is(err, errCompactionStale) {
+			return r.finishCompaction(ctx, row, compactionCompletion{status: "Default branch changed"})
 		}
-		return r.finishCompaction(ctx, row, "Pull request open", true, pr, saved, "")
+		return err
+	}
+	proposal, err := r.github.compactPipeline(ctx, row, token)
+	if err != nil {
+		return err
+	}
+	if proposal != nil {
+		return r.publishCompaction(ctx, row, token, *proposal, "")
 	}
 	repoToken, err := r.github.compactionCloneToken(ctx, row)
 	if err != nil {
@@ -273,7 +276,7 @@ func (r *githubRunners) startCompaction(ctx context.Context, row types.GitHubCom
 		return err
 	}
 	if installation == nil || !installation.CICompaction || installation.Paused {
-		return r.finishCompaction(ctx, row, "CI Compaction paused", false, nil, "", "")
+		return r.finishCompaction(ctx, row, compactionCompletion{status: "CI Compaction paused"})
 	}
 	info, err := r.runnerAuth(ctx, installation)
 	if err != nil {
@@ -293,20 +296,20 @@ func (r *githubRunners) startCompaction(ctx context.Context, row types.GitHubCom
 	return r.launchRunnerVM(ctx, info, compactionPrefix+row.RunID, row.Repository, size, env, nil)
 }
 
-func (r *githubRunners) finishCompaction(ctx context.Context, row types.GitHubCompaction, status string, processed bool, pr *compactionPR, savings, report string) error {
-	row.Status, row.Savings, row.Report = status, savings, report
-	if pr != nil {
+func (r *githubRunners) finishCompaction(ctx context.Context, row types.GitHubCompaction, done compactionCompletion) error {
+	row.Status, row.Savings, row.Report = done.status, done.savings, done.report
+	if pr := done.pr; pr != nil {
 		row.PRNumber, row.PRURL, row.PROpen, row.BranchSHA = pr.Number, pr.URL, true, pr.SHA
 	}
-	if processed {
+	if done.processed {
 		row.LastCommit = row.RunCommit
 	}
-	if processed && pr == nil {
-		row.WaitWeeks = min(2*max(row.WaitWeeks, 1), 8)
-	} else {
-		row.WaitWeeks = 1
+	wait := 1
+	if done.processed && done.pr == nil {
+		wait = min(2*max(row.WaitWeeks, 1), 8)
 	}
-	return r.s.repo.FinishGitHubCompaction(ctx, row, time.Now().Add(time.Duration(row.WaitWeeks)*compactionWeek))
+	row.WaitWeeks = wait
+	return r.s.repo.FinishGitHubCompaction(ctx, row, time.Now().Add(time.Duration(wait)*compactionWeek))
 }
 
 func (r *githubRunners) compactionResult(c echo.Context) error {
@@ -337,65 +340,62 @@ func (r *githubRunners) compactionResult(c echo.Context) error {
 			log.Warn().Err(err).Str("repository", row.Repository).Msg("delete CI compaction VM")
 		}
 	}()
-	report, err := json.Marshal(result.Report)
-	if err != nil {
-		return err
-	}
-	switch {
-	case !validCompactionResult(result):
-		if err := r.finishCompaction(ctx, *row, "Result rejected", false, nil, "", ""); err != nil {
-			return err
-		}
-		return echo.NewHTTPError(http.StatusUnprocessableEntity, "compaction result failed verification")
-	case result.Status == "failed":
-		log.Warn().Str("repository", row.Repository).Str("reason", compactionText(result.Report.Reason, 240)).Msg("CI compaction VM reported a failure")
-		err = r.finishCompaction(ctx, *row, "Analysis failed", false, nil, "", string(report))
-	case result.Status == "unchanged":
-		err = r.finishCompaction(ctx, *row, "No test changes", true, nil, "", string(report))
-	case len(result.Files) == 0 || !result.Report.worthwhile():
-		status := "No worthwhile change"
-		if len(result.Files) == 0 && result.Report.Outcome == "unsupported" {
-			status = "Test verification unavailable"
-		}
-		err = r.finishCompaction(ctx, *row, status, true, nil, "", string(report))
-	default:
-		err = r.publishTestCompaction(ctx, *row, result, string(report))
-	}
-	if err != nil {
+	if err := r.completeCompaction(ctx, *row, result); err != nil {
 		return err
 	}
 	return c.NoContent(http.StatusAccepted)
 }
 
-func validCompactionPath(name string, workflow bool) bool {
-	if name == "." || name == "" || name != path.Clean(name) || strings.HasPrefix(name, "/") ||
-		strings.ContainsAny(name, "\\:") || strings.ContainsFunc(name, unicode.IsControl) {
-		return false
-	}
-	for _, component := range strings.Split(name, "/") {
-		if component == ".." || strings.EqualFold(component, ".git") || strings.EqualFold(component, "testdata") ||
-			(!workflow && strings.EqualFold(component, ".github")) {
-			return false
+func (r *githubRunners) completeCompaction(ctx context.Context, row types.GitHubCompaction, result compactionResult) error {
+	if !validCompactionResult(result) {
+		if err := r.finishCompaction(ctx, row, compactionCompletion{status: "Result rejected"}); err != nil {
+			return err
 		}
+		return echo.NewHTTPError(http.StatusUnprocessableEntity, "compaction result failed verification")
 	}
-	return !workflow || path.Dir(name) == ".github/workflows" && slices.Contains([]string{".yml", ".yaml"}, path.Ext(name))
+	report, err := json.Marshal(result.Report)
+	if err != nil {
+		return err
+	}
+	done := compactionCompletion{status: "No worthwhile change", processed: true, report: string(report)}
+	switch {
+	case result.Status == "failed":
+		log.Warn().Str("repository", row.Repository).Str("reason", compactionText(result.Report.Reason, 240)).Msg("CI compaction VM reported a failure")
+		done.status, done.processed = "Analysis failed", false
+	case result.Status == "unchanged":
+		done.status = "No test changes"
+	case len(result.Files) != 0 && result.Report.worthwhile():
+		return r.publishTestCompaction(ctx, row, result, done.report)
+	case len(result.Files) == 0 && result.Report.Outcome == "unsupported":
+		done.status = "Test verification unavailable"
+	}
+	return r.finishCompaction(ctx, row, done)
+}
+
+func canonicalCompactionPath(name string) bool {
+	return name != "" && name != "." && name == path.Clean(name) && !path.IsAbs(name) &&
+		!strings.ContainsAny(name, "\\:") && !strings.ContainsFunc(name, unicode.IsControl)
 }
 
 // A reported framework selects a gateway rule. It never supplies paths or
 // patterns for that rule. Only Go's naming rule excludes tests from builds, so
 // the other adapters also need the framework's own discovery and verification.
 func validCompactionTestPath(name, framework string) bool {
-	if !validCompactionPath(name, false) {
+	if !canonicalCompactionPath(name) {
 		return false
 	}
-	base := path.Base(name)
-	if framework == "go" {
-		return strings.HasSuffix(base, "_test.go")
-	}
+	parts := strings.Split(name, "/")
+	dirs, base := parts[:len(parts)-1], parts[len(parts)-1]
 	var inTests bool
-	for _, dir := range strings.Split(path.Dir(name), "/") {
+	for _, dir := range dirs {
+		if dir == ".." || strings.EqualFold(dir, ".git") || strings.EqualFold(dir, ".github") || strings.EqualFold(dir, "testdata") {
+			return false
+		}
+		if framework == "go" {
+			continue
+		}
 		dir = strings.ToLower(dir)
-		if dir != "." && strings.HasPrefix(dir, ".") {
+		if strings.HasPrefix(dir, ".") {
 			return false
 		}
 		switch dir {
@@ -410,6 +410,8 @@ func validCompactionTestPath(name, framework string) bool {
 	ext := path.Ext(base)
 	stem := strings.TrimSuffix(base, ext)
 	switch framework {
+	case "go":
+		return strings.HasSuffix(base, "_test.go")
 	case "pytest":
 		if ext != ".py" || !inTests {
 			return false
@@ -510,19 +512,24 @@ func (r *githubRunners) publishTestCompaction(ctx context.Context, row types.Git
 	if err != nil {
 		return r.failCompactionPublication(ctx, row, err)
 	}
-	runs, err := r.s.repo.CountGitHubCompactionRuns(ctx, row.WorkspaceID, row.Repository, time.Now().Add(-30*24*time.Hour))
+	runs, err := r.s.repo.CountGitHubCompactionRuns(ctx, row.WorkspaceID, row.Repository, time.Now().Add(-compactionHistoryDays*24*time.Hour))
 	if err != nil {
 		return r.failCompactionPublication(ctx, row, err)
 	}
-	title, body, savings := result.Report.message(row.Label, runs)
-	pr, err := r.github.publishCompaction(ctx, row, token, result.Files, title, body)
+	return r.publishCompaction(ctx, row, token, result.Report.proposal(result.Files, row.Label, runs), report)
+}
+
+func (r *githubRunners) publishCompaction(ctx context.Context, row types.GitHubCompaction, token string, proposal compactionProposal, report string) error {
+	pr, err := r.github.publishCompaction(ctx, row, token, proposal)
 	if err != nil {
 		if pr != nil {
 			row.BranchSHA = pr.SHA
 		}
 		return r.failCompactionPublication(ctx, row, err)
 	}
-	return r.finishCompaction(ctx, row, "Pull request open", true, pr, savings, report)
+	return r.finishCompaction(ctx, row, compactionCompletion{
+		status: "Pull request open", processed: true, pr: pr, savings: proposal.savings, report: report,
+	})
 }
 
 func (r *githubRunners) failCompactionPublication(ctx context.Context, row types.GitHubCompaction, cause error) error {
@@ -531,10 +538,10 @@ func (r *githubRunners) failCompactionPublication(ctx context.Context, row types
 		status = "Default branch changed"
 	}
 	log.Warn().Err(cause).Str("repository", row.Repository).Msg("publish CI compaction")
-	return r.finishCompaction(ctx, row, status, false, nil, "", "")
+	return r.finishCompaction(ctx, row, compactionCompletion{status: status})
 }
 
-func (r compactionReport) message(label string, runs int) (string, string, string) {
+func (r compactionReport) proposal(files map[string]string, label string, runs int) compactionProposal {
 	title := fmt.Sprintf("CI Compaction: %d tests → %d, coverage preserved", r.TestsBefore, r.TestsAfter)
 	lines := r.LinesBefore - r.LinesAfter
 	saving := r.savingMS()
@@ -554,8 +561,8 @@ func (r compactionReport) message(label string, runs int) (string, string, strin
 		float64(r.CoveredBefore)*100/float64(r.Coverable), float64(r.CoveredAfter)*100/float64(r.Coverable))
 	fmt.Fprintf(&body, "**Mutations** %d of %d previously caught case checks are still caught.\n\n", r.Preserved, r.Caught)
 	if saving > 0 {
-		fmt.Fprintf(&body, "**Projected** %d runs in the last 30 days × %s = %.2f runner-hours per month.\n\n",
-			runs, compactionTime(saving), float64(runs)*float64(saving)/float64(time.Hour.Milliseconds()))
+		fmt.Fprintf(&body, "**Projected** %d runs in the last %d days × %s = %.2f runner-hours per month.\n\n",
+			runs, compactionHistoryDays, compactionTime(saving), float64(runs)*float64(saving)/float64(time.Hour.Milliseconds()))
 	}
 	for _, group := range r.Groups {
 		if group.Status != "merged" {
@@ -569,7 +576,7 @@ func (r compactionReport) message(label string, runs int) (string, string, strin
 		body.WriteString("\n")
 	}
 	body.WriteString("To turn this off, open **GitHub Runners** in your Beam workspace and disable **CI Compaction**.\n")
-	return title, body.String(), savings
+	return compactionProposal{files: files, title: title, body: body.String(), savings: savings}
 }
 
 func compactionTime(ms int64) time.Duration {
@@ -579,7 +586,7 @@ func compactionTime(ms int64) time.Duration {
 // Repository text appears as plain text, without creating mentions or links.
 func compactionText(text string, limit int) string {
 	out := []rune(strings.Join(strings.Fields(text), " "))
-	return strings.NewReplacer("@", "＠", "<", "‹", ">", "›", "[", "［", "]", "］", "`", "′").Replace(string(out[:min(limit, len(out))]))
+	return compactionEscaper.Replace(string(out[:min(limit, len(out))]))
 }
 
 func (r *githubRunners) deleteCompactionVM(ctx context.Context, row types.GitHubCompaction) error {
@@ -630,6 +637,17 @@ func (g *githubApp) compactionRef(ctx context.Context, row types.GitHubCompactio
 	return ref.Object.SHA, err
 }
 
+func (g *githubApp) verifyCompactionHead(ctx context.Context, row types.GitHubCompaction, token string) error {
+	head, err := g.compactionRef(ctx, row, token, row.Branch)
+	if err != nil {
+		return err
+	}
+	if head != row.RunCommit {
+		return errCompactionStale
+	}
+	return nil
+}
+
 type compactionPR struct {
 	Number int    `json:"number"`
 	URL    string `json:"html_url"`
@@ -646,7 +664,7 @@ type compactionTreeEntry struct {
 	Content string `json:"content"`
 }
 
-func (g *githubApp) publishCompaction(ctx context.Context, row types.GitHubCompaction, token string, files map[string]string, title, body string) (*compactionPR, error) {
+func (g *githubApp) publishCompaction(ctx context.Context, row types.GitHubCompaction, token string, proposal compactionProposal) (*compactionPR, error) {
 	owner, _, _ := strings.Cut(row.Repository, "/")
 	var open []compactionPR
 	_, err := g.compactionCall(ctx, row, token, http.MethodGet, "/pulls?state=open&head="+url.QueryEscape(owner+":"+compactionBranch), nil, &open)
@@ -657,28 +675,24 @@ func (g *githubApp) publishCompaction(ctx context.Context, row types.GitHubCompa
 		open[0].SHA = open[0].Head.SHA
 		return &open[0], nil
 	}
-	current, err := g.compactionRef(ctx, row, token, row.Branch)
-	if err != nil {
+	if err := g.verifyCompactionHead(ctx, row, token); err != nil {
 		return nil, err
-	}
-	if current != row.RunCommit {
-		return nil, errCompactionStale
 	}
 	var base struct {
 		Tree struct {
 			SHA string `json:"sha"`
 		} `json:"tree"`
 	}
-	if _, err := g.compactionCall(ctx, row, token, http.MethodGet, "/git/commits/"+current, nil, &base); err != nil {
+	if _, err := g.compactionCall(ctx, row, token, http.MethodGet, "/git/commits/"+row.RunCommit, nil, &base); err != nil {
 		return nil, err
 	}
-	if err := g.checkCompactionPaths(ctx, row, token, base.Tree.SHA, files); err != nil {
+	if err := g.checkCompactionPaths(ctx, row, token, base.Tree.SHA, proposal.files); err != nil {
 		return nil, err
 	}
-	return g.commitCompaction(ctx, row, token, base.Tree.SHA, files, title, body)
+	return g.commitCompaction(ctx, row, token, base.Tree.SHA, proposal)
 }
 
-func (g *githubApp) commitCompaction(ctx context.Context, row types.GitHubCompaction, token, baseTree string, files map[string]string, title, body string) (*compactionPR, error) {
+func (g *githubApp) commitCompaction(ctx context.Context, row types.GitHubCompaction, token, baseTree string, proposal compactionProposal) (*compactionPR, error) {
 	branchSHA, err := g.compactionRef(ctx, row, token, compactionBranch)
 	if err != nil && githubStatus(err) != http.StatusNotFound {
 		return nil, err
@@ -686,8 +700,8 @@ func (g *githubApp) commitCompaction(ctx context.Context, row types.GitHubCompac
 	if branchSHA != "" && branchSHA != row.BranchSHA {
 		return nil, errors.New("the CI Compaction branch already exists")
 	}
-	entries := make([]compactionTreeEntry, 0, len(files))
-	for name, content := range files {
+	entries := make([]compactionTreeEntry, 0, len(proposal.files))
+	for name, content := range proposal.files {
 		entries = append(entries, compactionTreeEntry{Path: name, Mode: "100644", Type: "blob", Content: content})
 	}
 	slices.SortFunc(entries, func(a, b compactionTreeEntry) int { return strings.Compare(a.Path, b.Path) })
@@ -702,16 +716,12 @@ func (g *githubApp) commitCompaction(ctx context.Context, row types.GitHubCompac
 		return nil, errors.New("compaction would create an empty diff")
 	}
 	if _, err := g.compactionCall(ctx, row, token, http.MethodPost, "/git/commits",
-		map[string]any{"message": title, "tree": tree.SHA, "parents": []string{row.RunCommit}}, &commit); err != nil {
+		map[string]any{"message": proposal.title, "tree": tree.SHA, "parents": []string{row.RunCommit}}, &commit); err != nil {
 		return nil, err
 	}
 	// Avoid applying a result to a branch that advanced during publication.
-	current, err := g.compactionRef(ctx, row, token, row.Branch)
-	if err != nil {
+	if err := g.verifyCompactionHead(ctx, row, token); err != nil {
 		return nil, err
-	}
-	if current != row.RunCommit {
-		return nil, errCompactionStale
 	}
 	ref := "refs/heads/" + compactionBranch
 	method, endpoint := http.MethodPost, "/git/refs"
@@ -725,7 +735,7 @@ func (g *githubApp) commitCompaction(ctx context.Context, row types.GitHubCompac
 	}
 	pr := &compactionPR{SHA: commit.SHA}
 	_, err = g.compactionCall(ctx, row, token, http.MethodPost, "/pulls",
-		map[string]string{"title": title, "body": body, "head": compactionBranch, "base": row.Branch}, pr)
+		map[string]string{"title": proposal.title, "body": proposal.body, "head": compactionBranch, "base": row.Branch}, pr)
 	return pr, err
 }
 
@@ -753,8 +763,6 @@ func (g *githubApp) checkCompactionPaths(ctx context.Context, row types.GitHubCo
 	}
 	return nil
 }
-
-const pipelineHistoryDays = 30
 
 const pipelineBranchPush = "github.event_name == 'push' && github.ref_type == 'branch' && github.event.repository.default_branch != '' && github.ref_name != github.event.repository.default_branch"
 
@@ -794,28 +802,27 @@ func (s pipelineSavings) worthChanging() bool {
 	return s.wasted >= compactionMinimumTime && s.wasted >= s.runtime*compactionMinimumPercent/100
 }
 
-func (r *githubRunners) compactPipeline(ctx context.Context, row types.GitHubCompaction, site compactionHead, token string) (map[string]string, string, string, string, error) {
+func (g *githubApp) compactPipeline(ctx context.Context, row types.GitHubCompaction, token string) (*compactionProposal, error) {
 	until := time.Now().UTC().Truncate(time.Second)
-	repo := r.github.apiURL + "/repos/" + row.Repository
-	runs, err := r.github.pipelineRuns(ctx, row.InstallationID, repo, token, until.AddDate(0, 0, -pipelineHistoryDays), until)
+	runs, err := g.pipelineRuns(ctx, row, token, until.AddDate(0, 0, -compactionHistoryDays), until)
 	if err != nil {
-		return nil, "", "", "", err
+		return nil, err
 	}
 
 	// REST run history gives a name that can denote either a branch or a tag.
 	// Only count savings on refs that GitHub can still identify as branches.
 	savings := map[string]pipelineSavings{}
 	branches := map[string]bool{}
-	for group, stats := range pipelineOverlaps(runs, row.Repository, site.Branch) {
+	for group, stats := range pipelineOverlaps(runs, row.Repository, row.Branch) {
 		total := savings[group.file]
 		total.runtime += stats.runtime
 		total.runs += stats.runs
 		if stats.wasted > 0 {
 			branch, checked := branches[group.branch]
 			if !checked {
-				branch, err = r.github.pipelineBranch(ctx, row.InstallationID, repo, token, group.branch)
+				branch, err = g.pipelineBranch(ctx, row, token, group.branch)
 				if err != nil {
-					return nil, "", "", "", err
+					return nil, err
 				}
 				branches[group.branch] = branch
 			}
@@ -828,55 +835,52 @@ func (r *githubRunners) compactPipeline(ctx context.Context, row types.GitHubCom
 	}
 
 	files := map[string]string{}
-	var paths []string
-	for file, stats := range savings {
-		if stats.worthChanging() {
-			paths = append(paths, file)
-		}
-	}
-	slices.Sort(paths)
-
 	var body strings.Builder
 	var wasted time.Duration
 	body.WriteString("CI Compaction found push runs that kept going after a newer push on the same branch started.\n\n")
 	body.WriteString("| Workflow | Superseded push runs | Elapsed time after a newer run started |\n")
 	body.WriteString("| --- | ---: | ---: |\n")
-	for _, file := range paths {
-		original, err := r.github.pipelineFile(ctx, row.InstallationID, repo, token, file, site.Commit)
+	for _, file := range slices.Sorted(maps.Keys(savings)) {
+		stats := savings[file]
+		if !stats.worthChanging() {
+			continue
+		}
+		original, err := g.pipelineFile(ctx, row, token, file)
 		if err != nil {
-			return nil, "", "", "", err
+			return nil, err
 		}
 		update, ok := addPipelineConcurrency(original)
 		if !ok {
 			continue
 		}
 		files[file] = update
-		stats := savings[file]
 		wasted += stats.wasted
 		fmt.Fprintf(&body, "| `%s` | %d of %d | %s |\n", file, stats.superseded, stats.runs, stats.wasted)
 	}
 	if len(files) == 0 {
-		return nil, "", "", "", nil
+		return nil, nil
 	}
-	fmt.Fprintf(&body, "\nFigures use GitHub Actions workflow timestamps for the last %d days. Each change adds workflow concurrency for non-default branch pushes.\n", pipelineHistoryDays)
+	fmt.Fprintf(&body, "\nFigures use GitHub Actions workflow timestamps for the last %d days. Each change adds workflow concurrency for non-default branch pushes.\n", compactionHistoryDays)
 	body.WriteString("\nTurn off CI Compaction in the workspace's GitHub runners settings.\n")
-	saved := fmt.Sprintf("%s of superseded workflow time", wasted)
-	return files, "CI Compaction: cancel superseded workflow runs", body.String(), saved, nil
+	return &compactionProposal{
+		files: files, title: "CI Compaction: cancel superseded workflow runs", body: body.String(),
+		savings: fmt.Sprintf("%s of superseded workflow time", wasted),
+	}, nil
 }
 
-func (g *githubApp) pipelineRuns(ctx context.Context, installation int64, repo, token string, from, until time.Time) ([]pipelineRun, error) {
+func (g *githubApp) pipelineRuns(ctx context.Context, row types.GitHubCompaction, token string, from, until time.Time) ([]pipelineRun, error) {
 	query := url.Values{
 		"event":    {"push"},
 		"created":  {from.Format(time.RFC3339) + ".." + until.Format(time.RFC3339)},
 		"per_page": {"100"},
 	}
 	var runs []pipelineRun
-	for page := repo + "/actions/runs?" + query.Encode(); page != ""; {
+	for page := g.apiURL + "/repos/" + row.Repository + "/actions/runs?" + query.Encode(); page != ""; {
 		var result struct {
 			Total int           `json:"total_count"`
 			Runs  []pipelineRun `json:"workflow_runs"`
 		}
-		header, err := g.ask(ctx, installation, http.MethodGet, page, token, nil, &result)
+		header, err := g.ask(ctx, row.InstallationID, http.MethodGet, page, token, nil, &result)
 		if err != nil {
 			return nil, err
 		}
@@ -887,11 +891,11 @@ func (g *githubApp) pipelineRuns(ctx context.Context, installation int64, repo, 
 				return nil, fmt.Errorf("more workflow runs than GitHub can list at %s", from.Format(time.RFC3339))
 			}
 			mid := from.Add(until.Sub(from) / 2).Truncate(time.Second)
-			early, err := g.pipelineRuns(ctx, installation, repo, token, from, mid)
+			early, err := g.pipelineRuns(ctx, row, token, from, mid)
 			if err != nil {
 				return nil, err
 			}
-			late, err := g.pipelineRuns(ctx, installation, repo, token, mid.Add(time.Second), until)
+			late, err := g.pipelineRuns(ctx, row, token, mid.Add(time.Second), until)
 			return append(early, late...), err
 		}
 		runs = append(runs, result.Runs...)
@@ -905,10 +909,11 @@ func pipelineOverlaps(runs []pipelineRun, repo, defaultBranch string) map[pipeli
 	seen := map[int64]bool{}
 	for _, run := range runs {
 		branch := run.HeadBranch
+		started := run.Status == "in_progress" || run.Status == "completed" &&
+			run.Conclusion != "skipped" && run.Updated.After(run.Started)
 		if run.ID == 0 || seen[run.ID] || run.WorkflowID == 0 || run.Number == 0 || run.Attempt != 1 ||
 			run.Event != "push" || !strings.EqualFold(run.HeadRepository.FullName, repo) ||
-			branch == "" || strings.EqualFold(branch, defaultBranch) || run.SHA == "" || run.Started.IsZero() ||
-			(run.Status != "in_progress" && (run.Status != "completed" || run.Conclusion == "skipped" || !run.Updated.After(run.Started))) {
+			branch == "" || strings.EqualFold(branch, defaultBranch) || run.SHA == "" || run.Started.IsZero() || !started {
 			continue
 		}
 		file := pipelineWorkflowPath(run.Path, branch)
@@ -951,16 +956,17 @@ func pipelineWorkflowPath(file, branch string) string {
 		return ""
 	}
 	file = strings.TrimSuffix(strings.TrimSuffix(file, "@refs/heads/"+branch), "@"+branch)
-	if !validCompactionPath(file, true) || strings.ContainsAny(file, "`|") {
+	if !canonicalCompactionPath(file) || path.Dir(file) != ".github/workflows" ||
+		!slices.Contains([]string{".yml", ".yaml"}, path.Ext(file)) || strings.ContainsAny(file, "`|") {
 		return ""
 	}
 	return file
 }
 
-func (g *githubApp) pipelineBranch(ctx context.Context, installation int64, repo, token, branch string) (bool, error) {
+func (g *githubApp) pipelineBranch(ctx context.Context, row types.GitHubCompaction, token, branch string) (bool, error) {
 	for _, kind := range []string{"heads", "tags"} {
 		ref := kind + "/" + branch
-		_, err := g.ask(ctx, installation, http.MethodGet, repo+"/git/ref/"+kind+"/"+url.PathEscape(branch), token, nil, nil)
+		_, err := g.compactionCall(ctx, row, token, http.MethodGet, "/git/ref/"+kind+"/"+url.PathEscape(branch), nil, nil)
 		if githubStatus(err) == http.StatusNotFound {
 			return kind == "tags", nil
 		}
@@ -971,14 +977,14 @@ func (g *githubApp) pipelineBranch(ctx context.Context, installation int64, repo
 	return false, nil
 }
 
-func (g *githubApp) pipelineFile(ctx context.Context, installation int64, repo, token, file, commit string) (string, error) {
+func (g *githubApp) pipelineFile(ctx context.Context, row types.GitHubCompaction, token, file string) (string, error) {
 	var result struct {
 		Type     string `json:"type"`
 		Encoding string `json:"encoding"`
 		Content  string `json:"content"`
 	}
-	endpoint := repo + "/contents/.github/workflows/" + url.PathEscape(path.Base(file)) + "?ref=" + url.QueryEscape(commit)
-	_, err := g.ask(ctx, installation, http.MethodGet, endpoint, token, nil, &result)
+	endpoint := "/contents/.github/workflows/" + url.PathEscape(path.Base(file)) + "?ref=" + url.QueryEscape(row.RunCommit)
+	_, err := g.compactionCall(ctx, row, token, http.MethodGet, endpoint, nil, &result)
 	if githubStatus(err) == http.StatusNotFound {
 		return "", nil
 	}
@@ -996,7 +1002,7 @@ func (g *githubApp) pipelineFile(ctx context.Context, installation int64, repo, 
 // block still lives at the root of one workflow, with no existing concurrency.
 func addPipelineConcurrency(source string) (string, bool) {
 	root := pipelineMapping(source)
-	if root == nil || pipelineHasConcurrency(root) {
+	if root == nil || !canAddPipelineConcurrency(root) {
 		return "", false
 	}
 	eol := "\n"
@@ -1028,32 +1034,35 @@ func pipelineMapping(source string) *yaml.Node {
 	return root
 }
 
-func pipelineHasConcurrency(root *yaml.Node) bool {
-	jobs := false
+func canAddPipelineConcurrency(root *yaml.Node) bool {
+	var jobs *yaml.Node
 	for i := 0; i < len(root.Content); i += 2 {
 		key, value := root.Content[i], root.Content[i+1]
 		if key.Kind != yaml.ScalarNode || key.Value == "<<" || key.Value == "concurrency" {
-			return true
+			return false
 		}
 		if key.Value != "jobs" {
 			continue
 		}
-		if jobs || value.Kind != yaml.MappingNode || len(value.Content) == 0 {
-			return true
+		if jobs != nil || value.Kind != yaml.MappingNode || len(value.Content) == 0 {
+			return false
 		}
-		jobs = true
-		for j := 0; j < len(value.Content); j += 2 {
-			job, config := value.Content[j], value.Content[j+1]
-			if job.Kind != yaml.ScalarNode || job.Value == "<<" || config.Kind != yaml.MappingNode {
-				return true
-			}
-			for k := 0; k < len(config.Content); k += 2 {
-				key := config.Content[k]
-				if key.Kind != yaml.ScalarNode || key.Value == "<<" || key.Value == "concurrency" {
-					return true
-				}
+		jobs = value
+	}
+	if jobs == nil {
+		return false
+	}
+	for i := 0; i < len(jobs.Content); i += 2 {
+		job, config := jobs.Content[i], jobs.Content[i+1]
+		if job.Kind != yaml.ScalarNode || job.Value == "<<" || config.Kind != yaml.MappingNode {
+			return false
+		}
+		for j := 0; j < len(config.Content); j += 2 {
+			key := config.Content[j]
+			if key.Kind != yaml.ScalarNode || key.Value == "<<" || key.Value == "concurrency" {
+				return false
 			}
 		}
 	}
-	return !jobs
+	return true
 }

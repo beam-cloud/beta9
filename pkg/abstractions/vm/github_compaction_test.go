@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 )
 
@@ -226,30 +227,30 @@ func quoteCompactionTest(value string) string {
 	return string(data)
 }
 
-func TestCompactionPublishesVerifiedPullRequest(t *testing.T) {
-	r, _, _, _ := runnerFixture(t)
-	routes := compactionTestRoutes(
-		"[{\"path\":\"pkg\",\"mode\":\"040000\",\"type\":\"tree\"}," +
-			"{\"path\":\"pkg/orders\",\"mode\":\"040000\",\"type\":\"tree\"}," +
-			"{\"path\":" + quoteCompactionTest(testCompactionPath) + ",\"mode\":\"100644\",\"type\":\"blob\"}]",
-	)
+func compactionPublicationRoutes() map[string]string {
+	routes := compactionTestRoutes(`[{"path":` + quoteCompactionTest(testCompactionPath) + `,"mode":"100644","type":"blob"}]`)
 	routes["POST /repos/acme/repo/git/trees"] = "201 {\"sha\":" + quoteCompactionTest(testCompactionTree) + "}"
 	routes["POST /repos/acme/repo/git/commits"] = "201 {\"sha\":" + quoteCompactionTest(testCompactionPRCommit) + "}"
 	routes["POST /repos/acme/repo/git/refs"] = "201 {}"
 	routes["POST /repos/acme/repo/pulls"] = "201 {\"number\":9,\"html_url\":\"https://github.com/acme/repo/pull/9\"}"
-	calls := fakeGitHub(t, r, routes)
+	return routes
+}
+
+func TestCompactionPublishesVerifiedPullRequest(t *testing.T) {
+	r, _, _, _ := runnerFixture(t)
+	calls := fakeGitHub(t, r, compactionPublicationRoutes())
 	ctx := context.Background()
 	row := compactionTestRepo()
 	token, err := r.github.installationToken(ctx, row.InstallationID)
 	require.NoError(t, err)
 	result := compactionTestResult()
-	title, body, _ := result.Report.message("beam-4vcpu-ubuntu-2404", 360)
-	require.Contains(t, title, "2 tests")
+	proposal := result.Report.proposal(result.Files, "beam-4vcpu-ubuntu-2404", 360)
+	require.Contains(t, proposal.title, "2 tests")
 	for _, text := range []string{"3m20s", "3m10s", "5.0%", "(-200)", "75.0%", "2 of 2", "1.00 runner-hours",
 		"TestSmallOrder", "TestOrder/small", "keeps the minimum", "CI Compaction"} {
-		require.Contains(t, body, text)
+		require.Contains(t, proposal.body, text)
 	}
-	pr, err := r.github.publishCompaction(ctx, row, token, result.Files, title, body)
+	pr, err := r.github.publishCompaction(ctx, row, token, proposal)
 	require.NoError(t, err)
 	require.Equal(t, 9, pr.Number)
 	require.Equal(t, "https://github.com/acme/repo/pull/9", pr.URL)
@@ -266,14 +267,32 @@ func TestCompactionPublishesVerifiedPullRequest(t *testing.T) {
 		"tree":      []compactionTreeEntry{{Path: testCompactionPath, Mode: "100644", Type: "blob", Content: result.Files[testCompactionPath]}},
 	}))
 	require.Contains(t, got, encodedCall("POST /repos/acme/repo/git/commits", map[string]any{
-		"message": title, "parents": []string{testCompactionCommit}, "tree": testCompactionTree,
+		"message": proposal.title, "parents": []string{testCompactionCommit}, "tree": testCompactionTree,
 	}))
 	require.Contains(t, got, encodedCall("POST /repos/acme/repo/git/refs", map[string]string{
 		"ref": "refs/heads/" + compactionBranch, "sha": testCompactionPRCommit,
 	}))
 	require.Contains(t, got, encodedCall("POST /repos/acme/repo/pulls", map[string]string{
-		"title": title, "body": body, "head": compactionBranch, "base": "main",
+		"title": proposal.title, "body": proposal.body, "head": compactionBranch, "base": "main",
 	}))
+}
+
+func TestCompactionKeepsWrittenBranchWhenPullRequestFails(t *testing.T) {
+	r, runners, _, _ := runnerFixture(t)
+	store := &compactionScheduleStore{runnerStore: runners}
+	r.s.repo = store
+	routes := compactionPublicationRoutes()
+	routes["POST /repos/acme/repo/pulls"] = `502 {"message":"try again"}`
+	fakeGitHub(t, r, routes)
+	row := compactionTestRepo()
+	row.LastCommit = "previous"
+	result := compactionTestResult()
+	proposal := result.Report.proposal(result.Files, "beam-4vcpu-ubuntu-2404", 360)
+	require.NoError(t, r.publishCompaction(t.Context(), row, "installation-token", proposal, "{}"))
+	require.Equal(t, testCompactionPRCommit, store.finished.BranchSHA)
+	require.Equal(t, row.LastCommit, store.finished.LastCommit)
+	require.Equal(t, "Could not open pull request", store.finished.Status)
+	require.False(t, store.finished.PROpen)
 }
 
 func TestCompactionRejectsStaleCommitBeforeWriting(t *testing.T) {
@@ -283,7 +302,7 @@ func TestCompactionRejectsStaleCommitBeforeWriting(t *testing.T) {
 		"GET /repos/acme/repo/git/ref/heads/main": "200 {\"object\":{\"sha\":" + quoteCompactionTest(testCompactionPRCommit) + "}}",
 	})
 	_, err := r.github.publishCompaction(context.Background(), compactionTestRepo(), "installation-token",
-		compactionTestResult().Files, "CI Compaction", "body")
+		compactionProposal{files: compactionTestResult().Files, title: "CI Compaction", body: "body"})
 	require.ErrorIs(t, err, errCompactionStale)
 	require.Equal(t, []string{"GET /repos/acme/repo/pulls", "GET /repos/acme/repo/git/ref/heads/main"}, calls())
 }
@@ -308,7 +327,7 @@ func TestCompactionRejectsNonRegularPathsBeforeWriting(t *testing.T) {
 			}
 			calls := fakeGitHub(t, r, compactionTestRoutes(tree))
 			_, err := r.github.publishCompaction(context.Background(), compactionTestRepo(), "installation-token",
-				compactionTestResult().Files, "CI Compaction", "body")
+				compactionProposal{files: compactionTestResult().Files, title: "CI Compaction", body: "body"})
 			require.Error(t, err)
 			require.Contains(t, calls(), "GET /repos/acme/repo/git/trees/"+testCompactionBaseTree)
 			for _, call := range calls() {
@@ -431,15 +450,14 @@ func TestPipelineProposal(t *testing.T) {
 		}
 	}))
 	defer fake.Close()
-	runner := &githubRunners{github: &githubApp{apiURL: fake.URL, client: fake.Client()}}
-	files, title, body, saved, err := runner.compactPipeline(context.Background(), types.GitHubCompaction{Repository: pipelineTestRepository, InstallationID: 11}, compactionHead{Branch: "main", Commit: "pinned-commit"}, "staged-token")
-	if err != nil || len(files) != 1 || !strings.HasPrefix(files[file], pipelineTestWorkflow) {
-		require.Contains(t, saved, "of superseded workflow time")
-		t.Fatalf("unexpected pipeline proposal: %s %q %v", title, files, err)
-	}
-	if !strings.Contains(body, "1 of 2 | 30s") {
-		t.Fatalf("incorrect workflow overlap in report: %s", body)
-	}
+	github := &githubApp{apiURL: fake.URL, client: fake.Client()}
+	row := types.GitHubCompaction{Repository: pipelineTestRepository, InstallationID: 11, Branch: "main", RunCommit: "pinned-commit"}
+	proposal, err := github.compactPipeline(t.Context(), row, "staged-token")
+	require.NoError(t, err)
+	require.NotNil(t, proposal)
+	require.Equal(t, map[string]string{file: pipelineTestWorkflow + pipelineConcurrency}, proposal.files)
+	require.Contains(t, proposal.body, "1 of 2 | 30s")
+	require.Equal(t, "30s of superseded workflow time", proposal.savings)
 }
 
 type compactionScheduleStore struct {
@@ -447,6 +465,42 @@ type compactionScheduleStore struct {
 	marked   types.GitHubCompaction
 	finished types.GitHubCompaction
 	due      time.Time
+}
+
+func TestCompactionCompletionStatuses(t *testing.T) {
+	for _, tc := range []struct {
+		status, outcome, finished string
+		processed, rejected       bool
+	}{
+		{status: "complete", finished: "No worthwhile change", processed: true},
+		{status: "complete", outcome: "unsupported", finished: "Test verification unavailable", processed: true},
+		{status: "unchanged", finished: "No test changes", processed: true},
+		{status: "failed", finished: "Analysis failed"},
+		{status: "failed", finished: "Result rejected", rejected: true},
+	} {
+		t.Run(tc.finished, func(t *testing.T) {
+			r, runners, _, _ := runnerFixture(t)
+			store := &compactionScheduleStore{runnerStore: runners}
+			r.s.repo = store
+			row := compactionTestRepo()
+			row.LastCommit = "previous"
+			result := compactionTestResult()
+			result.Status, result.Report.Outcome = tc.status, tc.outcome
+			if !tc.rejected {
+				result.Files = nil
+			}
+			err := r.completeCompaction(t.Context(), row, result)
+			if tc.rejected {
+				var response *echo.HTTPError
+				require.ErrorAs(t, err, &response)
+				require.Equal(t, http.StatusUnprocessableEntity, response.Code)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.finished, store.finished.Status)
+			require.Equal(t, tc.processed, store.finished.LastCommit == row.RunCommit)
+		})
+	}
 }
 
 func (s *compactionScheduleStore) MarkGitHubCompaction(_ context.Context, row types.GitHubCompaction) error {
@@ -505,7 +559,7 @@ func TestCompactionScheduleBacksOffAndKeepsUnprocessedCommits(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			row := types.GitHubCompaction{LastCommit: "previous", RunCommit: "current", WaitWeeks: tc.current}
 			start := time.Now()
-			require.NoError(t, r.finishCompaction(t.Context(), row, tc.name, tc.processed, tc.pr, "", ""))
+			require.NoError(t, r.finishCompaction(t.Context(), row, compactionCompletion{status: tc.name, processed: tc.processed, pr: tc.pr}))
 			require.Equal(t, tc.next, store.finished.WaitWeeks)
 			require.WithinDuration(t, start.Add(time.Duration(tc.next)*compactionWeek), store.due, time.Second)
 			want := row.LastCommit
