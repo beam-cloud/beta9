@@ -3,4 +3,3 @@ kind: Component
 
 resources:
 - daemonset.yaml
-- service-account.yaml

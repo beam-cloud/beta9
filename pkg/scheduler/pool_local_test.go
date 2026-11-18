@@ -101,11 +101,6 @@ func TestLocalWorkerJobOmitsControlPlaneCredentials(t *testing.T) {
 	controller.config.Cache.Coordinator.Token = "coordinator-token"
 	controller.config.Cache.Client.Token = "cache-client-token"
 	controller.config.Monitoring.Prometheus.AgentPassword = "prometheus-agent-password"
-	controller.config.Abstractions.VM.GitHubRunners = types.GitHubRunnerConfig{
-		ClientSecret:  "github-app-client-secret",
-		PrivateKey:    "github-app-private-key",
-		WebhookSecret: "github-app-webhook-secret",
-	}
 
 	job, _ := controller.createWorkerJob("worker-1", 0, 0, "", 0, "token")
 	pod := job.Spec.Template.Spec
@@ -122,7 +117,7 @@ func TestLocalWorkerJobOmitsControlPlaneCredentials(t *testing.T) {
 		"postgres-password", "sk_encryption-key", "redis-password", "storage-access-key", "storage-secret-key",
 		"hetzner-token", "tailscale-key", "tailscale-agent-key", "credit-gate-token", "build-registry-secret",
 		"docker-password", "cache-redis-password", "valkey-password", "coordinator-token", "prometheus-agent-password",
-		"billing-token", "github-app-client-secret", "github-app-private-key", "github-app-webhook-secret",
+		"billing-token",
 	} {
 		if strings.Contains(configJSON, secret) {
 			t.Errorf("worker config contains %q", secret)

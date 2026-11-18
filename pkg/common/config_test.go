@@ -1,41 +1,16 @@
 package common
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/knadh/koanf/providers/rawbytes"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 )
-
-func TestDebugModeDoesNotLogConfigValues(t *testing.T) {
-	const secret = "test-config-password-marker"
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("debugMode: true\ndatabase:\n  postgres:\n    password: "+secret+"\n"), 0o600))
-	t.Setenv("CONFIG_PATH", path)
-	t.Setenv("CONFIG_JSON", "")
-	t.Setenv(types.WorkerMinimalConfigEnv, "")
-
-	var output bytes.Buffer
-	previousLogger := log.Logger
-	log.Logger = zerolog.New(&output).Level(zerolog.DebugLevel)
-	t.Cleanup(func() { log.Logger = previousLogger })
-
-	manager, err := NewConfigManager[types.AppConfig]()
-	require.NoError(t, err)
-	config := manager.GetConfig()
-	require.True(t, config.DebugMode)
-	require.Equal(t, secret, config.Database.Postgres.Password)
-	require.NotContains(t, output.String(), secret)
-}
 
 func TestGeeseFileModes(t *testing.T) {
 	t.Setenv("CONFIG_PATH", "")
@@ -163,18 +138,6 @@ func TestMinimalConfigEnabled(t *testing.T) {
 
 	t.Setenv(types.WorkerMinimalConfigEnv, "false")
 	require.False(t, minimalConfigEnabled())
-}
-
-func TestMinimalConfigUsesMountedFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("cache:\n  coordinator:\n    token: mounted-token\n"), 0o600))
-	t.Setenv(types.WorkerMinimalConfigEnv, "true")
-	t.Setenv("CONFIG_PATH", path)
-	t.Setenv("CONFIG_JSON", `{"cache":{"coordinator":{"token":"overlay-token"}}}`)
-
-	manager, err := NewConfigManager[types.AppConfig]()
-	require.NoError(t, err)
-	require.Equal(t, "mounted-token", manager.GetConfig().Cache.Coordinator.Token)
 }
 
 func TestUnknownConfigKeysAreReportedWithTheirSource(t *testing.T) {

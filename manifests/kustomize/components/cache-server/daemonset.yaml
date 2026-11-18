@@ -1,3 +1,9 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: beta9-cache-server
+  namespace: beta9
+---
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:

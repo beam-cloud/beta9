@@ -1,23 +1,10 @@
 # Cache server configuration
 
-Provision `beta9-cache-server-config` in the DaemonSet's namespace through your
-existing secret controller before rollout. Use one `config.yaml` entry in the
-standard Beta9 YAML format containing only settings the cache needs. Set Helm's
-`cacheServer.configSecretName` to that Secret if your values previously set a
-different name.
+Before rollout, provision `beta9-cache-server-config` in the DaemonSet's
+namespace. Its `config.yaml` should contain the cache settings, gateway address,
+and coordinator token in the standard Beta9 format. Update any Helm override
+of `cacheServer.configSecretName` to point to this Secret.
 
-```yaml
-gateway:
-  grpc:
-    externalHost: beta9-gateway
-    externalPort: 1993
-cache:
-  coordinator:
-    token: <cache-coordinator-token>
-```
-
-Use the coordinator token accepted by the gateway and carry over any cache
-settings the DaemonSet uses, such as pool, storage, and reconciliation settings.
 For cloud access, bind a cache-scoped workload identity through Helm's
 `cacheServer.serviceAccount.annotations` or patch the Kustomize service account.
-The DaemonSet reads `config.yaml` at startup, so roll it after changes.
+Roll the DaemonSet after changes to `config.yaml`.

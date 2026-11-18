@@ -1,15 +1,13 @@
 {{- if .Values.cacheServer.enabled -}}
 {{- $configSecretName := required "cacheServer.configSecretName must name a dedicated cache-server Secret" .Values.cacheServer.configSecretName -}}
 {{- $gatewayConfigVolume := (.Values.persistence | default dict).config | default dict -}}
-{{- if or (has $configSecretName (list "beta9-config-helm" "beta9-config")) (eq $configSecretName ($gatewayConfigVolume.name | default "")) -}}
+{{- if or (eq $configSecretName "beta9-config-helm") (eq $configSecretName ($gatewayConfigVolume.name | default "")) -}}
 {{- fail "cacheServer.configSecretName cannot reference a gateway configuration Secret" -}}
 {{- end -}}
 {{- $serviceAccountName := printf "%s-cache-server" .Release.Name -}}
 {{- if eq $serviceAccountName .Values.serviceAccount.name -}}
 {{- fail "cache-server and gateway must use different service accounts" -}}
 {{- end -}}
-{{- $gatewayConfig := .Values.config | default dict -}}
-{{- $workerConfig := $gatewayConfig.worker | default dict -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -18,15 +16,11 @@ metadata:
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
-  labels:
-    {{- include "bjw-s.common.lib.metadata.allLabels" . | nindent 4 }}
-    app.kubernetes.io/component: cache-server
-automountServiceAccountToken: false
 ---
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ .Release.Name }}-cache-server
+  name: {{ $serviceAccountName }}
   labels:
     {{- include "bjw-s.common.lib.metadata.allLabels" . | nindent 4 }}
     app.kubernetes.io/component: cache-server
@@ -140,9 +134,9 @@ spec:
           path: {{ .Values.cacheServer.hostPath }}
           type: DirectoryOrCreate
       - name: images
-        {{- with $workerConfig.imagePVCName }}
+        {{- if .Values.config.worker.imagePVCName }}
         persistentVolumeClaim:
-          claimName: {{ . }}
+          claimName: {{ .Values.config.worker.imagePVCName }}
         {{- else }}
         hostPath:
           path: {{ .Values.cacheServer.imagesHostPath }}
