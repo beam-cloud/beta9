@@ -247,6 +247,70 @@ func TestWaitForProcessManagerStopsWithContainer(t *testing.T) {
 	require.Greater(t, stats.Attempts, 1)
 }
 
+type guestProcessRuntime struct {
+	runtime.Runtime
+	socket string
+	dialed chan string
+}
+
+func (r guestProcessRuntime) DialGuestProcessManager(ctx context.Context, id string) (net.Conn, error) {
+	r.dialed <- id
+	return (&net.Dialer{}).DialContext(ctx, "unix", r.socket)
+}
+
+// A headless VM's process manager has no address: it is reached through the
+// runtime, and nothing is looked for on the guest's ports.
+func TestHeadlessVMProcessManagerIsReachedThroughRuntime(t *testing.T) {
+	// Socket paths are short, and macOS's temporary directory is not.
+	dir, err := os.MkdirTemp("/tmp", "beam-manager")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "manager.sock")
+	listener, err := net.Listen("unix", socket)
+	require.NoError(t, err)
+	server := grpc.NewServer()
+	service := &countedReadyGoProcServer{}
+	goprocpb.RegisterGoProcServer(server, service)
+	go server.Serve(listener)
+	t.Cleanup(server.Stop)
+
+	// A listener on the port of other VMs' process managers must not be used.
+	port, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { port.Close() })
+	go func() {
+		if conn, err := port.Accept(); err == nil {
+			conn.Close()
+			t.Error("connected to the guest's network")
+		}
+	}()
+
+	request := &types.ContainerRequest{ContainerId: "headless", UseVM: true, Env: []string{"BEAM_VM_SYSTEMD=1", "BEAM_VM_HEADLESS=1"}}
+	instance := &ContainerInstance{
+		Request:             request,
+		ContainerIp:         "127.0.0.1",
+		ContainerAddressMap: map[int32]string{types.WorkerSandboxProcessManagerPort: port.Addr().String()},
+		Runtime:             guestProcessRuntime{socket: socket, dialed: make(chan string, 8)},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client, ready, _ := (&Worker{}).waitForProcessManager(ctx, request.ContainerId, instance)
+	require.True(t, ready)
+	t.Cleanup(func() { _ = client.Cleanup() })
+	require.Equal(t, request.ContainerId, <-instance.Runtime.(guestProcessRuntime).dialed)
+	require.NotZero(t, service.calls.Load())
+
+	// A runtime that cannot reach it says so, and nothing falls back to a port.
+	instance.Runtime = nil
+	_, err = newProcessManagerClient(ctx, instance)
+	require.ErrorContains(t, err, "headless")
+
+	require.NotContains(t, portsForRequest(&types.ContainerRequest{
+		UseVM: true, Env: request.Env,
+		Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeVM)}},
+	}), uint32(types.WorkerSandboxProcessManagerPort))
+}
+
 type delayedReadyGoProcServer struct {
 	goprocpb.UnimplementedGoProcServer
 	cancelled atomic.Int64

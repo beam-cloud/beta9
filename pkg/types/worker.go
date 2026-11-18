@@ -69,6 +69,17 @@ type DurableDiskMountConfig struct {
 	Driver     string `json:"driver"`
 	// Snapshot used to seed a new disk.
 	SourceSnapshotId string `json:"source_snapshot_id,omitempty"`
+	// Set for a disk whose capture_exit_snapshot is false. go2proto has no
+	// optional fields, so the mount carries the negative: a request without
+	// it captures the disk.
+	SkipExitSnapshot bool `json:"skip_exit_snapshot,omitempty"`
+}
+
+// CapturesExitSnapshot reads the capture_exit_snapshot of a VM spec or of a
+// durable disk. Unset means true: the specs and stubs stored before the
+// setting existed do not have it, and their disks are captured.
+func CapturesExitSnapshot(setting *bool) bool {
+	return setting == nil || *setting
 }
 
 func NewDurableDiskMountConfigFromProto(in *pb.DurableDisk) *DurableDiskMountConfig {
@@ -82,6 +93,7 @@ func NewDurableDiskMountConfigFromProto(in *pb.DurableDisk) *DurableDiskMountCon
 		Filesystem:       in.Filesystem,
 		Driver:           in.Driver,
 		SourceSnapshotId: in.SourceSnapshotId,
+		SkipExitSnapshot: !CapturesExitSnapshot(in.CaptureExitSnapshot),
 	}
 
 	return config
@@ -101,6 +113,7 @@ func (m *Mount) ToProto() *pb.Mount {
 			Filesystem:       m.DurableDisk.Filesystem,
 			Driver:           m.DurableDisk.Driver,
 			SourceSnapshotId: m.DurableDisk.SourceSnapshotId,
+			SkipExitSnapshot: m.DurableDisk.SkipExitSnapshot,
 		}
 	}
 
@@ -129,6 +142,7 @@ func NewMountFromProto(in *pb.Mount) *Mount {
 			Filesystem:       in.DurableDisk.Filesystem,
 			Driver:           in.DurableDisk.Driver,
 			SourceSnapshotId: in.DurableDisk.SourceSnapshotId,
+			SkipExitSnapshot: in.DurableDisk.SkipExitSnapshot,
 		}
 	}
 

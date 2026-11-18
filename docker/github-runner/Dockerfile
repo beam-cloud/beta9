@@ -3,25 +3,103 @@
 #     beam vm image build docker/github-runner
 #
 # and set abstractions.vm.githubRunners.imageID to the image ID it prints.
-# That build adds what every Beam VM has (systemd, Docker, git, Node, Python)
-# after these steps, so this file adds only the runner.
+# That build adds what every Beam VM has (git, Node, Python) after these
+# steps, so this file adds the runner and what a job written for GitHub's
+# ubuntu-24.04 runners expects of the machine. What GitHub does is in
+# https://github.com/actions/runner-images/tree/ubuntu24/20261111.370/images/ubuntu
 FROM ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55
 
 # Versions and checksums: https://github.com/actions/runner/releases
 ARG RUNNER_VERSION=2.338.2
 ARG RUNNER_SHA256_AMD64=baebf204307bac6193480852732f0aba2ae97b6c5597c244f4d5558390147c40
 ARG RUNNER_SHA256_ARM64=670adb2f268fe21dcbb58b3db0e0aa9d5b3bddfe2c651481336e561ff86de945
+# Docker and Compose as GitHub pins them (docker in toolsets/toolset-2404.json).
+# https://github.com/docker/compose/releases
+ARG DOCKER_VERSION=28.0.4
+ARG COMPOSE_VERSION=2.38.2
+ARG COMPOSE_SHA256_AMD64=486b3ffc0f806ca2efbc430cef89955386011662f0c76bad17c103d059cfa9cf
+ARG COMPOSE_SHA256_ARM64=4d0f7678dd3338452beba4518e36a8e22b20cad79ba2535c687da554dc3997fb
+# https://github.com/mikefarah/yq/releases
+ARG YQ_VERSION=4.54.3
+ARG YQ_SHA256_AMD64=129534601871538efe0ba4c5e62a34fb1d5f469bcb975c4fddeb467d82974973
+ARG YQ_SHA256_ARM64=89f69310b61b68d1245065a1241d1fc843f7a36cd6103ffd77ad987613bd1b67
 ARG DEBIAN_FRONTEND=noninteractive
 
+# A job installs packages without -y or prompts (scripts/build/configure-apt.sh
+# and configure-dpkg.sh).
+COPY apt.conf /etc/apt/apt.conf.d/90github-runner
+
+# In order:
+# - The tools of the Ubuntu server install that GitHub's image starts from
+#   (ubuntu-minimal, ubuntu-standard and ubuntu-server), without the packages
+#   that manage a machine.
+# - The apt packages GitHub installs before any toolchain (vital_packages,
+#   common_packages and cmd_packages in toolsets/toolset-2404.json).
+# - Its compilers, the system Python's venv and headers, GitHub CLI, Git LFS and
+#   kmod, which has modprobe.
+# - Docker. The VM build installs the newest release only where there is none.
+# The package indexes stay, for a job that installs without updating them.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        build-essential ca-certificates curl jq sudo unzip zip zstd \
-    # Jobs run as a user with sudo and Docker, as they do on GitHub's runners.
-    # Docker's package, which the VM build installs, uses this group.
-    && groupadd --system docker \
-    && useradd --create-home --shell /bin/bash --groups docker runner \
+    && apt-get install --no-install-recommends ca-certificates curl \
+    && curl -fsSL -o /etc/apt/keyrings/github-cli.gpg https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/github-cli.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list \
+    && curl -fsSL -o /etc/apt/keyrings/docker.asc https://download.docker.com/linux/ubuntu/gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" \
+        > /etc/apt/sources.list.d/docker.list \
+    && apt-get update \
+    && apt-get install --no-install-recommends \
+        apt-utils bash-completion bc bsdextrautils busybox-static cpio dirmngr dmidecode dosfstools ed \
+        eject ethtool fdisk fuse3 gawk gdisk gettext-base hdparm htop info iputils-tracepath less \
+        lsb-release lshw lsof media-types mtr-tiny nano netbase nftables numactl parted patch pciutils \
+        psmisc screen software-properties-common strace tcpdump tmux uuid-runtime usbutils vim whiptail \
+        \
+        bzip2 curl g++ gcc make jq tar unzip wget \
+        autoconf automake dbus dnsutils dpkg dpkg-dev fakeroot fonts-noto-color-emoji gnupg2 iproute2 \
+        iputils-ping libyaml-dev libtool libssl-dev libicu-dev libsqlite3-dev locales mercurial \
+        openssh-client p7zip-rar pkg-config python-is-python3 rpm texinfo tk tree tzdata upx xvfb \
+        xz-utils zsync \
+        acl aria2 binutils bison brotli libnss3-tools coreutils file findutils flex ftp haveged lz4 m4 \
+        mediainfo netcat-openbsd net-tools p7zip-full parallel patchelf pigz pollinate rsync shellcheck \
+        sphinxsearch sqlite3 ssh sshpass sudo systemd-coredump swig telnet time zip \
+        \
+        build-essential gh git-lfs kmod python3-dev python3-venv zstd \
+        \
+        containerd.io docker-buildx-plugin \
+        "docker-ce-cli=5:$DOCKER_VERSION-1~ubuntu.24.04~noble" "docker-ce=5:$DOCKER_VERSION-1~ubuntu.24.04~noble" \
+    # Daemons from those packages that a machine living for one job never needs,
+    # and apt's timers, which would hold the lock a job's apt-get waits for.
+    && systemctl mask haveged.service pollinate.service \
+    && systemctl disable apt-daily.timer apt-daily-upgrade.timer \
+    # Ubuntu lets users ping and trace through file capabilities, which Beam
+    # images do not keep. This is what the packages do where they cannot set one.
+    && chmod u+s /usr/bin/ping /usr/bin/mtr-packet \
+    # A job writes here without sudo (scripts/build/configure-system.sh).
+    && chmod -R 777 /usr/share \
+    && chmod 777 /usr/local/bin \
+    && case "$(dpkg --print-architecture)" in \
+        amd64) yq=$YQ_SHA256_AMD64 compose=$COMPOSE_SHA256_AMD64 ;; \
+        arm64) yq=$YQ_SHA256_ARM64 compose=$COMPOSE_SHA256_ARM64 ;; \
+    esac \
+    && curl -fsSL --retry 3 -o /usr/bin/yq \
+        "https://github.com/mikefarah/yq/releases/download/v$YQ_VERSION/yq_linux_$(dpkg --print-architecture)" \
+    && curl -fsSL --retry 3 -o /usr/libexec/docker/cli-plugins/docker-compose \
+        "https://github.com/docker/compose/releases/download/v$COMPOSE_VERSION/docker-compose-linux-$(uname -m)" \
+    && printf '%s  %s\n' "$yq" /usr/bin/yq "$compose" /usr/libexec/docker/cli-plugins/docker-compose | sha256sum --check - \
+    && chmod 0755 /usr/bin/yq /usr/libexec/docker/cli-plugins/docker-compose
+
+# What every process of a job starts with, and the limits it runs under
+# (scripts/build/configure-environment.sh and configure-limits.sh).
+COPY environment /etc/environment
+COPY sysctl.conf /etc/sysctl.d/60-github-runner.conf
+COPY limits.conf /etc/security/limits.d/github-runner.conf
+
+# Jobs run as GitHub's user, with sudo and Docker, who can write to /opt.
+RUN useradd --uid 1001 --create-home --shell /bin/bash --groups adm,users,docker,systemd-journal runner \
     && echo 'runner ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/runner \
     && chmod 0440 /etc/sudoers.d/runner \
+    && install -d -o runner -g runner /home/runner/work /home/runner/actions-runner /opt/hostedtoolcache \
+    && chmod -R 777 /opt \
     && case "$(dpkg --print-architecture)" in \
         amd64) arch=x64 sha256=$RUNNER_SHA256_AMD64 ;; \
         arm64) arch=arm64 sha256=$RUNNER_SHA256_ARM64 ;; \
@@ -30,13 +108,10 @@ RUN apt-get update \
     && curl -fsSL --retry 3 -o /tmp/runner.tgz \
         "https://github.com/actions/runner/releases/download/v$RUNNER_VERSION/actions-runner-linux-$arch-$RUNNER_VERSION.tar.gz" \
     && echo "$sha256  /tmp/runner.tgz" | sha256sum --check - \
-    && mkdir /home/runner/actions-runner \
     && tar -xzf /tmp/runner.tgz -C /home/runner/actions-runner \
     && /home/runner/actions-runner/bin/installdependencies.sh \
     && chown -R runner:runner /home/runner/actions-runner \
-    && rm -rf /tmp/runner.tgz /var/lib/apt/lists/*
+    && rm /tmp/runner.tgz
 
-# What systemctl enable would do; systemd is installed after these steps.
 COPY beam-github-runner.service /etc/systemd/system/
-RUN mkdir -p /etc/systemd/system/multi-user.target.wants \
-    && ln -s ../beam-github-runner.service /etc/systemd/system/multi-user.target.wants/
+RUN systemctl enable beam-github-runner.service

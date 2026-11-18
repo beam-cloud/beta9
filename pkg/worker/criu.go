@@ -1202,6 +1202,11 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	if opts == nil || opts.Request == nil {
 		return errors.New("checkpoint request is required")
 	}
+	// Saved memory resumes on the disk generations sealed with it, and a disk
+	// that is not captured seals none.
+	if disk := uncapturedQcowDurableDisk(opts.Request); disk != "" {
+		return fmt.Errorf("durable disk %s is not captured, so memory saved with it could never be resumed", disk)
+	}
 
 	availableStateCreated := false
 	runtimeName := ""

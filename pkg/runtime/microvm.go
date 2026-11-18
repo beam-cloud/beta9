@@ -49,6 +49,12 @@ const (
 	MicroVMScratchGiBAnnotation = "com.beam.microvm.scratch-gib" // sparse scratch disk size for ephemeral sandboxes
 	MicroVMVFIOAnnotation       = "com.beam.microvm.vfio"        // comma-separated PCI functions from Config.MicroVMVFIODevices
 	MicroVMGPUCountAnnotation   = "com.beam.microvm.gpu-count"   // requested guest GPUs: 0 or 1
+	// "true" keeps the data of a file whose attributes change in the image
+	// (microvm.Spec.RootMetacopy). Only for a root disk that is never restored.
+	MicroVMRootMetacopyAnnotation = "com.beam.microvm.root-metacopy"
+	// Guest directories, separated by ":", whose new files the guest writes
+	// into the directory bound at microvm.CacheExportDir as it shuts down.
+	MicroVMCacheExportAnnotation = "com.beam.microvm.cache-export"
 
 	microVMSysfsCgroupRoot       = "/sys/fs/cgroup"
 	microVMTapName               = "b9tap0"
@@ -100,6 +106,12 @@ type GuestFilesystem interface {
 // namespace the host cannot enter. The worker still checks the port is bound.
 type GuestPortDialer interface {
 	DialGuestPort(ctx context.Context, containerID string, port uint32) (net.Conn, error)
+}
+
+// GuestProcessDialer reaches the process manager of a headless VM, which
+// listens on a socket in the guest and not on a port.
+type GuestProcessDialer interface {
+	DialGuestProcessManager(ctx context.Context, containerID string) (net.Conn, error)
 }
 
 // GuestUpperDir is where a guest keeps the writable layer of its root
@@ -362,6 +374,18 @@ func microVMGuestSpec(spec *specs.Spec, network microvm.Network, root microVMDis
 		RootDisk:            root.device,
 		Docker:              annotationBool(spec, MicroVMDockerAnnotation),
 		Mounts:              mounts,
+		RootMetacopy:        annotationBool(spec, MicroVMRootMetacopyAnnotation),
+	}
+	if spec != nil {
+		var paths []string
+		for _, dir := range strings.Split(spec.Annotations[MicroVMCacheExportAnnotation], ":") {
+			if dir = strings.TrimSpace(dir); filepath.IsAbs(dir) {
+				paths = append(paths, filepath.Clean(dir))
+			}
+		}
+		if len(paths) > 0 {
+			vmSpec.CacheExport = &microvm.CacheExport{Paths: paths, File: path.Join(microvm.CacheExportDir, microvm.CacheExportFile)}
+		}
 	}
 	for _, disk := range extra {
 		vmSpec.Disks = append(vmSpec.Disks, microvm.Disk{Device: disk.device, MountPath: disk.mountPath, ReadOnly: disk.readOnly})

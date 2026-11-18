@@ -149,6 +149,12 @@ func runAgent(process *specs.Process, systemd, lateDevices bool, workload *workl
 	}); err != nil {
 		return -1, err
 	}
+	// Only a headless guest's process manager listens on this socket.
+	if err := serveVsock(microvm.ProcessPort, func(conn *os.File) error {
+		return microvm.ServeSocket(guestPortConn{conn}, microvm.ProcessSocket)
+	}); err != nil {
+		return -1, err
+	}
 	ctrl, err := dialControl(microvm.ControlPort)
 	if err != nil {
 		return -1, err
@@ -345,7 +351,13 @@ func assembleRoot(vm *microvm.Spec) error {
 	}
 	// virtio-fs inode handles change on cold boots and forks. Keep copied-up
 	// data on the durable disk instead of indexing or referencing lower inodes.
-	overlayOpts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s,index=off,metacopy=off", microvm.ImageMount, upper, work)
+	// A root disk that is never restored can refer to them: a change to a
+	// file's attributes then leaves its data in the image.
+	metacopy := "off"
+	if vm.RootMetacopy {
+		metacopy = "on"
+	}
+	overlayOpts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s,index=off,metacopy=%s", microvm.ImageMount, upper, work, metacopy)
 	if err := unix.Mount("overlay", microvm.NewRoot, "overlay", 0, overlayOpts); err != nil {
 		return fmt.Errorf("mount overlay (%s): %w", overlayOpts, err)
 	}
@@ -403,6 +415,41 @@ func assembleRoot(vm *microvm.Spec) error {
 		if err := unix.Mount(disk.Device, target, "ext4", flags, ""); err != nil {
 			return fmt.Errorf("mount %s on %s: %w", disk.Device, disk.MountPath, err)
 		}
+	}
+	// A guest boots without them as it did before there were any.
+	if err := installKernelModules(newRoot, vm.KernelModules); err != nil {
+		logf("install kernel module indexes: %v", err)
+	}
+	return nil
+}
+
+// installKernelModules gives a root the host's module indexes for the running
+// kernel, so that modprobe succeeds for a driver the kernel has built in. They
+// are copies in memory: a file of the host's would be one more that a paused
+// VM needs from the worker that resumes it.
+func installKernelModules(newRoot string, modules map[string]map[string][]byte) error {
+	var uts unix.Utsname
+	if err := unix.Uname(&uts); err != nil {
+		return err
+	}
+	release := unix.ByteSliceToString(uts.Release[:])
+	target, err := kernelModulesTarget(newRoot, release, modules[release])
+	if err != nil || target == "" {
+		return err
+	}
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		return err
+	}
+	if err := unix.Mount("tmpfs", target, "tmpfs", unix.MS_NOSUID|unix.MS_NODEV, "mode=0755"); err != nil {
+		return fmt.Errorf("mount tmpfs on %s: %w", target, err)
+	}
+	for name, data := range modules[release] {
+		if err := os.WriteFile(filepath.Join(target, name), data, 0o644); err != nil {
+			return err
+		}
+	}
+	if err := unix.Mount("", target, "", unix.MS_REMOUNT|unix.MS_RDONLY|unix.MS_NOSUID|unix.MS_NODEV, ""); err != nil {
+		return fmt.Errorf("remount %s read-only: %w", target, err)
 	}
 	return nil
 }
@@ -1511,6 +1558,7 @@ func runProcess(proc *specs.Process, ctrl *control, workload *workloadMemory) (i
 				continue
 			}
 			code := exitCode(status)
+			exportCache()
 			// Sync before reporting: FUSE_SYNCFS flushes the host filesystems
 			// behind the virtio-fs binds (object-storage volumes upload here),
 			// and the host tears the VM down once it hears of the exit.

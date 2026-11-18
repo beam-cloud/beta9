@@ -661,7 +661,9 @@ func (s *Worker) snapshotQcowDurableDiskMount(ctx context.Context, request *type
 
 func (s *Worker) snapshotQcowDurableDiskMountWithSeal(ctx context.Context, request *types.ContainerRequest, mount *types.Mount, mode durableDiskSyncMode, sealed func()) (*types.DiskSnapshot, error) {
 
-	if mount.ReadOnly {
+	// A disk that is not captured goes with its container (see
+	// removeUncapturedQcowDurableDisk), so no boundary publishes it.
+	if mount.ReadOnly || mount.DurableDisk.SkipExitSnapshot {
 		return nil, nil
 	}
 	key := s.qcowVolumeKey(request, mount)
@@ -1062,6 +1064,31 @@ func (s *Worker) detachQcowDurableDiskMount(ctx context.Context, request *types.
 		return nil
 	}
 	return s.diskManager.DetachOwned(ctx, s.qcowVolumeKey(request, mount), request.ContainerId)
+}
+
+// uncapturedQcowDurableDisk names a disk of the request that is not captured,
+// if it has one.
+func uncapturedQcowDurableDisk(request *types.ContainerRequest) string {
+	for i := range request.Mounts {
+		if mount := &request.Mounts[i]; isQcowDurableDiskMount(mount) && mount.DurableDisk.SkipExitSnapshot {
+			return mount.DurableDisk.Name
+		}
+	}
+	return ""
+}
+
+// removeUncapturedQcowDurableDisk deletes the local layers of a detached disk
+// that is not captured. Nothing else would: a detached copy is pruned once
+// everything in it is published, and nothing of this one ever is. A copy that
+// cannot be removed costs the node disk space, not the container its exit.
+func (s *Worker) removeUncapturedQcowDurableDisk(request *types.ContainerRequest, mount *types.Mount) {
+	if s.diskManager == nil || !mount.DurableDisk.SkipExitSnapshot {
+		return
+	}
+	if err := s.diskManager.Remove(s.qcowVolumeKey(request, mount)); err != nil {
+		log.Warn().Err(err).Str("container_id", request.ContainerId).Str("disk", mount.DurableDisk.Name).
+			Msg("failed to remove the local volume of a durable disk that is not captured")
+	}
 }
 
 // qcowChunkSink adapts the workspace bucket store, reporting progress so the

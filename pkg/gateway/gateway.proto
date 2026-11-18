@@ -693,6 +693,11 @@ message DurableDisk {
   bool read_only = 6;
   // Snapshot used to initialize a disk with no snapshot history.
   string source_snapshot_id = 7;
+  // Whether the disk outlives its container. Unset means true. A disk that
+  // is not captured is never uploaded, and its worker removes it when the
+  // container exits: it belongs to a machine that is never started again.
+  // Only a qcow disk can opt out; the snapshot driver always captures.
+  optional bool capture_exit_snapshot = 8;
 }
 
 // A durable machine-root disk. The container's entire root filesystem delta

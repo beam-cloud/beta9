@@ -208,6 +208,15 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		return &pb.GetOrCreateStubResponse{Ok: false, ErrMsg: err.Error()}, nil
 	}
 	stubConfig.PreparationCacheKey = preparedStubCacheKey(ctx)
+	stubConfig.RootLayer = types.RootLayerFromContext(ctx)
+	for _, disk := range in.Disks {
+		if disk != nil && strings.HasPrefix(types.SafeDurableDiskName(disk.Name), types.RootLayerDiskPrefix) {
+			return &pb.GetOrCreateStubResponse{Ok: false, ErrMsg: fmt.Sprintf("disk names that begin with %q are reserved", types.RootLayerDiskPrefix)}, nil
+		}
+	}
+	if in.PersistentRoot != nil && strings.HasPrefix(types.SafeDurableDiskName(in.PersistentRoot.Name), types.RootLayerDiskPrefix) {
+		return &pb.GetOrCreateStubResponse{Ok: false, ErrMsg: fmt.Sprintf("disk names that begin with %q are reserved", types.RootLayerDiskPrefix)}, nil
+	}
 
 	// A persistent root is shorthand for a qcow machine-root disk: the
 	// container's overlay upper layer lives on the volume, so disk snapshots

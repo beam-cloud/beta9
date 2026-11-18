@@ -25,6 +25,10 @@ var validName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,23}$`)
 var validEnvKey = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 var errVMPreempted = echo.NewHTTPError(http.StatusConflict, "Spot VM was preempted; call start() to restart")
 
+// errRootNotCaptured refuses what a VM needs its root kept for: its worker
+// discards a root that is not captured when the VM exits.
+var errRootNotCaptured = echo.NewHTTPError(http.StatusConflict, "this VM's disk is not kept when it exits, so nothing would be left to start it from; it cannot be stopped, paused, snapshotted or forked, only deleted")
+
 func normalizeDiskSize(size string) (string, error) {
 	if size == "" {
 		size = strconv.FormatInt(types.DefaultVMRootSizeBytes, 10)
@@ -96,6 +100,9 @@ func validate(spec *types.VMSpec) error {
 		if disk == nil || !validName.MatchString(disk.Name) || strings.HasPrefix(disk.Name, "vm-") || seenDisks[disk.Name] {
 			return fmt.Errorf("additional disks require unique names; the vm- prefix is reserved for VM roots")
 		}
+		if strings.HasPrefix(disk.Name, types.RootLayerDiskPrefix) {
+			return fmt.Errorf("disk names that begin with %q are reserved", types.RootLayerDiskPrefix)
+		}
 
 		if disk.Driver != "" && disk.Driver != "qcow" {
 			return fmt.Errorf("microVM disks require the qcow driver")
@@ -103,6 +110,11 @@ func validate(spec *types.VMSpec) error {
 
 		if disk.Filesystem != "" && disk.Filesystem != "ext4" {
 			return fmt.Errorf("microVM disks require ext4")
+		}
+
+		// Stop and pause count on every additional disk being kept.
+		if disk.CaptureExitSnapshot != nil {
+			return fmt.Errorf("capture_exit_snapshot is not a disk option")
 		}
 
 		disk.Driver, disk.Filesystem = "qcow", "ext4"
@@ -155,6 +167,15 @@ func validate(spec *types.VMSpec) error {
 		return fmt.Errorf("desktop requires at least 1024 MiB")
 	}
 
+	if spec.Headless && (spec.Desktop || spec.Kiosk != nil || spec.SSH) {
+		return fmt.Errorf("a headless VM has no desktop, kiosk or SSH")
+	}
+
+	// Each of these stops a VM so that it can start again from its root.
+	if !types.CapturesExitSnapshot(spec.CaptureExitSnapshot) && (spec.IdleTimeout > 0 || spec.IdleAction != "" || spec.AutoResume || spec.CPUTier.Borrows()) {
+		return fmt.Errorf("a VM whose disk is not kept has no idle timeout, idle action, auto-resume or Spot tier")
+	}
+
 	for _, env := range spec.Env {
 		key, _, ok := strings.Cut(env, "=")
 		if !ok || !validEnvKey.MatchString(key) || strings.HasPrefix(key, "BEAM_VM_") || strings.HasPrefix(key, "BETA9_") || strings.ContainsRune(env, 0) {
@@ -176,7 +197,11 @@ func validate(spec *types.VMSpec) error {
 	}
 
 	seen := map[uint32]bool{}
-	ports := []uint32{types.VMTerminalPort}
+	ports := []uint32{}
+	if !spec.Headless {
+		ports = append(ports, types.VMTerminalPort)
+	}
+
 	if spec.Desktop {
 		ports = append(ports, types.VMDesktopPort)
 	}
@@ -215,7 +240,8 @@ func validate(spec *types.VMSpec) error {
 		}
 	}
 	for _, port := range []uint32{types.VMTerminalPort, types.VMDesktopPort} {
-		if (port == types.VMTerminalPort || spec.Desktop) && !slices.Contains(spec.PublicPorts, port) && !slices.Contains(spec.ProtectedPorts, port) {
+		managed := port == types.VMTerminalPort && !spec.Headless || port == types.VMDesktopPort && spec.Desktop
+		if managed && !slices.Contains(spec.PublicPorts, port) && !slices.Contains(spec.ProtectedPorts, port) {
 			spec.ProtectedPorts = append(spec.ProtectedPorts, port)
 		}
 	}
@@ -526,7 +552,7 @@ func (s *Service) configurePort(ctx context.Context, v *types.VM, action string,
 	if err := validateDesktopPort(v.Spec, port, public); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
-	systemPort := port == types.VMTerminalPort || (port == types.VMDesktopPort && v.Spec.Desktop)
+	systemPort := managedVMWebPort(v, port)
 	if port == 0 || port > 65535 || port == types.VMSSHPort || port == uint32(types.WorkerSandboxProcessManagerPort) || (systemPort && (action != "expose" || protected == nil)) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid or reserved port")
 	}

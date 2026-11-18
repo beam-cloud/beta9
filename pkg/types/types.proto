@@ -149,6 +149,7 @@ message DurableDiskMountConfig {
   string filesystem = 3;
   string driver = 4;
   string source_snapshot_id = 5;
+  bool skip_exit_snapshot = 6;
 }
 
 message FileInfo {

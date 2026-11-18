@@ -735,11 +735,42 @@ func nextProcessManagerBackoff(delay time.Duration) time.Duration {
 }
 
 func newProcessManagerClient(ctx context.Context, instance *ContainerInstance) (*goproc.GoProcClient, error) {
+	if instance != nil && instance.Request.IsHeadlessVM() {
+		return newHeadlessProcessManagerClient(ctx, instance)
+	}
+
 	endpoints := sandboxProcessManagerEndpoints(instance)
 	if len(endpoints) == 0 {
 		return nil, errors.New("sandbox process manager address unavailable")
 	}
 	return newProcessManagerClientFromEndpoints(ctx, endpoints)
+}
+
+// newHeadlessProcessManagerClient connects to the process manager of a
+// headless VM, which listens on a socket in the guest and has no address:
+// each connection goes through the runtime, over vsock.
+func newHeadlessProcessManagerClient(ctx context.Context, instance *ContainerInstance) (*goproc.GoProcClient, error) {
+	guest, ok := instance.Runtime.(runtime.GuestProcessDialer)
+	if !ok {
+		return nil, errors.New("runtime cannot reach the process manager of a headless VM")
+	}
+
+	containerId := instance.Request.ContainerId
+	client, err := goproc.NewGoProcClientWithDialer(ctx, func(ctx context.Context) (net.Conn, error) {
+		return guest.DialGuestProcessManager(ctx, containerId)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, goprocReadyProbeTimeout)
+	defer cancel()
+	if err := client.ReadyContext(probeCtx); err != nil {
+		_ = client.Cleanup()
+		return nil, err
+	}
+
+	return client, nil
 }
 
 // newProcessManagerClientFromEndpoints tries each endpoint in order and returns

@@ -57,6 +57,9 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 		"BEAM_VM_SSH="+fmt.Sprint(v.Spec.SSH),
 		"BEAM_VM_SSH_PUBLIC_KEY="+v.Spec.SSHPublicKey,
 	)
+	if v.Spec.Headless {
+		env = append(env, "BEAM_VM_HEADLESS=1")
+	}
 	if v.Spec.Desktop {
 		env = append(env, "DISPLAY=:1", "XAUTHORITY=/run/beam-desktop/.Xauthority")
 		if v.Spec.DesktopTransport != "" {
@@ -105,6 +108,8 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 			Filesystem:       "ext4",
 			Driver:           "qcow",
 			SourceSnapshotId: v.Spec.SourceSnapshotID,
+			// Left unset unless the spec sets it, as stubs made before it are.
+			CaptureExitSnapshot: v.Spec.CaptureExitSnapshot,
 		}},
 	}
 	if v.Spec.GPU != "" {
@@ -123,7 +128,9 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 		req.Pool = &pb.PoolConfig{Name: v.Spec.Pool}
 	}
 
-	resp, err := s.gateway.GetOrCreateStub(ctx, req)
+	// A root layer is no option of a stub's request, which anyone can make:
+	// it reaches the stub's configuration only from here.
+	resp, err := s.gateway.GetOrCreateStub(types.WithRootLayer(ctx, v.Spec.RootLayer), req)
 	if err != nil {
 		return err
 	}
@@ -175,7 +182,7 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 			return fmt.Errorf("read VM finalization proof before retiring runtime %s: %w", retiredContainerID, err)
 		}
 		retiredProofObserved = err == nil
-		if retiredProofObserved && retiredCode == int(types.ContainerExitCodeUnknownError) {
+		if retiredProofObserved && retiredCode == int(types.ContainerExitCodeUnknownError) && keepsDisks(v) {
 			return fmt.Errorf("VM runtime finalization failed; retaining runtime %s for recovery", retiredContainerID)
 		}
 	}
@@ -233,7 +240,7 @@ func (s *Service) runtimeState(v *types.VM) (*types.ContainerState, error) {
 			return nil, err
 		}
 
-		if code, err := s.containers.GetContainerExitCode(v.ContainerID); err == nil && code == int(types.ContainerExitCodeUnknownError) {
+		if code, err := s.containers.GetContainerExitCode(v.ContainerID); err == nil && code == int(types.ContainerExitCodeUnknownError) && keepsDisks(v) {
 			return nil, fmt.Errorf("VM runtime finalization failed; retaining runtime %s for recovery", v.ContainerID)
 		}
 
@@ -241,6 +248,14 @@ func (s *Service) runtimeState(v *types.VM) (*types.ContainerState, error) {
 	}
 
 	return state, nil
+}
+
+// keepsDisks reports whether a VM's worker keeps any of its disks when it
+// exits. Only then is there anything to recover from a runtime whose
+// finalization failed: the worker removes the disks of any other VM, such
+// as a runner whose guest was killed, however it exits.
+func keepsDisks(v *types.VM) bool {
+	return types.CapturesExitSnapshot(v.Spec.CaptureExitSnapshot) || len(v.Spec.Disks) > 0
 }
 
 // Launch completion is visible before the reconciler persists it. Project only
@@ -261,6 +276,12 @@ func (s *Service) launchStatus(v *types.VM) (string, error) {
 }
 
 func (s *Service) snapshotRoot(ctx context.Context, v *types.VM) error {
+	// The worker uploads nothing of a root that is not captured, so there
+	// is no snapshot to commit, or to take a template or a fork from.
+	if !types.CapturesExitSnapshot(v.Spec.CaptureExitSnapshot) {
+		return errRootNotCaptured
+	}
+
 	if v.ContainerID == "" {
 		if v.RootSnapshotID == "" {
 			return fmt.Errorf("VM has no committed root snapshot")
@@ -395,19 +416,27 @@ func (s *Service) stop(ctx context.Context, v *types.VM, visible bool) error {
 				// disk writes. Its explicit terminal status is also a barrier;
 				// missing Redis state alone never is.
 				status, err := s.containers.GetContainerRequestStatus(v.ContainerID)
-				if err != nil || status != types.ContainerRequestStatusFailed {
+				switch {
+				case err == nil && status == types.ContainerRequestStatusFailed:
+				case errors.Is(codeErr, redis.Nil) && !keepsDisks(v):
+					// A worker that is lost reports no exit, ever. It kept
+					// none of this VM's disks, so there is no final sync to
+					// confirm, and the VM is not left to wait for one.
+				default:
 					return fmt.Errorf("unable to confirm final disk sync: %w", codeErr)
 				}
 
 				code = int(types.ContainerExitCodeScheduler)
 			}
 
-			if code == int(types.ContainerExitCodeUnknownError) {
+			if code == int(types.ContainerExitCodeUnknownError) && keepsDisks(v) {
 				return fmt.Errorf("VM exited with a finalization error; inspect worker logs before restarting")
 			}
 
+			// A root that is not captured has no final snapshot to confirm:
+			// its worker removed it instead.
 			latest, err := s.backend.GetLatestDiskSnapshot(ctx, v.WorkspaceID, rootDisk(v))
-			if err != nil && v.EverRunning {
+			if err != nil && v.EverRunning && types.CapturesExitSnapshot(v.Spec.CaptureExitSnapshot) {
 				return fmt.Errorf("unable to confirm final root snapshot: %w", err)
 			}
 
@@ -634,6 +663,11 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 
 	if token == nil || !token.Active || token.DisabledByClusterAdmin {
 		v.DesiredState = types.VMStateStopped
+		// Stopping a VM whose root is not captured would leave nothing to
+		// start, so it is removed instead.
+		if !types.CapturesExitSnapshot(v.Spec.CaptureExitSnapshot) {
+			v.DesiredState = types.VMStateDeleted
+		}
 		if err := s.repo.SaveVM(ctx, v); err != nil {
 			return err
 		}
@@ -642,7 +676,14 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 	}
 
 	info.Token = token
-	if v.Status == types.VMStateError && (v.LaunchAttempts >= 5 || time.Since(v.UpdatedAt) < 30*time.Second) {
+	pause := 30 * time.Second
+	if runner && throttled(v) {
+		// Room in the workspace's limit comes at any moment, and to be
+		// refused again costs nothing.
+		pause = 0
+	}
+
+	if v.Status == types.VMStateError && (v.LaunchAttempts >= 5 || time.Since(v.UpdatedAt) < pause) {
 		return nil
 	}
 
@@ -664,7 +705,9 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 				}
 			}
 
-			if v.Spec.IdleTimeout > 0 && time.Since(v.LastActiveAt) >= time.Duration(v.Spec.IdleTimeout)*time.Second {
+			// A VM whose root is not captured cannot start again, so it is
+			// never stopped or paused for being idle.
+			if v.Spec.IdleTimeout > 0 && types.CapturesExitSnapshot(v.Spec.CaptureExitSnapshot) && time.Since(v.LastActiveAt) >= time.Duration(v.Spec.IdleTimeout)*time.Second {
 				active, err := s.hasActivity(ctx, v.ID)
 				if err != nil {
 					return err
@@ -697,8 +740,9 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 				}
 			}
 
-			// Runner disks are discarded with their single job.
-			if !runner && time.Since(v.UpdatedAt) >= time.Minute {
+			// Runner disks are discarded with their single job, as is any
+			// root that is not captured.
+			if !runner && types.CapturesExitSnapshot(v.Spec.CaptureExitSnapshot) && time.Since(v.UpdatedAt) >= time.Minute {
 				if err := s.snapshotRoot(ctx, v); err != nil {
 					return err
 				}

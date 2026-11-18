@@ -157,6 +157,7 @@ type Worker struct {
 	storageManager          *WorkspaceStorageManager
 	diskManager             *disk.Manager
 	qcowChains              sync.Map // live published qcow chain (rows + manifests) per volume key
+	rootLayers              *rootLayers
 	qcowMerges              sync.Map // running background layer merge (*qcowMerge) per volume key, or a placeholder while it detaches
 	verifiedJournalStores   sync.Map // endpoint/region/bucket keys whose conditional writes passed the journal probe
 	persistent              bool
@@ -1198,6 +1199,7 @@ func (s *Worker) failContainerRequest(containerId string, request *types.Contain
 		exitCode = int(serr.ExitCode)
 	}
 
+	s.discardRootLayerExport(containerId, request)
 	s.clearContainer(containerId, request, exitCode, false)
 }
 

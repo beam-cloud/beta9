@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -691,6 +692,190 @@ func TestPublicTemplateLookupRequiresImmutableIDAndTemplateKind(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+// statement matches a statement that has each of the parts, in their order,
+// whatever is between them.
+func statement(parts ...string) string {
+	for i, part := range parts {
+		parts[i] = regexp.QuoteMeta(part)
+	}
+	return strings.Join(parts, ".*")
+}
+
+func TestGitHubRunnerJobIsClaimedWithinTheLimit(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	r := repo.(*PostgresBackendRepository)
+	ctx := context.Background()
+
+	// A claim holds the job for a minute and starts its runner's times over.
+	// It counts the workspace's runners, those being started among them, and
+	// the jobs of the account that have been due longer. No more runners
+	// are counted than the limit, in the order of their names.
+	claim := statement(
+		`SET vm = $3, attempts = attempts + 1, provision_at = NOW() + INTERVAL '1 minute', waiting = '', registered_at = NULL, vm_ready_at = NULL`,
+		`WHERE id = $1 AND attempts = $2 AND provision_at <= NOW()`,
+		`AND ($4 <= 0 OR (`,
+		`v.workspace_id = j.workspace_id AND v.data->>'desired_state' <> 'deleted'`,
+		`r.workspace_id = v.workspace_id AND r.vm = v.name AND r.vm <> '' LIMIT 1 ) ORDER BY v.name LIMIT $4 ) runners ) + (`,
+		`r.workspace_id = j.workspace_id AND r.provision_at > NOW() AND r.vm <> '' AND r.waiting = ''`,
+		`AND NOT EXISTS (SELECT 1 FROM persistent_vm v WHERE v.workspace_id = r.workspace_id AND v.name = r.vm) ) ) + (`,
+		`d.workspace_id = j.workspace_id AND d.installation_id = j.installation_id`,
+		`d.provision_at <= NOW() AND (d.provision_at, d.id) < (j.provision_at, j.id) ) < $4);`)
+	job := types.GitHubRunnerJob{ID: 5, Attempts: 2}
+	mock.ExpectExec(claim).WithArgs(int64(5), 2, "ghr-a", 100).WillReturnResult(sqlmock.NewResult(0, 1))
+	claimed, err := r.ClaimGitHubRunnerJob(ctx, &job, "ghr-a", 100)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.Equal(t, types.GitHubRunnerJob{ID: 5, Attempts: 3, VM: "ghr-a"}, job)
+
+	// A job that is not claimed, as one past the limit, stays as it is.
+	mock.ExpectExec(claim).WithArgs(int64(5), 3, "ghr-b", 100).WillReturnResult(sqlmock.NewResult(0, 0))
+	claimed, err = r.ClaimGitHubRunnerJob(ctx, &job, "ghr-b", 100)
+	require.NoError(t, err)
+	require.False(t, claimed)
+	require.Equal(t, types.GitHubRunnerJob{ID: 5, Attempts: 3, VM: "ghr-a"}, job)
+
+	// The jobs of a workspace that is full are not listed as due, and the
+	// others are, the job due longest first.
+	received := time.Date(2026, 11, 16, 9, 0, 0, 123_000_000, time.UTC)
+	columns := strings.Split(strings.Join(strings.Fields(githubRunnerJobColumns), ""), ",")
+	mock.ExpectQuery(statement(`WITH due AS (`, `WHERE provision_at <= NOW()`, `AND NOT i.paused`,
+		`WHERE $1 <= 0 OR workspace_id NOT IN (`, `FROM (SELECT DISTINCT workspace_id FROM due) j WHERE (`,
+		`ORDER BY v.name LIMIT $1 ) runners ) + (`, `) >= $1 )`, `ORDER BY provision_at, id LIMIT 100;`)).
+		WithArgs(100).
+		WillReturnRows(sqlmock.NewRows(columns).AddRow(int64(5), int64(77), int64(42), 8, "acme/repo", "CI", "test", "", "beam-4vcpu-ubuntu-2404",
+			"queued", "", "", received, nil, nil, "ghr-a", 3, received, "boom", "Retrying", received, received.Add(time.Second), nil, true))
+	due, err := r.ListDueGitHubRunnerJobs(ctx, 100)
+	require.NoError(t, err)
+	registered := received.Add(time.Second)
+	require.Equal(t, []types.GitHubRunnerJob{{ID: 5, RunID: 77, InstallationID: 42, WorkspaceID: 8, Repository: "acme/repo", Workflow: "CI",
+		Name: "test", Label: "beam-4vcpu-ubuntu-2404", Status: "queued", CreatedAt: received, VM: "ghr-a", Attempts: 3, ProvisionAt: &received,
+		Error: "boom", Waiting: "Retrying", ReceivedAt: &received, RegisteredAt: &registered, DefaultBranch: true}}, due,
+		"a due job says whether it is on a default branch, which decides what its runner keeps")
+
+	// Every runner of a workspace is counted for its status.
+	mock.ExpectQuery(statement(`SELECT (`, `v.workspace_id = j.workspace_id`, `ORDER BY v.name LIMIT NULL ) runners ) + (`,
+		`) FROM (SELECT $1::bigint AS workspace_id) j;`)).
+		WithArgs(uint(8)).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
+	running, err := r.CountGitHubRunners(ctx, 8)
+	require.NoError(t, err)
+	require.Equal(t, 3, running)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGitHubRunnerJobWaitsToBeTriedAgain(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	r := repo.(*PostgresBackendRepository)
+	ctx := context.Background()
+	const retry = `provision_at = NOW() + LEAST(60, 5 * POWER(2, LEAST(attempts, 5) - 1)) * INTERVAL '1 second'`
+
+	// A failed attempt is made again after a time that grows to a minute,
+	// unless no runner is started for the job any more.
+	mock.ExpectExec(statement(`UPDATE github_runner_job SET `+retry+`, error = $2, waiting = $3`, `WHERE id = $1 AND provision_at IS NOT NULL;`)).
+		WithArgs(int64(5), "boom", "Retrying").WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, r.FailGitHubRunnerJob(ctx, 5, "boom", "Retrying"))
+
+	// So is a runner that stopped before it took a job replaced.
+	mock.ExpectExec(statement(`SET data = jsonb_set(data, '{desired_state}', '"deleted"')`, `UPDATE github_runner_job SET `+retry+`, error = $3, waiting = $4`,
+		`WHERE workspace_id = $1 AND vm = $2 AND vm <> '';`)).
+		WithArgs(uint(8), "ghr-a", "stopped", "Waiting for capacity").WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, r.ReplaceGitHubRunner(ctx, 8, "ghr-a", "stopped", "Waiting for capacity"))
+
+	// A job that waits without an attempt keeps its attempts, and is only
+	// made to wait while it is due.
+	until := time.Now().Add(time.Hour)
+	mock.ExpectExec(statement(`UPDATE github_runner_job SET provision_at = $3, waiting = $2 WHERE id = $1 AND provision_at <= NOW();`)).
+		WithArgs(int64(5), "GitHub is limiting requests", until).WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, r.WaitGitHubRunnerJob(ctx, 5, "GitHub is limiting requests", until))
+
+	// A job waits for nothing once no runner is started for it any more.
+	mock.ExpectExec(statement(`UPDATE github_runner_job SET provision_at = NULL, error = $2, waiting = '' WHERE id = $1;`)).
+		WithArgs(int64(5), "").WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, r.FinishGitHubRunnerJob(ctx, 5, ""))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGitHubRunnerJobTimelineIsStored(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	r := repo.(*PostgresBackendRepository)
+	ctx := context.Background()
+
+	// A job is received when it is first seen, and no later delivery of it
+	// changes that, or the branch it was first said to be on.
+	created := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
+	mock.ExpectExec(statement(`completed_at, run_id, default_branch, provision_at, received_at )`, `$15, $16, NOW(), NOW())`, `ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status,`,
+		`run_id = COALESCE(NULLIF(EXCLUDED.run_id, 0), github_runner_job.run_id) WHERE`)).
+		WithArgs(int64(5), int64(42), uint(8), "acme/repo", "CI", "test", "", "beam-4vcpu-ubuntu-2404", "queued", "", "", created, nil, nil, int64(77), true).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, r.SaveGitHubRunnerJob(ctx, &types.GitHubRunnerJob{ID: 5, RunID: 77, InstallationID: 42, WorkspaceID: 8, Repository: "acme/repo",
+		Workflow: "CI", Name: "test", Label: "beam-4vcpu-ubuntu-2404", Status: "queued", CreatedAt: created, DefaultBranch: true}))
+
+	mock.ExpectExec(statement(`UPDATE github_runner_job SET registered_at = NOW() WHERE id = $1;`)).
+		WithArgs(int64(5)).WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, r.MarkGitHubRunnerRegistered(ctx, 5))
+
+	// What is found of a runner's VM is its job's to know. The time it was
+	// first found ready stays, and none is given until it is.
+	observed := statement(`UPDATE github_runner_job SET waiting = $3, vm_ready_at = COALESCE(vm_ready_at, $4) WHERE workspace_id = $1 AND vm = $2 AND vm <> '';`)
+	ready := created.Add(7 * time.Second)
+	mock.ExpectExec(observed).WithArgs(uint(8), "ghr-a", "Waiting for capacity", nil).WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, r.ObserveGitHubRunner(ctx, 8, "ghr-a", "Waiting for capacity", nil))
+	mock.ExpectExec(observed).WithArgs(uint(8), "ghr-a", "", ready).WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, r.ObserveGitHubRunner(ctx, 8, "ghr-a", "", &ready))
+	mock.ExpectQuery(statement(`AS job_status, j.waiting, j.vm_ready_at IS NOT NULL AS ready FROM github_runner_job j WHERE j.workspace_id = $1 AND j.vm = $2 AND j.vm <> ''`)).
+		WithArgs(uint(8), "ghr-a").
+		WillReturnRows(sqlmock.NewRows([]string{"installation_id", "repository", "connected", "job_status", "waiting", "ready"}).
+			AddRow(int64(42), "acme/repo", true, "", "Waiting for capacity", true))
+	runner, err := r.GetGitHubRunner(ctx, 8, "ghr-a")
+	require.NoError(t, err)
+	require.Equal(t, &types.GitHubRunner{InstallationID: 42, Repository: "acme/repo", Connected: true, Waiting: "Waiting for capacity", Ready: true}, runner)
+
+	// The times are returned with the job.
+	received, registered := created.Add(time.Second+123*time.Millisecond), created.Add(2*time.Second)
+	columns := strings.Split(strings.Join(strings.Fields(githubRunnerJobColumns), ""), ",")
+	mock.ExpectQuery(statement(`error, waiting, received_at, registered_at, vm_ready_at, default_branch FROM github_runner_job j WHERE workspace_id = $1 AND id = $2`)).
+		WithArgs(uint(8), int64(5)).
+		WillReturnRows(sqlmock.NewRows(columns).AddRow(int64(5), int64(77), int64(42), 8, "acme/repo", "CI", "test", "", "beam-4vcpu-ubuntu-2404",
+			"queued", "", "", created, nil, nil, "ghr-a", 1, nil, "", "", received, registered, ready, false))
+	job, err := r.GetGitHubRunnerJob(ctx, 8, 5)
+	require.NoError(t, err)
+	require.Equal(t, &types.GitHubRunnerJob{ID: 5, RunID: 77, InstallationID: 42, WorkspaceID: 8, Repository: "acme/repo", Workflow: "CI", Name: "test",
+		Label: "beam-4vcpu-ubuntu-2404", Status: "queued", CreatedAt: created, VM: "ghr-a", Attempts: 1,
+		ReceivedAt: &received, RegisteredAt: &registered, VMReadyAt: &ready}, job)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestGitHubRunnerIsSurplusPastTheQueuedJobs(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	r := repo.(*PostgresBackendRepository)
+	ctx := context.Background()
+
+	// The queued jobs of the runner's repository and label are compared with
+	// the idle runners that come before it: those that are up, and that
+	// GitHub has given no job.
+	surplus := statement(
+		`q.workspace_id = j.workspace_id AND q.repository = j.repository AND q.label = j.label AND q.status = 'queued' ) <= (`,
+		`WHERE v.workspace_id = j.workspace_id AND v.name < j.vm`,
+		`AND v.data->>'desired_state' <> 'deleted' AND v.data->>'status' = 'running'`,
+		`SELECT o.repository = j.repository AND o.label = j.label FROM github_runner_job o`,
+		`WHERE o.workspace_id = v.workspace_id AND o.vm = v.name AND o.vm <> '' LIMIT 1 )`,
+		`AND COALESCE((`, `WHERE a.workspace_id = v.workspace_id AND a.runner_name = v.name AND a.runner_name <> '' LIMIT 1 ), '') = ''`,
+		`ORDER BY v.name ) idle )`,
+		`FROM github_runner_job WHERE workspace_id = $1 AND vm = $2 AND vm <> '' LIMIT 1 ) j;`)
+	for _, answer := range []bool{true, false} {
+		mock.ExpectQuery(surplus).WithArgs(uint(8), "ghr-b").WillReturnRows(sqlmock.NewRows([]string{"surplus"}).AddRow(answer))
+		is, err := r.IsSurplusGitHubRunner(ctx, 8, "ghr-b")
+		require.NoError(t, err)
+		require.Equal(t, answer, is)
+	}
+
+	// A VM that no job was started a runner for is no runner.
+	mock.ExpectQuery(surplus).WithArgs(uint(8), "dev").WillReturnRows(sqlmock.NewRows([]string{"surplus"}))
+	is, err := r.IsSurplusGitHubRunner(ctx, 8, "dev")
+	require.NoError(t, err)
+	require.False(t, is)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 // Every row belongs to a workspace made for the test, and is removed on
 // completion.
 func TestVMGitHubRunnersIntegration(t *testing.T) {
@@ -754,43 +939,83 @@ func TestVMGitHubRunnersIntegration(t *testing.T) {
 		return jobs[index]
 	}
 	isDue := func(id int64) bool {
-		due, err := repo.ListDueGitHubRunnerJobs(ctx)
+		due, err := repo.ListDueGitHubRunnerJobs(ctx, 0)
 		require.NoError(t, err)
 		return slices.ContainsFunc(due, func(job types.GitHubRunnerJob) bool { return job.ID == id })
 	}
+	// comeDue passes the time that a job waits to be tried again.
+	comeDue := func(id int64) {
+		_, err := db.Exec(`UPDATE github_runner_job SET provision_at = NOW() WHERE id = $1`, id)
+		require.NoError(t, err)
+	}
 
-	// A claim gives a due job to one caller, and schedules its retry.
+	// A claim gives a due job to one caller, and holds it for a minute. A
+	// job says when it was received.
 	queued := job(id, types.GitHubJobQueued, "")
 	require.NoError(t, repo.SaveGitHubRunnerJob(ctx, queued))
 	require.True(t, isDue(id))
 	first := stored(id)
 	require.Equal(t, queued.CreatedAt, first.CreatedAt.UTC())
-	first.CreatedAt, first.ProvisionAt = queued.CreatedAt, nil
+	require.WithinDuration(t, time.Now(), *first.ReceivedAt, time.Minute)
+	received := *first.ReceivedAt
+	first.CreatedAt, first.ProvisionAt, first.ReceivedAt = queued.CreatedAt, nil, nil
 	require.Equal(t, *queued, first)
 	stale := first
-	claimed, err := repo.ClaimGitHubRunnerJob(ctx, &first, "ghr-a")
+	claimed, err := repo.ClaimGitHubRunnerJob(ctx, &first, "ghr-a", 0)
 	require.NoError(t, err)
 	require.True(t, claimed)
 	require.Equal(t, "ghr-a", first.VM)
 	require.Equal(t, 1, first.Attempts)
-	claimed, err = repo.ClaimGitHubRunnerJob(ctx, &stale, "ghr-b")
+	require.WithinDuration(t, time.Now().Add(time.Minute), *stored(id).ProvisionAt, 10*time.Second, "an attempt that never finishes is made again")
+	claimed, err = repo.ClaimGitHubRunnerJob(ctx, &stale, "ghr-b", 0)
 	require.NoError(t, err)
 	require.False(t, claimed)
 	require.Empty(t, stale.VM)
 	require.False(t, isDue(id))
-	require.NoError(t, repo.FailGitHubRunnerJob(ctx, id, "boom"))
+
+	// The runner's steps are timed, and a failed attempt is made again
+	// sooner than one that never finished.
+	require.NoError(t, repo.MarkGitHubRunnerRegistered(ctx, id))
+	require.WithinDuration(t, time.Now(), *stored(id).RegisteredAt, time.Minute)
+	require.NoError(t, repo.FailGitHubRunnerJob(ctx, id, "boom", "Retrying"))
 	failed := stored(id)
 	require.Equal(t, "boom", failed.Error)
-	require.WithinDuration(t, time.Now().Add(time.Minute), *failed.ProvisionAt, 10*time.Second, "a failed attempt keeps its retry")
+	require.Equal(t, "Retrying", failed.Waiting)
+	require.WithinDuration(t, time.Now().Add(5*time.Second), *failed.ProvisionAt, 4*time.Second, "a failed attempt is made again soon")
 	require.NoError(t, repo.FinishGitHubRunnerJob(ctx, id, ""))
 	finished := stored(id)
 	require.Nil(t, finished.ProvisionAt)
 	require.Empty(t, finished.Error)
+	require.Empty(t, finished.Waiting)
 	require.Equal(t, "ghr-a", finished.VM)
+	require.Equal(t, received, *finished.ReceivedAt)
+	require.NoError(t, repo.FailGitHubRunnerJob(ctx, id, "late", "Retrying"))
+	require.Equal(t, finished, stored(id), "a job that no runner is started for any more stays so")
+
+	// A job is found in its workspace only. Its run is recorded by the first
+	// delivery that names it, and kept by one that does not.
+	found, err := repo.GetGitHubRunnerJob(ctx, ws, id)
+	require.NoError(t, err)
+	require.Equal(t, finished, *found)
+	for _, missing := range []struct {
+		workspace uint
+		job       int64
+	}{{other, id}, {ws, id + 1}} {
+		found, err = repo.GetGitHubRunnerJob(ctx, missing.workspace, missing.job)
+		require.NoError(t, err)
+		require.Nil(t, found)
+	}
+	for _, run := range []int64{70, 0} {
+		queued.RunID = run
+		require.NoError(t, repo.SaveGitHubRunnerJob(ctx, queued))
+		require.EqualValues(t, 70, stored(id).RunID)
+	}
+	require.Equal(t, "ghr-a", stored(id).VM)
 
 	// GitHub ran another job on this job's runner. That job is due when it
 	// is first seen, whatever its status, and a late delivery changes nothing.
 	ran := job(id+1, types.GitHubJobInProgress, "ghr-a")
+	ran.RunID = 71
 	require.NoError(t, repo.SaveGitHubRunnerJob(ctx, ran))
 	require.True(t, isDue(id+1))
 	require.NoError(t, repo.FinishGitHubRunnerJob(ctx, id+1, ""))
@@ -815,17 +1040,64 @@ func TestVMGitHubRunnersIntegration(t *testing.T) {
 		require.Nil(t, runner)
 	}
 
-	// Replacing a runner deletes its VM and makes its job due, at once.
+	// What is found of a runner's VM is told to the job it was started for.
+	// The first time it was found ready stays.
 	vm := &types.VM{ID: uuid.NewString(), WorkspaceID: ws, WorkspaceExternalID: "test", TokenID: "test", Name: "ghr-a",
 		Handle: uuid.NewString(), DesiredState: types.VMStateRunning, Status: types.VMStateRunning, LastActiveAt: time.Now()}
 	require.NoError(t, repo.CreateVM(ctx, vm))
-	require.NoError(t, repo.ReplaceGitHubRunner(ctx, ws, "ghr-a", "stopped"))
+	ready := time.Now().Add(-time.Minute).UTC().Truncate(time.Millisecond)
+	later := ready.Add(time.Second)
+	require.NoError(t, repo.ObserveGitHubRunner(ctx, ws, "ghr-a", "Waiting for capacity", nil))
+	require.Equal(t, "Waiting for capacity", stored(id).Waiting)
+	require.Nil(t, stored(id).VMReadyAt)
+	require.NoError(t, repo.ObserveGitHubRunner(ctx, ws, "ghr-a", "", &ready))
+	require.NoError(t, repo.ObserveGitHubRunner(ctx, ws, "ghr-a", "", &later))
+	require.Empty(t, stored(id).Waiting)
+	require.Equal(t, ready, stored(id).VMReadyAt.UTC())
+	runner, err = repo.GetGitHubRunner(ctx, ws, "ghr-a")
+	require.NoError(t, err)
+	require.True(t, runner.Ready)
+
+	// Replacing a runner deletes its VM and makes its job due again, after
+	// the time that a job waits to be tried again.
+	require.NoError(t, repo.ReplaceGitHubRunner(ctx, ws, "ghr-a", "stopped", "Retrying"))
+	require.False(t, isDue(id))
+	replaced := stored(id)
+	require.Equal(t, "stopped", replaced.Error)
+	require.Equal(t, "Retrying", replaced.Waiting)
+	require.WithinDuration(t, time.Now().Add(5*time.Second), *replaced.ProvisionAt, 4*time.Second)
+	comeDue(id)
 	require.True(t, isDue(id))
-	require.Equal(t, "stopped", stored(id).Error)
 	vm, err = repo.GetVM(ctx, ws, "ghr-a")
 	require.NoError(t, err)
 	require.Equal(t, types.VMStateDeleted, vm.DesiredState)
 	require.Equal(t, types.VMStateRunning, vm.Status)
+
+	// The jobs of a paused account stay as they are, and none is listed as
+	// due or claimed until it resumes. Connecting it again does not resume it.
+	none, err = repo.PauseGitHubRunnerInstallation(ctx, other, true)
+	require.NoError(t, err)
+	require.Nil(t, none)
+	saved, err = repo.PauseGitHubRunnerInstallation(ctx, ws, true)
+	require.NoError(t, err)
+	installation.Paused = true
+	require.Equal(t, &installation, saved)
+	require.False(t, isDue(id))
+	waiting := stored(id)
+	claimed, err = repo.ClaimGitHubRunnerJob(ctx, &waiting, "ghr-b", 0)
+	require.NoError(t, err)
+	require.False(t, claimed)
+	require.Equal(t, waiting, stored(id))
+	require.NoError(t, repo.SaveGitHubRunnerInstallation(ctx, &installation))
+	saved, err = repo.GetGitHubRunnerInstallation(ctx, ws)
+	require.NoError(t, err)
+	require.True(t, saved.Paused)
+	saved, err = repo.PauseGitHubRunnerInstallation(ctx, ws, false)
+	require.NoError(t, err)
+	installation.Paused = false
+	require.Equal(t, &installation, saved)
+	require.True(t, isDue(id))
+	require.Equal(t, waiting, stored(id))
 
 	// History is newest first.
 	jobs, total := list(ws, types.GitHubRunnerJobFilter{Limit: 1})
@@ -843,8 +1115,12 @@ func TestVMGitHubRunnersIntegration(t *testing.T) {
 	require.Zero(t, total)
 
 	// Disconnecting starts nothing more. Nothing reports how the jobs it
-	// leaves unfinished end, so the history is the ones that finished.
+	// leaves unfinished end, so the history is the ones that finished, and
+	// no other is found.
 	require.NoError(t, repo.SaveGitHubRunnerJob(ctx, job(id+1, types.GitHubJobCompleted, "ghr-a")))
+	require.EqualValues(t, 71, stored(id+1).RunID)
+	_, err = repo.PauseGitHubRunnerInstallation(ctx, ws, true)
+	require.NoError(t, err)
 	require.NoError(t, repo.DeleteGitHubRunnerInstallation(ctx, id))
 	require.False(t, isDue(id))
 	none, err = repo.GetGitHubRunnerInstallation(ctx, ws)
@@ -859,9 +1135,18 @@ func TestVMGitHubRunnersIntegration(t *testing.T) {
 	require.Equal(t, 1, total)
 	require.Len(t, jobs, 1)
 	require.Equal(t, id+1, jobs[0].ID)
+	for jobID, listed := range map[int64]bool{id: false, id + 1: true} {
+		found, err = repo.GetGitHubRunnerJob(ctx, ws, jobID)
+		require.NoError(t, err)
+		require.Equal(t, listed, found != nil)
+	}
 
-	// Connecting again shows them, without starting what was given up.
+	// Connecting again shows them, without starting what was given up. The
+	// account was paused when it disconnected, and is not when it is back.
 	require.NoError(t, repo.SaveGitHubRunnerInstallation(ctx, &installation))
+	saved, err = repo.GetGitHubRunnerInstallation(ctx, ws)
+	require.NoError(t, err)
+	require.False(t, saved.Paused)
 	_, total = list(ws, types.GitHubRunnerJobFilter{})
 	require.Equal(t, 3, total)
 	require.Nil(t, stored(id).ProvisionAt)
@@ -907,4 +1192,403 @@ func TestVMGitHubRunnersIntegration(t *testing.T) {
 	require.Equal(t, 3, page.Total)
 	require.Len(t, page.Jobs, 1)
 	require.Equal(t, id+1, page.Jobs[0].ID)
+
+	// The runs to cancel are those of the jobs that have not finished, each
+	// of them once, in one repository or in all of them. A job recorded
+	// without its run has none: id+1 completed, and id+2 names no run.
+	again, elsewhere := job(id+4, types.GitHubJobInProgress, "ghr-d"), job(id+5, types.GitHubJobQueued, "")
+	again.RunID, elsewhere.RunID, elsewhere.Repository = 70, 72, "acme/100%_site"
+	require.NoError(t, repo.SaveGitHubRunnerJob(ctx, again))
+	require.NoError(t, repo.SaveGitHubRunnerJob(ctx, elsewhere))
+	for repository, runs := range map[string][]types.GitHubRunnerRun{
+		"":               {{InstallationID: id, Repository: "acme/repo", RunID: 70}, {InstallationID: id, Repository: "acme/100%_site", RunID: 72}},
+		"acme/100%_site": {{InstallationID: id, Repository: "acme/100%_site", RunID: 72}},
+		"acme":           {},
+	} {
+		active, total, err := repo.ListActiveGitHubRunnerRuns(ctx, ws, repository)
+		require.NoError(t, err)
+		require.Equal(t, runs, active, repository)
+		require.Equal(t, len(runs), total, repository)
+	}
+
+	// A hundred of them at most are returned, the oldest, with how many
+	// there are.
+	for run := int64(100); run < 200; run++ {
+		more := job(id+run, types.GitHubJobQueued, "")
+		more.RunID = run
+		require.NoError(t, repo.SaveGitHubRunnerJob(ctx, more))
+	}
+	active, total, err := repo.ListActiveGitHubRunnerRuns(ctx, ws, "")
+	require.NoError(t, err)
+	require.Equal(t, 102, total)
+	require.Len(t, active, 100)
+	require.EqualValues(t, 70, active[0].RunID)
+	require.EqualValues(t, 197, active[99].RunID)
+
+	active, total, err = repo.ListActiveGitHubRunnerRuns(ctx, other, "")
+	require.NoError(t, err)
+	require.Empty(t, active)
+	require.Zero(t, total)
+	require.NoError(t, repo.DeleteGitHubRunnerInstallation(ctx, id))
+	active, total, err = repo.ListActiveGitHubRunnerRuns(ctx, ws, "")
+	require.NoError(t, err)
+	require.Empty(t, active, "the runs of a disconnected account are not the workspace's to cancel")
+	require.Zero(t, total)
+}
+
+// Every row belongs to a workspace made for the test, and is removed on
+// completion.
+func TestVMGitHubRunnerQueueIntegration(t *testing.T) {
+	repo := newVMIntegrationRepo(t)
+	db := repo.client
+	ctx := context.Background()
+	newWorkspace := func() uint {
+		var id uint
+		require.NoError(t, db.Get(&id, `INSERT INTO workspace (name) VALUES ($1) RETURNING id`, "github-runner-test-"+uuid.NewString()))
+		t.Cleanup(func() {
+			_, _ = db.Exec(`DELETE FROM github_runner_job WHERE workspace_id=$1`, id)
+			_, _ = db.Exec(`DELETE FROM github_runner_installation WHERE workspace_id=$1`, id)
+			_, _ = db.Exec(`DELETE FROM persistent_vm WHERE workspace_id=$1`, id)
+			_, _ = db.Exec(`DELETE FROM workspace WHERE id=$1`, id)
+		})
+		return id
+	}
+	ws, other := newWorkspace(), newWorkspace()
+
+	// GitHub's IDs are far below the clock's, so these collide with nothing.
+	// Jobs are named by how far their ID is past this one.
+	base := time.Now().UnixNano()
+	installations := map[uint]int64{ws: base, other: base + 1}
+	for workspace, installation := range installations {
+		require.NoError(t, repo.SaveGitHubRunnerInstallation(ctx, &types.GitHubRunnerInstallation{ID: installation, WorkspaceID: workspace,
+			TokenID: "token", Account: "acme-" + fmt.Sprint(workspace), AccountType: "Organization"}))
+	}
+	job := func(workspace uint, n int64, status, runner string) *types.GitHubRunnerJob {
+		return &types.GitHubRunnerJob{ID: base + n, InstallationID: installations[workspace], WorkspaceID: workspace, Repository: "acme/repo",
+			Label: "beam-4vcpu-ubuntu-2404", Status: status, RunnerName: runner, CreatedAt: time.Now().UTC().Truncate(time.Second)}
+	}
+	// queue records a job that has been due for some seconds.
+	queue := func(workspace uint, n int64, seconds int) {
+		t.Helper()
+		require.NoError(t, repo.SaveGitHubRunnerJob(ctx, job(workspace, n, types.GitHubJobQueued, "")))
+		_, err := db.Exec(`UPDATE github_runner_job SET provision_at = NOW() - $2 * INTERVAL '1 second' WHERE id = $1`, base+n, seconds)
+		require.NoError(t, err)
+	}
+	stored := func(workspace uint, n int64) types.GitHubRunnerJob {
+		t.Helper()
+		found, err := repo.GetGitHubRunnerJob(ctx, workspace, base+n)
+		require.NoError(t, err)
+		require.NotNil(t, found)
+		return *found
+	}
+	due := func(limit int) []int64 {
+		t.Helper()
+		jobs, err := repo.ListDueGitHubRunnerJobs(ctx, limit)
+		require.NoError(t, err)
+		due := []int64{}
+		for _, job := range jobs {
+			if job.WorkspaceID == ws || job.WorkspaceID == other {
+				due = append(due, job.ID-base)
+			}
+		}
+		return due
+	}
+	claim := func(workspace uint, n int64, vm string, limit int) bool {
+		t.Helper()
+		job := stored(workspace, n)
+		claimed, err := repo.ClaimGitHubRunnerJob(ctx, &job, vm, limit)
+		require.NoError(t, err)
+		return claimed
+	}
+	runners := func(workspace uint) int {
+		t.Helper()
+		count, err := repo.CountGitHubRunners(ctx, workspace)
+		require.NoError(t, err)
+		return count
+	}
+	runnerVM := func(workspace uint, name, status string) *types.VM {
+		t.Helper()
+		vm := &types.VM{ID: uuid.NewString(), WorkspaceID: workspace, WorkspaceExternalID: "test", TokenID: "test", Name: name,
+			Handle: uuid.NewString(), DesiredState: types.VMStateRunning, Status: status, LastActiveAt: time.Now()}
+		require.NoError(t, repo.CreateVM(ctx, vm))
+		return vm
+	}
+
+	// A workspace may have two runners. In whatever order its jobs are
+	// claimed, the two that have been due longest get them, and the others
+	// stay as they are.
+	for n := range int64(4) {
+		queue(ws, n, 40-int(n))
+	}
+	queue(other, 10, 10)
+	require.Equal(t, []int64{0, 1, 2, 3, 10}, due(2))
+	require.False(t, claim(ws, 3, "ghr-q3", 2))
+	require.False(t, claim(ws, 2, "ghr-q2", 2))
+	require.True(t, claim(ws, 1, "ghr-q1", 2))
+	require.True(t, claim(ws, 0, "ghr-q0", 2))
+	require.Zero(t, stored(ws, 2).Attempts)
+	require.Empty(t, stored(ws, 2).VM)
+	require.Equal(t, 2, runners(ws), "a runner counts from the claim that names it")
+	require.Zero(t, runners(other))
+	require.Equal(t, []int64{10}, due(2), "the jobs of a full workspace are not due for a runner")
+	require.Equal(t, []int64{2, 3, 10}, due(3))
+	require.Equal(t, []int64{2, 3, 10}, due(0))
+	require.False(t, claim(ws, 2, "ghr-q2", 2))
+	require.True(t, claim(other, 10, "ghr-o0", 2), "each workspace has runners of its own")
+
+	// A runner counts once: as a claim, then as its VM.
+	first := runnerVM(ws, "ghr-q0", types.VMStateStarting)
+	require.Equal(t, 2, runners(ws))
+	require.NoError(t, repo.FinishGitHubRunnerJob(ctx, base, ""))
+	require.Equal(t, 2, runners(ws))
+	runnerVM(ws, "dev", types.VMStateRunning)
+	require.Equal(t, 2, runners(ws), "a VM that no job was started a runner for is none")
+
+	// A job that waits to be tried again is starting no runner, and the
+	// place is the job's that has been due longest.
+	require.NoError(t, repo.FailGitHubRunnerJob(ctx, base+1, "boom", "Retrying"))
+	require.Equal(t, 1, runners(ws))
+	require.Equal(t, []int64{2, 3}, due(2))
+	require.False(t, claim(ws, 3, "ghr-q3", 2))
+	require.True(t, claim(ws, 2, "ghr-q2", 2))
+	require.Empty(t, due(2))
+
+	// A job that waits for something else than a runner keeps its attempts,
+	// and holds no place either. One that is not due is another gateway's.
+	until := time.Now().Add(time.Hour).UTC().Truncate(time.Millisecond)
+	require.NoError(t, repo.WaitGitHubRunnerJob(ctx, base+3, "GitHub is limiting requests", until))
+	waiting := stored(ws, 3)
+	require.Equal(t, until, waiting.ProvisionAt.UTC())
+	require.Equal(t, "GitHub is limiting requests", waiting.Waiting)
+	require.Zero(t, waiting.Attempts)
+	require.Equal(t, 2, runners(ws))
+	held := stored(ws, 2)
+	require.NoError(t, repo.WaitGitHubRunnerJob(ctx, base+2, "GitHub is limiting requests", until))
+	require.Equal(t, held, stored(ws, 2))
+
+	// A runner that is gone leaves its place.
+	first.DesiredState = types.VMStateDeleted
+	require.NoError(t, repo.SaveVM(ctx, first))
+	require.Equal(t, 1, runners(ws))
+
+	// The times of a runner go when another is started for its job. When
+	// the job was received stays.
+	require.NoError(t, repo.MarkGitHubRunnerRegistered(ctx, base+2))
+	runnerVM(ws, "ghr-q2", types.VMStateRunning)
+	ready := time.Now().UTC().Truncate(time.Millisecond)
+	require.NoError(t, repo.ObserveGitHubRunner(ctx, ws, "ghr-q2", "", &ready))
+	timed := stored(ws, 2)
+	require.NotNil(t, timed.ReceivedAt)
+	require.NotNil(t, timed.RegisteredAt)
+	require.Equal(t, ready, timed.VMReadyAt.UTC())
+	require.NoError(t, repo.ReplaceGitHubRunner(ctx, ws, "ghr-q2", "stopped", "Retrying"))
+	require.WithinDuration(t, time.Now().Add(5*time.Second), *stored(ws, 2).ProvisionAt, 4*time.Second)
+	_, err := db.Exec(`UPDATE github_runner_job SET provision_at = NOW() WHERE id = $1`, base+2)
+	require.NoError(t, err)
+	require.True(t, claim(ws, 2, "ghr-q2b", 2))
+	again := stored(ws, 2)
+	require.Equal(t, 2, again.Attempts)
+	require.Empty(t, again.Waiting)
+	require.Nil(t, again.RegisteredAt)
+	require.Nil(t, again.VMReadyAt)
+	require.Equal(t, timed.ReceivedAt, again.ReceivedAt)
+	require.NoError(t, repo.FailGitHubRunnerJob(ctx, base+2, "boom", "Retrying"))
+	require.WithinDuration(t, time.Now().Add(10*time.Second), *stored(ws, 2).ProvisionAt, 4*time.Second, "the time between attempts grows")
+
+	// However many gateways claim at once, a workspace gets the runners
+	// there is room for, and the jobs that have been due longest get them.
+	// This one has two runners, and may have nine.
+	crowded := newWorkspace()
+	installations[crowded] = base + 2
+	require.NoError(t, repo.SaveGitHubRunnerInstallation(ctx, &types.GitHubRunnerInstallation{ID: base + 2, WorkspaceID: crowded,
+		TokenID: "token", Account: "crowded", AccountType: "Organization"}))
+	for n, name := range map[int64]string{98: "ghr-c0", 99: "ghr-c1"} {
+		queue(crowded, n, 100)
+		require.True(t, claim(crowded, n, name, 0))
+		runnerVM(crowded, name, types.VMStateRunning)
+		require.NoError(t, repo.FinishGitHubRunnerJob(ctx, base+n, ""))
+	}
+	listed := make([]types.GitHubRunnerJob, 40)
+	for i := range listed {
+		queue(crowded, 100+int64(i), 90-i)
+		listed[i] = stored(crowded, 100+int64(i))
+	}
+	claimed := make([]bool, len(listed))
+	var claims errgroup.Group
+	for i := range listed {
+		claims.Go(func() (err error) {
+			claimed[i], err = repo.ClaimGitHubRunnerJob(ctx, &listed[len(listed)-1-i], "ghr-c"+fmt.Sprint(100+i), 9)
+			return err
+		})
+	}
+	require.NoError(t, claims.Wait())
+	slices.Reverse(claimed)
+	for i, got := range claimed {
+		require.Equal(t, i < 7, got, "job %d", i)
+	}
+	require.Equal(t, 9, runners(crowded))
+
+	// Three jobs of a repository are queued, and each has a runner that is
+	// up and idle, so none is one too many.
+	surplus := func(name string) bool {
+		t.Helper()
+		is, err := repo.IsSurplusGitHubRunner(ctx, other, name)
+		require.NoError(t, err)
+		return is
+	}
+	require.NoError(t, repo.SaveGitHubRunnerJob(ctx, job(other, 10, types.GitHubJobCompleted, "")))
+	vms := map[string]*types.VM{}
+	for n, name := range map[int64]string{20: "ghr-s0", 21: "ghr-s1", 22: "ghr-s2"} {
+		queue(other, n, 10)
+		_, err := db.Exec(`UPDATE github_runner_job SET vm = $2, provision_at = NULL WHERE id = $1`, base+n, name)
+		require.NoError(t, err)
+		vms[name] = runnerVM(other, name, types.VMStateRunning)
+	}
+	surpluses := func() []bool { return []bool{surplus("ghr-s0"), surplus("ghr-s1"), surplus("ghr-s2")} }
+	require.Equal(t, []bool{false, false, false}, surpluses())
+	require.False(t, surplus("ghr-none"))
+
+	// One of the jobs is cancelled. Runners are interchangeable, so the one
+	// that goes is the last by name, whichever job it was started for.
+	require.NoError(t, repo.SaveGitHubRunnerJob(ctx, job(other, 20, types.GitHubJobCompleted, "")))
+	require.Equal(t, []bool{false, false, true}, surpluses())
+
+	// A runner that GitHub gave a job is not idle, so the first idle runner
+	// is the one for the job that is still queued.
+	require.NoError(t, repo.SaveGitHubRunnerJob(ctx, job(other, 21, types.GitHubJobInProgress, "ghr-s0")))
+	require.False(t, surplus("ghr-s1"))
+	require.True(t, surplus("ghr-s2"))
+
+	// Nor is a runner idle whose VM is not up, so the one after it is needed.
+	vms["ghr-s1"].Status = types.VMStateStarting
+	require.NoError(t, repo.SaveVM(ctx, vms["ghr-s1"]))
+	require.False(t, surplus("ghr-s2"))
+	vms["ghr-s1"].Status = types.VMStateRunning
+	require.NoError(t, repo.SaveVM(ctx, vms["ghr-s1"]))
+	require.True(t, surplus("ghr-s2"))
+
+	// A job of another repository, or with another label, is not one that
+	// these runners take. Another job of theirs is.
+	elsewhere, larger := job(other, 23, types.GitHubJobQueued, ""), job(other, 24, types.GitHubJobQueued, "")
+	elsewhere.Repository, larger.Label = "acme/site", "beam-8vcpu-ubuntu-2404"
+	require.NoError(t, repo.SaveGitHubRunnerJob(ctx, elsewhere))
+	require.NoError(t, repo.SaveGitHubRunnerJob(ctx, larger))
+	require.True(t, surplus("ghr-s2"))
+	require.NoError(t, repo.SaveGitHubRunnerJob(ctx, job(other, 25, types.GitHubJobQueued, "")))
+	require.False(t, surplus("ghr-s2"))
+}
+
+// The statements that the cache of a workspace's runners is kept with. They
+// say which disk they are for, and those that withdraw or delete what a
+// worker published only do so for a cache disk.
+func TestGitHubRunnerCacheStatements(t *testing.T) {
+	repo, mock := NewBackendPostgresRepositoryForTest()
+	r := repo.(*PostgresBackendRepository)
+	ctx := context.Background()
+	const disk, layers = "root-layer-0123456789abcdef", "root-layer-%"
+	created := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
+	columns := strings.Split(strings.ReplaceAll(githubRunnerCacheColumns, " ", ""), ",")
+
+	// A repository's cache is the one it has, or a new one.
+	mock.ExpectQuery(statement(`INSERT INTO github_runner_cache (workspace_id, repository, disk_name) VALUES ($1, $2, $3)`, `ON CONFLICT DO NOTHING`,
+		`UNION ALL`, `WHERE workspace_id = $1 AND repository = $2 AND retired_at IS NULL`, `LIMIT 1;`)).
+		WithArgs(uint(8), "acme/repo", disk).
+		WillReturnRows(sqlmock.NewRows(columns).AddRow(8, "acme/repo", disk, "generation-1", created, nil, nil))
+	cache, err := r.CurrentGitHubRunnerCache(ctx, 8, "acme/repo", disk)
+	require.NoError(t, err)
+	require.Equal(t, &types.GitHubRunnerCache{WorkspaceID: 8, Repository: "acme/repo", DiskName: disk, SnapshotID: "generation-1", CreatedAt: created}, cache)
+
+	// Another gateway made the repository's disk in the meantime.
+	mock.ExpectQuery(statement(`INSERT INTO github_runner_cache`)).WithArgs(uint(8), "acme/repo", disk).WillReturnRows(sqlmock.NewRows(columns))
+	cache, err = r.CurrentGitHubRunnerCache(ctx, 8, "acme/repo", disk)
+	require.NoError(t, err)
+	require.Nil(t, cache)
+
+	// One runner at a time is started to add to the cache.
+	for _, claimed := range []bool{true, false} {
+		affected := int64(0)
+		if claimed {
+			affected = 1
+		}
+		mock.ExpectExec(statement(`UPDATE github_runner_cache SET publisher_at = NOW()`, `WHERE workspace_id = $1 AND disk_name = $2 AND retired_at IS NULL`,
+			`AND (publisher_at IS NULL OR publisher_at <= NOW() - $3 * INTERVAL '1 second');`)).
+			WithArgs(uint(8), disk, float64(900)).WillReturnResult(sqlmock.NewResult(0, affected))
+		got, err := r.ClaimGitHubRunnerCachePublisher(ctx, 8, disk, 15*time.Minute)
+		require.NoError(t, err)
+		require.Equal(t, claimed, got)
+	}
+
+	// A candidate is a generation that the VM it was published for started
+	// on what runners get now, as the VM's own record says.
+	mock.ExpectQuery(statement(`SELECT c.workspace_id, c.repository, c.disk_name`, `FROM github_runner_cache c`, `JOIN disk_snapshot s ON s.workspace_id = c.workspace_id AND s.disk_name = c.disk_name`,
+		`s.status = 'available' AND s.deleted_at IS NULL AND s.created_at > NOW() - INTERVAL '1 hour'`,
+		`JOIN stub st ON st.id = s.stub_id AND st.name LIKE 'vm/%'`,
+		`JOIN persistent_vm v ON v.workspace_id = c.workspace_id AND v.id = SUBSTRING(st.name FROM 4)`,
+		`WHERE c.retired_at IS NULL AND s.external_id::text <> c.snapshot_id`,
+		`AND v.data->'spec'->'root_layer'->>'disk_name' = c.disk_name`,
+		`AND COALESCE(v.data->'spec'->'root_layer'->>'snapshot_id', '') = c.snapshot_id`, `ORDER BY s.created_at`)).
+		WillReturnRows(sqlmock.NewRows([]string{"workspace_id", "repository", "disk_name", "parent", "snapshot_id", "runner", "created_at"}).
+			AddRow(8, "acme/repo", disk, "generation-1", "generation-2", "ghr-a", created))
+	candidates, err := r.ListGitHubRunnerCacheCandidates(ctx)
+	require.NoError(t, err)
+	candidate := types.GitHubRunnerCacheCandidate{WorkspaceID: 8, Repository: "acme/repo", DiskName: disk, Parent: "generation-1", SnapshotID: "generation-2", Runner: "ghr-a", CreatedAt: created}
+	require.Equal(t, []types.GitHubRunnerCacheCandidate{candidate}, candidates)
+
+	// It takes the place of the generation it was made from, and of no other.
+	for _, promoted := range []bool{true, false} {
+		affected := int64(0)
+		if promoted {
+			affected = 1
+		}
+		mock.ExpectExec(statement(`UPDATE github_runner_cache SET snapshot_id = $4, publisher_at = NULL`,
+			`WHERE workspace_id = $1 AND disk_name = $2 AND snapshot_id = $3 AND retired_at IS NULL;`)).
+			WithArgs(uint(8), disk, "generation-1", "generation-2").WillReturnResult(sqlmock.NewResult(0, affected))
+		got, err := r.PromoteGitHubRunnerCache(ctx, candidate)
+		require.NoError(t, err)
+		require.Equal(t, promoted, got)
+	}
+
+	mock.ExpectExec(statement(`UPDATE disk_snapshot SET status = 'failed', reason = $4`,
+		`WHERE workspace_id = $1 AND disk_name = $2 AND external_id::text = $3 AND disk_name LIKE $5`,
+		`UPDATE github_runner_cache c SET publisher_at = NULL`)).
+		WithArgs(uint(8), disk, "generation-2", "the job of the runner did not succeed", layers).WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, r.RejectGitHubRunnerCacheCandidate(ctx, candidate, "the job of the runner did not succeed"))
+
+	// A cache is retired when it is old enough, and deleted once it has
+	// been retired for long enough.
+	mock.ExpectExec(statement(`UPDATE github_runner_cache SET retired_at = NOW()`,
+		`WHERE workspace_id = $1 AND retired_at IS NULL AND created_at <= NOW() - $2 * INTERVAL '1 second';`)).
+		WithArgs(uint(8), float64(7*24*3600)).WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, r.RetireGitHubRunnerCache(ctx, 8, 7*24*time.Hour))
+
+	retiredAt := created.Add(time.Hour)
+	mock.ExpectQuery(statement(`FROM github_runner_cache`, `WHERE retired_at <= NOW() - $1 * INTERVAL '1 second'`, `ORDER BY retired_at`)).
+		WithArgs(float64(25 * 3600)).
+		WillReturnRows(sqlmock.NewRows(columns).AddRow(8, "acme/repo", disk, "generation-1", created, nil, retiredAt))
+	retired, err := r.ListRetiredGitHubRunnerCaches(ctx, 25*time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, []types.GitHubRunnerCache{{WorkspaceID: 8, Repository: "acme/repo", DiskName: disk, SnapshotID: "generation-1", CreatedAt: created, RetiredAt: &retiredAt}}, retired)
+
+	mock.ExpectExec(statement(`DELETE FROM github_runner_cache`,
+		`WHERE workspace_id = $1 AND disk_name = $2 AND retired_at IS NOT NULL AND disk_name LIKE $3`,
+		`DELETE FROM disk_snapshot s USING retired`, `WHERE s.workspace_id = retired.workspace_id AND s.disk_name = retired.disk_name;`)).
+		WithArgs(uint(8), disk, layers).WillReturnResult(sqlmock.NewResult(0, 3))
+	require.NoError(t, r.DeleteGitHubRunnerCache(ctx, 8, disk))
+
+	// The setting is the account's, and the job that ran on a runner is
+	// found by the runner's name.
+	installation := strings.Split(strings.ReplaceAll(githubRunnerInstallationColumns, " ", ""), ",")
+	mock.ExpectQuery(statement(`UPDATE github_runner_installation SET enhanced_cache = $2 WHERE workspace_id = $1`, `RETURNING`)).
+		WithArgs(uint(8), false).
+		WillReturnRows(sqlmock.NewRows(installation).AddRow(int64(42), 8, "token", "acme", "Organization", false, false, created))
+	account, err := r.SetGitHubRunnerEnhancedCache(ctx, 8, false)
+	require.NoError(t, err)
+	require.Equal(t, &types.GitHubRunnerInstallation{ID: 42, WorkspaceID: 8, TokenID: "token", Account: "acme", AccountType: "Organization", CreatedAt: created}, account)
+
+	mock.ExpectQuery(statement(`FROM github_runner_job`, `WHERE workspace_id = $1 AND runner_name = $2 AND runner_name <> ''`)).
+		WithArgs(uint(8), "ghr-a").WillReturnRows(sqlmock.NewRows(strings.Split(strings.Join(strings.Fields(githubRunnerJobColumns), ""), ",")))
+	job, err := r.GetGitHubRunnerJobByRunner(ctx, 8, "ghr-a")
+	require.NoError(t, err)
+	require.Nil(t, job)
+	require.NoError(t, mock.ExpectationsWereMet())
 }

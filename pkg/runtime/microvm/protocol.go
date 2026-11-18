@@ -98,7 +98,42 @@ type Spec struct {
 	// guest starts nothing that could look for one before then, except a
 	// process manager, whose commands the host holds back.
 	LateDevices bool `json:"late_devices,omitempty"`
+	// KernelModules are the module indexes built with the guest kernel: the
+	// files of /lib/modules/<release>, by release and name. The guest keeps
+	// them in memory instead of reading them from the canvas, so that a
+	// paused VM resumes under a worker that has none.
+	KernelModules map[string]map[string][]byte `json:"kernel_modules,omitempty"`
+	// RootMetacopy has a change to a file's attributes copy the attributes
+	// to the root disk and leave its data in the image. The copy refers to
+	// the file by the image's inodes, so this is for a root disk that is
+	// never restored: virtio-fs inodes change on a cold boot and on a fork.
+	RootMetacopy bool `json:"root_metacopy,omitempty"`
+	// CacheExport, when set, has the guest write what its workload added to
+	// its directories into its file as it shuts down.
+	CacheExport *CacheExport `json:"cache_export,omitempty"`
 }
+
+// CacheExport names directories of the guest's root whose new files the host
+// collects when the guest shuts down.
+type CacheExport struct {
+	// Paths are absolute directories in the guest.
+	Paths []string `json:"paths"`
+	// File is the tar the guest writes: a path in a directory the host
+	// bound into the guest. It appears there only once it is complete.
+	File string `json:"file"`
+}
+
+const (
+	// CacheExportDir is where the host binds the directory that receives a
+	// guest's cache export.
+	CacheExportDir = CanvasDir + "/cache-export"
+	// CacheExportFile is the export's name in that directory.
+	CacheExportFile = "entries.tar"
+	// CacheExportTouched marks an entry of the export that has no content:
+	// a file the guest used and did not write, whose time of use the header
+	// carries.
+	CacheExportTouched = "BEAM.touched"
+)
 
 // Network is the static configuration of the guest's single NIC. Addresses
 // are CIDR strings; gateways are bare addresses.

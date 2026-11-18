@@ -2,6 +2,7 @@ package vm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -146,6 +147,61 @@ func TestVMRedisRepositoryRedisFailuresAreNotMissingState(t *testing.T) {
 	require.Error(t, err)
 	require.Error(t, repo.RenewICELease(ctx, "fragment", "lease", time.Minute))
 	require.Error(t, repo.ReleaseICELease(ctx, "fragment", "lease"))
+}
+
+func TestVMRedisRepositoryGivesTheWebhookSweepToOneGatewayAtATime(t *testing.T) {
+	server, repo := redisRepositoryFixture(t)
+	other := NewVMRedisRepository(repo.(*VMRedisRepository).rdb)
+	ctx := context.Background()
+	unexpected := func(context.Context) error {
+		t.Error("swept while another gateway does, or just has")
+		return nil
+	}
+
+	// While a gateway sweeps no other does, whatever is known of when one
+	// last did.
+	sweeping, finish, finished := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		swept, err := repo.SweepGitHubWebhooks(ctx, time.Minute, func(context.Context) error {
+			close(sweeping)
+			<-finish
+			return nil
+		})
+		if err == nil && !swept {
+			err = errors.New("the first gateway to ask did not sweep")
+		}
+		finished <- err
+	}()
+	<-sweeping
+	require.True(t, server.Del(githubSweepRecentKey))
+	swept, err := other.SweepGitHubWebhooks(ctx, time.Minute, unexpected)
+	require.NoError(t, err)
+	require.False(t, swept)
+	close(finish)
+	require.NoError(t, <-finished)
+	require.False(t, server.Exists(githubSweepLockKey), "the sweep is another gateway's to take once it is done")
+
+	// A sweep is not repeated while it is recent, by any gateway. One that
+	// fails is recent too, and says how it failed.
+	failed := errors.New("GitHub returned HTTP 502")
+	swept, err = other.SweepGitHubWebhooks(ctx, time.Minute, func(context.Context) error { return failed })
+	require.ErrorIs(t, err, failed)
+	require.True(t, swept)
+	for _, gateway := range []VMRepository{repo, other} {
+		swept, err = gateway.SweepGitHubWebhooks(ctx, time.Minute, unexpected)
+		require.NoError(t, err)
+		require.False(t, swept)
+	}
+	server.FastForward(time.Minute)
+	swept, err = repo.SweepGitHubWebhooks(ctx, time.Minute, func(context.Context) error { return nil })
+	require.NoError(t, err)
+	require.True(t, swept)
+
+	// Without Redis nothing says whose turn it is, so no gateway sweeps.
+	server.SetError("unavailable")
+	swept, err = repo.SweepGitHubWebhooks(ctx, time.Minute, unexpected)
+	require.Error(t, err)
+	require.False(t, swept)
 }
 
 func TestVMRedisRepositoryReportsVMContainersAsTheirStateIsRemoved(t *testing.T) {

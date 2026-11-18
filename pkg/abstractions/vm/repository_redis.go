@@ -19,6 +19,10 @@ const (
 	iceSessionPrefix       = "vm:ice:"
 	iceLeasePrefix         = "vm:ice-open:"
 	containerExitBacklog   = 256
+
+	githubSweepLockKey        = "vm:github-runners:sweep:lock"
+	githubSweepRecentKey      = "vm:github-runners:sweep:recent"
+	githubSweepLockTTLSeconds = 60
 )
 
 type VMRedisRepository struct {
@@ -115,6 +119,28 @@ func (r *VMRedisRepository) RenewICELease(ctx context.Context, fragment, lease s
 
 func (r *VMRedisRepository) ReleaseICELease(ctx context.Context, fragment, lease string) error {
 	return r.rdb.ZRem(ctx, iceLeasePrefix+fragment, lease).Err()
+}
+
+// Every gateway asks to sweep, and one of them is let at a time: the lease is
+// held, and kept alive, for as long as the sweep runs. The key that marks a
+// sweep as recent outlives the lease, so that the gateways that ask after it
+// do not sweep the same deliveries again.
+func (r *VMRedisRepository) SweepGitHubWebhooks(ctx context.Context, recent time.Duration, sweep func(context.Context) error) (bool, error) {
+	swept := false
+	err := common.NewRedisLock(r.rdb).WithLease(ctx, githubSweepLockKey, common.RedisLockOptions{TtlS: githubSweepLockTTLSeconds}, func(ctx context.Context) error {
+		due, err := r.rdb.SetNX(ctx, githubSweepRecentKey, 1, recent).Result()
+		if err != nil || !due {
+			return err
+		}
+
+		swept = true
+		return sweep(ctx)
+	})
+	if common.IsRedisLockNotObtained(err) {
+		return false, nil
+	}
+
+	return swept, err
 }
 
 func (r *VMRedisRepository) ContainerExits(ctx context.Context) <-chan string {

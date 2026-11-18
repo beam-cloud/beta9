@@ -46,6 +46,10 @@ type MicroVM struct {
 	// cudaCheckpoint is NVIDIA's tool for moving a process's GPU state into
 	// its memory and back; "" where the worker image has none.
 	cudaCheckpoint string
+	// kernelModules are the module indexes built with the guest kernel,
+	// which sit beside it, by release and name; nil for a kernel that came
+	// without them.
+	kernelModules map[string]map[string][]byte
 }
 
 var (
@@ -138,7 +142,7 @@ func NewMicroVM(cfg Config) (Runtime, error) {
 		return nil, unavailable(fmt.Sprintf("create state root: %v", err))
 	}
 	sweepLeftoverVMs(cfg.MicroVMStateRoot)
-	m := &MicroVM{cfg: cfg, vms: map[string]*microVMInstance{}}
+	m := &MicroVM{cfg: cfg, vms: map[string]*microVMInstance{}, kernelModules: microVMKernelModules(cfg.MicroVMKernelPath)}
 	if len(cfg.MicroVMVFIODevices) > 0 {
 		if err := allowSurplusHugePages(microVMSurplusHugePagesPath, microVMMeminfoPath); err != nil {
 			log.Warn().Err(err).Msg("cannot allow surplus huge pages; GPU microvms start slowly unless the host reserves them")
@@ -153,6 +157,35 @@ func NewMicroVM(cfg Config) (Runtime, error) {
 		}
 	}
 	return m, nil
+}
+
+func microVMKernelModules(kernel string) map[string]map[string][]byte {
+	modules := filepath.Join(filepath.Dir(kernel), "modules")
+	releases, _ := os.ReadDir(modules)
+	var indexes map[string]map[string][]byte
+	for _, release := range releases {
+		files, _ := os.ReadDir(filepath.Join(modules, release.Name()))
+		for _, file := range files {
+			if !file.Type().IsRegular() {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(modules, release.Name(), file.Name()))
+			if err != nil {
+				// Half of a kernel's indexes would name modules that modprobe
+				// then cannot resolve.
+				log.Warn().Err(err).Str("release", release.Name()).Msg("cannot read guest kernel module indexes")
+				return nil
+			}
+			if indexes == nil {
+				indexes = map[string]map[string][]byte{}
+			}
+			if indexes[release.Name()] == nil {
+				indexes[release.Name()] = map[string][]byte{}
+			}
+			indexes[release.Name()][file.Name()] = data
+		}
+	}
+	return indexes
 }
 
 // sweepLeftoverVMs kills the hypervisors and virtiofsd daemons a previous
@@ -1470,7 +1503,23 @@ var _ GuestFilesystem = (*MicroVM)(nil)
 
 var _ GuestPortDialer = (*MicroVM)(nil)
 
+var _ GuestProcessDialer = (*MicroVM)(nil)
+
 func (m *MicroVM) DialGuestPort(ctx context.Context, containerID string, port uint32) (net.Conn, error) {
+	return m.dialGuestService(ctx, containerID, microvm.TunnelPort, func(conn net.Conn) error {
+		return microvm.ConnectPort(conn, port)
+	})
+}
+
+func (m *MicroVM) DialGuestProcessManager(ctx context.Context, containerID string) (net.Conn, error) {
+	return m.dialGuestService(ctx, containerID, microvm.ProcessPort, func(conn net.Conn) error {
+		return microvm.ConnectProcess(conn)
+	})
+}
+
+// dialGuestService connects to a vsock service of the guest that answers
+// whether it reached its target before it carries the target's bytes.
+func (m *MicroVM) dialGuestService(ctx context.Context, containerID string, service uint32, connect func(net.Conn) error) (net.Conn, error) {
 	inst, ok := m.instance(containerID)
 	if !ok {
 		return nil, ErrContainerNotFound{ContainerID: containerID}
@@ -1480,8 +1529,8 @@ func (m *MicroVM) DialGuestPort(ctx context.Context, containerID string, port ui
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	// The guest starts this service before announcing readiness.
-	conn, err := dialGuestVsockOnce(ctx, filepath.Join(inst.stateDir, microVMVsockSocket), microvm.TunnelPort)
+	// The guest starts these services before announcing readiness.
+	conn, err := dialGuestVsockOnce(ctx, filepath.Join(inst.stateDir, microVMVsockSocket), service)
 	if err != nil {
 		return nil, err
 	}
@@ -1489,7 +1538,7 @@ func (m *MicroVM) DialGuestPort(ctx context.Context, containerID string, port ui
 	defer stop()
 	deadline, _ := ctx.Deadline()
 	_ = conn.SetDeadline(deadline)
-	if err := microvm.ConnectPort(conn, port); err != nil {
+	if err := connect(conn); err != nil {
 		conn.Close()
 		return nil, err
 	}
@@ -2034,6 +2083,12 @@ func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network
 	guestSpec := microVMGuestSpec(spec, network, root, extra, mounts)
 	guestSpec.MountConcurrency = 4
 	guestSpec.LateDevices = passthrough
+	// No image has the indexes of this kernel, and without them modprobe
+	// fails for a driver the kernel has built in. A booting guest takes them
+	// where its root has none; a restored one has what it booted with.
+	if restoreFrom == "" {
+		guestSpec.KernelModules = m.kernelModules
+	}
 	data, err := json.MarshalIndent(guestSpec, "", "  ")
 	if err != nil {
 		return err

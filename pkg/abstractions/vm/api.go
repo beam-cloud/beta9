@@ -397,6 +397,18 @@ func (s *Service) create(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "use a VM template or fork to initialize a root disk")
 	}
 
+	if spec.Headless {
+		return echo.NewHTTPError(http.StatusBadRequest, "headless is not a VM option")
+	}
+
+	if spec.CaptureExitSnapshot != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "capture_exit_snapshot is not a VM option")
+	}
+
+	if spec.RootLayer != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "root_layer is not a VM option")
+	}
+
 	var image *pb.VerifyImageBuildRequest
 	if len(req.Image) > 0 {
 		if seed != "" || spec.ImageID != "" || spec.SourceSnapshotID != "" {
@@ -665,6 +677,10 @@ func (s *Service) action(c echo.Context) error {
 
 		err = s.activate(ctx, info, v)
 	case "pause":
+		if !types.CapturesExitSnapshot(v.Spec.CaptureExitSnapshot) {
+			return errRootNotCaptured
+		}
+
 		// The worker owns a terminal checkpoint once pause is accepted. Keep
 		// its RAM/disk pairing durable even if the HTTP caller disconnects.
 		operationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
@@ -681,6 +697,10 @@ func (s *Service) action(c echo.Context) error {
 
 		err = s.activate(ctx, info, v)
 	case "stop":
+		if !types.CapturesExitSnapshot(v.Spec.CaptureExitSnapshot) {
+			return errRootNotCaptured
+		}
+
 		v.MemoryCheckpointID, v.MemoryDiskSnapshots = "", nil
 		v.DesiredState = types.VMStateStopped
 		if !req.NoSnapshot && v.StopSnapshotID == "" && v.ContainerID != "" {

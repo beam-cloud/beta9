@@ -161,6 +161,7 @@ class DurableDiskMountConfig(betterproto.Message):
     filesystem: str = betterproto.string_field(3)
     driver: str = betterproto.string_field(4)
     source_snapshot_id: str = betterproto.string_field(5)
+    skip_exit_snapshot: bool = betterproto.bool_field(6)
 
 
 @dataclass(eq=False, repr=False)

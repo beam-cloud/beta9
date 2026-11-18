@@ -22,6 +22,9 @@ type ContainerOverlay struct {
 	overlayPath     string
 	persistentUpper string
 	persistentWork  string
+	// under is a directory below the root: its files are in the container
+	// wherever the root has none.
+	under string
 }
 
 type ContainerOverlayLayer struct {
@@ -53,6 +56,17 @@ func NewContainerOverlay(request *types.ContainerRequest, rootPath string, overl
 		root:        rootPath,
 		overlayPath: overlayPath,
 	}
+}
+
+// SetUnder puts dir below the root of an overlay that is not mounted yet.
+// It applies to Setup, whose writable layer starts empty: a writable layer
+// that outlives the mount would keep referring to a directory that the next
+// mount may not have.
+func (co *ContainerOverlay) SetUnder(dir string) {
+	if strings.ContainsAny(dir, ":,") {
+		return // overlayfs separates its options and its lower directories with these
+	}
+	co.under = dir
 }
 
 func (co *ContainerOverlay) Setup() error {
@@ -122,6 +136,8 @@ func (co *ContainerOverlay) AddEmptyLayer() error {
 	if len(co.layers) > 0 {
 		index = len(co.layers)
 		lowerDir = co.layers[index-1].merged
+	} else if co.under != "" {
+		lowerDir = co.root + ":" + co.under
 	}
 
 	layerDir := filepath.Join(co.overlayPath, co.containerId, fmt.Sprintf("layer-%d", index))

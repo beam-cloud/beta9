@@ -48,6 +48,13 @@ func isPersistentVM(useVM bool, env []string) bool {
 	return useVM && slices.Contains(env, "BEAM_VM_SYSTEMD=1")
 }
 
+// IsHeadlessVM identifies a VM that takes none of its guest's ports: it has
+// no web terminal, and its process manager listens on a socket that the
+// worker reaches over vsock instead of on a port.
+func (r *ContainerRequest) IsHeadlessVM() bool {
+	return r.IsPersistentVM() && slices.Contains(r.Env, "BEAM_VM_HEADLESS=1")
+}
+
 func (r *ContainerRequest) VMID() string {
 	for _, env := range r.Env {
 		if id, ok := strings.CutPrefix(env, "BEAM_VM_ID="); ok {
@@ -94,6 +101,18 @@ type VMSpec struct {
 	Disks            []*pb.DurableDisk  `json:"disks,omitempty"`
 	Volumes          []*pb.Volume       `json:"volumes,omitempty"`
 	SourceSnapshotID string             `json:"source_snapshot_id,omitempty"`
+	// Headless VMs take none of their guest's ports, so that what runs in
+	// one finds the machine it expects. GitHub runners are headless; the API
+	// does not accept it.
+	Headless bool `json:"headless,omitempty"`
+	// Whether the root disk outlives the VM's container. Unset means true
+	// (see CapturesExitSnapshot). A VM that turns it off leaves nothing to
+	// start it from again, so it can be deleted but not stopped or paused.
+	// GitHub runners turn it off; the API does not accept it.
+	CaptureExitSnapshot *bool `json:"capture_exit_snapshot,omitempty"`
+	// RootLayer goes under the VM's image (see RootLayer). GitHub runners
+	// have their repository's cache there; the API does not accept it.
+	RootLayer *RootLayer `json:"root_layer,omitempty"`
 }
 
 // VMCreateOptions carries parsed inputs for creation and forks.
@@ -369,14 +388,62 @@ const (
 
 // GitHubRunnerInstallation connects a GitHub account, through an installation
 // of the GitHub App, to the workspace that runs its jobs and is billed for
-// them. Runners launch with the Beam token that connected it.
+// them. Runners launch with the Beam token that connected it. No runner
+// starts while it is paused, which leaves its jobs queued on GitHub.
+// EnhancedCache gives its runners their repository's cache
+// (GitHubRunnerCache).
 type GitHubRunnerInstallation struct {
-	ID          int64     `db:"id" json:"id"`
-	WorkspaceID uint      `db:"workspace_id" json:"-"`
-	TokenID     string    `db:"token_id" json:"-"`
-	Account     string    `db:"account" json:"account"`
-	AccountType string    `db:"account_type" json:"account_type"`
-	CreatedAt   time.Time `db:"created_at" json:"created_at"`
+	ID            int64     `db:"id" json:"id"`
+	WorkspaceID   uint      `db:"workspace_id" json:"-"`
+	TokenID       string    `db:"token_id" json:"-"`
+	Account       string    `db:"account" json:"account"`
+	AccountType   string    `db:"account_type" json:"account_type"`
+	Paused        bool      `db:"paused" json:"paused"`
+	EnhancedCache bool      `db:"enhanced_cache" json:"-"`
+	CreatedAt     time.Time `db:"created_at" json:"created_at"`
+}
+
+// GitHubRunnerCache is the disk that holds what the jobs of one repository
+// of a workspace download and build again and again: the standard cache
+// directories of their tools, whose entries are named by their content or
+// their version. Every runner of the repository starts with SnapshotID of
+// it under its image, read-only (RootLayer), so a job finds the entries
+// there instead of fetching or building them.
+//
+// A repository has its own disk, so nothing that a job of one repository
+// leaves is ever in front of the jobs of another. Repository is its full
+// name in lower case.
+//
+// SnapshotID is the generation runners get, and is empty until there is
+// one. It moves only to a generation that a job on the repository's default
+// branch left (GitHubRunnerCacheCandidate). One runner at a time is started
+// to leave one, and PublisherAt is when the last was. A repository has one
+// disk that is not retired. A retired one is deleted, with everything
+// stored for it.
+type GitHubRunnerCache struct {
+	WorkspaceID uint       `db:"workspace_id"`
+	Repository  string     `db:"repository"`
+	DiskName    string     `db:"disk_name"`
+	SnapshotID  string     `db:"snapshot_id"`
+	CreatedAt   time.Time  `db:"created_at"`
+	PublisherAt *time.Time `db:"publisher_at"`
+	RetiredAt   *time.Time `db:"retired_at"`
+}
+
+// GitHubRunnerCacheCandidate is a generation of a repository's cache that no
+// runner gets yet: SnapshotID, which the worker of the runner VM named
+// Runner published. That runner started on Parent, which is the generation
+// runners get now, so the candidate is Parent and what the runner's job
+// added. It becomes the generation runners get if that job is one of the
+// repository whose code its default branch holds.
+type GitHubRunnerCacheCandidate struct {
+	WorkspaceID uint      `db:"workspace_id"`
+	Repository  string    `db:"repository"`
+	DiskName    string    `db:"disk_name"`
+	Parent      string    `db:"parent"`
+	SnapshotID  string    `db:"snapshot_id"`
+	Runner      string    `db:"runner"`
+	CreatedAt   time.Time `db:"created_at"`
 }
 
 // GitHubRunnerJob is a workflow job that asked for a Beam runner.
@@ -386,8 +453,23 @@ type GitHubRunnerInstallation struct {
 // started for another job with the same label. ProvisionAt is when to start
 // the job's runner, and is unset once there is nothing left to start. Error
 // is why the last attempt to start it failed.
+//
+// RunID is the workflow run the job is part of, which is what GitHub cancels,
+// and is zero for a job recorded before runs were.
+//
+// Waiting tells a user what a queued job that no runner has taken waits for.
+// What is stored is why its runner starts later than at once, and is empty
+// while one is being started. The API completes it with what the row does
+// not say, as that the account is paused.
+//
+// ReceivedAt, RegisteredAt and VMReadyAt are when the steps that get the job
+// its runner were done: the gateway first heard of the job, VM was registered
+// with GitHub, and VM could run commands. The last two are of VM, and are
+// unset again when another runner is started for the job. Timeline is how
+// the API returns the three, and is not stored.
 type GitHubRunnerJob struct {
 	ID             int64      `db:"id" json:"id"`
+	RunID          int64      `db:"run_id" json:"run_id,omitempty"`
 	InstallationID int64      `db:"installation_id" json:"-"`
 	WorkspaceID    uint       `db:"workspace_id" json:"-"`
 	Repository     string     `db:"repository" json:"repository"`
@@ -405,6 +487,32 @@ type GitHubRunnerJob struct {
 	Attempts       int        `db:"attempts" json:"-"`
 	ProvisionAt    *time.Time `db:"provision_at" json:"-"`
 	Error          string     `db:"error" json:"error,omitempty"`
+	Waiting        string     `db:"waiting" json:"waiting,omitempty"`
+	ReceivedAt     *time.Time `db:"received_at" json:"-"`
+	RegisteredAt   *time.Time `db:"registered_at" json:"-"`
+	VMReadyAt      *time.Time `db:"vm_ready_at" json:"-"`
+	// DefaultBranch is whether GitHub said the job runs on its repository's
+	// default branch, when the job was first heard of.
+	DefaultBranch bool `db:"default_branch" json:"-"`
+
+	Timeline GitHubRunnerTimeline `db:"-" json:"timeline,omitzero"`
+}
+
+// GitHubRunnerTimeline is when each step that got a job its runner was done,
+// as RFC 3339 with milliseconds. A step that was not reached, or not timed,
+// is empty.
+type GitHubRunnerTimeline struct {
+	ReceivedAt   string `json:"received_at,omitempty"`
+	RegisteredAt string `json:"registered_at,omitempty"`
+	VMReadyAt    string `json:"vm_ready_at,omitempty"`
+}
+
+// GitHubRunnerRun is a workflow run with jobs that asked for a Beam runner,
+// in the repository and account that it is cancelled in.
+type GitHubRunnerRun struct {
+	InstallationID int64  `db:"installation_id"`
+	Repository     string `db:"repository"`
+	RunID          int64  `db:"run_id"`
 }
 
 // GitHubRunnerJobFilter selects one page of a workspace's jobs, newest first.
@@ -428,10 +536,14 @@ type GitHubRunnerJobPage struct {
 
 // GitHubRunner is what the lifecycle of a runner VM depends on: where it is
 // registered, whether that account is still connected, and the status of the
-// job GitHub gave it, which is empty while it waits for one.
+// job GitHub gave it, which is empty while it waits for one. Waiting and
+// Ready are what the job it was started for has been told of it: what that
+// job waits for, and whether the runner's VM was found ready.
 type GitHubRunner struct {
 	InstallationID int64  `db:"installation_id"`
 	Repository     string `db:"repository"`
 	Connected      bool   `db:"connected"`
 	JobStatus      string `db:"job_status"`
+	Waiting        string `db:"waiting"`
+	Ready          bool   `db:"ready"`
 }

@@ -339,10 +339,17 @@ func (m *Manager) Close(ctx context.Context) error {
 // DetachAll tears down every volume still owned by this worker. It is safe to
 // call after the last container exits and during worker shutdown.
 func (m *Manager) DetachAll(ctx context.Context) error {
+	return m.DetachAllExcept(ctx, "")
+}
+
+// DetachAllExcept is DetachAll for the volumes no container holds: it leaves
+// the ones attached with this owner, which outlive the containers that use
+// them.
+func (m *Manager) DetachAllExcept(ctx context.Context, owner string) error {
 	m.mu.Lock()
 	keys := make([]string, 0, len(m.volumes))
 	for key, volume := range m.volumes {
-		if volume != nil {
+		if volume != nil && (owner == "" || volume.owner != owner) {
 			keys = append(keys, key)
 		}
 	}

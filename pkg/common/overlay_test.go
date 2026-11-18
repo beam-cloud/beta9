@@ -2,6 +2,7 @@ package common
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -183,4 +184,36 @@ func TestContainerOverlayEphemeralLayersMountVolatile(t *testing.T) {
 		require.False(t, overlayVolatileUnsupported.Load())
 		require.Len(t, mountCalls(t, logPath), 1)
 	})
+}
+
+// A directory put under the root is a lower directory of the container's
+// first layer, below the root, so that the root's files come first.
+func TestContainerOverlaySetUnderPutsADirectoryBelowTheRoot(t *testing.T) {
+	overlayVolatileUnsupported.Store(false)
+	t.Cleanup(func() { overlayVolatileUnsupported.Store(false) })
+	logPath := fakeMount(t, "exit 0")
+
+	root, under := t.TempDir(), t.TempDir()
+	overlay := NewContainerOverlay(&types.ContainerRequest{ContainerId: "layered"}, root, t.TempDir())
+	overlay.SetUnder(under)
+	require.NoError(t, overlay.Setup())
+	require.NoError(t, overlay.AddEmptyLayer())
+
+	plain := NewContainerOverlay(&types.ContainerRequest{ContainerId: "plain"}, root, t.TempDir())
+	require.NoError(t, plain.Setup())
+
+	// overlayfs reads these as the end of an option or of a directory.
+	for i, name := range []string{"a:b", "a,b"} {
+		refused := NewContainerOverlay(&types.ContainerRequest{ContainerId: fmt.Sprint("refused-", i)}, root, t.TempDir())
+		refused.SetUnder(filepath.Join(t.TempDir(), name))
+		require.NoError(t, refused.Setup())
+	}
+
+	calls := mountCalls(t, logPath)
+	require.Len(t, calls, 5)
+	require.Contains(t, calls[0], "lowerdir="+root+":"+under+",")
+	require.NotContains(t, calls[1], under, "a later layer is over the first, which has the directory")
+	for _, call := range calls[2:] {
+		require.Contains(t, call, "lowerdir="+root+",")
+	}
 }
