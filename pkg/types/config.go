@@ -1102,7 +1102,9 @@ type WorkerPoolJobSpecPoolSizingConfig struct {
 // buys machines from.
 type ProviderConfig struct {
 	// Disabled prevents catalog discovery and new purchases while retaining
-	// credentials for inspecting and deleting machines already bought.
+	// credentials for inspecting and deleting machines already bought. It
+	// names providers by the keys below, in any case. A name that is no
+	// provider's disables nothing, and is logged as an error at startup.
 	Disabled  []string                `key:"disabled" json:"disabled"`
 	Vast      VastProviderConfig      `key:"vast" json:"vast"`
 	Shadeform ShadeformProviderConfig `key:"shadeform" json:"shadeform"`

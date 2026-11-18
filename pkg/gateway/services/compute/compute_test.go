@@ -8948,6 +8948,37 @@ func TestCreateManagedPoolThatBuysItsMachines(t *testing.T) {
 	require.ErrorIs(t, err, model.ErrInvalidManagedPoolConfig)
 }
 
+// Nor can a pool buy from a provider that is disabled. It is told that, and
+// not that the provider lacks credentials, which it has.
+func TestCreateManagedPoolThatBuysFromADisabledProvider(t *testing.T) {
+	const disabled, selling = "vast", "shadeform"
+	vast := types.VastProviderConfig{ApiKey: "synthetic-key"}
+	for name, tc := range map[string]struct {
+		config types.ProviderConfig
+		others string
+	}{
+		"another provider sells": {
+			config: types.ProviderConfig{Disabled: []string{disabled}, Vast: vast, Shadeform: types.ShadeformProviderConfig{ApiKey: "synthetic-key"}},
+			others: "enabled: " + selling,
+		},
+		"no provider sells": {
+			config: types.ProviderConfig{Disabled: []string{disabled}, Vast: vast},
+			others: "none are enabled",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			service, repo := buyingTestService(types.AppConfig{})
+			service.providers = providers.NewRegistry(tc.config, testOwner)
+			_, err := service.CreateManagedPool(context.Background(), clusterAdminAuth(), "spot-l40s", spotPool(func(pool *types.WorkerPoolConfig) {
+				pool.Provisioning.Provider = disabled
+			}))
+			require.ErrorIs(t, err, model.ErrInvalidManagedPoolConfig)
+			require.ErrorContains(t, err, fmt.Sprintf("provisioning.provider %q is disabled under providers.disabled (%s)", disabled, tc.others))
+			require.Empty(t, repo.pools, "a pool that cannot buy is not made")
+		})
+	}
+}
+
 func TestBuyingPoolsAreThePoolsThisReplicaRunsThatBuy(t *testing.T) {
 	ctx := context.Background()
 	service, _ := buyingTestService(types.AppConfig{Worker: types.WorkerConfig{Pools: map[string]types.WorkerPoolConfig{

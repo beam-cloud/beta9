@@ -1096,6 +1096,14 @@ func TestEveryReasonAPoolCannotBuyForIsSaid(t *testing.T) {
 			want: `the pool buys from provider \"nebius\", which is not configured under providers`,
 		},
 		{
+			name:    "a provider that is disabled",
+			options: func(opts *Options) { opts.Providers, _ = newDisabledVast(t) },
+			arrange: func(w *world) {
+				w.control.pools["spot-l40s"] = spotL40S(func(pool *types.WorkerPoolConfig) { pool.Provisioning.Provider = disabledVastName })
+			},
+			want: `the pool buys from provider \"` + disabledVastName + `\", which is disabled under providers.disabled`,
+		},
+		{
 			name: "a purchase that just failed",
 			arrange: func(w *world) {
 				w.Tick(w.ctx)

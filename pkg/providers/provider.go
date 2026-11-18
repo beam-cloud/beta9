@@ -336,14 +336,18 @@ type Registry struct {
 	byName map[string]Provider
 }
 
+// providerNames are the keys a provider can be configured under.
+var providerNames = []string{awsName, gcpName, hetznerName, nebiusName, shadeformName, vastName, verdaName}
+
 // NewRegistry builds a client for every provider the config has credentials
 // for. Owner identifies this control plane on the instances they buy. A
 // provider the config disables keeps its client and sells nothing new.
 //
 // It does not fail, so that a gateway starts whatever its config says of
 // providers. What is wrong is logged as an error, once, here: an owner that
-// some provider could not store, for which no client is made, and a provider
-// whose credentials are incomplete or cannot be read, which is left out.
+// some provider could not store, for which no client is made, a provider
+// whose credentials are incomplete or cannot be read, which is left out, and
+// a name under providers.disabled that is no provider's.
 func NewRegistry(config types.ProviderConfig, owner string) *Registry {
 	registry := RegistryOf()
 	if err := checkOwner(owner); err != nil {
@@ -391,6 +395,15 @@ func NewRegistry(config types.ProviderConfig, owner string) *Registry {
 // One that has no credentials sells nothing as it is.
 func (r *Registry) disable(written string) {
 	name := strings.ToLower(strings.TrimSpace(written))
+	if name == "" {
+		return
+	}
+	if !slices.Contains(providerNames, name) {
+		// A name that is misspelt would leave the provider it was meant for
+		// buying, with nothing to show that it still is.
+		log.Error().Str("provider", written).Strs("providers", providerNames).Msg("providers.disabled names no provider: nothing is disabled for it")
+		return
+	}
 	if provider, configured := r.byName[name]; configured && r.IsEnabled(name) {
 		r.byName[name] = disabledProvider{Provider: provider}
 	}

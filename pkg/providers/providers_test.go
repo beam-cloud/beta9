@@ -1344,6 +1344,54 @@ func TestRegistryHasNoProvidersForAnOwnerThatCannotBeStored(t *testing.T) {
 	require.Empty(t, errs())
 }
 
+// A name under providers.disabled that is misspelt would leave the provider
+// it was meant for buying. The log says which name is no provider's, and the
+// rest of the list holds.
+func TestRegistrySaysWhenADisabledNameIsNoProviders(t *testing.T) {
+	const misspelt = "shadeforn"
+	config := types.ProviderConfig{
+		Shadeform: types.ShadeformProviderConfig{ApiKey: "key"},
+		Hetzner:   types.HetznerProviderConfig{ApiToken: "token"},
+	}
+
+	errs := loggedErrors(t)
+	config.Disabled = []string{misspelt, hetznerName}
+	require.Equal(t, []string{shadeformName}, NewRegistry(config, testOwner).Names())
+	require.Len(t, errs(), 1)
+	require.Equal(t, misspelt, errs()[0].Provider)
+	require.Contains(t, errs()[0].Message, "providers.disabled names no provider")
+
+	// A provider without credentials sells nothing as it is, and an entry
+	// that was left empty names nothing. Neither is a mistake.
+	errs = loggedErrors(t)
+	config.Disabled = []string{vastName, "", "  "}
+	require.Equal(t, []string{hetznerName, shadeformName}, NewRegistry(config, testOwner).Names())
+	require.Empty(t, errs())
+}
+
+// Every provider a registry can hold can be disabled: a provider that is
+// added without its name here would be reported as misspelt.
+func TestEveryProviderOfARegistryCanBeDisabled(t *testing.T) {
+	config := types.ProviderConfig{
+		Shadeform: types.ShadeformProviderConfig{ApiKey: "key"},
+		Hetzner:   types.HetznerProviderConfig{ApiToken: "token"},
+		Verda:     types.VerdaProviderConfig{ClientID: "id", ClientSecret: "secret"},
+		Nebius:    types.NebiusProviderConfig{ServiceAccountID: "account", PublicKeyID: "key", PrivateKey: testServiceKeyPEM(t)},
+		AWS:       types.AWSProviderConfig{Regions: []types.AWSProviderRegionConfig{{Name: "us-east-1"}}},
+		GCP:       types.GCPProviderConfig{ServiceAccountKey: gcpTestKeyJSON(t, "https://oauth2.googleapis.com/token")},
+		Vast:      types.VastProviderConfig{ApiKey: "key"},
+	}
+	all := NewRegistry(config, testOwner).Names()
+	require.ElementsMatch(t, providerNames, all)
+
+	errs := loggedErrors(t)
+	config.Disabled = all
+	registry := NewRegistry(config, testOwner)
+	require.Empty(t, registry.Names())
+	require.Equal(t, all, registry.ConfiguredNames())
+	require.Empty(t, errs())
+}
+
 // A provider that has half of what it signs in with, or a key that cannot
 // be read, could not make one call. It is left out, and the log says once
 // which provider and what is wrong with it. The others are used.

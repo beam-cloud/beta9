@@ -422,6 +422,8 @@ cache:
 providers:
   # Disable new purchases and discovery by provider key (for example [aws, gcp]).
   # Keep credentials configured so existing reservations can still be cleaned up.
+  # A key that is no provider's disables nothing: the gateway logs it as an
+  # error when it starts.
   disabled: []
   # Every provider is asked what it sells at this interval, by one gateway at
   # a time. What they answer is kept in Redis for the gateways, and as history
