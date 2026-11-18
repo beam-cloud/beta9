@@ -22,6 +22,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog/log"
@@ -143,7 +144,8 @@ type compactionResult struct {
 }
 
 func (r *githubRunners) compactionEnabled() bool {
-	return r.github != nil && r.config.CompactionURL != "" && r.config.CompactionSecret != ""
+	return r.github != nil && r.config.CompactionURL != "" && r.config.CompactionSecret != "" &&
+		r.config.CompactionImageID != "" && r.config.CompactionImageID != r.config.ImageID
 }
 
 func (r *githubRunners) compactionValues(ctx context.Context, installation *types.GitHubRunnerInstallation, status *runnerStatus) error {
@@ -293,7 +295,21 @@ func (r *githubRunners) startCompaction(ctx context.Context, row types.GitHubCom
 		"COMPACTION_PREVIOUS_COMMIT=" + row.LastCommit,
 		"COMPACTION_ADAPTERS=" + compactionFrameworks,
 	}
-	return r.launchRunnerVM(ctx, info, compactionPrefix+row.RunID, row.Repository, size, env, nil)
+	captureExitSnapshot := false
+	_, err = r.s.createVM(auth.ContextWithAuthInfo(ctx, info), info, types.VMCreateOptions{
+		Name: compactionPrefix + row.RunID,
+		Spec: types.VMSpec{
+			ImageID:             r.config.CompactionImageID,
+			CPU:                 size.CPU,
+			Memory:              size.Memory,
+			DiskSize:            size.DiskSize,
+			Headless:            true,
+			Env:                 env,
+			CaptureExitSnapshot: &captureExitSnapshot,
+		},
+		Metadata: map[string]string{"github.repository": row.Repository, "github.compaction": "true"},
+	})
+	return err
 }
 
 func (r *githubRunners) finishCompaction(ctx context.Context, row types.GitHubCompaction, done compactionCompletion) error {

@@ -1145,7 +1145,26 @@ func (r *githubRunners) launch(ctx context.Context, job types.GitHubRunnerJob, s
 		log.Warn().Err(err).Int64("github_job_id", job.ID).Msg("find the cache of a GitHub runner")
 	}
 
-	return r.launchRunnerVM(ctx, info, job.VM, job.Repository, size, []string{"BEAM_GITHUB_JIT_CONFIG=" + config}, layer)
+	captureExitSnapshot := false
+	_, err = r.s.createVM(auth.ContextWithAuthInfo(ctx, info), info, types.VMCreateOptions{
+		Name: job.VM,
+		Spec: types.VMSpec{
+			ImageID:       r.config.ImageID,
+			CPU:           size.CPU,
+			Memory:        size.Memory,
+			DiskSize:      size.DiskSize,
+			DockerEnabled: true,
+			// A job finds no port of its machine taken, as on GitHub's.
+			Headless: true,
+			Env:      []string{"BEAM_GITHUB_JIT_CONFIG=" + config},
+			// A runner is deleted with its job and never starts again, so
+			// nothing of its disk is worth uploading when it exits.
+			CaptureExitSnapshot: &captureExitSnapshot,
+			RootLayer:           layer,
+		},
+		Metadata: map[string]string{"github.repository": job.Repository},
+	})
+	return err
 }
 
 func (r *githubRunners) runnerAuth(ctx context.Context, installation *types.GitHubRunnerInstallation) (*auth.AuthInfo, error) {
@@ -1161,34 +1180,6 @@ func (r *githubRunners) runnerAuth(ctx context.Context, installation *types.GitH
 		return nil, errors.New("the Beam token that connected GitHub is inactive; connect again")
 	}
 	return &auth.AuthInfo{Workspace: workspace, Token: token}, nil
-}
-
-func (r *githubRunners) launchRunnerVM(ctx context.Context, info *auth.AuthInfo, name, repository string, size runnerSize, env []string, layer *types.RootLayer) error {
-	compaction := strings.HasPrefix(name, compactionPrefix)
-	metadata := map[string]string{"github.repository": repository}
-	if compaction {
-		metadata["github.compaction"] = "true"
-	}
-	captureExitSnapshot := false
-	_, err := r.s.createVM(auth.ContextWithAuthInfo(ctx, info), info, types.VMCreateOptions{
-		Name: name,
-		Spec: types.VMSpec{
-			ImageID:       r.config.ImageID,
-			CPU:           size.CPU,
-			Memory:        size.Memory,
-			DiskSize:      size.DiskSize,
-			DockerEnabled: !compaction,
-			// A job finds no port of its machine taken, as on GitHub's.
-			Headless: true,
-			Env:      env,
-			// A runner is deleted with its job and never starts again, so
-			// nothing of its disk is worth uploading when it exits.
-			CaptureExitSnapshot: &captureExitSnapshot,
-			RootLayer:           layer,
-		},
-		Metadata: metadata,
-	})
-	return err
 }
 
 // reconcileRunner deletes a runner VM that has nothing left to do, as a

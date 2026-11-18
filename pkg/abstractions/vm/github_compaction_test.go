@@ -513,11 +513,61 @@ func (s *compactionScheduleStore) FinishGitHubCompaction(_ context.Context, row 
 	return nil
 }
 
+func TestCompactionUsesDedicatedVM(t *testing.T) {
+	r, store, _, _ := runnerFixture(t)
+	r.config.CompactionURL, r.config.CompactionSecret = "https://compaction.test", "secret"
+	require.False(t, r.compactionEnabled())
+	r.config.CompactionImageID = r.config.ImageID
+	require.False(t, r.compactionEnabled())
+	r.config.CompactionImageID = "analysis-image"
+	require.True(t, r.compactionEnabled())
+
+	store.installation.CICompaction = true
+	token := r.github.tokens[42]
+	token.Permissions = map[string]string{"contents": "write", "pull_requests": "write", "workflows": "write"}
+	r.github.tokens[42] = token
+	fakeGitHub(t, r, map[string]string{
+		"GET /repos/acme/repo/git/ref/heads/main":                  `200 {"object":{"sha":"` + testCompactionCommit + `"}}`,
+		"GET /repos/acme/repo/actions/runs":                        `200 {"workflow_runs":[]}`,
+		"POST /app/installations/42/access_tokens":                 `201 {"token":"clone-token"}`,
+		"POST /repos/acme/repo/actions/runners/generate-jitconfig": `201 {"encoded_jit_config":"jit-secret"}`,
+	})
+	size, ok := runnerSizeFor("beam-4vcpu-ubuntu-2404")
+	require.True(t, ok)
+	expires := time.Now().Add(time.Minute)
+	require.NoError(t, r.startCompaction(t.Context(), types.GitHubCompaction{
+		InstallationID: 42, Repository: "acme/repo", Branch: "main", Label: size.Label,
+		RunCommit: testCompactionCommit, RunID: "analysis", RunExpires: &expires,
+	}))
+	analysis := r.s.gateway.(*vmGateway).stub
+	require.Equal(t, r.config.CompactionImageID, analysis.ImageId)
+	require.False(t, analysis.DockerEnabled)
+	require.Contains(t, analysis.Env, "COMPACTION_CLONE_TOKEN=clone-token")
+	for _, env := range analysis.Env {
+		require.NotContains(t, env, "BEAM_GITHUB_JIT_CONFIG=")
+	}
+
+	job := queuedJob(1)
+	job.VM = runnerPrefix + "normal"
+	store.jobs[job.ID] = job
+	require.NoError(t, r.launch(t.Context(), *job, size))
+	runner := r.s.gateway.(*vmGateway).stub
+	require.Equal(t, r.config.ImageID, runner.ImageId)
+	require.Equal(t, analysis.Cpu, runner.Cpu)
+	require.Equal(t, analysis.Memory, runner.Memory)
+	require.True(t, runner.DockerEnabled)
+	require.Contains(t, runner.Env, "BEAM_GITHUB_JIT_CONFIG=jit-secret")
+	for _, env := range runner.Env {
+		require.NotContains(t, env, "COMPACTION_")
+	}
+}
+
 func TestCompactionScheduleMarksOnlyOptedInDefaultBranchJobs(t *testing.T) {
 	r, runners, _, _ := runnerFixture(t)
 	store := &compactionScheduleStore{runnerStore: runners}
 	r.s.repo = store
 	r.config.CompactionURL, r.config.CompactionSecret = "https://compaction.test", "secret"
+	r.config.CompactionImageID = "analysis-image"
 	event := runnerEvent{Action: types.GitHubJobCompleted}
 	event.Repository.FullName, event.Repository.DefaultBranch = "Acme/Example", "main"
 	event.Job.HeadBranch, event.Job.HeadSHA, event.Job.Conclusion = "feature", strings.Repeat("a", 40), "success"
