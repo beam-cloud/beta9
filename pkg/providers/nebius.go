@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/rsa"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -477,7 +478,7 @@ func (c *Nebius) spec(req CreateRequest, platform, preset, subnet, policy string
 		"recoveryPolicy": "FAIL",
 	}
 	if req.StartupScript != "" {
-		spec["cloudInitUserData"] = bootScript(req.StartupScript)
+		spec["cloudInitUserData"] = nebiusCloudConfig(req.StartupScript)
 	}
 	if policy != "" {
 		spec["spotPricingPolicy"] = map[string]string{"id": policy}
@@ -485,6 +486,17 @@ func (c *Nebius) spec(req CreateRequest, platform, preset, subnet, policy string
 		spec["followsSpotPrice"] = empty
 	}
 	return spec
+}
+
+// Nebius merges this field as cloud-config YAML, including when the supplied
+// string starts with a shell shebang. A raw script becomes a YAML scalar and
+// is discarded. List-form runcmd runs this Bash script as root in cloud-init's
+// final stage, once per instance. A JSON-quoted string is also a valid YAML
+// scalar and preserves shell quotes, newlines and trailing whitespace.
+func nebiusCloudConfig(commands string) string {
+	// Marshaling a string cannot encounter unsupported JSON values.
+	script, _ := json.Marshal(bootScript(commands))
+	return "#cloud-config\nruncmd:\n  - [/bin/bash, -c, " + string(script) + "]\n"
 }
 
 // priceLimit returns the pricing policy that has Nebius take a VM back when

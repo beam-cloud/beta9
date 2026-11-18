@@ -5350,8 +5350,8 @@ func newNebiusSite(t *testing.T) site {
 		lose:   api.lose,
 		bought: func() (string, string) {
 			create := api.lastCreate()
-			script, _ := create["spec"].(map[string]any)["cloudInitUserData"].(string)
-			return create["metadata"].(map[string]any)["name"].(string), script
+			userData, _ := create["spec"].(map[string]any)["cloudInitUserData"].(string)
+			return create["metadata"].(map[string]any)["name"].(string), nebiusStartupCommand(t, userData)[2]
 		},
 		plantForeign: func() string {
 			offers, err := api.client(foreignOwner).Offers(context.Background(), OfferFilter{})
@@ -5496,6 +5496,8 @@ func TestNebiusCreateSendsWhatNebiusNeeds(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, Instance{ID: "computeinstance-e000001", Status: StatusPending, Tags: map[string]string{"beam-machine": "a1b2c3d4"}}, created)
+	userData := api.lastCreate()["spec"].(map[string]any)["cloudInitUserData"].(string)
+	require.Equal(t, "#!/usr/bin/env bash\nset -euo pipefail\ncurl -fsSL https://gateway.example/join | sh\n", nebiusStartupCommand(t, userData)[2])
 
 	require.Equal(t, map[string]any{
 		"metadata": map[string]any{
@@ -5524,7 +5526,7 @@ func TestNebiusCreateSendsWhatNebiusNeeds(t *testing.T) {
 				"ipAddress":       map[string]any{},
 				"publicIpAddress": map[string]any{},
 			}},
-			"cloudInitUserData": "#!/usr/bin/env bash\nset -euo pipefail\ncurl -fsSL https://gateway.example/join | sh\n",
+			"cloudInitUserData": userData,
 			"preemptible":       map[string]any{"onPreemption": "STOP"},
 			"recoveryPolicy":    "FAIL",
 			// No price limit was asked for.
