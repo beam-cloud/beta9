@@ -314,6 +314,7 @@ func (i *podInstance) startContainers(containersToRun int) error {
 			CheckpointTrigger: i.StubConfig.CheckpointTrigger,
 			Ports:             ports,
 			PoolSelector:      i.StubConfig.PoolSelector(),
+			Preemptable:       i.StubConfig.ServerlessGPUPreemptable(),
 			Hostname:          i.StubConfig.Hostname,
 		}
 		if err := abstractions.ConfigureContainerRequestNetwork(runRequest, *i.StubConfig); err != nil {
