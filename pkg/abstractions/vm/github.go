@@ -243,9 +243,10 @@ func (g *githubApp) registerRunner(ctx context.Context, installation int64, repo
 	return runner.Config, err
 }
 
-// removeRunner unregisters a runner that has no job. It reports false when
-// GitHub refuses, which it does once it has given the runner a job.
-func (g *githubApp) removeRunner(ctx context.Context, installation int64, repository, name string) (bool, error) {
+// removeRunner unregisters a runner. When a matching job still needs one,
+// only an offline or missing runner is removed. GitHub can also refuse to
+// remove a runner that has already been assigned a job.
+func (g *githubApp) removeRunner(ctx context.Context, installation int64, repository, name string, keepOnline bool) (bool, error) {
 	token, err := g.installationToken(ctx, installation)
 	if err != nil {
 		return false, err
@@ -253,14 +254,21 @@ func (g *githubApp) removeRunner(ctx context.Context, installation int64, reposi
 
 	var registered struct {
 		Runners []struct {
-			ID int64 `json:"id"`
+			ID     int64  `json:"id"`
+			Status string `json:"status"`
+			Busy   bool   `json:"busy"`
 		} `json:"runners"`
 	}
 	endpoint := g.apiURL + "/repos/" + repository + "/actions/runners"
 	_, err = g.ask(ctx, installation, http.MethodGet, endpoint+"?name="+url.QueryEscape(name), token, nil, &registered)
-	for _, runner := range registered.Runners {
-		if _, err = g.ask(ctx, installation, http.MethodDelete, fmt.Sprintf("%s/%d", endpoint, runner.ID), token, nil, nil); err != nil {
-			break
+	if err == nil {
+		for _, runner := range registered.Runners {
+			if keepOnline && (runner.Status != "offline" || runner.Busy) {
+				return false, nil
+			}
+			if _, err = g.ask(ctx, installation, http.MethodDelete, fmt.Sprintf("%s/%d", endpoint, runner.ID), token, nil, nil); err != nil {
+				break
+			}
 		}
 	}
 

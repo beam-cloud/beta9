@@ -489,7 +489,7 @@ func (r *githubRunners) stopJob(c echo.Context) error {
 	// GitHub refuses to unregister a runner that it gave a job, which spares
 	// the runner in reconcileRunner. Here its VM is deleted whatever GitHub
 	// answers, and GitHub fails the job.
-	if _, err := r.github.removeRunner(ctx, runner.InstallationID, runner.Repository, v.Name); err != nil {
+	if _, err := r.github.removeRunner(ctx, runner.InstallationID, runner.Repository, v.Name, false); err != nil {
 		log.Warn().Err(err).Str("vm_id", v.ID).Msg("unregister GitHub runner")
 	}
 
@@ -1195,7 +1195,7 @@ func (s *Service) reconcileRunner(ctx context.Context, v *types.VM) (bool, error
 		// them are many runners for an account to look through, so this one
 		// is taken off its list now, if GitHub will.
 		if r.github != nil && runner.Connected {
-			if _, err := r.github.removeRunner(ctx, runner.InstallationID, runner.Repository, v.Name); err != nil {
+			if _, err := r.github.removeRunner(ctx, runner.InstallationID, runner.Repository, v.Name, false); err != nil {
 				log.Debug().Err(err).Str("vm_id", v.ID).Msg("remove a replaced GitHub runner")
 			}
 		}
@@ -1209,12 +1209,14 @@ func (s *Service) reconcileRunner(ctx context.Context, v *types.VM) (bool, error
 		runner.JobStatus == types.GitHubJobCompleted || time.Since(v.CreatedAt) > runnerLifetime
 
 	if !done && waiting && v.Status == types.VMStateRunning {
-		spare, err := r.spare(ctx, v)
-		if err != nil || !spare {
+		surplus, err := r.s.repo.IsSurplusGitHubRunner(ctx, v.WorkspaceID, v.Name)
+		if err != nil || (!surplus && time.Since(v.UpdatedAt) <= runnerIdle) {
 			return true, err
 		}
 
-		removed, err := r.github.removeRunner(ctx, runner.InstallationID, runner.Repository, v.Name)
+		// Surplus runners can go immediately. For a runner that is still
+		// needed, ask GitHub whether it can take work before replacing it.
+		removed, err := r.github.removeRunner(ctx, runner.InstallationID, runner.Repository, v.Name, !surplus)
 
 		// GitHub takes no calls for the account for now. The runner is no
 		// worse for it, and is removed once GitHub does.
@@ -1226,7 +1228,8 @@ func (s *Service) reconcileRunner(ctx context.Context, v *types.VM) (bool, error
 			return true, err
 		}
 
-		// GitHub has given it a job in the meantime, so it gets more time.
+		// Give a runner that can still take a job or was just assigned one
+		// another interval before checking its health again.
 		if !removed {
 			return true, s.repo.SaveVM(ctx, v)
 		}
@@ -1291,18 +1294,6 @@ func (r *githubRunners) observe(ctx context.Context, v *types.VM, runner *types.
 	if err := r.s.repo.ObserveGitHubRunner(ctx, v.WorkspaceID, v.Name, waits, ready); err != nil {
 		log.Warn().Err(err).Str("vm_id", v.ID).Msg("record GitHub runner state")
 	}
-}
-
-// spare reports whether an idle runner has no job to wait for: none took it
-// in the time a runner is given, or each queued job that could take it has
-// another runner, so that it goes at once. Nothing else saves a running
-// runner, so UpdatedAt is when it started or was last found to be busy.
-func (r *githubRunners) spare(ctx context.Context, v *types.VM) (bool, error) {
-	if time.Since(v.UpdatedAt) > runnerIdle {
-		return true, nil
-	}
-
-	return r.s.repo.IsSurplusGitHubRunner(ctx, v.WorkspaceID, v.Name)
 }
 
 // redeliver has GitHub send again each event whose latest delivery since a

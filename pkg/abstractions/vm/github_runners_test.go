@@ -795,9 +795,9 @@ func TestGitHubRunnerVMLifecycle(t *testing.T) {
 		v.UpdatedAt = time.Now().Add(-runnerIdle - time.Minute)
 	}
 	for name, tc := range map[string]struct {
-		setup             func(*types.VM, *runnerStore, *githubRunners)
-		deleted, replaced bool
-		deregister        string
+		setup                      func(*types.VM, *runnerStore, *githubRunners)
+		deleted, replaced, refresh bool
+		lookup, deregister         string
 	}{
 		"running a job": {setup: assign("in_progress")},
 		"job completed": {setup: assign("completed"), deleted: true},
@@ -810,16 +810,20 @@ func TestGitHubRunnerVMLifecycle(t *testing.T) {
 			exit(v, store, r)
 			v.ContainerID, v.Status, v.LaunchAttempts = "", types.VMStateError, 5
 		}, deregister: "204", deleted: true, replaced: true},
-		"idle":                 {setup: idle, deregister: "204", deleted: true},
-		"idle but just busy":   {setup: idle, deregister: "422"},
-		"disconnected":         {setup: func(_ *types.VM, store *runnerStore, _ *githubRunners) { store.installation = nil }, deleted: true},
-		"disabled":             {setup: func(_ *types.VM, _ *runnerStore, r *githubRunners) { r.github = nil }, deleted: true},
-		"stopped":              {setup: func(v *types.VM, _ *runnerStore, _ *githubRunners) { v.DesiredState = types.VMStateStopped }, deleted: true},
-		"past its lifetime":    {setup: func(v *types.VM, _ *runnerStore, _ *githubRunners) { v.CreatedAt = time.Now().Add(-runnerLifetime) }, deleted: true},
-		"named like a runner":  {setup: func(_ *types.VM, store *runnerStore, _ *githubRunners) { store.jobs[1].VM = "ghr-another" }},
-		"idle without GitHub":  {setup: idle, deregister: "500"},
-		"running before a job": {},
-		"account paused":       {setup: func(_ *types.VM, store *runnerStore, _ *githubRunners) { store.installation.Paused = true }},
+		"idle and offline":         {setup: idle, deregister: "204", deleted: true},
+		"idle and missing":         {setup: idle, lookup: `200 {"runners":[]}`, deleted: true},
+		"idle and online":          {setup: idle, lookup: `200 {"runners":[{"id":9,"status":"online"}]}`, refresh: true},
+		"idle but busy":            {setup: idle, lookup: `200 {"runners":[{"id":9,"status":"offline","busy":true}]}`, refresh: true},
+		"idle with unknown status": {setup: idle, lookup: `200 {"runners":[{"id":9}]}`, refresh: true},
+		"idle but just busy":       {setup: idle, deregister: "422", refresh: true},
+		"disconnected":             {setup: func(_ *types.VM, store *runnerStore, _ *githubRunners) { store.installation = nil }, deleted: true},
+		"disabled":                 {setup: func(_ *types.VM, _ *runnerStore, r *githubRunners) { r.github = nil }, deleted: true},
+		"stopped":                  {setup: func(v *types.VM, _ *runnerStore, _ *githubRunners) { v.DesiredState = types.VMStateStopped }, deleted: true},
+		"past its lifetime":        {setup: func(v *types.VM, _ *runnerStore, _ *githubRunners) { v.CreatedAt = time.Now().Add(-runnerLifetime) }, deleted: true},
+		"named like a runner":      {setup: func(_ *types.VM, store *runnerStore, _ *githubRunners) { store.jobs[1].VM = "ghr-another" }},
+		"idle without GitHub":      {setup: idle, deregister: "500"},
+		"running before a job":     {},
+		"account paused":           {setup: func(_ *types.VM, store *runnerStore, _ *githubRunners) { store.installation.Paused = true }},
 		"pending a long time": {setup: func(v *types.VM, store *runnerStore, r *githubRunners) {
 			idle(v, store, r)
 			v.Status = types.VMStateStarting
@@ -829,8 +833,10 @@ func TestGitHubRunnerVMLifecycle(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			r, store, _, runtime := runnerFixture(t)
 			routes := map[string]string{}
+			if tc.lookup != "" || tc.deregister != "" {
+				routes["GET /repos/acme/repo/actions/runners"] = cmp.Or(tc.lookup, `200 {"runners":[{"id":9,"status":"offline"}]}`)
+			}
 			if tc.deregister != "" {
-				routes["GET /repos/acme/repo/actions/runners"] = `200 {"runners":[{"id":9}]}`
 				routes["DELETE /repos/acme/repo/actions/runners/9"] = tc.deregister + " {}"
 			}
 			calls := fakeGitHub(t, r, routes)
@@ -855,9 +861,15 @@ func TestGitHubRunnerVMLifecycle(t *testing.T) {
 			require.Equal(t, tc.deleted, v.Status == types.VMStateDeleted, v.Status)
 			require.Equal(t, tc.replaced, store.jobs[1].ProvisionAt != nil, "replacement requested")
 			require.Empty(t, runtime.requests, "runners never restart")
-			require.Equal(t, tc.deregister != "", slices.Contains(calls(), "GET /repos/acme/repo/actions/runners"), "deregistered")
-			if tc.deregister == "422" {
-				require.WithinDuration(t, time.Now(), store.rows[v.ID].UpdatedAt, time.Second, "a busy runner gets more time")
+			require.Equal(t, tc.lookup != "" || tc.deregister != "", slices.Contains(calls(), "GET /repos/acme/repo/actions/runners"), "looked up the runner")
+			require.Equal(t, tc.deregister != "", slices.Contains(calls(), "DELETE /repos/acme/repo/actions/runners/9"), "deregistered")
+			if tc.refresh {
+				next, err := store.GetVM(context.Background(), v.WorkspaceID, v.ID)
+				require.NoError(t, err)
+				require.WithinDuration(t, time.Now(), next.UpdatedAt, time.Second)
+				previousCalls := calls()
+				require.NoError(t, r.s.reconcileVM(context.Background(), next))
+				require.Equal(t, previousCalls, calls(), "the next pass does not check the runner again")
 			}
 			if name == "named like a runner" {
 				require.Equal(t, 1, runtime.snapshots, "ordinary VMs keep periodic snapshots")
@@ -1826,7 +1838,7 @@ func TestGitHubRunnerSurplusGoesAtOnce(t *testing.T) {
 	r, store, _, runtime := runnerFixture(t)
 	ctx := context.Background()
 	routes := map[string]string{
-		"GET /repos/acme/repo/actions/runners":      `200 {"runners":[{"id":9}]}`,
+		"GET /repos/acme/repo/actions/runners":      `200 {"runners":[{"id":9,"status":"online"}]}`,
 		"DELETE /repos/acme/repo/actions/runners/9": `204 {}`,
 	}
 	calls := fakeGitHub(t, r, routes)
