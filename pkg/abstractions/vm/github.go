@@ -41,6 +41,8 @@ type githubApp struct {
 	lock      sync.Mutex
 	tokens    map[int64]githubToken
 	notBefore map[int64]time.Time
+	// The runners GitHub last listed of each repository (see runners).
+	listed map[string]githubRunnerList
 }
 
 type githubToken struct {
@@ -243,6 +245,85 @@ func (g *githubApp) registerRunner(ctx context.Context, installation int64, repo
 	return runner.Config, err
 }
 
+// githubRunner is a runner as GitHub lists it: online once it has connected
+// to take a job, and busy from when GitHub gives it one.
+type githubRunner struct {
+	ID     int64  `json:"id"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Busy   bool   `json:"busy"`
+	// When a runner that is free was first listed so. A runner takes one
+	// job and is gone, so it has been free ever since.
+	FreeSince time.Time `json:"-"`
+}
+
+// free reports whether GitHub could give the runner a job at once.
+func (r githubRunner) free() bool {
+	return r.Status == "online" && !r.Busy
+}
+
+// githubRunnerList is the runners of a repository as GitHub listed them at a
+// time, by name.
+type githubRunnerList struct {
+	at      time.Time
+	runners map[string]githubRunner
+}
+
+// How long a list of a repository's runners is used for. Every idle runner
+// of the repository asks for it on each pass over the VMs, so the list is
+// read once for all of them, and a few times a minute at most.
+const githubRunnerListAge = 15 * time.Second
+
+// runners lists the runners registered in a repository, by name, as GitHub
+// has them now or had them a few seconds ago. What GitHub did since is found
+// out when it is asked to remove one: it refuses a runner that got a job.
+func (g *githubApp) runners(ctx context.Context, installation int64, repository string) (map[string]githubRunner, error) {
+	key := fmt.Sprintf("%d/%s", installation, repository)
+	g.lock.Lock()
+	cached, ok := g.listed[key]
+	g.lock.Unlock()
+	if ok && time.Since(cached.at) < githubRunnerListAge {
+		return cached.runners, nil
+	}
+
+	token, err := g.installationToken(ctx, installation)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	runners := map[string]githubRunner{}
+	for page := g.apiURL + "/repos/" + repository + "/actions/runners?per_page=100"; page != ""; {
+		var listed struct {
+			Runners []githubRunner `json:"runners"`
+		}
+		header, err := g.ask(ctx, installation, http.MethodGet, page, token, nil, &listed)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, runner := range listed.Runners {
+			if before := cached.runners[runner.Name]; runner.free() {
+				runner.FreeSince = now
+				if before.free() {
+					runner.FreeSince = before.FreeSince
+				}
+			}
+
+			runners[runner.Name] = runner
+		}
+		page = nextPage(header.Get("Link"))
+	}
+
+	g.lock.Lock()
+	if g.listed == nil {
+		g.listed = map[string]githubRunnerList{}
+	}
+	g.listed[key] = githubRunnerList{at: now, runners: runners}
+	g.lock.Unlock()
+	return runners, nil
+}
+
 // removeRunner unregisters a runner that has no job. It reports false when
 // GitHub refuses, which it does once it has given the runner a job.
 func (g *githubApp) removeRunner(ctx context.Context, installation int64, repository, name string) (bool, error) {
@@ -252,18 +333,37 @@ func (g *githubApp) removeRunner(ctx context.Context, installation int64, reposi
 	}
 
 	var registered struct {
-		Runners []struct {
-			ID int64 `json:"id"`
-		} `json:"runners"`
+		Runners []githubRunner `json:"runners"`
 	}
 	endpoint := g.apiURL + "/repos/" + repository + "/actions/runners"
 	_, err = g.ask(ctx, installation, http.MethodGet, endpoint+"?name="+url.QueryEscape(name), token, nil, &registered)
-	for _, runner := range registered.Runners {
-		if _, err = g.ask(ctx, installation, http.MethodDelete, fmt.Sprintf("%s/%d", endpoint, runner.ID), token, nil, nil); err != nil {
-			break
+	if err == nil {
+		for _, runner := range registered.Runners {
+			if _, err = g.ask(ctx, installation, http.MethodDelete, fmt.Sprintf("%s/%d", endpoint, runner.ID), token, nil, nil); err != nil {
+				break
+			}
 		}
 	}
 
+	return removedRunner(err)
+}
+
+// deleteRunner unregisters a runner that GitHub listed, as removeRunner does
+// one it has yet to find.
+func (g *githubApp) deleteRunner(ctx context.Context, installation int64, repository string, runner githubRunner) (bool, error) {
+	token, err := g.installationToken(ctx, installation)
+	if err != nil {
+		return false, err
+	}
+
+	endpoint := fmt.Sprintf("%s/repos/%s/actions/runners/%d", g.apiURL, repository, runner.ID)
+	_, err = g.ask(ctx, installation, http.MethodDelete, endpoint, token, nil, nil)
+	return removedRunner(err)
+}
+
+// removedRunner reads GitHub's answer to removing a runner: it refuses one
+// that it has given a job, and one that it no longer has is removed.
+func removedRunner(err error) (bool, error) {
 	switch githubStatus(err) {
 	case http.StatusUnprocessableEntity:
 		return false, nil

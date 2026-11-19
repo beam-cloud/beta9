@@ -465,8 +465,11 @@ type GitHubRunnerCacheCandidate struct {
 // ReceivedAt, RegisteredAt and VMReadyAt are when the steps that get the job
 // its runner were done: the gateway first heard of the job, VM was registered
 // with GitHub, and VM could run commands. The last two are of VM, and are
-// unset again when another runner is started for the job. Timeline is how
-// the API returns the three, and is not stored.
+// unset again when another runner is started for the job. RunnerReadyAt is
+// when a runner that GitHub could give the job was first ready, whichever it
+// was: from then on, the job waits for GitHub. It is unset only when the
+// job's runner stopped before it took a job. Timeline is how the API returns
+// the four, and is not stored.
 type GitHubRunnerJob struct {
 	ID             int64      `db:"id" json:"id"`
 	RunID          int64      `db:"run_id" json:"run_id,omitempty"`
@@ -491,6 +494,7 @@ type GitHubRunnerJob struct {
 	ReceivedAt     *time.Time `db:"received_at" json:"-"`
 	RegisteredAt   *time.Time `db:"registered_at" json:"-"`
 	VMReadyAt      *time.Time `db:"vm_ready_at" json:"-"`
+	RunnerReadyAt  *time.Time `db:"runner_ready_at" json:"-"`
 	// DefaultBranch is whether GitHub said the job runs on its repository's
 	// default branch, when the job was first heard of.
 	DefaultBranch bool `db:"default_branch" json:"-"`
@@ -505,6 +509,9 @@ type GitHubRunnerTimeline struct {
 	ReceivedAt   string `json:"received_at,omitempty"`
 	RegisteredAt string `json:"registered_at,omitempty"`
 	VMReadyAt    string `json:"vm_ready_at,omitempty"`
+	// When a runner was first ready for the job: Beam's part of its time in
+	// the queue ends here, and GitHub's begins.
+	RunnerReadyAt string `json:"runner_ready_at,omitempty"`
 }
 
 // GitHubRunnerRun is a workflow run with jobs that asked for a Beam runner,
@@ -538,7 +545,8 @@ type GitHubRunnerJobPage struct {
 // registered, whether that account is still connected, and the status of the
 // job GitHub gave it, which is empty while it waits for one. Waiting and
 // Ready are what the job it was started for has been told of it: what that
-// job waits for, and whether the runner's VM was found ready.
+// job waits for, and whether the runner's VM was found ready. Queued is
+// whether that job still waits for a runner.
 type GitHubRunner struct {
 	InstallationID int64  `db:"installation_id"`
 	Repository     string `db:"repository"`
@@ -546,4 +554,21 @@ type GitHubRunner struct {
 	JobStatus      string `db:"job_status"`
 	Waiting        string `db:"waiting"`
 	Ready          bool   `db:"ready"`
+	Queued         bool   `db:"queued"`
+}
+
+// GitHubRunnerPool is what an idle runner is weighed against: the jobs of
+// its repository and label, which are the ones it could take, and the other
+// runners that could take them.
+//
+// Queued is how many of the jobs wait for a runner, and Unheld how many of
+// those are told nothing of why, while no runner is being started for them.
+// Busy is how many runners are running one of the jobs. Ahead names the idle
+// runners that come before this one by name, in that order: of several idle
+// runners, each asking for itself, the same ones are then the first.
+type GitHubRunnerPool struct {
+	Queued int
+	Unheld int
+	Busy   int
+	Ahead  []string
 }
