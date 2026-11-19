@@ -115,6 +115,8 @@ message ContainerSnapshotDisksResponse {
   bool ok = 1;
   string error_msg = 2;
   repeated ContainerDiskSnapshot snapshots = 3;
+  // The snapshot failed only because the guest could not freeze its disks.
+  bool guest_freeze_failed = 4;
 }
 
 message ContainerSandboxExecRequest {

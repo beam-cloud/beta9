@@ -440,6 +440,34 @@ func TestContainerSnapshotDisksReportsPartialSuccess(t *testing.T) {
 	require.Equal(t, "captured-before-failure", response.Snapshots[0].SnapshotId)
 }
 
+func TestContainerSnapshotDisksClassifiesGuestFreezeFailures(t *testing.T) {
+	request := &types.ContainerRequest{ContainerId: "container-id"}
+	freezeErr := fmt.Errorf("snapshot: %w", guestDiskFreezeError{context.DeadlineExceeded})
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "freeze only", err: errors.Join(freezeErr), want: true},
+		{name: "freeze and upload", err: errors.Join(freezeErr, errors.New("upload failed"))},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := &ContainerRuntimeServer{
+				containerInstances: common.NewSafeMap[*ContainerInstance](),
+				snapshotDisks: func(context.Context, *types.ContainerRequest) ([]*types.DiskSnapshot, error) {
+					return nil, test.err
+				},
+			}
+			server.containerInstances.Set(request.ContainerId, &ContainerInstance{Request: request})
+			response, err := server.ContainerSnapshotDisks(context.Background(), &pb.ContainerSnapshotDisksRequest{ContainerId: request.ContainerId})
+			require.NoError(t, err)
+			require.False(t, response.Ok)
+			require.Equal(t, test.err.Error(), response.ErrorMsg)
+			require.Equal(t, test.want, response.GuestFreezeFailed)
+		})
+	}
+}
+
 func TestContainerSnapshotDisksRefusesAnUnknownContainer(t *testing.T) {
 	server := &ContainerRuntimeServer{containerInstances: common.NewSafeMap[*ContainerInstance]()}
 

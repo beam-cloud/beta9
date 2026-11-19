@@ -183,7 +183,7 @@ const (
 
 	// Host -> guest.
 	MsgSignal  = "signal"  // Payload: Signal to deliver to the container process.
-	MsgFreeze  = "freeze"  // FIFREEZE the filesystem at Text (a guest mount path; empty means the root disk).
+	MsgFreeze  = "freeze"  // FIFREEZE the filesystem at Text (a guest mount path; empty means the root disk), after those on loop devices.
 	MsgThaw    = "thaw"    // FITHAW the same.
 	MsgNetwork = "network" // Payload: Network and TimeUnixNano; restore addresses and wall time.
 	MsgRescan  = "rescan"  // Find PCI devices the host attached; the hypervisor's hotplug interrupt can precede the guest's handler.
@@ -217,6 +217,12 @@ const (
 // before thawing it itself: shorter than the host's request timeout, so a
 // freeze the host gave up on cannot outlive it.
 const FreezeLimit = 20 * time.Second
+
+// FreezeTimeout is how long the guest gives the kernel to freeze a filesystem
+// before it answers that the freeze failed. The kernel cannot give up on a
+// freeze, so the guest thaws it whenever it does finish. Shorter than the
+// host's request timeout, so the host hears the reason.
+const FreezeTimeout = 25 * time.Second
 
 // Filesystem operations the host performs inside the guest. The worker's
 // sandbox file RPCs use these because the guest's writable layer is a block

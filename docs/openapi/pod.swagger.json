@@ -1389,6 +1389,10 @@
             "type": "object",
             "$ref": "#/definitions/podPodSandboxDiskSnapshot"
           }
+        },
+        "guestFreezeFailed": {
+          "type": "boolean",
+          "description": "The snapshot failed only because the guest could not freeze its disks."
         }
       }
     },

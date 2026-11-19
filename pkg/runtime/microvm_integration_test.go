@@ -1337,6 +1337,109 @@ test "$(stat -c %a /etc/alpine-release)" = 600
 	require.Contains(t, vm2.output.String(), "persisted")
 }
 
+func TestMicroVMDurableRootFullReturnsENOSPC(t *testing.T) {
+	rt := requireMicroVMEnv(t)
+	dir, err := os.MkdirTemp(testWorkRoot, "qcow-full-")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
+	manager := disk.NewManager(disk.Config{Root: dir})
+	ctx := context.Background()
+	t.Cleanup(func() { require.NoError(t, manager.Close(ctx)) })
+	var containerID string
+	volume, err := manager.Attach(ctx, disk.AttachSpec{
+		Key:              "root",
+		VirtualSizeBytes: 128 << 20,
+		Export:           disk.ExportVhostUser,
+		Freeze: func(ctx context.Context) (func(), error) {
+			return rt.FreezeDisk(ctx, containerID, "")
+		},
+	}, nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, volume.ExportSocket())
+
+	vm := newTestVM(t, rt, vmOptions{
+		image:       "python",
+		annotations: map[string]string{MicroVMRootDiskAnnotation: volume.ExportSocket()},
+		args: []string{"python3", "-c", `
+import errno
+import os
+import signal
+from pathlib import Path
+
+# Block before reporting readiness so the signal cannot arrive before sigwait.
+release = {signal.SIGUSR1}
+signal.pthread_sigmask(signal.SIG_BLOCK, release)
+
+sentinel = Path("/root-sentinel")
+sentinel.write_bytes(b"before capacity was reached")
+os.sync()
+
+filler = Path("/root-fill")
+chunk = os.urandom(1 << 20)
+try:
+    with filler.open("wb", buffering=0) as disk:
+        for _ in range(256):
+            disk.write(chunk)
+            os.fsync(disk.fileno())
+except OSError as err:
+    if err.errno != errno.ENOSPC:
+        raise
+else:
+    raise AssertionError("writes exceeded the virtual root disk capacity")
+
+stats = os.statvfs("/")
+available = stats.f_bavail * stats.f_frsize
+assert available < len(chunk), f"ENOSPC with {available} bytes still available"
+assert sentinel.read_bytes() == b"before capacity was reached"
+os.sync()
+print("full root returned ENOSPC and remains readable", flush=True)
+signal.sigwait(release)
+
+filler.unlink()
+with sentinel.open("wb") as disk:
+    disk.write(b"after reclaiming space")
+    disk.flush()
+    os.fsync(disk.fileno())
+assert sentinel.read_bytes() == b"after reclaiming space"
+`},
+	})
+	containerID = vm.id
+	vm.start()
+
+	const fullMarker = "full root returned ENOSPC and remains readable"
+	deadline := time.NewTimer(90 * time.Second)
+	defer deadline.Stop()
+	poll := time.NewTicker(50 * time.Millisecond)
+	defer poll.Stop()
+	for !strings.Contains(vm.output.String(), fullMarker) {
+		select {
+		case res := <-vm.result:
+			t.Fatalf("VM exited before reaching disk capacity: code=%d err=%v\n%s", res.code, res.err, vm.output.String())
+		case <-deadline.C:
+			t.Fatalf("VM did not reach disk capacity\n%s", vm.output.String())
+		case <-poll.C:
+		}
+	}
+
+	// Automatic snapshots must be able to freeze and seal a full root.
+	sealCtx, cancelSeal := context.WithTimeout(ctx, 45*time.Second)
+	defer cancelSeal()
+	require.NoError(t, rt.WaitForGuestControl(sealCtx, vm.id), vm.output.String())
+	sealed, skipped, err := volume.Seal(sealCtx, true)
+	require.NoError(t, err, vm.output.String())
+	require.False(t, skipped)
+	require.Len(t, sealed, 1)
+	require.NoError(t, rt.Kill(ctx, vm.id, syscall.SIGUSR1, nil))
+
+	res := vm.wait(90 * time.Second)
+	output := vm.output.String()
+	require.NoError(t, res.err, output)
+	require.Zero(t, res.code, output)
+	console := strings.ToLower(output)
+	require.NotContains(t, console, "i/o error", output)
+	require.NotContains(t, console, "aborting journal", output)
+}
+
 func TestMicroVMResourcesAndOOM(t *testing.T) {
 	rt := requireMicroVMEnv(t)
 	vm := newTestVM(t, rt, vmOptions{image: "alpine", goproc: true, memoryMiB: 512, cpuCores: 2})

@@ -1245,9 +1245,10 @@ func (s *GenericPodService) SandboxSnapshotDisks(ctx context.Context, in *pb.Pod
 		}, nil
 	}
 	return &pb.PodSandboxSnapshotDisksResponse{
-		Ok:        resp.Ok,
-		ErrorMsg:  resp.ErrorMsg,
-		Snapshots: sandboxDiskSnapshots(resp.Snapshots),
+		Ok:                resp.Ok,
+		ErrorMsg:          resp.ErrorMsg,
+		Snapshots:         sandboxDiskSnapshots(resp.Snapshots),
+		GuestFreezeFailed: resp.GuestFreezeFailed,
 	}, nil
 }
 
