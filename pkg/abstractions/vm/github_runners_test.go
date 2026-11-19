@@ -188,6 +188,8 @@ func longerDue(a, b types.GitHubRunnerJob) int {
 	return cmp.Or(a.ProvisionAt.Compare(*b.ProvisionAt), cmp.Compare(a.ID, b.ID))
 }
 
+func (r *runnerStore) RearmGitHubRunnerJobs(context.Context) error { return nil }
+
 func (r *runnerStore) ListDueGitHubRunnerJobs(ctx context.Context, limit int) ([]types.GitHubRunnerJob, error) {
 	due := []types.GitHubRunnerJob{}
 	for _, job := range r.jobs {

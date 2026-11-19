@@ -932,6 +932,13 @@ func (r *githubRunners) run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
+			// Recover queued jobs that lost their runner after it expired idle
+			// or took another job. New webhooks only need the due-job check.
+			recovery, cancel := context.WithTimeout(ctx, 5*time.Second)
+			if err := r.s.repo.RearmGitHubRunnerJobs(recovery); err != nil {
+				log.Warn().Err(err).Msg("recover queued GitHub runner jobs")
+			}
+			cancel()
 		case <-r.wake:
 		}
 

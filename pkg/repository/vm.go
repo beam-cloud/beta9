@@ -48,6 +48,7 @@ type VMRepository interface {
 	GetGitHubRunnerJob(context.Context, uint, int64) (*types.GitHubRunnerJob, error)
 	ListGitHubRunnerJobs(context.Context, uint, types.GitHubRunnerJobFilter) (*types.GitHubRunnerJobPage, error)
 	ListActiveGitHubRunnerRuns(context.Context, uint, string) ([]types.GitHubRunnerRun, int, error)
+	RearmGitHubRunnerJobs(context.Context) error
 	ListDueGitHubRunnerJobs(context.Context, int) ([]types.GitHubRunnerJob, error)
 	ClaimGitHubRunnerJob(context.Context, *types.GitHubRunnerJob, string, int) (bool, error)
 	FinishGitHubRunnerJob(context.Context, int64, string) error
@@ -950,6 +951,79 @@ func (r *PostgresBackendRepository) ListActiveGitHubRunnerRuns(ctx context.Conte
 	return runs, total, nil
 }
 
+// RearmGitHubRunnerJobs makes queued jobs due again after their runner went
+// away. A runner is not tied to the job it was started for. Another runner
+// might still cover that job, so recover only as many jobs as there are
+// missing runners for that installation, repository and label. Count both
+// live unassigned VMs (including those still starting) and attempts that
+// can start a new one. GitHub gives self-hosted jobs 24 hours in the queue,
+// even if we miss their final webhook.
+func (r *PostgresBackendRepository) RearmGitHubRunnerJobs(ctx context.Context) error {
+	query := `
+	WITH orphaned AS (
+		SELECT j.id, j.workspace_id, j.installation_id, j.repository, j.label, j.created_at, j.vm
+		FROM github_runner_installation i
+		JOIN github_runner_job j ON j.workspace_id = i.workspace_id AND j.installation_id = i.id
+		WHERE NOT i.paused AND j.status = 'queued' AND j.runner_name = ''
+			AND j.provision_at IS NULL AND j.error = '' AND j.vm <> ''
+			AND COALESCE(j.received_at, j.created_at) > NOW() - INTERVAL '24 hours'
+			AND NOT EXISTS (
+				SELECT 1 FROM persistent_vm v
+				WHERE v.workspace_id = j.workspace_id AND v.name = j.vm AND v.data->>'desired_state' <> 'deleted'
+			)
+	), pools AS (
+		SELECT DISTINCT workspace_id, installation_id, repository, label FROM orphaned
+	), shortages AS MATERIALIZED (
+		SELECT p.*,
+			(SELECT COUNT(*) FROM github_runner_job q
+				WHERE q.workspace_id = p.workspace_id AND q.installation_id = p.installation_id
+					AND q.repository = p.repository AND q.label = p.label AND q.status = 'queued'
+					AND q.runner_name = '' AND (q.error = '' OR q.provision_at IS NOT NULL)
+					AND COALESCE(q.received_at, q.created_at) > NOW() - INTERVAL '24 hours')
+			- (SELECT COUNT(*) FROM persistent_vm v
+				WHERE v.workspace_id = p.workspace_id AND v.data->>'desired_state' <> 'deleted'
+					AND v.data->>'desired_state' = 'running' AND (
+						SELECT TRUE FROM github_runner_job o
+						WHERE o.workspace_id = v.workspace_id AND o.vm = v.name AND o.vm <> ''
+							AND o.installation_id = p.installation_id AND o.repository = p.repository AND o.label = p.label
+						LIMIT 1
+					) AND NOT EXISTS (
+						SELECT 1 FROM github_runner_job a
+						WHERE a.workspace_id = v.workspace_id AND a.runner_name = v.name AND a.runner_name <> ''
+					))
+			- (SELECT COUNT(*) FROM github_runner_job o
+				WHERE o.workspace_id = p.workspace_id AND o.installation_id = p.installation_id
+					AND o.repository = p.repository AND o.label = p.label AND o.provision_at IS NOT NULL
+					AND COALESCE(o.received_at, o.created_at) > NOW() - INTERVAL '24 hours'
+					AND (o.status = 'queued' OR o.runner_name LIKE 'ghr-%') AND NOT EXISTS (
+						SELECT 1 FROM persistent_vm v
+						WHERE v.workspace_id = o.workspace_id AND v.name = o.vm AND v.data->>'desired_state' <> 'deleted'
+					)) AS shortage
+		FROM pools p
+	), ranked AS (
+		SELECT o.*, ROW_NUMBER() OVER (
+			PARTITION BY workspace_id, installation_id, repository, label ORDER BY created_at, id
+		) AS position
+		FROM orphaned o
+	), due AS (
+		SELECT r.id, r.vm FROM ranked r JOIN shortages s USING (workspace_id, installation_id, repository, label)
+		WHERE r.position <= s.shortage
+		ORDER BY r.created_at, r.id
+		LIMIT 100
+	)
+	UPDATE github_runner_job j SET provision_at = NOW(), waiting = ''
+	FROM due d
+	WHERE j.id = d.id AND j.vm = d.vm AND j.status = 'queued' AND j.runner_name = ''
+		AND j.provision_at IS NULL AND j.error = ''
+		AND EXISTS (
+			SELECT 1 FROM github_runner_installation i
+			WHERE i.id = j.installation_id AND i.workspace_id = j.workspace_id AND NOT i.paused
+		);
+	`
+	_, err := r.client.ExecContext(ctx, query)
+	return err
+}
+
 // ListDueGitHubRunnerJobs returns the jobs of connected accounts that are due
 // for a runner, longest due first. The jobs of a paused account stay as they
 // are, so that they are due, in the same order, once it resumes. So do those
@@ -987,8 +1061,8 @@ func (r *PostgresBackendRepository) ListDueGitHubRunnerJobs(ctx context.Context,
 // one no job refers to, and makes the job due again in a minute, for an
 // attempt that never finishes. The job waits for nothing while its runner
 // is started, and the times of the runner it had before are not this one's.
-// No job of a paused account is claimed, so that the jobs listed as due
-// before it paused start no runner after it.
+// A job must still be on a connected and unpaused account at claim time.
+// Its previous runner must be gone before its VM name may be replaced.
 //
 // Nor is a job claimed that would be one runner too many for its workspace,
 // when limit is more than zero. The jobs of its account that have been due
@@ -1002,7 +1076,14 @@ func (r *PostgresBackendRepository) ClaimGitHubRunnerJob(ctx context.Context, jo
 	SET vm = $3, attempts = attempts + 1, provision_at = NOW() + INTERVAL '1 minute', waiting = '',
 		registered_at = NULL, vm_ready_at = NULL
 	WHERE id = $1 AND attempts = $2 AND provision_at <= NOW()
-		AND NOT EXISTS (SELECT 1 FROM github_runner_installation i WHERE i.id = j.installation_id AND i.paused)
+		AND NOT EXISTS (
+			SELECT 1 FROM persistent_vm v
+			WHERE v.workspace_id = j.workspace_id AND v.name = j.vm AND v.data->>'desired_state' <> 'deleted'
+		)
+		AND EXISTS (
+			SELECT 1 FROM github_runner_installation i
+			WHERE i.id = j.installation_id AND i.workspace_id = j.workspace_id AND NOT i.paused
+		)
 		AND ($4 <= 0 OR ` + githubRunnerCount("$4") + ` + (
 			SELECT COUNT(*) FROM github_runner_job d
 			WHERE d.workspace_id = j.workspace_id AND d.installation_id = j.installation_id

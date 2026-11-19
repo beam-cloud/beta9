@@ -713,6 +713,8 @@ func TestGitHubRunnerJobIsClaimedWithinTheLimit(t *testing.T) {
 	claim := statement(
 		`SET vm = $3, attempts = attempts + 1, provision_at = NOW() + INTERVAL '1 minute', waiting = '', registered_at = NULL, vm_ready_at = NULL`,
 		`WHERE id = $1 AND attempts = $2 AND provision_at <= NOW()`,
+		`AND NOT EXISTS ( SELECT 1 FROM persistent_vm v WHERE v.workspace_id = j.workspace_id AND v.name = j.vm AND v.data->>'desired_state' <> 'deleted' )`,
+		`AND EXISTS ( SELECT 1 FROM github_runner_installation i WHERE i.id = j.installation_id AND i.workspace_id = j.workspace_id AND NOT i.paused )`,
 		`AND ($4 <= 0 OR (`,
 		`v.workspace_id = j.workspace_id AND v.data->>'desired_state' <> 'deleted'`,
 		`r.workspace_id = v.workspace_id AND r.vm = v.name AND r.vm <> '' LIMIT 1 ) ORDER BY v.name LIMIT $4 ) runners ) + (`,
@@ -876,6 +878,117 @@ func TestGitHubRunnerIsSurplusPastTheQueuedJobs(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestGitHubRunnerQueueRearmsStrandedJobs(t *testing.T) {
+	repo := newVMIntegrationRepo(t)
+	db, ctx := repo.client, context.Background()
+	var workspace uint
+	require.NoError(t, db.Get(&workspace, `INSERT INTO workspace (name) VALUES ($1) RETURNING id`, "github-runner-test-"+uuid.NewString()))
+	t.Cleanup(func() {
+		_, _ = db.Exec(`DELETE FROM github_runner_job WHERE workspace_id=$1`, workspace)
+		_, _ = db.Exec(`DELETE FROM github_runner_installation WHERE workspace_id=$1`, workspace)
+		_, _ = db.Exec(`DELETE FROM persistent_vm WHERE workspace_id=$1`, workspace)
+		_, _ = db.Exec(`DELETE FROM workspace WHERE id=$1`, workspace)
+	})
+
+	now := time.Now().UTC()
+	base := now.UnixNano()
+	installation := types.GitHubRunnerInstallation{ID: base, WorkspaceID: workspace, TokenID: "token", Account: "acme"}
+	require.NoError(t, repo.SaveGitHubRunnerInstallation(ctx, &installation))
+	job := func(n int64, label, status, runner, vm string, finish bool) {
+		t.Helper()
+		require.NoError(t, repo.SaveGitHubRunnerJob(ctx, &types.GitHubRunnerJob{ID: base + n, InstallationID: installation.ID,
+			WorkspaceID: workspace, Label: label, Repository: "acme/runner", Status: status, RunnerName: runner,
+			CreatedAt: now.Add(time.Duration(n) * time.Second)}))
+		if vm != "" {
+			_, err := db.Exec(`UPDATE github_runner_job SET vm = $2, attempts = 1 WHERE id = $1`, base+n, vm)
+			require.NoError(t, err)
+		}
+		if finish {
+			require.NoError(t, repo.FinishGitHubRunnerJob(ctx, base+n, ""))
+		}
+	}
+	vm := func(name, desired, status string) *types.VM {
+		t.Helper()
+		v := &types.VM{ID: uuid.NewString(), WorkspaceID: workspace, WorkspaceExternalID: "test", TokenID: "token", Name: name,
+			Handle: uuid.NewString(), DesiredState: desired, Status: status, LastActiveAt: now}
+		require.NoError(t, repo.CreateVM(ctx, v))
+		return v
+	}
+	stored := func(n int64) types.GitHubRunnerJob {
+		t.Helper()
+		j, err := repo.GetGitHubRunnerJob(ctx, workspace, base+n)
+		require.NoError(t, err)
+		require.NotNil(t, j)
+		return *j
+	}
+	provisioning := func(n int64) bool {
+		return stored(n).ProvisionAt != nil
+	}
+	const label = "beam-4vcpu-ubuntu-2404"
+	job(1, label, types.GitHubJobQueued, "", "ghr-ran-a-different-job", true)
+	job(2, label, types.GitHubJobQueued, "", "ghr-expired-idle", true)
+	job(3, label, types.GitHubJobQueued, "", "ghr-missing-vm", true)
+	job(4, label, types.GitHubJobQueued, "", "ghr-live", true)
+	job(5, label, types.GitHubJobCompleted, "", "ghr-spare", true)
+	job(6, label, types.GitHubJobCompleted, "ghr-ran-a-different-job", "ghr-claim", false)
+	job(7, "beam-8vcpu-ubuntu-2404", types.GitHubJobCompleted, "", "ghr-wrong-label", true)
+	job(8, label, types.GitHubJobQueued, "", "ghr-permanent-error", true)
+	job(9, label, types.GitHubJobQueued, "", "ghr-expired-job", true)
+	job(10, label, types.GitHubJobQueued, "", "ghr-disconnected", true)
+	require.NoError(t, repo.FinishGitHubRunnerJob(ctx, base+8, "registration refused"))
+	_, err := db.Exec(`UPDATE github_runner_job SET received_at = NOW() - INTERVAL '25 hours' WHERE id = $1`, base+9)
+	require.NoError(t, err)
+	_, err = db.Exec(`UPDATE github_runner_job SET installation_id = $2 WHERE id = $1`, base+10, installation.ID+1)
+	require.NoError(t, err)
+	vm("ghr-ran-a-different-job", types.VMStateDeleted, types.VMStateDeleted)
+	vm("ghr-expired-idle", types.VMStateDeleted, types.VMStateDeleted)
+	vm("ghr-live", types.VMStateRunning, types.VMStateRunning)
+	spare := vm("ghr-spare", types.VMStateRunning, types.VMStateStarting)
+	vm("ghr-wrong-label", types.VMStateRunning, types.VMStateRunning)
+
+	_, err = repo.PauseGitHubRunnerInstallation(ctx, workspace, true)
+	require.NoError(t, err)
+	require.NoError(t, repo.RearmGitHubRunnerJobs(ctx))
+	require.False(t, provisioning(1), "a paused installation does not start replacements")
+	_, err = repo.PauseGitHubRunnerInstallation(ctx, workspace, false)
+	require.NoError(t, err)
+
+	require.NoError(t, repo.RearmGitHubRunnerJobs(ctx))
+	require.NoError(t, repo.RearmGitHubRunnerJobs(ctx))
+	require.True(t, provisioning(1), "the oldest stranded job gets one missing runner")
+	require.False(t, provisioning(2), "a compatible VM that is starting can take this job")
+	require.False(t, provisioning(3), "an existing claim can cover this job")
+	require.False(t, provisioning(4), "the job's own live runner stays tracked")
+	require.False(t, provisioning(5), "completed jobs stay completed")
+	require.False(t, provisioning(8), "an explicit refusal stays final")
+	require.False(t, provisioning(9), "GitHub has expired the job's queue window")
+
+	spare.DesiredState = types.VMStateDeleted
+	require.NoError(t, repo.SaveVM(ctx, spare))
+	require.NoError(t, repo.RearmGitHubRunnerJobs(ctx))
+	require.True(t, provisioning(2), "a job whose idle runner was deleted can get a replacement")
+	require.False(t, provisioning(3))
+	require.NoError(t, repo.FinishGitHubRunnerJob(ctx, base+6, ""))
+	require.NoError(t, repo.RearmGitHubRunnerJobs(ctx))
+	require.True(t, provisioning(3), "a different runner label does not cover this job")
+	var disconnectedScheduled bool
+	require.NoError(t, db.Get(&disconnectedScheduled, `SELECT provision_at IS NOT NULL FROM github_runner_job WHERE id = $1`, base+10))
+	require.False(t, disconnectedScheduled)
+
+	// A live VM may appear between rearming its job and the next claim.
+	orphan := stored(3)
+	vm(orphan.VM, types.VMStateRunning, types.VMStateStarting)
+	claimed, err := repo.ClaimGitHubRunnerJob(ctx, &orphan, "ghr-replacement", 0)
+	require.NoError(t, err)
+	require.False(t, claimed)
+	require.Equal(t, "ghr-missing-vm", stored(3).VM)
+
+	old := stored(1)
+	claimed, err = repo.ClaimGitHubRunnerJob(ctx, &old, "ghr-allowed", 0)
+	require.NoError(t, err)
+	require.True(t, claimed, "a deleted VM does not prevent a replacement")
+}
+
 // Every row belongs to a workspace made for the test, and is removed on
 // completion.
 func TestVMGitHubRunnersIntegration(t *testing.T) {
@@ -905,7 +1018,7 @@ func TestVMGitHubRunnersIntegration(t *testing.T) {
 	require.Nil(t, none)
 
 	// A workspace connects one installation, and an installation one workspace.
-	installation := types.GitHubRunnerInstallation{ID: id, WorkspaceID: ws, TokenID: "token", Account: "acme", AccountType: "Organization"}
+	installation := types.GitHubRunnerInstallation{ID: id, WorkspaceID: ws, TokenID: "token", Account: "acme", AccountType: "Organization", EnhancedCache: true}
 	require.NoError(t, repo.SaveGitHubRunnerInstallation(ctx, &installation))
 	installation.TokenID = "new-token"
 	require.NoError(t, repo.SaveGitHubRunnerInstallation(ctx, &installation), "connecting again refreshes the token")
