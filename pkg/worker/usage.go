@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/clients"
@@ -29,7 +30,6 @@ type ContainerUsageRecorder interface {
 type WorkerUsageMetrics struct {
 	workerId            string
 	metricsRepo         repo.UsageMetricsRepository
-	ctx                 context.Context
 	containerCostClient *clients.ContainerCostClient
 	usageRecorder       ContainerUsageRecorder
 	gpuType             string
@@ -39,13 +39,19 @@ type WorkerUsageMetrics struct {
 	newTicker           func(time.Duration) (<-chan time.Time, func())
 	quoteProvider       func(context.Context, *types.ContainerRequest) (clients.ContainerCostQuote, error)
 
+	// Containers being metered. Flush waits for their final interval.
+	tracked atomic.Int64
+
 	// Usage events the metering endpoint refused, waiting to be resent.
 	backlogMu sync.Mutex
-	backlog   []pendingUsageEvent
+	backlog   []*pendingUsageEvent
 	drainMu   sync.Mutex
 }
 
-const usageBacklogDrainInterval = 30 * time.Second
+const (
+	usageBacklogDrainInterval = 30 * time.Second
+	usageFlushPollInterval    = 50 * time.Millisecond
+)
 
 type containerUsageInterval struct {
 	request  types.ContainerRequest
@@ -70,7 +76,6 @@ func NewWorkerUsageMetrics(
 	}
 
 	wm := &WorkerUsageMetrics{
-		ctx:                 ctx,
 		workerId:            workerId,
 		gpuType:             gpuType,
 		poolMode:            poolMode,
@@ -85,6 +90,74 @@ func NewWorkerUsageMetrics(
 		go wm.startBacklogDrain(ctx, usageBacklogDrainInterval)
 	}
 	return wm, nil
+}
+
+// TrackContainer meters a container from now until the returned stop is
+// called. Metering follows the container rather than the worker's context: a
+// worker that is shutting down has cancelled its context while its containers
+// run on through their drain and stop grace, and that time is billable.
+func (wm *WorkerUsageMetrics) TrackContainer(request *types.ContainerRequest) (stop func()) {
+	if wm == nil || request == nil {
+		return func() {}
+	}
+	// Copied here, not in the goroutine: the caller goes on changing the request.
+	snapshot := *request
+	ctx, cancel := context.WithCancel(context.Background())
+	wm.tracked.Add(1)
+	go func() {
+		defer wm.tracked.Add(-1)
+		wm.EmitContainerUsage(ctx, &snapshot)
+	}()
+	return cancel
+}
+
+// Flush delivers what is left when the worker exits: it waits up to timeout
+// for stopped containers to report their final interval and for the backlog
+// to drain, and returns how many events it had to give up on. The backlog
+// lives in memory, so each of those is logged with everything needed to bill
+// it by hand; nothing else will ever record that usage.
+func (wm *WorkerUsageMetrics) Flush(timeout time.Duration) (undelivered int) {
+	if wm == nil {
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	flushed := make(chan struct{})
+	go func() {
+		defer close(flushed)
+		for wm.tracked.Load() > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(usageFlushPollInterval):
+			}
+		}
+		wm.drainMu.Lock()
+		defer wm.drainMu.Unlock()
+		wm.drainBacklogLocked()
+	}()
+	select {
+	case <-flushed:
+	case <-ctx.Done():
+	}
+	if metering := wm.tracked.Load(); metering > 0 {
+		log.Error().
+			Int64("containers", metering).
+			Dur("timeout", timeout).
+			Msg("containers were still being metered when the worker shut down; their last usage is lost")
+	}
+
+	wm.backlogMu.Lock()
+	pending := slices.Clone(wm.backlog)
+	wm.backlogMu.Unlock()
+	for _, event := range pending {
+		log.Error().
+			Str("metric", event.name).
+			Float64("value", event.value).
+			Interface("event", event.labels).
+			Msg("usage event was not delivered before the worker shut down")
+	}
+	return len(pending)
 }
 
 // EmitContainerUsage binds a quote to each interval start. Once an end is
@@ -346,7 +419,7 @@ type pendingUsageEvent struct {
 // derives their ID from the interval), so a retry after an ambiguous failure
 // can never double count; losing one, on the other hand, is money gone.
 func (wm *WorkerUsageMetrics) emitUsage(name string, labels map[string]interface{}, value float64) {
-	event := pendingUsageEvent{name: name, labels: labels, value: value}
+	event := &pendingUsageEvent{name: name, labels: labels, value: value}
 	wm.backlogMu.Lock()
 	queued := len(wm.backlog) > 0
 	wm.backlogMu.Unlock()
@@ -361,26 +434,35 @@ func (wm *WorkerUsageMetrics) emitUsage(name string, labels map[string]interface
 	}
 }
 
-func (wm *WorkerUsageMetrics) enqueueUsage(event pendingUsageEvent) {
+func (wm *WorkerUsageMetrics) enqueueUsage(event *pendingUsageEvent) {
 	wm.backlogMu.Lock()
 	defer wm.backlogMu.Unlock()
 	if len(wm.backlog) >= usageBacklogLimit {
 		dropped := wm.backlog[0]
+		wm.backlog[0] = nil
 		wm.backlog = wm.backlog[1:]
-		log.Error().Str("metric", dropped.name).Str("container_id", fmt.Sprint(dropped.labels["container_id"])).Msg("usage backlog full; dropping oldest usage event")
+		log.Error().
+			Str("metric", dropped.name).
+			Float64("value", dropped.value).
+			Interface("event", dropped.labels).
+			Msg("usage backlog full; dropping oldest usage event")
 	}
 	wm.backlog = append(wm.backlog, event)
 }
 
 // drainBacklog resends held-back usage events in order, stopping at the first
-// one the endpoint still refuses.
+// one the endpoint still refuses. It returns at once if a drain is running.
 func (wm *WorkerUsageMetrics) drainBacklog() {
-	// One drain at a time: two could send the same event (harmless) and then
-	// both pop the front (not harmless).
 	if !wm.drainMu.TryLock() {
 		return
 	}
 	defer wm.drainMu.Unlock()
+	wm.drainBacklogLocked()
+}
+
+// drainBacklogLocked is drainBacklog for a caller holding drainMu, which keeps
+// two drains from sending the same event.
+func (wm *WorkerUsageMetrics) drainBacklogLocked() {
 	for {
 		wm.backlogMu.Lock()
 		if len(wm.backlog) == 0 {
@@ -395,7 +477,13 @@ func (wm *WorkerUsageMetrics) drainBacklog() {
 		}
 
 		wm.backlogMu.Lock()
-		wm.backlog = wm.backlog[1:]
+		// The send ran unlocked, so a full backlog may have evicted this event
+		// meanwhile. Removing the head regardless would discard the event
+		// behind it, which has not been sent.
+		if len(wm.backlog) > 0 && wm.backlog[0] == event {
+			wm.backlog[0] = nil
+			wm.backlog = wm.backlog[1:]
+		}
 		wm.backlogMu.Unlock()
 	}
 }
@@ -478,10 +566,9 @@ func (wm *WorkerUsageMetrics) getContainerCostQuote(request *types.ContainerRequ
 	if wm.containerCostClient == nil && wm.quoteProvider == nil {
 		return clients.ContainerCostQuote{}
 	}
-	ctx := wm.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	// Not the worker's context: containers are still metered, and still need a
+	// price, after it is cancelled. The client bounds each lookup itself.
+	ctx := context.Background()
 	var quote clients.ContainerCostQuote
 	var err error
 	if wm.quoteProvider != nil {

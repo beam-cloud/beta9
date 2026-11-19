@@ -285,7 +285,6 @@ func TestEmitContainerUsageFreezesCancellationBoundaryDuringQuoteLatency(t *test
 	var captureOnce sync.Once
 	repository := &usageMetricsRecorder{notify: make(chan struct{}, 4)}
 	metrics := &WorkerUsageMetrics{
-		ctx:               context.Background(),
 		workerId:          "worker-1",
 		metricsRepo:       repository,
 		poolMode:          types.PoolModeLocal,
@@ -391,7 +390,6 @@ func TestEmitContainerUsageSplitsAtQuoteValidityBoundary(t *testing.T) {
 	var initialQuoteOnce sync.Once
 	var nowCalls atomic.Int32
 	metrics := &WorkerUsageMetrics{
-		ctx:               context.Background(),
 		workerId:          "worker-1",
 		metricsRepo:       repository,
 		usageRecorder:     external,
@@ -623,7 +621,6 @@ func TestEmitContainerUsageQuoteFailureRemainsDurationOnly(t *testing.T) {
 	var quoteFailedOnce sync.Once
 	repository := &usageMetricsRecorder{notify: make(chan struct{}, 4)}
 	metrics := &WorkerUsageMetrics{
-		ctx:         context.Background(),
 		workerId:    "worker-1",
 		metricsRepo: repository,
 		poolMode:    types.PoolModeLocal,
@@ -767,7 +764,6 @@ func TestEmitContainerUsageBillsRequestedGpuOnFailoverAndReportsPlacement(t *tes
 	repository := &usageMetricsRecorder{}
 	var quoted []string
 	metrics := &WorkerUsageMetrics{
-		ctx:               context.Background(),
 		workerId:          "worker-4090",
 		metricsRepo:       repository,
 		poolMode:          types.PoolModeLocal,
@@ -855,7 +851,6 @@ func TestEmitContainerUsageDrainsBacklogOnEveryTickAndAtExit(t *testing.T) {
 	repository := &flakyUsageMetricsRecorder{failing: true, notify: make(chan struct{}, 16)}
 	var nowCalls atomic.Int32
 	metrics := &WorkerUsageMetrics{
-		ctx:         context.Background(),
 		workerId:    "worker-1",
 		metricsRepo: repository,
 		poolMode:    types.PoolModeLocal,
@@ -900,6 +895,176 @@ func TestEmitContainerUsageDrainsBacklogOnEveryTickAndAtExit(t *testing.T) {
 	}
 }
 
+func TestTrackContainerMetersUntilStopped(t *testing.T) {
+	start := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	stoppedAt := start.Add(12 * time.Second)
+	ticks := make(chan time.Time, 2)
+	repository := &usageMetricsRecorder{notify: make(chan struct{}, 16)}
+	var nowCalls atomic.Int32
+	metrics := &WorkerUsageMetrics{
+		workerId:    "worker-1",
+		metricsRepo: repository,
+		poolMode:    types.PoolModeLocal,
+		now: func() time.Time {
+			if nowCalls.Add(1) == 1 {
+				return start
+			}
+			return stoppedAt
+		},
+		newTicker: func(time.Duration) (<-chan time.Time, func()) { return ticks, func() {} },
+	}
+
+	request := &types.ContainerRequest{ContainerId: "container-1", StubId: "stub-1"}
+	stop := metrics.TrackContainer(request)
+	// The caller keeps using its request; metering must not follow it.
+	request.StubId = "changed"
+
+	// Nothing but stop ends metering: there is no worker context to cancel it
+	// while the container is still running.
+	ticks <- start.Add(5 * time.Second)
+	ticks <- start.Add(10 * time.Second)
+	waitForUsageMetrics(t, repository.notify, 2)
+	if got := metrics.tracked.Load(); got != 1 {
+		t.Fatalf("tracked containers = %d, want 1 while the container runs", got)
+	}
+
+	stop()
+	if undelivered := metrics.Flush(time.Second); undelivered != 0 {
+		t.Fatalf("undelivered = %d, want 0", undelivered)
+	}
+	if got := metrics.tracked.Load(); got != 0 {
+		t.Fatalf("tracked containers = %d after stop, want 0", got)
+	}
+
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	var durationMs float64
+	for _, event := range repository.events {
+		durationMs += event.value
+		if event.labels["stub_id"] != "stub-1" {
+			t.Fatalf("stub_id = %v, want the stub the container started with", event.labels["stub_id"])
+		}
+	}
+	if len(repository.events) != 3 || durationMs != 12_000 {
+		t.Fatalf("events/duration = %d/%v, want 3 intervals covering the 12000ms up to stop", len(repository.events), durationMs)
+	}
+}
+
+func TestFlushDeliversTheFinalIntervalAndTheBacklog(t *testing.T) {
+	start := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
+	ticks := make(chan time.Time, 1)
+	repository := &flakyUsageMetricsRecorder{failing: true, notify: make(chan struct{}, 16)}
+	var nowCalls atomic.Int32
+	metrics := &WorkerUsageMetrics{
+		workerId:    "worker-1",
+		metricsRepo: repository,
+		poolMode:    types.PoolModeLocal,
+		now: func() time.Time {
+			if nowCalls.Add(1) == 1 {
+				return start
+			}
+			return start.Add(8 * time.Second)
+		},
+		newTicker: func(time.Duration) (<-chan time.Time, func()) { return ticks, func() {} },
+	}
+
+	stop := metrics.TrackContainer(&types.ContainerRequest{ContainerId: "container-1"})
+	ticks <- start.Add(5 * time.Second)
+	waitForUsageMetrics(t, repository.notify, 1) // refused: held back
+	stop()
+	waitForUsageMetrics(t, repository.notify, 2) // the final interval's two drains, refused
+
+	// The endpoint recovers only after the container has gone.
+	repository.mu.Lock()
+	repository.failing = false
+	repository.mu.Unlock()
+	if undelivered := metrics.Flush(time.Second); undelivered != 0 {
+		t.Fatalf("undelivered = %d, want 0", undelivered)
+	}
+	if got := repository.accepted; len(got) != 2 || got[0] != 5_000 || got[1] != 3_000 {
+		t.Fatalf("accepted durations = %v, want the held-back 5000ms then the final 3000ms", got)
+	}
+}
+
+func TestFlushReportsUsageItCouldNotDeliver(t *testing.T) {
+	repository := &flakyUsageMetricsRecorder{failing: true}
+	metrics := &WorkerUsageMetrics{metricsRepo: repository, poolMode: types.PoolModeLocal}
+	metrics.emitUsage(types.UsageMetricsWorkerContainerDuration, map[string]interface{}{"container_id": "c"}, 1)
+	metrics.emitUsage(types.UsageMetricsWorkerContainerDuration, map[string]interface{}{"container_id": "c"}, 2)
+
+	// A container that never stops must not hold the worker's exit either.
+	stop := metrics.TrackContainer(&types.ContainerRequest{ContainerId: "container-1"})
+	defer stop()
+
+	done := make(chan int, 1)
+	go func() { done <- metrics.Flush(20 * time.Millisecond) }()
+	select {
+	case undelivered := <-done:
+		if undelivered != 2 {
+			t.Fatalf("undelivered = %d, want the 2 events still held back", undelivered)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Flush did not return at its timeout")
+	}
+}
+
+func TestUsageMetricsAreOptional(t *testing.T) {
+	var metrics *WorkerUsageMetrics
+	metrics.TrackContainer(&types.ContainerRequest{ContainerId: "container-1"})()
+	if undelivered := metrics.Flush(time.Second); undelivered != 0 {
+		t.Fatalf("undelivered = %d, want 0", undelivered)
+	}
+}
+
+// A full backlog evicts its oldest event. If that happens while a drain is
+// sending that same event, the drain must not then remove the next one.
+func TestDrainBacklogKeepsTheEventBehindAnEvictedHead(t *testing.T) {
+	repository := &gatedUsageMetricsRecorder{entered: make(chan struct{}), release: make(chan struct{})}
+	metrics := &WorkerUsageMetrics{metricsRepo: repository}
+	for i := 0; i < usageBacklogLimit; i++ {
+		metrics.backlog = append(metrics.backlog, &pendingUsageEvent{name: types.UsageMetricsWorkerContainerDuration, value: float64(i)})
+	}
+
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		metrics.drainBacklog()
+	}()
+	<-repository.entered // event 0 is being sent
+	metrics.enqueueUsage(&pendingUsageEvent{name: types.UsageMetricsWorkerContainerDuration, value: usageBacklogLimit})
+	close(repository.release)
+	select {
+	case <-drained:
+	case <-time.After(5 * time.Second):
+		t.Fatal("backlog did not drain")
+	}
+
+	if got := len(repository.accepted); got != usageBacklogLimit+1 {
+		t.Fatalf("delivered %d events, want all %d", got, usageBacklogLimit+1)
+	}
+	for i, value := range repository.accepted {
+		if value != float64(i) {
+			t.Fatalf("event %d delivered value %v, want %d: an unsent event was dropped", i, value, i)
+		}
+	}
+}
+
+// gatedUsageMetricsRecorder holds its first event in flight until released.
+type gatedUsageMetricsRecorder struct {
+	flakyUsageMetricsRecorder
+	entered chan struct{}
+	release chan struct{}
+	gate    sync.Once
+}
+
+func (r *gatedUsageMetricsRecorder) IncrementCounter(name string, labels map[string]interface{}, value float64) error {
+	r.gate.Do(func() {
+		close(r.entered)
+		<-r.release
+	})
+	return r.flakyUsageMetricsRecorder.IncrementCounter(name, labels, value)
+}
+
 func TestEmitContainerUsagePricesEarlierIntervalsOnceAQuoteArrives(t *testing.T) {
 	start := time.Date(2026, 7, 11, 0, 0, 0, 0, time.UTC)
 	firstEnd := start.Add(5 * time.Second)
@@ -908,7 +1073,6 @@ func TestEmitContainerUsagePricesEarlierIntervalsOnceAQuoteArrives(t *testing.T)
 	repository := &usageMetricsRecorder{notify: make(chan struct{}, 16)}
 	var nowCalls, quoteCalls atomic.Int32
 	metrics := &WorkerUsageMetrics{
-		ctx:               context.Background(),
 		workerId:          "worker-1",
 		metricsRepo:       repository,
 		poolMode:          types.PoolModeLocal,
