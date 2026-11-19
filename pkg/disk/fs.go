@@ -8,6 +8,17 @@ import (
 	"strings"
 )
 
+// directoryHashSeed is what ext4 hashes file names with to order the entries
+// of a directory. mkfs draws one at random, so two disks list the same files
+// in different orders, and a program that takes files in the order they are
+// listed (a test runner that does not sort) behaves differently on each VM.
+// GitHub's runners boot copies of a disk image, so those of one image share a
+// seed. This is the seed most of its ubuntu-24.04 runners had when this was
+// written (images 20261111.370 and 20261116.376): a checkout on a Beam runner
+// lists in the order it does there, and in the same order on every VM.
+// A disk belongs to one workspace, so nothing is lost by the seed being known.
+const directoryHashSeed = "d6844188-c353-45ca-9eef-12a30c6aea47"
+
 // formatExt4 formats a freshly created block device. Inode tables and the
 // journal are left for the kernel to initialize lazily, and the device is not
 // discarded first: it is a brand new qcow2 whose unallocated clusters already
@@ -15,7 +26,7 @@ import (
 // mkfs time) accomplish nothing.
 func (m *Manager) formatExt4(ctx context.Context, devicePath string) error {
 	_, err := m.run(ctx, m.binaries.MkfsExt4, "-F", "-q", "-m", "0",
-		"-E", "lazy_itable_init=1,lazy_journal_init=1,nodiscard", devicePath)
+		"-E", "lazy_itable_init=1,lazy_journal_init=1,nodiscard,hash_seed="+directoryHashSeed, devicePath)
 	if err != nil {
 		return fmt.Errorf("format %s: %w", devicePath, err)
 	}

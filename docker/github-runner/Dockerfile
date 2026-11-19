@@ -23,6 +23,10 @@ ARG COMPOSE_SHA256_ARM64=4d0f7678dd3338452beba4518e36a8e22b20cad79ba2535c687da55
 ARG YQ_VERSION=4.54.3
 ARG YQ_SHA256_AMD64=129534601871538efe0ba4c5e62a34fb1d5f469bcb975c4fddeb467d82974973
 ARG YQ_SHA256_ARM64=89f69310b61b68d1245065a1241d1fc843f7a36cd6103ffd77ad987613bd1b67
+# PostgreSQL and pipx as GitHub pins them (postgresql in
+# toolsets/toolset-2404.json, pipx in scripts/build/install-python.sh).
+ARG POSTGRESQL_VERSION=16
+ARG PIPX_VERSION=1.16.7
 ARG DEBIAN_FRONTEND=noninteractive
 
 # A job installs packages without -y or prompts (scripts/build/configure-apt.sh
@@ -35,8 +39,8 @@ COPY apt.conf /etc/apt/apt.conf.d/90github-runner
 #   that manage a machine.
 # - The apt packages GitHub installs before any toolchain (vital_packages,
 #   common_packages and cmd_packages in toolsets/toolset-2404.json).
-# - Its compilers, the system Python's venv and headers, GitHub CLI, Git LFS and
-#   kmod, which has modprobe.
+# - Its compilers, the system Python's pip, venv and headers, GitHub CLI, Git LFS
+#   and kmod, which has modprobe.
 # - Docker. The VM build installs the newest release only where there is none.
 # The package indexes stay, for a job that installs without updating them.
 RUN apt-get update \
@@ -63,7 +67,7 @@ RUN apt-get update \
         mediainfo netcat-openbsd net-tools p7zip-full parallel patchelf pigz pollinate rsync shellcheck \
         sphinxsearch sqlite3 ssh sshpass sudo systemd-coredump swig telnet time zip \
         \
-        build-essential gh git-lfs kmod python3-dev python3-venv zstd \
+        build-essential gh git-lfs kmod python3-dev python3-pip python3-venv zstd \
         \
         containerd.io docker-buildx-plugin \
         "docker-ce-cli=5:$DOCKER_VERSION-1~ubuntu.24.04~noble" "docker-ce=5:$DOCKER_VERSION-1~ubuntu.24.04~noble" \
@@ -71,6 +75,8 @@ RUN apt-get update \
     # and apt's timers, which would hold the lock a job's apt-get waits for.
     && systemctl mask haveged.service pollinate.service \
     && systemctl disable apt-daily.timer apt-daily-upgrade.timer \
+    # GitHub's image has this locale besides C.UTF-8, and a job may ask for it.
+    && locale-gen en_US.UTF-8 \
     # Ubuntu lets users ping and trace through file capabilities, which Beam
     # images do not keep. This is what the packages do where they cannot set one.
     && chmod u+s /usr/bin/ping /usr/bin/mtr-packet \
@@ -87,6 +93,29 @@ RUN apt-get update \
         "https://github.com/docker/compose/releases/download/v$COMPOSE_VERSION/docker-compose-linux-$(uname -m)" \
     && printf '%s  %s\n' "$yq" /usr/bin/yq "$compose" /usr/libexec/docker/cli-plugins/docker-compose | sha256sum --check - \
     && chmod 0755 /usr/bin/yq /usr/libexec/docker/cli-plugins/docker-compose
+
+# PostgreSQL's server and client programs, and the headers of libpq, from
+# PostgreSQL's own repository, which is not left for a job's apt-get to read.
+# A job runs createdb or psql against a database of its own, makes a cluster
+# with the initdb in /usr/lib/postgresql, or starts the one made here, which
+# does not start with the machine (scripts/build/install-postgresql.sh). That
+# cluster takes its encoding from the locale it is installed in: UTF8, as on
+# GitHub's image.
+RUN curl -fsSL -o /etc/apt/keyrings/pgdg.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+    && echo "deb [signed-by=/etc/apt/keyrings/pgdg.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && LANG=C.UTF-8 apt-get install --no-install-recommends "postgresql-$POSTGRESQL_VERSION" libpq-dev \
+    && systemctl disable postgresql.service \
+    && rm /etc/apt/sources.list.d/pgdg.list /etc/apt/keyrings/pgdg.asc \
+    && apt-get update
+
+# Ubuntu's Python refuses "pip install" outside a virtual environment. GitHub
+# lets it through, and has pipx for tools that want an environment each
+# (scripts/build/install-python.sh).
+COPY pip.conf /etc/pip.conf
+RUN python3 -m pip install --no-cache-dir "pipx==$PIPX_VERSION" \
+    && pipx --version
 
 # What every process of a job starts with, and the limits it runs under
 # (scripts/build/configure-environment.sh and configure-limits.sh).
