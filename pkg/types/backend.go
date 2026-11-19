@@ -1373,8 +1373,8 @@ func (p ScheduledJobPayload) Value() (driver.Value, error) {
 }
 
 // DeployCustomDomainSync is the outcome of syncing the domains declared by one
-// deploy. Stale means a newer version of the deployment already exists, so
-// nothing was changed.
+// deploy. Stale means a newer live version of the deployment has already saved
+// its own domains, so nothing was changed.
 type DeployCustomDomainSync struct {
 	Bound  []CustomDomain
 	Pruned []CustomDomain

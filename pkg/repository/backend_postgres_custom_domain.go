@@ -248,8 +248,10 @@ func pruneDeployCustomDomainsWithRunner(ctx context.Context, runner sqlx.ExtCont
 // the ones no longer declared, in a single transaction. Syncs for the same
 // workspace, deployment name and stub type are serialized with an advisory
 // lock, so overlapping deploys cannot delete each other's bindings. A deploy
-// that is older than the newest live version of the deployment is stale and
-// changes nothing, so it can never prune a newer deploy's bindings.
+// is stale, and changes nothing, only when a newer deploy has already saved its
+// domains and is still live, so an older deploy can never prune a newer
+// deploy's bindings, while a newer deploy that fails before saving anything
+// cannot make an older one skip its own domains.
 func (r *PostgresBackendRepository) SyncDeployCustomDomains(ctx context.Context, workspaceId uint, deploymentName, stubType string, deployVersion uint, domains []*types.CustomDomain) (*types.DeployCustomDomainSync, error) {
 	tx, err := r.client.BeginTxx(ctx, nil)
 	if err != nil {
@@ -264,15 +266,31 @@ func (r *PostgresBackendRepository) SyncDeployCustomDomains(ctx context.Context,
 		return nil, err
 	}
 
-	var newest uint
-	if err := tx.GetContext(ctx, &newest, `
-		SELECT COALESCE(MAX(version), 0) FROM deployment
-		WHERE workspace_id = $1 AND name = $2 AND stub_type::text = $3 AND deleted_at IS NULL;
+	// A deploy is stale only if a newer deploy has already saved its domains and
+	// that deploy is still live. A newer deployment row alone is not enough: it
+	// may still fail and be rolled back before it saves anything, and skipping
+	// this deploy then would leave its domains unbound.
+	var synced uint
+	if err := tx.GetContext(ctx, &synced, `
+		SELECT COALESCE(MAX(synced_version), 0) FROM custom_domain_sync
+		WHERE workspace_id = $1 AND deployment_name = $2 AND stub_type = $3;
 	`, workspaceId, deploymentName, stubType); err != nil {
 		return nil, err
 	}
-	if newest > deployVersion {
-		return &types.DeployCustomDomainSync{Stale: true}, nil
+	if synced > deployVersion {
+		var stillLive bool
+		if err := tx.GetContext(ctx, &stillLive, `
+			SELECT EXISTS (
+				SELECT 1 FROM deployment
+				WHERE workspace_id = $1 AND name = $2 AND stub_type::text = $3
+				  AND version >= $4 AND deleted_at IS NULL
+			);
+		`, workspaceId, deploymentName, stubType, synced); err != nil {
+			return nil, err
+		}
+		if stillLive {
+			return &types.DeployCustomDomainSync{Stale: true}, nil
+		}
 	}
 
 	result := &types.DeployCustomDomainSync{}
@@ -291,6 +309,16 @@ func (r *PostgresBackendRepository) SyncDeployCustomDomains(ctx context.Context,
 		return nil, err
 	}
 	result.Pruned = pruned
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO custom_domain_sync (workspace_id, deployment_name, stub_type, synced_version)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (workspace_id, deployment_name, stub_type) DO UPDATE SET
+			synced_version = EXCLUDED.synced_version,
+			updated_at = CURRENT_TIMESTAMP;
+	`, workspaceId, deploymentName, stubType, deployVersion); err != nil {
+		return nil, err
+	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, err

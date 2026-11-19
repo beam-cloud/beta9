@@ -314,8 +314,8 @@ func TestSyncDeployCustomDomainsPostgres(t *testing.T) {
 	require.ElementsMatch(t, []string{"a.customer.io", "b.customer.io"}, names(res.Bound))
 	require.Empty(t, res.Pruned)
 
-	// 2. A deploy older than the newest live version is stale: it neither binds
-	// nor prunes, so it cannot delete bindings that belong to the newer deploy.
+	// 2. A deploy older than one that already saved its domains is stale: it
+	// neither binds nor prunes, so it cannot delete the newer deploy's bindings.
 	res, err = repo.SyncDeployCustomDomains(ctx, wsID, "sync-api", types.StubTypeEndpointDeployment, 1,
 		[]*types.CustomDomain{domain("old.customer.io")})
 	require.NoError(t, err)
@@ -347,6 +347,43 @@ func TestSyncDeployCustomDomainsPostgres(t *testing.T) {
 	_, err = repo.SyncDeployCustomDomains(ctx, wsID, "sync-api", types.StubTypeEndpointDeployment, 2,
 		[]*types.CustomDomain{domain("taken.customer.io")})
 	require.Error(t, err)
+	require.ElementsMatch(t, []string{"a.customer.io", "c.customer.io"}, listed())
+
+	// 4b. A newer deployment row that has not saved its domains yet does not make
+	// an older deploy stale. Deploy v3 exists (created, still syncing), so v2
+	// must still bind and prune its own domains, even if v3 later fails and is
+	// rolled back before saving anything.
+	_, err = repo.client.Exec(
+		`INSERT INTO deployment (external_id, name, active, version, stub_id, stub_type, workspace_id, subdomain)
+		 VALUES ($1, 'sync-api', true, 3, $2, $3::stub_type, $4, 'sync-api-v3')`,
+		uuid.NewString(), stubID, types.StubTypeEndpointDeployment, wsID,
+	)
+	require.NoError(t, err)
+	res, err = repo.SyncDeployCustomDomains(ctx, wsID, "sync-api", types.StubTypeEndpointDeployment, 2,
+		[]*types.CustomDomain{domain("a.customer.io"), domain("d.customer.io")})
+	require.NoError(t, err)
+	require.False(t, res.Stale, "an unsynced newer deployment must not make an older deploy skip its domains")
+	require.ElementsMatch(t, []string{"a.customer.io", "d.customer.io"}, listed())
+
+	// 4c. Once v3 saves its domains it owns the bindings: a late v2 is stale again.
+	res, err = repo.SyncDeployCustomDomains(ctx, wsID, "sync-api", types.StubTypeEndpointDeployment, 3,
+		[]*types.CustomDomain{domain("e.customer.io")})
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"e.customer.io"}, listed())
+	res, err = repo.SyncDeployCustomDomains(ctx, wsID, "sync-api", types.StubTypeEndpointDeployment, 2,
+		[]*types.CustomDomain{domain("a.customer.io")})
+	require.NoError(t, err)
+	require.True(t, res.Stale)
+	require.ElementsMatch(t, []string{"e.customer.io"}, listed())
+
+	// 4d. If v3 is rolled back after saving its domains, it no longer owns them:
+	// v2 is not stale and restores its own set.
+	_, err = repo.client.Exec(`UPDATE deployment SET deleted_at = CURRENT_TIMESTAMP, active = false WHERE workspace_id = $1 AND name = 'sync-api' AND version = 3`, wsID)
+	require.NoError(t, err)
+	res, err = repo.SyncDeployCustomDomains(ctx, wsID, "sync-api", types.StubTypeEndpointDeployment, 2,
+		[]*types.CustomDomain{domain("a.customer.io"), domain("c.customer.io")})
+	require.NoError(t, err)
+	require.False(t, res.Stale)
 	require.ElementsMatch(t, []string{"a.customer.io", "c.customer.io"}, listed())
 
 	// 5. Concurrent syncs are serialized; whichever finishes last wins and the

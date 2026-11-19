@@ -41,11 +41,25 @@ func upAddCustomDomains(ctx context.Context, tx *sql.Tx) error {
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_domain_active_domain ON custom_domain(domain) WHERE status = 'active';
 		CREATE INDEX IF NOT EXISTS idx_custom_domain_domain ON custom_domain(domain);
 		CREATE INDEX IF NOT EXISTS idx_custom_domain_deployment ON custom_domain(workspace_id, deployment_name);
+
+		-- Records which version of a deployment last saved its declared domains.
+		-- A deploy may only be skipped as stale once a newer deploy has actually
+		-- saved its domains; a newer deployment row alone proves nothing, because
+		-- that deploy can still fail and be rolled back.
+		CREATE TABLE IF NOT EXISTS custom_domain_sync (
+			workspace_id INT REFERENCES workspace(id) ON DELETE CASCADE NOT NULL,
+			deployment_name TEXT NOT NULL,
+			stub_type TEXT NOT NULL,
+			synced_version INT NOT NULL,
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL,
+			PRIMARY KEY (workspace_id, deployment_name, stub_type)
+		);
 	`)
 	return err
 }
 
 func downAddCustomDomains(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS custom_domain;`)
+	_, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS custom_domain_sync;
+		DROP TABLE IF EXISTS custom_domain;`)
 	return err
 }
