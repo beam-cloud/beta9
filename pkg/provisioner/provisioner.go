@@ -392,6 +392,20 @@ func (p *Provisioner) Booting(ctx context.Context, pool string) ([]scheduler.Pro
 	return booting, nil
 }
 
+// Machine returns a machine that a pool bought and holds, or nil when none
+// has that ID.
+func (p *Provisioner) Machine(ctx context.Context, id string) (*scheduler.ProvisionedMachine, error) {
+	machine, err := p.store.get(ctx, id)
+	if errors.Is(err, errNoRecord) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	provisioned := machine.provisioned()
+	return &provisioned, nil
+}
+
 // choose decides what the pool would buy, with what this replica knows and
 // the records it is given. It returns the pool's config as it was when it
 // decided, which is the one to buy with.
@@ -484,6 +498,8 @@ func (p *Provisioner) learn(ctx context.Context, outcome watch.Outcome) {
 	estimates, err := p.store.Learn(ctx, outcome)
 	if err != nil {
 		log.Warn().Err(err).Msg("provisioner: could not learn from what became of a machine")
+	}
+	if estimates == nil {
 		return
 	}
 	p.mu.Lock()
@@ -1208,9 +1224,9 @@ func (p *Provisioner) refreshSoldOut(ctx context.Context, now time.Time) {
 func (p *Provisioner) refreshEstimates(ctx context.Context, now time.Time) {
 	estimates, err := p.store.Estimates(ctx)
 	if err == nil && estimates == nil {
-		var past []watch.Outcome
-		if past, err = p.outcomes.Read(ctx, now.Add(-estimatesFrom), now); err == nil {
-			estimates, err = p.store.Learn(ctx, past...)
+		var history []watch.Outcome
+		if history, err = p.outcomes.Read(ctx, now.Add(-estimatesFrom), now); err == nil {
+			estimates, err = p.store.StartEstimates(ctx, history)
 		}
 	}
 	if err != nil {
@@ -2062,14 +2078,28 @@ func (s *Store) Estimates(ctx context.Context) (watch.Estimates, error) {
 	return estimates, json.Unmarshal(data, &estimates)
 }
 
-// Learn takes outcomes into the estimates, for every replica, and returns
-// them as they are now.
-func (s *Store) Learn(ctx context.Context, outcomes ...watch.Outcome) (estimates watch.Estimates, err error) {
+// Learn takes an outcome into the estimates, for every replica, and returns
+// them as they are now. It adds nothing to estimates that have not been
+// started, and returns nil: the outcome is in the history they start from.
+func (s *Store) Learn(ctx context.Context, outcome watch.Outcome) (watch.Estimates, error) {
+	return s.estimate(ctx, false, outcome)
+}
+
+// StartEstimates starts the estimates from the market's history, and returns
+// them. Every replica reads the history when it finds no estimates, and
+// several may at once: the first to get here starts them, and the others
+// get what it wrote.
+func (s *Store) StartEstimates(ctx context.Context, history []watch.Outcome) (watch.Estimates, error) {
+	return s.estimate(ctx, true, history...)
+}
+
+func (s *Store) estimate(ctx context.Context, start bool, outcomes ...watch.Outcome) (estimates watch.Estimates, err error) {
 	err = s.lock.WithLease(ctx, common.RedisKeys.ComputeProvisionedLock(), writeLock, func(ctx context.Context) error {
-		if estimates, err = s.Estimates(ctx); err != nil {
-			return err
+		estimates, err = s.Estimates(ctx)
+		if started := estimates != nil; err != nil || started == start {
+			return err // they start once, and learn only once started
 		}
-		if estimates == nil {
+		if start {
 			estimates = watch.Estimates{}
 		}
 		for _, outcome := range outcomes {

@@ -461,10 +461,23 @@ func (wpc *AgentWorkerPoolController) ensureMachineWorker(machine *compute.Agent
 	if err != nil {
 		return nil, err
 	}
-	if worker != nil {
-		if wpc.workerPoolConfig.Buys() {
-			spec.preemptable = worker.Preemptable // as its machine was bought
+	// A pool that buys may buy both kinds of machine: a machine's worker is
+	// of the kind the machine was bought as. Its worker says which that is,
+	// and the machine's own record when its worker is gone.
+	switch {
+	case !wpc.workerPoolConfig.Buys() || wpc.provisioner == nil:
+	case worker != nil:
+		spec.preemptable = worker.Preemptable
+	default:
+		bought, err := wpc.provisioner.Machine(wpc.ctx, machine.MachineID)
+		if err != nil {
+			return nil, err
 		}
+		if bought != nil {
+			spec.preemptable = bought.Spot || wpc.workerPoolConfig.Preemptable
+		}
+	}
+	if worker != nil {
 		spec.applyToWorker(worker)
 		if worker.CordonRequested || worker.RolloutGeneration != "" {
 			worker.Status = types.WorkerStatusDisabled
@@ -779,8 +792,10 @@ type Provisioner interface {
 	Provision(ctx context.Context, pool string, need MachineNeed) (*ProvisionedMachine, error)
 
 	// Booting returns the pool's machines that have been bought and have not
-	// yet run a worker.
+	// yet run a worker. Machine returns one that a pool bought and holds,
+	// booting or not, or nil when none has that ID.
 	Booting(ctx context.Context, pool string) ([]ProvisionedMachine, error)
+	Machine(ctx context.Context, machineID string) (*ProvisionedMachine, error)
 
 	// Want says that the request with this ID waits for the pool to have a
 	// machine that holds need. It lapses unless it is said again every few
@@ -802,7 +817,7 @@ type MachineNeed struct {
 	HoursLost float64
 }
 
-// ProvisionedMachine is a machine that has been bought and is booting.
+// ProvisionedMachine is a machine that a pool bought.
 type ProvisionedMachine struct {
 	// MachineID is the ID the machine will join the pool with. It is chosen
 	// before the purchase, so the worker that stands for the machine can be

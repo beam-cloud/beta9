@@ -475,6 +475,21 @@ func TestProvisionBuysTheCheapestMachineThatFits(t *testing.T) {
 	booting, err = w.Booting(w.ctx, "spot-a10g")
 	require.NoError(t, err)
 	require.Empty(t, booting)
+
+	// The machine is known for what it was bought as for as long as the
+	// pool holds it, also once it has joined.
+	w.workers.join(record)
+	w.workers.work(record, true)
+	w.after(tickInterval)
+	booting, err = w.Booting(w.ctx, "spot-l40s")
+	require.NoError(t, err)
+	require.Empty(t, booting)
+	held, err := w.Machine(w.ctx, got.MachineID)
+	require.NoError(t, err)
+	require.Equal(t, got, held)
+	held, err = w.Machine(w.ctx, "machine-of-another-kind")
+	require.NoError(t, err)
+	require.Nil(t, held)
 }
 
 // Invariant 3: a pool buys only from its own provider, whatever another one
@@ -3928,6 +3943,62 @@ func TestWhatWasLearnedIsReadFromTheMarketsHistory(t *testing.T) {
 	bought, err := other.Provision(w.ctx, "spot-l40s", anyMachine)
 	require.NoError(t, err)
 	require.Equal(t, "FIN-02", w.record(bought.MachineID).Region, "the offer whose machine never came up is passed over")
+}
+
+// readLog is a history that does something more once it has been read.
+type readLog struct {
+	watch.Log
+	read func()
+}
+
+func (l *readLog) Read(ctx context.Context, stream watch.Stream, from, to time.Time) ([]watch.Record, error) {
+	records, err := l.Log.Read(ctx, stream, from, to)
+	if read := l.read; read != nil {
+		l.read = nil
+		read()
+	}
+	return records, err
+}
+
+// Every replica reads the market's history when nothing has been learned
+// yet, and several may read it at once. It counts once all the same.
+func TestTheMarketsHistoryCountsOnceHoweverManyReplicasReadIt(t *testing.T) {
+	w, told := recordingOutcomes(t)
+	w.Tick(w.ctx)
+	machine := w.buy("spot-l40s")
+	w.workers.join(machine)
+	w.workers.work(machine, true)
+	w.every(tickInterval, time.Hour)
+	w.verda.SetStatus(machine.InstanceID, providers.StatusInterrupted, "preempted")
+	w.every(tickInterval, 10*time.Minute)
+	told.outcomes(t)
+
+	forget := func() { require.NoError(t, w.rdb.Del(w.ctx, common.RedisKeys.ComputeProvisionedEstimates()).Err()) }
+	learned := func() watch.Estimates {
+		estimates, err := w.store.Estimates(w.ctx)
+		require.NoError(t, err)
+		return estimates
+	}
+	replica := func(log watch.Log) *Provisioner {
+		return w.replica(func(opts *Options) { opts.Outcomes = watch.NewRecorder(log, watch.Streams{}, opts.Clock) })
+	}
+	forget()
+	replica(told.log).Tick(w.ctx)
+	once := learned()
+	require.NotEmpty(t, once)
+
+	// One replica has read the history when another reads it and takes it
+	// in first.
+	forget()
+	replica(&readLog{Log: told.log, read: func() { replica(told.log).Tick(w.ctx) }}).Tick(w.ctx)
+	require.Equal(t, once, learned())
+
+	// What becomes of a machine before the history is read is in the
+	// history, and is not taken in twice either.
+	forget()
+	_, err := w.store.Learn(w.ctx, machine.outcome(w.clock.Now()).CameUp(time.Minute))
+	require.NoError(t, err)
+	require.Nil(t, learned())
 }
 
 // The requests that wait for a pool are kept for every replica.

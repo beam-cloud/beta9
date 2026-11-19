@@ -158,6 +158,28 @@ func TestSolverBuysSpotWhenItIsWorthItsRisk(t *testing.T) {
 	sim.ExpectWaiting(0)
 }
 
+// A machine is of the kind it was bought as, also once the scheduler has
+// lost the record of its worker. The worker used to come back as one that
+// may be taken back, and work that may not be interrupted was bought a
+// second machine.
+func TestSolverKnowsWhatAMachineWasBoughtAsWhenItsWorkerIsLost(t *testing.T) {
+	sim := New(t, solverPool)
+	verda := sim.Provider("verda").Machine(2, 16_000, 64*1024)
+	sim.Provider("nebius").Stock("L40S", 0)
+	price(verda, 100, 120)
+
+	sim.Submit(Function("L40S").For(time.Hour), 1)
+	sim.Advance(2 * time.Minute)
+	require.Equal(t, 1, verda.sold("l40s-on-demand"))
+	sim.Pool("l40s").Workers()[0].LoseRecord()
+	sim.Advance(2 * time.Minute)
+
+	ids := sim.Submit(Function("L40S").For(time.Hour), 1)
+	sim.Advance(2 * time.Minute)
+	require.Len(t, sim.Container(ids[0]).Runs, 1)
+	require.Equal(t, 1, verda.Bought(), "the machine it has holds both")
+}
+
 // A machine that takes twice as long as those before it is given back and
 // replaced. Main waited out the boot timeout, 20 minutes, by which time the
 // request had failed.
