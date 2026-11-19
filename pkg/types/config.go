@@ -1658,6 +1658,12 @@ type GitHubRunnerConfig struct {
 	// it stay queued on GitHub, and get theirs as runners finish, the jobs
 	// that have waited longest first. Zero or less sets no limit.
 	RunnerLimit int `key:"runnerLimit" json:"runner_limit"`
+	// Empty compaction settings leave CI Compaction unavailable.
+	CompactionURL     string `key:"compactionURL" json:"compaction_url"`
+	CompactionSecret  string `key:"compactionSecret" json:"compaction_secret"`
+	CompactionImageID string `key:"compactionImageID" json:"compaction_image_id"`
+	// Limit a staging rollout to a designated test repository.
+	CompactionRepository string `key:"compactionRepository" json:"compaction_repository"`
 }
 
 // VMWebRTCConfig bounds authenticated kiosk media on the shared TCP gateway.

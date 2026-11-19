@@ -110,8 +110,9 @@ type githubRunners struct {
 	s      *Service
 	config types.GitHubRunnerConfig
 	// Nil unless the gateway is configured with a GitHub App.
-	github *githubApp
-	wake   chan struct{}
+	github         *githubApp
+	wake           chan struct{}
+	compactionBusy atomic.Bool
 	// How often each failed webhook was redelivered, by GUID. Only run uses it.
 	redelivered map[string]int
 	// Set by tests, which have no object storage.
@@ -124,6 +125,7 @@ func (s *Service) initGitHubRunners(api *echo.Group) error {
 
 	group := api.Group("/github-runners")
 	group.POST("/webhook", r.webhook)
+	group.POST(compactionResultRoute, r.compactionResult)
 	group.GET("/:workspaceId", auth.WithStrictWorkspaceAuth(r.status))
 	group.PATCH("/:workspaceId", auth.WithStrictWorkspaceAuth(r.update))
 	group.DELETE("/:workspaceId", auth.WithStrictWorkspaceAuth(r.disconnect))
@@ -176,7 +178,9 @@ type runnerStatus struct {
 	Runners      runnerCount                     `json:"runners"`
 	// Whether the runners of the connected account get the workspace's
 	// cache, which no account says of itself until one is connected.
-	EnhancedCache *bool `json:"enhanced_cache,omitempty"`
+	EnhancedCache     *bool              `json:"enhanced_cache,omitempty"`
+	CICompaction      *bool              `json:"ci_compaction,omitempty"`
+	CompactionResults []compactionStatus `json:"compaction_results,omitempty"`
 }
 
 // runnerCount is how many runners a workspace has, those being started among
@@ -212,6 +216,9 @@ func (r *githubRunners) respond(c echo.Context, installation *types.GitHubRunner
 	}
 	if installation != nil {
 		status.EnhancedCache = &installation.EnhancedCache
+		if err := r.compactionValues(ctx, installation, &status); err != nil {
+			return err
+		}
 	}
 
 	return c.JSON(http.StatusOK, status)
@@ -233,12 +240,19 @@ func (r *githubRunners) update(c echo.Context) error {
 	var req struct {
 		Paused        *bool `json:"paused"`
 		EnhancedCache *bool `json:"enhanced_cache"`
+		CICompaction  *bool `json:"ci_compaction"`
 	}
 	if err := decode(c, &req); err != nil {
 		return err
 	}
 
 	installation, err := r.s.repo.GetGitHubRunnerInstallation(ctx, info.Workspace.Id)
+	if err == nil && installation != nil && req.CICompaction != nil {
+		if !r.compactionEnabled() || (*req.CICompaction && !r.github.compactionAllowed(ctx, installation.ID)) {
+			return echo.NewHTTPError(http.StatusConflict, "CI Compaction is unavailable")
+		}
+		installation, err = r.s.repo.SetGitHubRunnerCICompaction(ctx, info.Workspace.Id, *req.CICompaction)
+	}
 	if err == nil && installation != nil && req.Paused != nil {
 		installation, err = r.s.repo.PauseGitHubRunnerInstallation(ctx, info.Workspace.Id, *req.Paused)
 	}
@@ -796,6 +810,7 @@ type runnerEvent struct {
 		ID          int64      `json:"id"`
 		RunID       int64      `json:"run_id"`
 		HeadBranch  string     `json:"head_branch"`
+		HeadSHA     string     `json:"head_sha"`
 		Name        string     `json:"name"`
 		Workflow    string     `json:"workflow_name"`
 		URL         string     `json:"html_url"`
@@ -806,6 +821,15 @@ type runnerEvent struct {
 		StartedAt   *time.Time `json:"started_at"`
 		CompletedAt *time.Time `json:"completed_at"`
 	} `json:"workflow_job"`
+	PullRequest struct {
+		Number int `json:"number"`
+		Head   struct {
+			Ref  string `json:"ref"`
+			Repo struct {
+				FullName string `json:"full_name"`
+			} `json:"repo"`
+		} `json:"head"`
+	} `json:"pull_request"`
 }
 
 func (r *githubRunners) webhook(c echo.Context) error {
@@ -837,6 +861,8 @@ func (r *githubRunners) webhook(c echo.Context) error {
 		err = r.installationChanged(ctx, event)
 	case "workflow_job":
 		err = r.jobChanged(ctx, event)
+	case "pull_request":
+		err = r.compactionPRChanged(ctx, event)
 	}
 	if err != nil {
 		return err
@@ -908,6 +934,10 @@ func (r *githubRunners) jobChanged(ctx context.Context, event runnerEvent) error
 		return err
 	}
 
+	if err := r.markCompaction(ctx, installation, event, label); err != nil {
+		return err
+	}
+
 	if status == types.GitHubJobQueued {
 		select {
 		case r.wake <- struct{}{}:
@@ -937,6 +967,7 @@ func (r *githubRunners) run(ctx context.Context) {
 
 		r.provisionDue(ctx)
 		r.promoteCaches(ctx)
+		r.kickCompaction(ctx)
 		if time.Since(asked) < runnerSweep {
 			continue
 		}
@@ -1093,18 +1124,9 @@ func (r *githubRunners) launch(ctx context.Context, job types.GitHubRunnerJob, s
 		return errRunnerDisconnected
 	}
 
-	workspace, err := r.s.backend.GetWorkspace(ctx, job.WorkspaceID)
+	info, err := r.runnerAuth(ctx, installation)
 	if err != nil {
 		return err
-	}
-
-	token, err := r.s.backend.GetTokenByExternalId(ctx, workspace.Id, installation.TokenID)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
-
-	if token == nil || !token.Active || token.DisabledByClusterAdmin {
-		return errors.New("the Beam token that connected GitHub is inactive; connect again")
 	}
 
 	config, err := r.github.registerRunner(ctx, installation.ID, job.Repository, job.VM, size.Label)
@@ -1123,7 +1145,6 @@ func (r *githubRunners) launch(ctx context.Context, job types.GitHubRunnerJob, s
 		log.Warn().Err(err).Int64("github_job_id", job.ID).Msg("find the cache of a GitHub runner")
 	}
 
-	info := &auth.AuthInfo{Workspace: workspace, Token: token}
 	captureExitSnapshot := false
 	_, err = r.s.createVM(auth.ContextWithAuthInfo(ctx, info), info, types.VMCreateOptions{
 		Name: job.VM,
@@ -1146,11 +1167,30 @@ func (r *githubRunners) launch(ctx context.Context, job types.GitHubRunnerJob, s
 	return err
 }
 
+func (r *githubRunners) runnerAuth(ctx context.Context, installation *types.GitHubRunnerInstallation) (*auth.AuthInfo, error) {
+	workspace, err := r.s.backend.GetWorkspace(ctx, installation.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	token, err := r.s.backend.GetTokenByExternalId(ctx, workspace.Id, installation.TokenID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	if token == nil || !token.Active || token.DisabledByClusterAdmin {
+		return nil, errors.New("the Beam token that connected GitHub is inactive; connect again")
+	}
+	return &auth.AuthInfo{Workspace: workspace, Token: token}, nil
+}
+
 // reconcileRunner deletes a runner VM that has nothing left to do, as a
 // runner takes one job and never restarts. It reports whether v is a runner,
 // which the reconciler then leaves alone otherwise.
 func (s *Service) reconcileRunner(ctx context.Context, v *types.VM) (bool, error) {
 	r := s.runners
+	if r != nil && v.DesiredState != types.VMStateDeleted && strings.HasPrefix(v.Name, compactionPrefix) &&
+		v.Metadata["github.compaction"] == "true" {
+		return r.reconcileCompaction(ctx, v)
+	}
 	if r == nil || v.DesiredState == types.VMStateDeleted || !strings.HasPrefix(v.Name, runnerPrefix) {
 		return false, nil
 	}

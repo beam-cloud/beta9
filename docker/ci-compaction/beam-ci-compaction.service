@@ -1,0 +1,20 @@
+[Unit]
+Description=Beam CI Compaction analysis
+
+[Service]
+User=compaction
+WorkingDirectory=/home/compaction
+RuntimeDirectory=beam-ci-compaction
+RuntimeDirectoryMode=0700
+EnvironmentFile=-/run/beam-vm/environment
+ExecStart=/bin/bash -euo pipefail -c '\
+    printf "header = \\"Authorization: Bearer %%s\\"\\n" "$${COMPACTION_RUN_TOKEN:?}" | \
+    /usr/bin/curl --config - --fail --silent --show-error --proto =https --max-time 30 \
+        "$${COMPACTION_URL:?}/compactor/" --output "$$RUNTIME_DIRECTORY/compactor.py"; \
+    exec /usr/bin/python3 "$$RUNTIME_DIRECTORY/compactor.py"'
+ExecStopPost=+/usr/bin/systemctl --no-block poweroff
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
