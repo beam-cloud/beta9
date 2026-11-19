@@ -52,6 +52,9 @@ const (
 	// "true" keeps the data of a file whose attributes change in the image
 	// (microvm.Spec.RootMetacopy). Only for a root disk that is never restored.
 	MicroVMRootMetacopyAnnotation = "com.beam.microvm.root-metacopy"
+	// "true" has the guest send no flushes to the root disk
+	// (microvm.Spec.RootVolatile). Only for a root disk that goes with its VM.
+	MicroVMRootVolatileAnnotation = "com.beam.microvm.root-volatile"
 	// Guest directories, separated by ":", whose new files the guest writes
 	// into the directory bound at microvm.CacheExportDir as it shuts down.
 	MicroVMCacheExportAnnotation = "com.beam.microvm.cache-export"
@@ -375,6 +378,7 @@ func microVMGuestSpec(spec *specs.Spec, network microvm.Network, root microVMDis
 		Docker:              annotationBool(spec, MicroVMDockerAnnotation),
 		Mounts:              mounts,
 		RootMetacopy:        annotationBool(spec, MicroVMRootMetacopyAnnotation),
+		RootVolatile:        annotationBool(spec, MicroVMRootVolatileAnnotation),
 	}
 	if spec != nil {
 		var paths []string

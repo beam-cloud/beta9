@@ -204,6 +204,10 @@ func TestMicroVMGuestSpec(t *testing.T) {
 	assert.Equal(t, []microvm.Disk{{Device: "/dev/vdb", MountPath: "/data", ReadOnly: true}}, got.Disks)
 	assert.Equal(t, microvm.Mount{Type: microvm.MountTmpfs, Destination: "/tmp", Options: []string{"size=1g"}}, got.Mounts[0])
 	assert.Equal(t, mounts[1], got.Mounts[1])
+	assert.False(t, got.RootVolatile, "a root disk keeps its flushes unless the worker says it goes with the VM")
+
+	spec.Annotations[MicroVMRootVolatileAnnotation] = "true"
+	assert.True(t, microVMGuestSpec(spec, network, root, extra, mounts).RootVolatile)
 }
 
 func TestCpusetSize(t *testing.T) {

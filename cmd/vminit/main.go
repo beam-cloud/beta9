@@ -310,14 +310,28 @@ func enableWriteCache(device string) error {
 	return err
 }
 
+// rootDiskOptions are the ext4 options of the root disk. A flush protects
+// what is read back after a crash, and nothing reads a volatile root then, so
+// ext4 sends none: an fsync waits for the host to take the write and not for
+// the host's disk. The device's write cache is left as the host reports it,
+// and nobarrier covers a device that reports one.
+func rootDiskOptions(vm *microvm.Spec) string {
+	if vm.RootVolatile {
+		return "nobarrier"
+	}
+	return ""
+}
+
 func assembleRoot(vm *microvm.Spec) error {
 	if err := waitForDevice(vm.RootDisk); err != nil {
 		return err
 	}
-	if err := enableWriteCache(vm.RootDisk); err != nil {
-		return err
+	if !vm.RootVolatile {
+		if err := enableWriteCache(vm.RootDisk); err != nil {
+			return err
+		}
 	}
-	if err := unix.Mount(vm.RootDisk, microvm.DiskMount, "ext4", 0, ""); err != nil {
+	if err := unix.Mount(vm.RootDisk, microvm.DiskMount, "ext4", 0, rootDiskOptions(vm)); err != nil {
 		return fmt.Errorf("mount %s: %w", vm.RootDisk, err)
 	}
 	upper := filepath.Join(microvm.DiskMount, microvm.DiskOverlayUpper)
