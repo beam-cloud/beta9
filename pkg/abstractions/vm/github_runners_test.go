@@ -188,7 +188,169 @@ func longerDue(a, b types.GitHubRunnerJob) int {
 	return cmp.Or(a.ProvisionAt.Compare(*b.ProvisionAt), cmp.Compare(a.ID, b.ID))
 }
 
-func (r *runnerStore) RearmGitHubRunnerJobs(context.Context) error { return nil }
+// pool is the jobs that the runners of one repository and label can take.
+type runnerPool struct {
+	repository, label string
+}
+
+func (r *runnerStore) in(pool runnerPool, job *types.GitHubRunnerJob) bool {
+	return job.WorkspaceID == 7 && job.Repository == pool.repository && job.Label == pool.label
+}
+
+// alive reports whether the VM of a name exists.
+func (r *runnerStore) alive(name string) bool {
+	v := r.vm(7, name)
+	return name != "" && v != nil && v.DesiredState != types.VMStateDeleted
+}
+
+// taken reports whether GitHub gave the runner of a name a job.
+func (r *runnerStore) taken(name string) bool {
+	for _, job := range r.jobs {
+		if name != "" && job.RunnerName == name {
+			return true
+		}
+	}
+	return false
+}
+
+// busy counts the runners that are running a job of a pool.
+func (r *runnerStore) busy(pool runnerPool) int {
+	count := 0
+	for _, job := range r.jobs {
+		if r.in(pool, job) && job.Status == types.GitHubJobInProgress && r.alive(job.RunnerName) {
+			count++
+		}
+	}
+	return count
+}
+
+// RearmGitHubRunnerJobs makes the queued jobs whose runner is gone due again,
+// oldest first, for as many runners as their pool is short of.
+func (r *runnerStore) RearmGitHubRunnerJobs(_ context.Context, reserve int, held string) error {
+	if r.installation == nil || r.installation.Paused {
+		return nil
+	}
+
+	orphans := map[runnerPool][]*types.GitHubRunnerJob{}
+	for _, job := range r.jobs {
+		if r.connected(job.InstallationID) && job.Status == types.GitHubJobQueued && job.RunnerName == "" &&
+			job.ProvisionAt == nil && job.Error == "" && job.VM != "" && !r.alive(job.VM) {
+			pool := runnerPool{job.Repository, job.Label}
+			orphans[pool] = append(orphans[pool], job)
+		}
+	}
+
+	for pool, jobs := range orphans {
+		queued, holds, live, pending := 0, 0, 0, 0
+		for _, job := range r.jobs {
+			if !r.in(pool, job) {
+				continue
+			}
+
+			waits := job.Status == types.GitHubJobQueued && job.RunnerName == ""
+			if waits && (job.Error == "" || job.ProvisionAt != nil) {
+				queued++
+			}
+			if waits && job.Waiting == held {
+				holds++
+			}
+			if v := r.vm(7, job.VM); r.alive(job.VM) && v.DesiredState == types.VMStateRunning && !r.taken(job.VM) {
+				live++
+			}
+			if job.ProvisionAt != nil && !r.alive(job.VM) && (job.Status == types.GitHubJobQueued || strings.HasPrefix(job.RunnerName, runnerPrefix)) {
+				pending++
+			}
+		}
+
+		wanted := queued
+		if holds > 0 {
+			wanted = min(queued, max(reserve, r.busy(pool)))
+		}
+
+		slices.SortFunc(jobs, func(a, b *types.GitHubRunnerJob) int {
+			return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.ID, b.ID))
+		})
+		for _, job := range jobs[:max(min(wanted-live-pending, len(jobs)), 0)] {
+			job.ProvisionAt, job.Waiting = at(time.Now()), ""
+		}
+	}
+	return nil
+}
+
+func (r *runnerStore) runnerJob(ws uint, vm string) *types.GitHubRunnerJob {
+	for _, job := range r.jobs {
+		if job.WorkspaceID == ws && job.VM == vm && vm != "" {
+			return job
+		}
+	}
+	return nil
+}
+
+func (r *runnerStore) GetGitHubRunnerPool(_ context.Context, ws uint, vm string) (*types.GitHubRunnerPool, error) {
+	runner := r.runnerJob(ws, vm)
+	if runner == nil {
+		return nil, nil
+	}
+
+	pool := runnerPool{runner.Repository, runner.Label}
+	found := &types.GitHubRunnerPool{Busy: r.busy(pool), Ahead: []string{}}
+	for _, job := range r.jobs {
+		if !r.in(pool, job) {
+			continue
+		}
+		if job.Status == types.GitHubJobQueued {
+			found.Queued++
+			if job.RunnerName == "" && job.ProvisionAt == nil && job.Error == "" && job.Waiting == "" {
+				found.Unheld++
+			}
+		}
+		if job.VM != "" && job.VM < vm && r.idle(job) {
+			found.Ahead = append(found.Ahead, job.VM)
+		}
+	}
+	slices.Sort(found.Ahead)
+	return found, nil
+}
+
+func (r *runnerStore) HoldGitHubRunnerJobs(_ context.Context, ws uint, vm, waiting string, freeSince time.Time) error {
+	runner := r.runnerJob(ws, vm)
+	if runner == nil {
+		return nil
+	}
+
+	for _, job := range r.jobs {
+		if r.in(runnerPool{runner.Repository, runner.Label}, job) && job.Status == types.GitHubJobQueued && job.RunnerName == "" &&
+			job.ProvisionAt == nil && job.Error == "" && job.Waiting == "" {
+			job.Waiting = waiting
+			if job.RunnerReadyAt == nil {
+				job.RunnerReadyAt = at(maxTime(*cmp.Or(job.ReceivedAt, &job.CreatedAt), freeSince))
+			}
+		}
+	}
+	return nil
+}
+
+func (r *runnerStore) AdoptGitHubRunner(_ context.Context, ws uint, id int64, runner string) error {
+	taken, started := r.jobs[id], r.runnerJob(ws, runner)
+	if taken == nil || started == nil || started == taken || taken.WorkspaceID != ws || taken.VM == "" {
+		return nil
+	}
+
+	taken.VM, started.VM = started.VM, taken.VM
+	taken.RegisteredAt, started.RegisteredAt = started.RegisteredAt, taken.RegisteredAt
+	taken.VMReadyAt, started.VMReadyAt = started.VMReadyAt, taken.VMReadyAt
+	if taken.RunnerReadyAt == nil && taken.VMReadyAt != nil {
+		taken.RunnerReadyAt = at(maxTime(*cmp.Or(taken.ReceivedAt, &taken.CreatedAt), *taken.VMReadyAt))
+	}
+	return nil
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
+}
 
 func (r *runnerStore) ListDueGitHubRunnerJobs(ctx context.Context, limit int) ([]types.GitHubRunnerJob, error) {
 	due := []types.GitHubRunnerJob{}
@@ -285,7 +447,7 @@ func (r *runnerStore) GetGitHubRunner(_ context.Context, ws uint, vm string) (*t
 func (r *runnerStore) ObserveGitHubRunner(_ context.Context, ws uint, vm, waiting string, readyAt *time.Time) error {
 	for _, job := range r.jobs {
 		if job.WorkspaceID == ws && job.VM == vm {
-			job.Waiting, job.VMReadyAt = waiting, cmp.Or(job.VMReadyAt, readyAt)
+			job.Waiting, job.VMReadyAt, job.RunnerReadyAt = waiting, cmp.Or(job.VMReadyAt, readyAt), cmp.Or(job.RunnerReadyAt, readyAt)
 		}
 	}
 	return nil
@@ -339,7 +501,7 @@ func (r *runnerStore) ReplaceGitHubRunner(_ context.Context, ws uint, vm, messag
 	}
 	for _, job := range r.jobs {
 		if job.WorkspaceID == ws && job.VM == vm {
-			job.ProvisionAt, job.Error, job.Waiting = r.retry(job), message, waiting
+			job.ProvisionAt, job.Error, job.Waiting, job.RunnerReadyAt = r.retry(job), message, waiting, nil
 		}
 	}
 	return nil
@@ -794,6 +956,7 @@ func TestGitHubRunnerVMLifecycle(t *testing.T) {
 	idle := func(v *types.VM, _ *runnerStore, _ *githubRunners) {
 		v.UpdatedAt = time.Now().Add(-runnerIdle - time.Minute)
 	}
+	online := `200 {"runners":[{"id":9,"name":"ghr-test","status":"online"}]}`
 	for name, tc := range map[string]struct {
 		setup                      func(*types.VM, *runnerStore, *githubRunners)
 		deleted, replaced, refresh bool
@@ -810,20 +973,23 @@ func TestGitHubRunnerVMLifecycle(t *testing.T) {
 			exit(v, store, r)
 			v.ContainerID, v.Status, v.LaunchAttempts = "", types.VMStateError, 5
 		}, deregister: "204", deleted: true, replaced: true},
-		"idle and offline":         {setup: idle, deregister: "204", deleted: true},
-		"idle and missing":         {setup: idle, lookup: `200 {"runners":[]}`, deleted: true},
-		"idle and online":          {setup: idle, lookup: `200 {"runners":[{"id":9,"status":"online"}]}`, refresh: true},
-		"idle but busy":            {setup: idle, lookup: `200 {"runners":[{"id":9,"status":"offline","busy":true}]}`, refresh: true},
-		"idle with unknown status": {setup: idle, lookup: `200 {"runners":[{"id":9}]}`, refresh: true},
+		"idle and offline": {setup: idle, deregister: "204", deleted: true},
+		"idle and missing": {setup: idle, lookup: `200 {"runners":[]}`, deleted: true},
+		// GitHub has the runner and gives it no job yet: it is the job's.
+		"idle and online":          {setup: idle, lookup: online},
+		"idle but busy":            {setup: idle, lookup: `200 {"runners":[{"id":9,"name":"ghr-test","status":"offline","busy":true}]}`, refresh: true},
+		"idle with unknown status": {setup: idle, lookup: `200 {"runners":[{"id":9,"name":"ghr-test"}]}`, refresh: true},
 		"idle but just busy":       {setup: idle, deregister: "422", refresh: true},
+		"offline for a while":      {lookup: `200 {"runners":[{"id":9,"name":"ghr-test","status":"offline"}]}`},
+		"just started":             {setup: func(v *types.VM, _ *runnerStore, _ *githubRunners) { v.UpdatedAt = time.Now() }},
 		"disconnected":             {setup: func(_ *types.VM, store *runnerStore, _ *githubRunners) { store.installation = nil }, deleted: true},
 		"disabled":                 {setup: func(_ *types.VM, _ *runnerStore, r *githubRunners) { r.github = nil }, deleted: true},
 		"stopped":                  {setup: func(v *types.VM, _ *runnerStore, _ *githubRunners) { v.DesiredState = types.VMStateStopped }, deleted: true},
 		"past its lifetime":        {setup: func(v *types.VM, _ *runnerStore, _ *githubRunners) { v.CreatedAt = time.Now().Add(-runnerLifetime) }, deleted: true},
 		"named like a runner":      {setup: func(_ *types.VM, store *runnerStore, _ *githubRunners) { store.jobs[1].VM = "ghr-another" }},
 		"idle without GitHub":      {setup: idle, deregister: "500"},
-		"running before a job":     {},
-		"account paused":           {setup: func(_ *types.VM, store *runnerStore, _ *githubRunners) { store.installation.Paused = true }},
+		"running before a job":     {lookup: online},
+		"account paused":           {setup: func(_ *types.VM, store *runnerStore, _ *githubRunners) { store.installation.Paused = true }, lookup: online},
 		"pending a long time": {setup: func(v *types.VM, store *runnerStore, r *githubRunners) {
 			idle(v, store, r)
 			v.Status = types.VMStateStarting
@@ -834,7 +1000,7 @@ func TestGitHubRunnerVMLifecycle(t *testing.T) {
 			r, store, _, runtime := runnerFixture(t)
 			routes := map[string]string{}
 			if tc.lookup != "" || tc.deregister != "" {
-				routes["GET /repos/acme/repo/actions/runners"] = cmp.Or(tc.lookup, `200 {"runners":[{"id":9,"status":"offline"}]}`)
+				routes["GET /repos/acme/repo/actions/runners"] = cmp.Or(tc.lookup, `200 {"runners":[{"id":9,"name":"ghr-test","status":"offline"}]}`)
 			}
 			if tc.deregister != "" {
 				routes["DELETE /repos/acme/repo/actions/runners/9"] = tc.deregister + " {}"
@@ -863,13 +1029,14 @@ func TestGitHubRunnerVMLifecycle(t *testing.T) {
 			require.Empty(t, runtime.requests, "runners never restart")
 			require.Equal(t, tc.lookup != "" || tc.deregister != "", slices.Contains(calls(), "GET /repos/acme/repo/actions/runners"), "looked up the runner")
 			require.Equal(t, tc.deregister != "", slices.Contains(calls(), "DELETE /repos/acme/repo/actions/runners/9"), "deregistered")
-			if tc.refresh {
+			if tc.refresh || tc.lookup != "" && !tc.deleted {
 				next, err := store.GetVM(context.Background(), v.WorkspaceID, v.ID)
 				require.NoError(t, err)
-				require.WithinDuration(t, time.Now(), next.UpdatedAt, time.Second)
+				require.Equal(t, tc.refresh, time.Since(next.UpdatedAt) < time.Second, "a runner that GitHub has work for gets more time")
 				previousCalls := calls()
 				require.NoError(t, r.s.reconcileVM(context.Background(), next))
-				require.Equal(t, previousCalls, calls(), "the next pass does not check the runner again")
+				require.Equal(t, previousCalls, calls(), "the next pass does not ask GitHub again")
+				require.NotEqual(t, types.VMStateDeleted, next.Status)
 			}
 			if name == "named like a runner" {
 				require.Equal(t, 1, runtime.snapshots, "ordinary VMs keep periodic snapshots")
@@ -1421,6 +1588,10 @@ func TestGitHubRunnerJobsSayWhatTheyWaitFor(t *testing.T) {
 	}{
 		"due for a runner":                     {job: types.GitHubRunnerJob{ProvisionAt: due}, waiting: "Starting a runner"},
 		"its runner starts":                    {job: types.GitHubRunnerJob{VM: "ghr-0123456789ab", Attempts: 1}, waiting: "Starting a runner"},
+		"its runner is up":                     {job: types.GitHubRunnerJob{VM: "ghr-0123456789ab", Attempts: 1, RunnerReadyAt: due}, waiting: "Runner ready, waiting for GitHub"},
+		"its runner is up, GitHub holds it":    {job: types.GitHubRunnerJob{VM: "ghr-0123456789ab", Attempts: 1, RunnerReadyAt: due, Waiting: waitingHeld}, waiting: "Held by GitHub, runner ready"},
+		"another runner starts, one was ready": {job: types.GitHubRunnerJob{VM: "ghr-0123456789ab", Attempts: 2, RunnerReadyAt: due, ProvisionAt: due}, waiting: "Runner ready, waiting for GitHub"},
+		"its runner is up, paused":             {job: types.GitHubRunnerJob{VM: "ghr-0123456789ab", Attempts: 1, RunnerReadyAt: due, Waiting: waitingHeld}, paused: true, waiting: "Runners are paused"},
 		"an attempt failed":                    {job: types.GitHubRunnerJob{ProvisionAt: due, Attempts: 1, Error: "boom"}, waiting: "Retrying"},
 		"its runner stopped before a job":      {job: types.GitHubRunnerJob{ProvisionAt: due, VM: "ghr-0123456789ab", Error: "stopped"}, waiting: "Retrying"},
 		"paused":                               {job: types.GitHubRunnerJob{ProvisionAt: due}, paused: true, waiting: "Runners are paused"},
@@ -2106,7 +2277,7 @@ func TestGitHubRunnerJobTimeline(t *testing.T) {
 	require.NoError(t, r.s.reconcileVM(ctx, v))
 	require.True(t, ready.Equal(*job.VMReadyAt), job.VMReadyAt)
 	require.Equal(t, map[string]string{"received_at": format(job.ReceivedAt), "registered_at": format(job.RegisteredAt),
-		"vm_ready_at": format(&ready)}, timeline(1))
+		"vm_ready_at": format(&ready), "runner_ready_at": format(&ready)}, timeline(1), "from here, the job waits for GitHub")
 	require.Regexp(t, `\.000Z$`, timeline(1)["vm_ready_at"])
 
 	// The times are of the runner started for the job, so those of a runner
@@ -2119,6 +2290,7 @@ func TestGitHubRunnerJobTimeline(t *testing.T) {
 	require.Equal(t, received, *job.ReceivedAt)
 	require.False(t, job.RegisteredAt.Before(registered))
 	require.Nil(t, job.VMReadyAt)
+	require.Nil(t, job.RunnerReadyAt, "a runner that stopped was not one that GitHub could give the job")
 	require.Len(t, timeline(1), 2)
 
 	// A VM that the worker gave no time for was ready when it was found so.
