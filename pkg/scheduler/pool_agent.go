@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -26,6 +27,7 @@ type AgentWorkerPoolController struct {
 	workerRepo       repository.WorkerRepository
 	computeRepo      repository.ComputeRepository
 	provisioner      Provisioner
+	waitlist         *Waitlist
 	clock            common.Clock
 }
 
@@ -42,8 +44,10 @@ type AgentWorkerPoolControllerOptions struct {
 	ContainerRepo  repository.ContainerRepository
 	PushMetrics    func(types.EventComputeSchema)
 	// Provisioner is what a pool with a provisioning block buys its machines
-	// from. Other pools do not use it.
+	// from, and Waitlist the requests it buys them for. Other pools use
+	// neither.
 	Provisioner Provisioner
+	Waitlist    *Waitlist
 	// Clock decides whether a machine's heartbeat is fresh and drives the
 	// controller's loops. Nil means the wall clock.
 	Clock common.Clock
@@ -126,6 +130,7 @@ func NewAgentWorkerPoolController(opts AgentWorkerPoolControllerOptions) (*Agent
 		workerRepo:       opts.WorkerRepo,
 		computeRepo:      opts.ComputeRepo,
 		provisioner:      opts.Provisioner,
+		waitlist:         opts.Waitlist,
 		clock:            common.ClockOrReal(opts.Clock),
 	}
 	// A pool that buys its machines can grow, so it can keep a floor free.
@@ -219,7 +224,7 @@ func (wpc *AgentWorkerPoolController) State() (*types.WorkerPoolState, error) {
 // a joined machine has room.
 func (wpc *AgentWorkerPoolController) CanAddWorker(cpu int64, memory int64, gpuCount uint32) (bool, error) {
 	if wpc.workerPoolConfig.Buys() {
-		return wpc.canBuyMachine(cpu, memory, gpuCount), nil
+		return wpc.canBuyMachine(wpc.machineNeed(cpu, memory, gpuCount)), nil
 	}
 	machine, err := wpc.findMachineForRequest(cpu, memory, wpc.workerPoolConfig.GPUType, gpuCount)
 	return machine != nil, err
@@ -227,7 +232,7 @@ func (wpc *AgentWorkerPoolController) CanAddWorker(cpu int64, memory int64, gpuC
 
 func (wpc *AgentWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
 	if wpc.workerPoolConfig.Buys() {
-		return wpc.buyMachine(cpu, memory, gpuCount)
+		return wpc.buyMachine(wpc.machineNeed(cpu, memory, gpuCount))
 	}
 	machine, err := wpc.findMachineForRequest(cpu, memory, wpc.workerPoolConfig.GPUType, gpuCount)
 	if err != nil {
@@ -459,6 +464,20 @@ func (wpc *AgentWorkerPoolController) ensureMachineWorker(machine *compute.Agent
 	if err != nil {
 		return nil, err
 	}
+	// A pool that buys may buy both kinds of machine: a machine's worker is
+	// of the kind the machine was bought as. Its worker says which that is,
+	// and the record of its purchase when its worker is gone.
+	switch {
+	case buyer(wpc) == nil:
+	case worker != nil:
+		spec.preemptable = worker.Preemptable
+	default:
+		bought, err := wpc.provisioner.Machine(wpc.ctx, machine.MachineID)
+		if err != nil {
+			return nil, err
+		}
+		spec.preemptable = wpc.preemptable(bought)
+	}
 	if worker != nil {
 		spec.applyToWorker(worker)
 		if worker.CordonRequested || worker.RolloutGeneration != "" {
@@ -520,9 +539,22 @@ func (wpc *AgentWorkerPoolController) machineWorkerSpec(machineID string, cpu, m
 		machineID:            machineID,
 		requiresPoolSelector: wpc.workerPoolConfig.RequiresPoolSelector,
 		priority:             wpc.workerPoolConfig.Priority,
-		preemptable:          wpc.workerPoolConfig.Preemptable,
+		preemptable:          wpc.preemptable(nil),
 		runtime:              wpc.ContainerRuntime(),
 	}
+}
+
+// preemptable reports whether the work on a machine of the pool may be
+// interrupted: all of it in a pool that says so, and that on a machine its
+// provider may take back. bought is the machine as the pool bought it. It
+// is nil when there is no record that the pool did, and the machine is then
+// taken for one that may be taken back if the pool buys such machines.
+func (wpc *AgentWorkerPoolController) preemptable(bought *ProvisionedMachine) bool {
+	spot := wpc.workerPoolConfig.Provisioning.Spot
+	if bought != nil {
+		spot = bought.Spot
+	}
+	return spot || wpc.workerPoolConfig.Preemptable
 }
 
 func (m agentMachineWorker) worker() *types.Worker {
@@ -581,19 +613,19 @@ func (m agentMachineWorker) applyToWorker(worker *types.Worker) {
 // Such a pool grows no other way. A machine that has joined already has its
 // worker, so there is never one with room and no worker to give it.
 
-// canBuyMachine reports whether a machine with room for a worker of this
-// size can be bought now.
-func (wpc *AgentWorkerPoolController) canBuyMachine(cpu int64, memory int64, gpuCount uint32) bool {
-	return wpc.provisioner != nil && wpc.provisioner.CanProvision(wpc.ctx, wpc.poolName(), wpc.machineNeed(cpu, memory, gpuCount))
+// canBuyMachine reports whether a machine with room for any of needs can be
+// bought now.
+func (wpc *AgentWorkerPoolController) canBuyMachine(needs ...MachineNeed) bool {
+	return wpc.provisioner != nil && wpc.provisioner.CanProvision(wpc.ctx, wpc.poolName(), needs...)
 }
 
-// buyMachine buys a machine with room for a worker of this size and returns
+// buyMachine buys the first machine the pool is to have for needs and returns
 // the Pending worker that stands for it.
-func (wpc *AgentWorkerPoolController) buyMachine(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
+func (wpc *AgentWorkerPoolController) buyMachine(needs ...MachineNeed) (*types.Worker, error) {
 	if wpc.provisioner == nil {
 		return nil, fmt.Errorf("pool %q buys its machines, but this gateway has nothing to buy them with", wpc.poolName())
 	}
-	machine, err := wpc.provisioner.Provision(wpc.ctx, wpc.poolName(), wpc.machineNeed(cpu, memory, gpuCount))
+	machine, err := wpc.provisioner.Provision(wpc.ctx, wpc.poolName(), needs...)
 	if err != nil {
 		return nil, err
 	}
@@ -630,6 +662,7 @@ func (wpc *AgentWorkerPoolController) bootingMachineWorker(machine ProvisionedMa
 	spec.workspaceID = wpc.workspaceID
 	spec.controlPlaneManaged = true
 	spec.buildVersion = types.WorkerImageVersion("", wpc.config.Worker.ImageTag)
+	spec.preemptable = wpc.preemptable(&machine)
 	return spec.worker()
 }
 
@@ -677,19 +710,25 @@ func (wpc *AgentWorkerPoolController) keepBootingWorkers(joined []*compute.Agent
 // depends on no provider code. pkg/provisioner implements it.
 type Provisioner interface {
 	// CanProvision reports whether the pool could buy a machine with room for
-	// need right now. It is false when the pool's provider has no matching
-	// stock, the pool is at maxNodes or maxGPUs, a spend cap is reached, or a
-	// purchase for the pool has just failed for any reason but lack of stock.
-	// Lack of stock rules out only the offer that was asked for.
-	CanProvision(ctx context.Context, pool string, need MachineNeed) bool
+	// any of needs right now, not counting one it began to buy a moment ago.
+	// It is false when no provider of the pool has matching stock, the pool
+	// is at maxNodes or maxGPUs, a spend cap is reached, or a purchase for
+	// the pool from each of them has just failed for any reason but lack of
+	// stock. Lack of stock rules out only the offer that was asked for.
+	CanProvision(ctx context.Context, pool string, needs ...MachineNeed) bool
 
 	// Provision buys one machine for the pool and returns it before it has
-	// booted. The machine joins the pool on its own once it is up.
-	Provision(ctx context.Context, pool string, need MachineNeed) (*ProvisionedMachine, error)
+	// booted: the first of the machines that are best to buy for all of
+	// needs. The machine joins the pool on its own once it is up.
+	Provision(ctx context.Context, pool string, needs ...MachineNeed) (*ProvisionedMachine, error)
 
 	// Booting returns the pool's machines that have been bought and have not
 	// yet run a worker.
 	Booting(ctx context.Context, pool string) ([]ProvisionedMachine, error)
+
+	// Machine returns a machine that a pool bought and holds, booting or
+	// not, or nil when none has that ID.
+	Machine(ctx context.Context, machineID string) (*ProvisionedMachine, error)
 }
 
 // MachineNeed is the capacity a new machine must have.
@@ -697,9 +736,20 @@ type MachineNeed struct {
 	CPU      int64 // physical millicores
 	Memory   int64 // MiB
 	GPUCount uint32
+	// OnDemand rules out a machine its provider may take back.
+	OnDemand bool
+	// HoursLost is how many hours of work are lost when one is taken back.
+	HoursLost float64
 }
 
-// ProvisionedMachine is a machine that has been bought and is booting.
+// Compare orders needs by how hard it is to find them room, the hardest
+// first: work that may not be interrupted, then the biggest.
+func (n MachineNeed) Compare(other MachineNeed) int {
+	return cmp.Or(compareBool(other.OnDemand, n.OnDemand), cmp.Compare(other.GPUCount, n.GPUCount), cmp.Compare(other.Memory, n.Memory),
+		cmp.Compare(other.CPU, n.CPU), cmp.Compare(other.HoursLost, n.HoursLost))
+}
+
+// ProvisionedMachine is a machine that a pool bought.
 type ProvisionedMachine struct {
 	// MachineID is the ID the machine will join the pool with. It is chosen
 	// before the purchase, so the worker that stands for the machine can be
@@ -708,4 +758,6 @@ type ProvisionedMachine struct {
 	CPU       int64 // physical millicores
 	Memory    int64 // MiB
 	GPUCount  uint32
+	// Spot is whether its provider may take it back.
+	Spot bool
 }

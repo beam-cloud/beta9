@@ -43,6 +43,7 @@ func placementCostScheduler(t *testing.T, workers int) (*Scheduler, *repo.RedisC
 		credentials:               newSchedulerCredentialCache(),
 		provisioning:              newProvisioningTracker(),
 		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
+		waitlist:                  NewWaitlist(rdb, nil),
 	}
 	s.workerPoolManager.SetPool(placementCostPool, config.Worker.Pools[placementCostPool], nil)
 	require.NoError(t, s.workspaceRepo.SetConcurrencyLimitByWorkspaceId("workspace", &types.ConcurrencyLimit{GPULimit: 100, CPUMillicoreLimit: 1 << 30}))
@@ -123,9 +124,9 @@ func TestRedisCommandsToPlaceSandboxes(t *testing.T) {
 	t.Logf("place %d sandboxes on %d workers: %d round trips, %v", sandboxes, workers, roundTrips, commands)
 	// Pop the backlog (a script), read the workers (two round trips) and the
 	// sandboxes' statuses (one), then for the worker that takes them: its
-	// lock, its state, the script that queues them, the lock's release, the
-	// wake-up and the queue's length.
-	require.Equal(t, 10, roundTrips)
+	// lock, its state, their places on the waitlist, the script that queues
+	// them, the lock's release, the wake-up and the queue's length.
+	require.Equal(t, 11, roundTrips)
 	require.Equal(t, 4, commands["EVALSHA"])
 	require.Equal(t, sandboxes, commands["RPUSH"])
 

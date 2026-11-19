@@ -100,7 +100,7 @@ func TestSpotPoolExampleInTheDocsLoads(t *testing.T) {
 	require.NoError(t, config.Validate())
 	pool := config.Worker.Pools["spot-l40s"]
 	require.True(t, pool.Buys())
-	require.Equal(t, "verda", pool.Provisioning.Provider)
+	require.Equal(t, []string{"verda"}, pool.Provisioning.Providers)
 	require.True(t, pool.Provisioning.Spot)
 	require.Equal(t, 4, pool.Provisioning.MaxNodes)
 	require.Equal(t, 4, pool.Provisioning.MaxGPUs)
@@ -194,7 +194,7 @@ func TestUnknownConfigKeysInConfigJSONUseJSONNames(t *testing.T) {
 // A pool's durations are text in the config file, and in CONFIG_JSON either
 // text or the number of nanoseconds a marshalled config carries.
 func TestPoolDurationsLoadFromYAMLAndJSON(t *testing.T) {
-	want := types.WorkerPoolProvisioningConfig{Provider: "verda", MaxNodes: 2, MaxGPUs: 8,
+	want := types.WorkerPoolProvisioningConfig{Providers: []string{"verda"}, MaxNodes: 2, MaxGPUs: 8,
 		IdleTimeout: types.Duration(5 * time.Minute), BootTimeout: types.Duration(15 * time.Minute)}
 
 	t.Run("yaml", func(t *testing.T) {
@@ -205,7 +205,7 @@ worker:
   pools:
     spot:
       provisioning:
-        provider: verda
+        providers: [verda]
         maxNodes: 2
         maxGPUs: 8
         idleTimeout: 5m
@@ -220,8 +220,8 @@ worker:
 	})
 
 	for name, overlay := range map[string]string{
-		"json text":        `{"worker":{"pools":{"spot":{"provisioning":{"provider":"verda","max_nodes":2,"max_gpus":8,"idle_timeout":"5m","boot_timeout":"15m0s"}}}}}`,
-		"json nanoseconds": `{"worker":{"pools":{"spot":{"provisioning":{"provider":"verda","max_nodes":2,"max_gpus":8,"idle_timeout":300000000000,"boot_timeout":900000000000}}}}}`,
+		"json text":        `{"worker":{"pools":{"spot":{"provisioning":{"providers":["verda"],"max_nodes":2,"max_gpus":8,"idle_timeout":"5m","boot_timeout":"15m0s"}}}}}`,
+		"json nanoseconds": `{"worker":{"pools":{"spot":{"provisioning":{"providers":["verda"],"max_nodes":2,"max_gpus":8,"idle_timeout":300000000000,"boot_timeout":900000000000}}}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("CONFIG_JSON", overlay)

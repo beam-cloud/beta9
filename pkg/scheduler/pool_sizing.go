@@ -13,7 +13,8 @@ import (
 
 // WorkerPoolSizer keeps a pool's free capacity at its floor
 // (poolSizing.minFree*). It works through the pool interface alone, so it
-// sizes any pool that can add workers.
+// sizes any pool that can add workers. A pool that buys its machines plans
+// them itself, for its floor and for the requests that wait for it.
 type WorkerPoolSizer struct {
 	controller     WorkerPoolController
 	workerPoolRepo repository.WorkerPoolRepository
@@ -55,6 +56,10 @@ func (s *WorkerPoolSizer) tick() {
 }
 
 func (s *WorkerPoolSizer) size() {
+	if pool := buyer(s.controller); pool != nil {
+		pool.plan(s.sizing)
+		return
+	}
 	freeCapacity, err := s.controller.FreeCapacity()
 	if err != nil {
 		log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to get free capacity")

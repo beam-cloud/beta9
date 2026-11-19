@@ -63,6 +63,7 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 // scheduleRequest places the request on the worker, as dispatching a batch
 // does with each request it planned.
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
+	s.leaveWaitlist(request)
 	return s.pushWorkerRequests(worker, []*types.ContainerRequest{s.prepareWorkerRequest(worker, request)})
 }
 
@@ -146,6 +147,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		workerProvisioningLock:    common.NewRedisLock(rdb),
 		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
 		credentials:               newSchedulerCredentialCache(),
+		waitlist:                  NewWaitlist(rdb, nil),
 	}, nil
 }
 
@@ -2086,6 +2088,7 @@ func schedulerReplicaForTest(source *Scheduler) *Scheduler {
 		workerProvisioningLock:    common.NewRedisLock(source.requestBacklog.rdb),
 		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
 		credentials:               newSchedulerCredentialCache(),
+		waitlist:                  source.waitlist,
 		pushComputeEvent:          source.pushComputeEvent,
 		clock:                     source.clock,
 	}
@@ -6647,13 +6650,13 @@ type fakeProvisioner struct {
 	sold []ProvisionedMachine
 }
 
-func (p *fakeProvisioner) CanProvision(ctx context.Context, pool string, need MachineNeed) bool {
-	p.asked = append(p.asked, need)
+func (p *fakeProvisioner) CanProvision(ctx context.Context, pool string, needs ...MachineNeed) bool {
+	p.asked = append(p.asked, needs...)
 	return p.inStock
 }
 
-func (p *fakeProvisioner) Provision(ctx context.Context, pool string, need MachineNeed) (*ProvisionedMachine, error) {
-	p.asked = append(p.asked, need)
+func (p *fakeProvisioner) Provision(ctx context.Context, pool string, needs ...MachineNeed) (*ProvisionedMachine, error) {
+	p.asked = append(p.asked, needs...)
 	if p.err != nil {
 		return nil, p.err
 	}
@@ -6665,6 +6668,15 @@ func (p *fakeProvisioner) Provision(ctx context.Context, pool string, need Machi
 
 func (p *fakeProvisioner) Booting(ctx context.Context, pool string) ([]ProvisionedMachine, error) {
 	return p.sold, p.err
+}
+
+func (p *fakeProvisioner) Machine(ctx context.Context, machineID string) (*ProvisionedMachine, error) {
+	for _, machine := range p.sold {
+		if machine.MachineID == machineID {
+			return &machine, p.err
+		}
+	}
+	return nil, p.err
 }
 
 // buyingPool is the controller of a pool with a provisioning block, on its
@@ -6690,7 +6702,7 @@ func newBuyingPool(t *testing.T, provisioner Provisioner, change ...func(*types.
 		GPUType:          "L40S",
 		ContainerRuntime: types.ContainerRuntimeRunc.String(),
 		Priority:         5,
-		Provisioning:     types.WorkerPoolProvisioningConfig{Provider: "verda", Spot: true, MaxNodes: 4},
+		Provisioning:     types.WorkerPoolProvisioningConfig{Providers: []string{"verda"}, Spot: true, MaxNodes: 4},
 	}
 	for _, apply := range change {
 		apply(&config)
@@ -6709,6 +6721,7 @@ func newBuyingPool(t *testing.T, provisioner Provisioner, change ...func(*types.
 		WorkerRepo:  p.workers,
 		ComputeRepo: p.machines,
 		Provisioner: provisioner,
+		Waitlist:    NewWaitlist(rdb, nil),
 	})
 	require.NoError(t, err)
 	return p
@@ -6848,6 +6861,43 @@ func TestTheWorkerOfABoughtMachineCarriesOverWhenTheMachineJoins(t *testing.T) {
 	workers = p.poolWorkers()
 	require.Len(t, workers, 1)
 	require.Equal(t, types.WorkerStatusAvailable, workers[0].Status)
+}
+
+// A pool that buys both kinds of machine cannot tell one from the other by
+// its config. A machine's worker is of the kind the machine was bought as,
+// also when the worker's record is lost after the machine has joined.
+func TestTheWorkerOfABoughtMachineIsOfTheKindTheMachineWasBoughtAs(t *testing.T) {
+	provisioner := &fakeProvisioner{inStock: true, sells: oneL40S}
+	p := newBuyingPool(t, provisioner, func(pool *types.WorkerPoolConfig) { pool.Provisioning.OnDemand = true })
+	require.False(t, p.controller.IsPreemptable())
+
+	for _, spot := range []bool{false, true} {
+		provisioner.sells.Spot = spot
+		worker, err := p.controller.AddWorker(2000, 8192, 1)
+		require.NoError(t, err)
+		require.Equal(t, spot, worker.Preemptable)
+		p.join(worker.MachineId, 20_000, 58_500)
+
+		require.NoError(t, p.workers.RemoveWorker(worker.Id))
+		require.NoError(t, p.controller.reconcileMachines())
+		again, err := p.workers.GetWorkerById(worker.Id)
+		require.NoError(t, err)
+		require.Equal(t, spot, again.Preemptable)
+	}
+
+	// A machine the pool has no record of is taken for one that may be
+	// taken back: nothing that may not be interrupted is placed on it.
+	p.join("machine-by-hand", 20_000, 58_500)
+	byHand, err := p.workers.GetWorkerById(compute.AgentMachineWorkerID("machine-by-hand"))
+	require.NoError(t, err)
+	require.True(t, byHand.Preemptable)
+
+	// What it was bought as cannot be read: its worker waits until it can.
+	provisioner.err = errors.New("redis is away")
+	require.NoError(t, p.workers.RemoveWorker(compute.AgentMachineWorkerID("machine-a")))
+	require.ErrorIs(t, p.controller.reconcileMachines(), provisioner.err)
+	_, err = p.workers.GetWorkerById(compute.AgentMachineWorkerID("machine-a"))
+	require.Error(t, err)
 }
 
 func TestBootingMachinesKeepTheirPendingWorker(t *testing.T) {

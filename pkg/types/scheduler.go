@@ -496,10 +496,14 @@ type ContainerRequest struct {
 	// MachineAssigned marks a MachineId that the scheduler filled in when it
 	// placed the request, rather than one the caller pinned the request to.
 	// Set by AssignMachine, never by callers.
+	MachineAssigned bool `json:"machine_assigned,omitempty" go2proto:"ignore"`
+	// WaitlistPool is the pool the request last asked to buy a machine for
+	// it, and WaitlistedAt when. Set by the scheduler, never by callers.
 	//
 	// New fields go here, at the end: a field added higher up renumbers the
 	// wire fields below it, ignored by go2proto or not.
-	MachineAssigned bool `json:"machine_assigned,omitempty" go2proto:"ignore"`
+	WaitlistPool string    `json:"waitlist_pool,omitempty" go2proto:"ignore"`
+	WaitlistedAt time.Time `json:"waitlisted_at,omitzero" go2proto:"ignore"`
 }
 
 // CapacityCpu is the CPU the request takes from its worker's capacity.

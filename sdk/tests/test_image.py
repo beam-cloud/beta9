@@ -106,7 +106,7 @@ class TestImageLocalFiles(TestCase):
             image.add_local_dir("assets", copy=True)
         self.assertEqual(image.include_files_patterns, [], "a rejected call leaves no trace")
 
-    def test_modal_style_aliases(self):
+    def test_build_step_aliases(self):
         image = (
             Image()
             .apt_install("git", "curl")

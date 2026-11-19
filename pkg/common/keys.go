@@ -9,6 +9,8 @@ var (
 	schedulerPrefix                   string = "scheduler:"
 	schedulerContainerRequests        string = "scheduler:container_requests"
 	schedulerBackgroundRequests       string = "scheduler:background_requests"
+	schedulerWaitlist                 string = "scheduler:waitlist"
+	schedulerWaitlistPools            string = "scheduler:waitlist:pools"
 	schedulerWorkerLock               string = "scheduler:worker:lock:%s"
 	schedulerWorkerProvisioningLock   string = "scheduler:worker:provisioning:lock:%s"
 	schedulerWorkerRequests           string = "scheduler:worker:requests:%s"
@@ -141,6 +143,7 @@ var (
 	computeProvisionedLock      string = "compute:{provisioned}:lock"
 	computeProvisionedReconcile string = "compute:{provisioned}:reconcile"
 	computeProvisionedSoldOut   string = "compute:{provisioned}:sold_out"
+	computeProvisionedEstimates string = "compute:{provisioned}:estimates"
 	computeProviderOwner        string = "compute:provider_owner"
 )
 
@@ -205,6 +208,18 @@ func (rk *redisKeys) SchedulerContainerRequests() string {
 // foreground lane.
 func (rk *redisKeys) SchedulerBackgroundRequests() string {
 	return schedulerBackgroundRequests
+}
+
+// SchedulerWaitlist holds the requests that wait for a pool to buy a
+// machine, by container ID.
+func (rk *redisKeys) SchedulerWaitlist() string {
+	return schedulerWaitlist
+}
+
+// SchedulerWaitlistPools holds when a request last joined each pool's
+// waitlist.
+func (rk *redisKeys) SchedulerWaitlistPools() string {
+	return schedulerWaitlistPools
 }
 
 func (rk *redisKeys) SchedulerWorkerLock(workerId string) string {
@@ -541,6 +556,12 @@ func (rk *redisKeys) ComputeProvisionedReconcileLock() string {
 // and until when, by offer.
 func (rk *redisKeys) ComputeProvisionedSoldOut() string {
 	return computeProvisionedSoldOut
+}
+
+// ComputeProvisionedEstimates holds what the outcomes of past purchases say
+// to expect of the next.
+func (rk *redisKeys) ComputeProvisionedEstimates() string {
+	return computeProvisionedEstimates
 }
 
 // ComputeProviderOwner holds the name this control plane puts on the

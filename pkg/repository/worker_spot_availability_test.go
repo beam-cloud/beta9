@@ -15,11 +15,11 @@ func TestImplicitProvisioningSpotIsAvailableWithZeroWorkers(t *testing.T) {
 	want := []string{}
 	for _, gpu := range []types.GpuType{types.GPU_RTX_PRO6000, types.GPU_H100, types.GPU_H200, types.GPU_B200, types.GPU_B300} {
 		config.Pools["spot-"+gpu.String()] = types.WorkerPoolConfig{
-			GPUType: gpu.String(), Provisioning: types.WorkerPoolProvisioningConfig{Provider: "nebius", Spot: true, MaxNodes: 16, MaxGPUs: 16},
+			GPUType: gpu.String(), Provisioning: types.WorkerPoolProvisioningConfig{Providers: []string{"nebius"}, Spot: true, MaxNodes: 16, MaxGPUs: 16},
 		}
 		want = append(want, gpu.String())
 	}
-	config.Pools["on-demand"] = types.WorkerPoolConfig{GPUType: "A6000", Provisioning: types.WorkerPoolProvisioningConfig{Provider: "shadeform", MaxNodes: 1}}
+	config.Pools["on-demand"] = types.WorkerPoolConfig{GPUType: "A6000", Provisioning: types.WorkerPoolProvisioningConfig{Providers: []string{"shadeform"}, MaxNodes: 1}}
 	repo := NewWorkerRedisRepository(rdb, config)
 	workers, err := repo.GetAllWorkers()
 	require.NoError(t, err)

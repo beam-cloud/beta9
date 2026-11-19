@@ -92,7 +92,7 @@ func (s *Scheduler) chooseGrowth(route route, request *types.ContainerRequest) g
 		}
 
 		size := s.workerSizeFor(pool, request)
-		ok, err := pool.Controller.CanAddWorker(size.cpu, size.memory, size.gpuCount)
+		ok, err := s.canAddWorker(pool, request, size)
 		if err != nil {
 			requestLog(log.Warn(), request).
 				Str("pool_name", pool.Name).
@@ -140,6 +140,12 @@ func (a *schedulingAttempt) grow() {
 		return
 	case choice.pool == nil:
 		a.askAgainLater("worker_provisioning_backoff")
+		return
+	case buyer(choice.pool.Controller) != nil:
+		// Such a pool buys for all the requests that wait for it together
+		// (see pool_buying.go).
+		s.joinWaitlist(a.request, choice.pool)
+		a.askAgainLater("worker_provisioning_in_progress")
 		return
 	}
 

@@ -218,6 +218,22 @@ func (r *Recorder) Record(outcome Outcome) {
 	}
 }
 
+// Read returns the outcomes written from from until to, the oldest first.
+func (r *Recorder) Read(ctx context.Context, from, to time.Time) ([]Outcome, error) {
+	if r == nil {
+		return nil, nil
+	}
+	records, err := r.log.Read(ctx, r.stream, from, to)
+	outcomes := make([]Outcome, 0, len(records))
+	for _, record := range records {
+		var outcome Outcome
+		if json.Unmarshal(record.Body, &outcome) == nil {
+			outcomes = append(outcomes, outcome)
+		}
+	}
+	return outcomes, err
+}
+
 // Start writes the outcomes that are recorded until ctx is done. It returns
 // at once.
 func (r *Recorder) Start(ctx context.Context) {

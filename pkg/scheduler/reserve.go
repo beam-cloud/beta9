@@ -85,6 +85,10 @@ func (a *schedulingAttempt) reservePendingWorkerCapacity() bool {
 	}
 
 	metrics.RecordSchedulerWorkerWait(a.scheduler.since(a.request.Timestamp), a.request, "waiting_for_worker")
+	// The pool's plan counts the request against what is coming.
+	if pool, ok := a.scheduler.awaitedPool(a.request.ContainerId); ok {
+		a.scheduler.joinWaitlist(a.request, pool)
+	}
 	a.requeueForWorkerWait()
 	return true
 }
@@ -133,6 +137,7 @@ func (a *schedulingAttempt) fail(reason types.ContainerSchedulingFailureReason) 
 		Msg("giving up on request")
 
 	a.recordBacklogWait(false, string(reason))
+	a.scheduler.leaveWaitlist(a.request)
 	// Fence assignment and publish the no-worker terminal result together.
 	// A delayed scheduler attempt must never erase an assigned worker's state
 	// or manufacture proof that its disks were finalized.
@@ -222,6 +227,18 @@ func newProvisioningTracker() *provisioningTracker {
 		reservations:        map[string]*provisioningReservation{},
 		requestReservations: map[string]string{},
 	}
+}
+
+// awaitedPool returns the pool of the worker the request waits for.
+func (s *Scheduler) awaitedPool(requestID string) (*WorkerPool, bool) {
+	p := s.provisioning
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	reservation, ok := p.reservations[p.requestReservations[requestID]]
+	if !ok {
+		return nil, false
+	}
+	return s.poolOf(reservation.worker)
 }
 
 // reserveCapacity has the request wait for a worker that is on its way, and

@@ -182,14 +182,15 @@ func workerPodTerminationGracePeriod(workerStopGraceS int64) int64 {
 
 // MonitorPoolSize keeps the pool's free capacity at its poolSizing.minFree*
 // floor for as long as the controller's context lives. A pool with no floor
-// has nothing to keep free, and is not watched.
+// has nothing to keep free, and is not watched unless it buys its machines:
+// such a pool buys for the requests that wait for it too.
 func MonitorPoolSize(wpc WorkerPoolController,
 	config types.AppConfig,
 	workerPoolConfig *types.WorkerPoolConfig,
 	workerPoolRepo repository.WorkerPoolRepository,
 	c common.Clock) {
 	poolSizer := NewWorkerPoolSizer(wpc, config, workerPoolConfig, workerPoolRepo)
-	if !hasFloor(poolSizer.sizing) {
+	if !hasFloor(poolSizer.sizing) && !workerPoolConfig.Buys() {
 		return
 	}
 	common.ClockOrReal(c).Every(wpc.Context(), poolMonitoringInterval, poolSizer.tick)
