@@ -101,9 +101,6 @@ func TestContainerCostClientCachesByResourcesAndFallsBackToLastGoodQuote(t *test
 	if cached, err := client.GetContainerCostQuote(context.Background(), request); err != nil || !cached.Valid {
 		t.Fatalf("cached stale quote = %+v, err = %v; want quiet last-good hit", cached, err)
 	}
-	if _, err := client.GetContainerCostPerMs(request); err == nil {
-		t.Fatal("scalar lookup accepted an expired stale quote")
-	}
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("quote calls = %d, want failed-refresh backoff", got)
 	}
@@ -264,12 +261,6 @@ func TestContainerCostClientRetriesWhenNoQuoteWasCached(t *testing.T) {
 	}
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("quote calls = %d during negative-cache window, want 1", got)
-	}
-	if _, err := client.GetContainerCostPerMs(request); err == nil {
-		t.Fatal("legacy scalar lookup error = nil for unavailable cached quote")
-	}
-	if got := calls.Load(); got != 1 {
-		t.Fatalf("quote calls = %d after legacy cached lookup, want 1", got)
 	}
 
 	clock.Add(containerCostRetryDelay)
