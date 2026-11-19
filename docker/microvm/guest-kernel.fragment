@@ -11,6 +11,10 @@ CONFIG_MODULE_UNLOAD=y
 CONFIG_DRM=y
 CONFIG_DRM_KMS_HELPER=y
 CONFIG_DRM_FBDEV_EMULATION=y
+# The KMS and fbdev helpers have no prompt of their own: a driver has to
+# select them. simpledrm does, and binds only to a firmware framebuffer, which
+# a guest booted by Cloud Hypervisor does not have.
+CONFIG_DRM_SIMPLEDRM=y
 
 # IPv6: containers get an fd00:abcd::/64 address and the worker's ip6tables
 # rules key on it, so the guest must speak IPv6 too.
@@ -22,6 +26,8 @@ CONFIG_INET6_ESP=y
 # Netfilter: Docker's default bridge network needs NAT, conntrack, and the
 # xtables matches/targets its iptables rules use. Both the legacy xtables and
 # nf_tables frontends are enabled because images ship either iptables flavour.
+# The legacy tables are off unless NETFILTER_XTABLES_LEGACY asks for them.
+CONFIG_NETFILTER_XTABLES_LEGACY=y
 CONFIG_NETFILTER=y
 CONFIG_NETFILTER_ADVANCED=y
 CONFIG_NETFILTER_INGRESS=y
@@ -110,6 +116,7 @@ CONFIG_BRIDGE_NETFILTER=y
 CONFIG_BRIDGE_IGMP_SNOOPING=y
 CONFIG_BRIDGE_VLAN_FILTERING=y
 CONFIG_BRIDGE_NF_EBTABLES=y
+CONFIG_BRIDGE_NF_EBTABLES_LEGACY=y
 CONFIG_BRIDGE_EBT_BROUTE=y
 CONFIG_BRIDGE_EBT_T_FILTER=y
 CONFIG_BRIDGE_EBT_T_NAT=y
@@ -158,6 +165,9 @@ CONFIG_QFMT_V2=y
 CONFIG_CGROUP_MISC=y
 CONFIG_MEMCG_V1=y
 CONFIG_CGROUP_CPUACCT=y
+# /proc/<pid>/cpuset is only offered with the v1 cpuset controller.
+CONFIG_CPUSETS_V1=y
+CONFIG_PROC_PID_CPUSET=y
 
 # Diagnostics: the running config is readable from /proc/config.gz.
 CONFIG_IKCONFIG=y

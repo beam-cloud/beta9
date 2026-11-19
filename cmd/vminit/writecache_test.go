@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/beam-cloud/beta9/pkg/runtime/microvm"
 )
 
 // fakeBlockDevice lays out /sys/block/<name> with the two attributes
@@ -78,5 +80,14 @@ func TestEnableWriteCache(t *testing.T) {
 
 	if err := enableWriteCache("/dev/vde"); err == nil {
 		t.Fatal("a device without a queue must fail boot")
+	}
+}
+
+func TestRootDiskOptions(t *testing.T) {
+	if got := rootDiskOptions(&microvm.Spec{}); got != "" {
+		t.Fatalf("a root disk that is kept must keep its barriers, got %q", got)
+	}
+	if got := rootDiskOptions(&microvm.Spec{RootVolatile: true}); got != "nobarrier" {
+		t.Fatalf("a volatile root disk mounts with %q, want nobarrier", got)
 	}
 }

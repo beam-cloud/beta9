@@ -551,3 +551,17 @@ func TestMergeCacheExportRefusesADirectoryItsJobCouldNotWriteIn(t *testing.T) {
 	require.NoDirExists(t, filepath.Join(layer, "home/runner/.cache"))
 	require.FileExists(t, filepath.Join(layer, "home/runner/go/pkg/mod/module.zip"))
 }
+
+// Only a root that goes with its container may skip flushes: a worker
+// publishes what it holds of a captured one, crash or not.
+func TestAnnotateRootDiskMarksOnlyAnUncapturedRootVolatile(t *testing.T) {
+	for _, uncaptured := range []bool{false, true} {
+		request := rootLayerRequest(t, nil, uncaptured)
+		spec := &specs.Spec{Annotations: map[string]string{}}
+		annotateRootDisk(spec, qcowRootDiskMount(request), "/run/qcow/root/vhost.sock")
+
+		require.Equal(t, "/run/qcow/root/vhost.sock", spec.Annotations[runtime.MicroVMRootDiskAnnotation])
+		_, volatile := spec.Annotations[runtime.MicroVMRootVolatileAnnotation]
+		require.Equal(t, uncaptured, volatile)
+	}
+}

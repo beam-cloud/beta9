@@ -736,7 +736,7 @@ func TestMicroVMBootAndExit(t *testing.T) {
 	require.NoError(t, res.err, vm.output.String())
 	require.Equal(t, 7, res.code, vm.output.String())
 	require.Contains(t, vm.output.String(), "hello-from-guest")
-	require.Contains(t, vm.output.String(), "6.12.", "guest kernel version must appear in console output")
+	require.Contains(t, vm.output.String(), "6.18.", "guest kernel version must appear in console output")
 
 	cgroup := microVMCgroupPath(vm.spec, vm.id)
 	scratch := filepath.Join(filepath.Dir(vm.canvas), "scratch.ext4")
@@ -994,7 +994,7 @@ func TestMicroVMGoprocOverTheWire(t *testing.T) {
 
 	code, out := vm.exec(client, "uname", "-r")
 	require.Equal(t, 0, code, out)
-	require.Contains(t, out, "6.12.")
+	require.Contains(t, out, "6.18.")
 
 	code, out = vm.exec(client, "hostname")
 	require.Equal(t, 0, code)

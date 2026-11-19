@@ -108,6 +108,11 @@ type Spec struct {
 	// the file by the image's inodes, so this is for a root disk that is
 	// never restored: virtio-fs inodes change on a cold boot and on a fork.
 	RootMetacopy bool `json:"root_metacopy,omitempty"`
+	// RootVolatile has the guest send no flushes to the root disk, so an
+	// fsync waits for the host to take a write and not for the host's disk.
+	// A flush protects what is read back after a crash, so this is for a
+	// root disk that goes with its VM and is never read again.
+	RootVolatile bool `json:"root_volatile,omitempty"`
 	// CacheExport, when set, has the guest write what its workload added to
 	// its directories into its file as it shuts down.
 	CacheExport *CacheExport `json:"cache_export,omitempty"`
