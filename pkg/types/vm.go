@@ -545,7 +545,8 @@ type GitHubRunnerJobPage struct {
 // registered, whether that account is still connected, and the status of the
 // job GitHub gave it, which is empty while it waits for one. Waiting and
 // Ready are what the job it was started for has been told of it: what that
-// job waits for, and whether the runner's VM was found ready.
+// job waits for, and whether the runner's VM was found ready. Queued is
+// whether that job still waits for a runner.
 type GitHubRunner struct {
 	InstallationID int64  `db:"installation_id"`
 	Repository     string `db:"repository"`
@@ -553,6 +554,7 @@ type GitHubRunner struct {
 	JobStatus      string `db:"job_status"`
 	Waiting        string `db:"waiting"`
 	Ready          bool   `db:"ready"`
+	Queued         bool   `db:"queued"`
 }
 
 // GitHubRunnerPool is what an idle runner is weighed against: the jobs of

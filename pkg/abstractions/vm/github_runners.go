@@ -1201,9 +1201,19 @@ func (s *Service) reconcileRunner(ctx context.Context, v *types.VM) (bool, error
 	}
 
 	waiting := runner.JobStatus == ""
-	// The workspace's limit has no room for this runner, and would have none
-	// for one in its place. It keeps asking: room comes as runners finish.
 	if waiting && throttled(v) {
+		// Its job no longer waits: GitHub cancelled it, or gave it another
+		// runner. This one would start only to be removed, in room that a
+		// queued job needs.
+		if !runner.Queued {
+			r.forget(ctx, v, runner)
+			v.DesiredState = types.VMStateDeleted
+			return true, s.repo.SaveVM(ctx, v)
+		}
+
+		// The workspace's limit has no room for this runner, and would have
+		// none for one in its place. It keeps asking: room comes as runners
+		// finish.
 		v.LaunchAttempts = 0
 	}
 
@@ -1219,15 +1229,7 @@ func (s *Service) reconcileRunner(ctx context.Context, v *types.VM) (bool, error
 			return true, err
 		}
 
-		// GitHub keeps a runner that never came online for a day. Many of
-		// them are many runners for an account to look through, so this one
-		// is taken off its list now, if GitHub will.
-		if r.github != nil && runner.Connected {
-			if _, err := r.github.removeRunner(ctx, runner.InstallationID, runner.Repository, v.Name); err != nil {
-				log.Debug().Err(err).Str("vm_id", v.ID).Msg("remove a replaced GitHub runner")
-			}
-		}
-
+		r.forget(ctx, v, runner)
 		v.DesiredState = types.VMStateDeleted
 		return true, nil
 	}
@@ -1265,6 +1267,19 @@ func (s *Service) reconcileRunner(ctx context.Context, v *types.VM) (bool, error
 
 	v.DesiredState = types.VMStateDeleted
 	return true, s.repo.SaveVM(ctx, v)
+}
+
+// forget takes a runner that never came online off GitHub's list, if GitHub
+// will. GitHub keeps such a runner for a day, and many of them are many
+// runners for an account to look through.
+func (r *githubRunners) forget(ctx context.Context, v *types.VM, runner *types.GitHubRunner) {
+	if r.github == nil || !runner.Connected {
+		return
+	}
+
+	if _, err := r.github.removeRunner(ctx, runner.InstallationID, runner.Repository, v.Name); err != nil {
+		log.Debug().Err(err).Str("vm_id", v.ID).Msg("remove a GitHub runner that never came online")
+	}
 }
 
 // idle decides what becomes of a runner that is up and that GitHub has given

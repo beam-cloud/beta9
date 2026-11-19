@@ -823,13 +823,13 @@ func TestGitHubRunnerJobTimelineIsStored(t *testing.T) {
 	require.NoError(t, r.ObserveGitHubRunner(ctx, 8, "ghr-a", "Waiting for capacity", nil))
 	mock.ExpectExec(observed).WithArgs(uint(8), "ghr-a", "", ready).WillReturnResult(sqlmock.NewResult(0, 1))
 	require.NoError(t, r.ObserveGitHubRunner(ctx, 8, "ghr-a", "", &ready))
-	mock.ExpectQuery(statement(`AS job_status, j.waiting, j.vm_ready_at IS NOT NULL AS ready FROM github_runner_job j WHERE j.workspace_id = $1 AND j.vm = $2 AND j.vm <> ''`)).
+	mock.ExpectQuery(statement(`AS job_status, j.waiting, j.vm_ready_at IS NOT NULL AS ready, j.status = 'queued' AS queued FROM github_runner_job j WHERE j.workspace_id = $1 AND j.vm = $2 AND j.vm <> ''`)).
 		WithArgs(uint(8), "ghr-a").
-		WillReturnRows(sqlmock.NewRows([]string{"installation_id", "repository", "connected", "job_status", "waiting", "ready"}).
-			AddRow(int64(42), "acme/repo", true, "", "Waiting for capacity", true))
+		WillReturnRows(sqlmock.NewRows([]string{"installation_id", "repository", "connected", "job_status", "waiting", "ready", "queued"}).
+			AddRow(int64(42), "acme/repo", true, "", "Waiting for capacity", true, true))
 	runner, err := r.GetGitHubRunner(ctx, 8, "ghr-a")
 	require.NoError(t, err)
-	require.Equal(t, &types.GitHubRunner{InstallationID: 42, Repository: "acme/repo", Connected: true, Waiting: "Waiting for capacity", Ready: true}, runner)
+	require.Equal(t, &types.GitHubRunner{InstallationID: 42, Repository: "acme/repo", Connected: true, Waiting: "Waiting for capacity", Ready: true, Queued: true}, runner)
 
 	// The times are returned with the job.
 	received, registered := created.Add(time.Second+123*time.Millisecond), created.Add(2*time.Second)
@@ -1143,7 +1143,7 @@ func TestVMGitHubRunnersIntegration(t *testing.T) {
 
 	runner, err := repo.GetGitHubRunner(ctx, ws, "ghr-a")
 	require.NoError(t, err)
-	require.Equal(t, &types.GitHubRunner{InstallationID: id, Repository: "acme/repo", Connected: true, JobStatus: types.GitHubJobInProgress}, runner)
+	require.Equal(t, &types.GitHubRunner{InstallationID: id, Repository: "acme/repo", Connected: true, JobStatus: types.GitHubJobInProgress, Queued: true}, runner)
 	for _, missing := range []struct {
 		workspace uint
 		vm        string

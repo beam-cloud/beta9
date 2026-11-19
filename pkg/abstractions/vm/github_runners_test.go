@@ -432,7 +432,7 @@ func (r *runnerStore) GetGitHubRunner(_ context.Context, ws uint, vm string) (*t
 	for _, job := range r.jobs {
 		if job.WorkspaceID == ws && job.VM == vm {
 			runner := &types.GitHubRunner{InstallationID: job.InstallationID, Repository: job.Repository, Connected: r.connected(job.InstallationID),
-				Waiting: job.Waiting, Ready: job.VMReadyAt != nil}
+				Waiting: job.Waiting, Ready: job.VMReadyAt != nil, Queued: job.Status == types.GitHubJobQueued}
 			for _, assigned := range r.jobs {
 				if assigned.WorkspaceID == ws && assigned.RunnerName == vm {
 					runner.JobStatus = assigned.Status
@@ -2387,6 +2387,44 @@ func TestGitHubRunnerWaitsForRoomInTheWorkspaceLimit(t *testing.T) {
 	require.NoError(t, r.s.reconcileVM(ctx, v))
 	require.Equal(t, types.VMStateDeleted, v.Status)
 	require.NotNil(t, job.ProvisionAt)
+}
+
+// A runner that waits for room in the workspace's limit is removed without
+// starting once its job no longer waits for it, so that the room goes to a
+// job that does.
+func TestGitHubRunnerWaitingForRoomGoesWithItsJob(t *testing.T) {
+	for name, change := range map[string]func(*types.GitHubRunnerJob){
+		"cancelled": func(job *types.GitHubRunnerJob) {
+			job.Status, job.Conclusion = types.GitHubJobCompleted, "cancelled"
+		},
+		"run by another runner": func(job *types.GitHubRunnerJob) {
+			job.Status, job.RunnerName = types.GitHubJobInProgress, "elsewhere"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, store, _, runtime := runnerFixture(t)
+			ctx := context.Background()
+			calls := fakeGitHub(t, r, map[string]string{
+				"GET /repos/acme/repo/actions/runners":      `200 {"runners":[{"id":9}]}`,
+				"DELETE /repos/acme/repo/actions/runners/9": `204 {}`,
+			})
+			store.jobs[1] = queuedJob(1)
+			store.jobs[1].VM, store.jobs[1].Attempts = "ghr-test", 1
+			refused := (&types.ThrottledByConcurrencyLimitError{Reason: "cpu quota exceeded"}).Error()
+			v := &types.VM{ID: "vm-runner", Name: "ghr-test", WorkspaceID: 7, TokenID: "token", DesiredState: types.VMStateRunning,
+				Status: types.VMStateError, Error: refused, LaunchAttempts: 1, StubID: "stub",
+				CreatedAt: time.Now(), UpdatedAt: time.Now(), LastActiveAt: time.Now()}
+			runtime.diskName = rootDisk(v)
+			store.rows[v.ID] = v
+
+			change(store.jobs[1])
+			require.NoError(t, r.s.reconcileVM(ctx, v))
+			require.Equal(t, types.VMStateDeleted, v.DesiredState)
+			require.Empty(t, runtime.requests, "it never starts")
+			require.Nil(t, store.jobs[1].ProvisionAt, "no runner is started in its place")
+			require.Equal(t, []string{"GET /repos/acme/repo/actions/runners", "DELETE /repos/acme/repo/actions/runners/9"}, calls())
+		})
+	}
 }
 
 // The gateways see the same webhook deliveries, so one of them sweeps at a

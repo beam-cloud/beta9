@@ -1197,7 +1197,7 @@ func (r *PostgresBackendRepository) GetGitHubRunner(ctx context.Context, workspa
 			WHERE a.workspace_id = j.workspace_id AND a.runner_name = j.vm AND a.runner_name <> ''
 			LIMIT 1
 		), '') AS job_status,
-		j.waiting, j.vm_ready_at IS NOT NULL AS ready
+		j.waiting, j.vm_ready_at IS NOT NULL AS ready, j.status = 'queued' AS queued
 	FROM github_runner_job j
 	WHERE j.workspace_id = $1 AND j.vm = $2 AND j.vm <> ''
 	LIMIT 1;
