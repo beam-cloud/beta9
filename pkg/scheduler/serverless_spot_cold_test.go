@@ -37,7 +37,7 @@ func TestServerlessGPUColdDemandBuysSpotWithoutAFloor(t *testing.T) {
 				Config: s.config, WorkerPool: poolConfig,
 				PoolState:  &compute.PoolState{Name: name, Selector: name, Mode: string(types.PoolModeExternal)},
 				WorkerRepo: s.workerRepo, ComputeRepo: s.computeRepo, WorkerPoolRepo: s.workerPoolRepo,
-				Provisioner: provider, Clock: fakeClock,
+				Provisioner: provider, Waitlist: s.waitlist, Clock: fakeClock,
 			})
 			require.NoError(t, err)
 			t.Cleanup(controller.close)
@@ -115,7 +115,9 @@ func TestServerlessGPUColdDemandBuysSpotWithoutAFloor(t *testing.T) {
 			require.Empty(t, scheduled.PoolSelector)
 			require.True(t, scheduled.Preemptable)
 			require.Len(t, provider.sold, 1)
-			require.Empty(t, provider.wants, "a request that is placed no longer waits")
+			waiting, err := s.waitlist.For(s.ctx, name)
+			require.NoError(t, err)
+			require.Empty(t, waiting, "a request that is placed no longer waits")
 		})
 	}
 }
@@ -143,6 +145,35 @@ func TestExplicitNonPreemptableRequestStillRejectsSpot(t *testing.T) {
 	require.Empty(t, provider.asked, "the scheduler never weakens an explicit false request")
 }
 
+// Every replica has the same waitlist: nothing of it is kept in memory.
+func TestTheWaitlistIsTheSameForEveryReplica(t *testing.T) {
+	s, err := NewSchedulerForTest()
+	require.NoError(t, err)
+	clock := common.NewFakeClock(time.Now())
+	one, other := NewWaitlist(s.requestBacklog.rdb, clock), NewWaitlist(s.requestBacklog.rdb, clock)
+	waiting := func(pool string) []MachineNeed {
+		needs, err := other.For(s.ctx, pool)
+		require.NoError(t, err)
+		return needs
+	}
+	small, big := MachineNeed{GPUCount: 1, HoursLost: 0.1}, MachineNeed{GPUCount: 4, OnDemand: true}
+	require.NoError(t, one.Add(s.ctx, "spot-l40s", "b", big))
+	require.NoError(t, one.Add(s.ctx, "spot-l40s", "a", small))
+	require.NoError(t, one.Add(s.ctx, "spot-a10g", "c", small))
+	require.ElementsMatch(t, []MachineNeed{small, big}, waiting("spot-l40s"))
+
+	// A request waits for one pool at a time, until it is taken off the
+	// waitlist or stops asking for its place.
+	require.NoError(t, one.Add(s.ctx, "spot-a10g", "a", small))
+	require.NoError(t, one.Remove(s.ctx, "b"))
+	require.Empty(t, waiting("spot-l40s"))
+	clock.Advance(waitlistLapse - time.Second)
+	require.NoError(t, one.Add(s.ctx, "spot-a10g", "c", big))
+	clock.Advance(time.Second)
+	require.Equal(t, []MachineNeed{big}, waiting("spot-a10g"))
+	require.EqualValues(t, 1, s.requestBacklog.rdb.HLen(s.ctx, common.RedisKeys.SchedulerWaitlist()).Val(), "a place that lapsed is not kept")
+}
+
 // A pool that buys plans for every request that waits for it together.
 func TestABuyingPoolBuysWhatTheRequestsThatWaitForItLack(t *testing.T) {
 	provider := &fakeProvisioner{inStock: true, sells: ProvisionedMachine{CPU: 64_000, Memory: 256_000, GPUCount: 4, Spot: true}}
@@ -150,7 +181,7 @@ func TestABuyingPoolBuysWhatTheRequestsThatWaitForItLack(t *testing.T) {
 	none := types.WorkerPoolSizingConfig{}
 	sold := func(sizing types.WorkerPoolSizingConfig, waiting string, onDemand bool) int {
 		for _, id := range waiting {
-			require.NoError(t, provider.Want(p.ctx, "spot-l40s", string(id), MachineNeed{CPU: 1000, Memory: 1024, GPUCount: 1, OnDemand: onDemand}))
+			require.NoError(t, p.controller.waitlist.Add(p.ctx, "spot-l40s", string(id), MachineNeed{CPU: 1000, Memory: 1024, GPUCount: 1, OnDemand: onDemand}))
 		}
 		p.controller.plan(&sizing)
 		return len(provider.sold)

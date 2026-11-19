@@ -182,7 +182,7 @@ func TestSolveFindsWhatLookingAtEverySetOfMachinesFinds(t *testing.T) {
 		}
 
 		s := newSolver(needs, offers)
-		s.solve(offers, left)
+		s.run(left)
 		require.Less(t, s.steps, maxSteps, "case %d", i)
 
 		// Every set of machines: none, and each with one more of an offer
@@ -230,7 +230,7 @@ func TestSolveAnswersABurstInItsSteps(t *testing.T) {
 
 	s := newSolver(needs, offers)
 	started := time.Now()
-	s.solve(offers, headroom{machines: 500, gpus: math.MaxInt, hourlyMicros: math.MaxInt64})
+	s.run(headroom{machines: 500, gpus: math.MaxInt, hourlyMicros: math.MaxInt64})
 	require.Less(t, time.Since(started), time.Second)
 	require.GreaterOrEqual(t, s.steps, maxSteps)
 	require.Zero(t, s.best.without)

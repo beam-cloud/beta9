@@ -38,7 +38,7 @@ import (
 // it: a step is one kind of need tried on one machine. When a pool is short
 // of a few machines, that covers every set that could be the best, and the
 // answer is the best there is. When it is short of many, it is the best of
-// the sets looked at, which are the likeliest (solver.solve).
+// the sets looked at, which are the likeliest (solver.run).
 const maxSteps = 200_000
 
 // candidate is an offer a pool may buy, with what the machines bought
@@ -196,14 +196,15 @@ func place(needs []weighed, machines ...*candidate) plan {
 // and none when nothing on offer that the limits allow takes any of them.
 func solve(needs []scheduler.MachineNeed, offers []*candidate, left headroom) []*candidate {
 	s := newSolver(needs, offers)
-	s.solve(offers, left)
+	s.run(left)
 	return s.best.machines
 }
 
 // solver is the search for the best plan for needs.
 type solver struct {
 	// needs are those that something on offer holds, the hardest first.
-	needs []weighed
+	needs  []weighed
+	offers []*candidate
 	// least is what the needs cost beyond the price of their machines when
 	// each is on the offer that suits it best.
 	least float64
@@ -217,7 +218,7 @@ type solver struct {
 }
 
 func newSolver(needs []scheduler.MachineNeed, offers []*candidate) *solver {
-	s := &solver{}
+	s := &solver{offers: offers}
 	needs = slices.Clone(needs)
 	slices.SortFunc(needs, scheduler.MachineNeed.Compare)
 	least := 0.0 // of a need of the last kind
@@ -246,12 +247,12 @@ func newSolver(needs []scheduler.MachineNeed, offers []*candidate) *solver {
 	return s
 }
 
-// solve looks first at the plan that buys the most promising offer for
-// every machine (rank), then at the plans that turn from that for one
-// machine, then for two, and so on: until there are none left to look at, or
-// the steps are spent.
-func (s *solver) solve(offers []*candidate, left headroom) {
-	for turns := 0; s.steps < maxSteps && !s.search(nil, offers, left, turns); turns++ {
+// run looks first at the plan that buys the most promising offer for every
+// machine (rank), then at the plans that turn from that for one machine,
+// then for two, and so on: until there are none left to look at, or the
+// steps are spent.
+func (s *solver) run(left headroom) {
+	for turns := 0; s.steps < maxSteps && !s.search(nil, s.offers, left, turns); turns++ {
 	}
 }
 

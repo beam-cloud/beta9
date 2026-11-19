@@ -2,9 +2,8 @@
 // block, and looks after each one until its provider has confirmed it gone.
 //
 // The scheduler asks it three things: whether a pool can buy a machine now
-// (CanProvision), to buy one (Provision), and which machines are still
-// booting (Booting). It also keeps the requests that wait for a machine
-// (Want). Everything else happens on a tick, which compares each
+// (CanProvision), to buy one (Provision), and which machines it bought
+// (Booting, Machine). Everything else happens on a tick, which compares each
 // machine with what its provider and its worker say about it and gives back
 // the ones that failed, never joined, have nothing to run, or belong to a
 // pool that is gone.
@@ -69,9 +68,9 @@ const (
 	// purchase failed for any other reason.
 	errorBackoff = time.Minute
 
-	// wantFor is how long a request counts as waiting for a machine after
-	// it last said so.
-	wantFor = 15 * time.Second
+	// buyGrace is how long a machine that its provider has yet to answer
+	// for counts as one the pool is still buying.
+	buyGrace = 15 * time.Second
 	// waitWorth is what an hour of waiting for a machine is worth, in hours
 	// of the cheapest machine that would do.
 	waitWorth = 10
@@ -239,10 +238,10 @@ func (p *Provisioner) CanProvision(ctx context.Context, pool string, needs ...sc
 		log.Warn().Err(err).Str("pool_name", pool).Msg("provisioner: cannot read the machines held")
 		return false
 	}
-	// A machine the pool began to buy a moment ago does not count against
-	// it: whoever waits for the pool stays while it is bought.
+	// A machine the pool is still buying does not count against it: whoever
+	// waits for the pool stays while it is bought.
 	held = slices.DeleteFunc(slices.Clone(held), func(m Machine) bool {
-		return m.Pool == pool && m.InstanceID == "" && m.Release == nil && p.clock.Now().Sub(m.CreatedAt) < wantFor
+		return m.Pool == pool && m.InstanceID == "" && m.Release == nil && p.clock.Now().Sub(m.CreatedAt) < buyGrace
 	})
 	_, _, err = p.choose(pool, needs, held)
 	unread := errors.Is(err, errNotBuying) || errors.Is(err, errNotListed)
@@ -510,54 +509,6 @@ func (p *Provisioner) learn(ctx context.Context, outcome watch.Outcome) {
 	p.mu.Lock()
 	p.estimates = estimates
 	p.mu.Unlock()
-}
-
-// want is a request that waits for a pool to have a machine for it.
-type want struct {
-	Pool string                `json:"pool"`
-	Need scheduler.MachineNeed `json:"need"`
-	At   time.Time             `json:"at"`
-}
-
-// Want takes note that the request with this ID waits for the pool to have
-// a machine that holds need, in place of what it waited for before.
-func (p *Provisioner) Want(ctx context.Context, pool, id string, need scheduler.MachineNeed) error {
-	data, err := json.Marshal(want{Pool: pool, Need: need, At: p.clock.Now()})
-	if err != nil {
-		return err
-	}
-	return p.store.rdb.HSet(ctx, common.RedisKeys.ComputeProvisionedWants(), id, data).Err()
-}
-
-// Unwant takes note that the request no longer waits for a machine.
-func (p *Provisioner) Unwant(ctx context.Context, id string) error {
-	return p.store.rdb.HDel(ctx, common.RedisKeys.ComputeProvisionedWants(), id).Err()
-}
-
-// Wants returns what the requests that wait for the pool need. A request
-// that has not said that it waits for wantFor is forgotten: it was placed,
-// has failed, or was given up.
-func (p *Provisioner) Wants(ctx context.Context, pool string) ([]scheduler.MachineNeed, error) {
-	stored, err := p.store.rdb.HGetAll(ctx, common.RedisKeys.ComputeProvisionedWants()).Result()
-	if err != nil {
-		return nil, fmt.Errorf("read the requests that wait for a machine: %w", err)
-	}
-	var needs []scheduler.MachineNeed
-	var lapsed []string
-	for id, data := range stored {
-		var waiting want
-		switch err := json.Unmarshal([]byte(data), &waiting); {
-		case err != nil || p.clock.Now().Sub(waiting.At) >= wantFor:
-			lapsed = append(lapsed, id)
-		case waiting.Pool == pool:
-			needs = append(needs, waiting.Need)
-		}
-	}
-	if len(lapsed) > 0 {
-		// Whoever reads next removes what this could not.
-		_ = p.store.rdb.HDel(ctx, common.RedisKeys.ComputeProvisionedWants(), lapsed...).Err()
-	}
-	return needs, nil
 }
 
 // sold takes one machine off the stock this replica remembers, so that it

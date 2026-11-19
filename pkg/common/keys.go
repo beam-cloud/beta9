@@ -9,6 +9,7 @@ var (
 	schedulerPrefix                   string = "scheduler:"
 	schedulerContainerRequests        string = "scheduler:container_requests"
 	schedulerBackgroundRequests       string = "scheduler:background_requests"
+	schedulerWaitlist                 string = "scheduler:waitlist"
 	schedulerWorkerLock               string = "scheduler:worker:lock:%s"
 	schedulerWorkerProvisioningLock   string = "scheduler:worker:provisioning:lock:%s"
 	schedulerWorkerRequests           string = "scheduler:worker:requests:%s"
@@ -142,7 +143,6 @@ var (
 	computeProvisionedReconcile string = "compute:{provisioned}:reconcile"
 	computeProvisionedSoldOut   string = "compute:{provisioned}:sold_out"
 	computeProvisionedEstimates string = "compute:{provisioned}:estimates"
-	computeProvisionedWants     string = "compute:{provisioned}:wants"
 	computeProviderOwner        string = "compute:provider_owner"
 )
 
@@ -207,6 +207,12 @@ func (rk *redisKeys) SchedulerContainerRequests() string {
 // foreground lane.
 func (rk *redisKeys) SchedulerBackgroundRequests() string {
 	return schedulerBackgroundRequests
+}
+
+// SchedulerWaitlist holds the requests that wait for a pool to buy a
+// machine, by container ID.
+func (rk *redisKeys) SchedulerWaitlist() string {
+	return schedulerWaitlist
 }
 
 func (rk *redisKeys) SchedulerWorkerLock(workerId string) string {
@@ -549,12 +555,6 @@ func (rk *redisKeys) ComputeProvisionedSoldOut() string {
 // to expect of the next.
 func (rk *redisKeys) ComputeProvisionedEstimates() string {
 	return computeProvisionedEstimates
-}
-
-// ComputeProvisionedWants holds the requests that wait for a pool to buy a
-// machine, by container ID.
-func (rk *redisKeys) ComputeProvisionedWants() string {
-	return computeProvisionedWants
 }
 
 // ComputeProviderOwner holds the name this control plane puts on the

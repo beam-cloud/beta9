@@ -144,7 +144,7 @@ func (a *schedulingAttempt) grow() {
 	case buyer(choice.pool.Controller) != nil:
 		// Such a pool buys for all the requests that wait for it together
 		// (see pool_buying.go).
-		s.want(a.request, choice.pool)
+		s.joinWaitlist(a.request, choice.pool)
 		a.askAgainLater("worker_provisioning_in_progress")
 		return
 	}

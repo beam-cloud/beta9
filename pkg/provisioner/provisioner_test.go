@@ -4011,32 +4011,6 @@ func TestTheMarketsHistoryCountsOnceHoweverManyReplicasReadIt(t *testing.T) {
 	require.Nil(t, learned())
 }
 
-// The requests that wait for a pool are kept for every replica.
-func TestRequestsThatWaitForAPoolAreKeptForEveryReplica(t *testing.T) {
-	w := newWorld(t)
-	other := w.replica()
-	wants := func(pool string) []scheduler.MachineNeed {
-		needs, err := other.Wants(w.ctx, pool)
-		require.NoError(t, err)
-		return needs
-	}
-	small, big := scheduler.MachineNeed{GPUCount: 1, HoursLost: 0.1}, scheduler.MachineNeed{GPUCount: 4, OnDemand: true}
-	require.NoError(t, w.Want(w.ctx, "spot-l40s", "b", big))
-	require.NoError(t, w.Want(w.ctx, "spot-l40s", "a", small))
-	require.NoError(t, w.Want(w.ctx, "spot-a10g", "c", small))
-	require.ElementsMatch(t, []scheduler.MachineNeed{small, big}, wants("spot-l40s"))
-
-	// A request waits for one pool at a time, until it says that it no
-	// longer does or stops saying that it does.
-	require.NoError(t, w.Want(w.ctx, "spot-a10g", "a", small))
-	require.NoError(t, w.Unwant(w.ctx, "b"))
-	require.Empty(t, wants("spot-l40s"))
-	w.clock.Advance(wantFor - time.Second)
-	require.NoError(t, w.Want(w.ctx, "spot-a10g", "c", big))
-	w.clock.Advance(time.Second)
-	require.Equal(t, []scheduler.MachineNeed{big}, wants("spot-a10g"))
-}
-
 // While a pool buys its last machine, whoever waits for the pool stays.
 func TestAPoolThatIsBuyingItsLastMachineIsStillWaitedFor(t *testing.T) {
 	w, provider := newTroubledWorld(t)

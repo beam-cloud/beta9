@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -147,6 +146,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		workerProvisioningLock:    common.NewRedisLock(rdb),
 		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
 		credentials:               newSchedulerCredentialCache(),
+		waitlist:                  NewWaitlist(rdb, nil),
 	}, nil
 }
 
@@ -2087,6 +2087,7 @@ func schedulerReplicaForTest(source *Scheduler) *Scheduler {
 		workerProvisioningLock:    common.NewRedisLock(source.requestBacklog.rdb),
 		workerProvisioningBackoff: newWorkerProvisioningBackoff(),
 		credentials:               newSchedulerCredentialCache(),
+		waitlist:                  source.waitlist,
 		pushComputeEvent:          source.pushComputeEvent,
 		clock:                     source.clock,
 	}
@@ -6646,25 +6647,6 @@ type fakeProvisioner struct {
 	asked []MachineNeed
 	// sold are the machines it sold. They are booting until removed.
 	sold []ProvisionedMachine
-	// wants are the requests that wait for a machine, by ID.
-	wants map[string]MachineNeed
-}
-
-func (p *fakeProvisioner) Want(ctx context.Context, pool, id string, need MachineNeed) error {
-	if p.wants == nil {
-		p.wants = map[string]MachineNeed{}
-	}
-	p.wants[id] = need
-	return nil
-}
-
-func (p *fakeProvisioner) Unwant(ctx context.Context, id string) error {
-	delete(p.wants, id)
-	return nil
-}
-
-func (p *fakeProvisioner) Wants(ctx context.Context, pool string) ([]MachineNeed, error) {
-	return slices.Collect(maps.Values(p.wants)), nil
 }
 
 func (p *fakeProvisioner) CanProvision(ctx context.Context, pool string, needs ...MachineNeed) bool {
@@ -6738,6 +6720,7 @@ func newBuyingPool(t *testing.T, provisioner Provisioner, change ...func(*types.
 		WorkerRepo:  p.workers,
 		ComputeRepo: p.machines,
 		Provisioner: provisioner,
+		Waitlist:    NewWaitlist(rdb, nil),
 	})
 	require.NoError(t, err)
 	return p

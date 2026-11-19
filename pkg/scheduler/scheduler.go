@@ -65,8 +65,9 @@ type Scheduler struct {
 	pushComputeEvent func(types.EventComputeSchema)
 
 	// provisioner buys machines for pools with a provisioning block. Nil
-	// means no pool can buy.
+	// means no pool can buy. waitlist is the requests they buy for.
 	provisioner Provisioner
+	waitlist    *Waitlist
 	// chains is scheduling.failover.chains converted to alsoServes, for
 	// pools that are loaded after startup. It goes with the old key.
 	chains chainMigration
@@ -197,6 +198,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		credentials:               newSchedulerCredentialCache(),
 		pushComputeEvent:          pushPoolMetrics,
 		creditGate:                NewCreditGate(config.GatewayService.CreditGate, config.ManagedCompute.Billing.AuthToken, redisClient),
+		waitlist:                  NewWaitlist(redisClient, seams.clock),
 		chains:                    chains,
 		clock:                     seams.clock,
 		spawn:                     seams.spawn,
@@ -310,6 +312,7 @@ func (s *Scheduler) ensureAgentPool(workspaceID string, state *compute.PoolState
 		ContainerRepo:  s.containerRepo,
 		PushMetrics:    s.pushComputeEvent,
 		Provisioner:    s.provisioner,
+		Waitlist:       s.waitlist,
 		Clock:          s.clock,
 	})
 	if err != nil {
@@ -781,11 +784,9 @@ func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.Co
 }
 
 func (s *Scheduler) pushWorkerRequests(worker *types.Worker, requests []*types.ContainerRequest) error {
-	// A request stops waiting for a machine before it takes its room, so
-	// that no pool sees both and buys for it again.
-	for _, request := range requests {
-		s.unwant(request)
-	}
+	// Requests stop waiting for a machine before they take their room, so
+	// that no pool sees both and buys for them again.
+	s.leaveWaitlist(requests...)
 	start := s.now()
 	err := s.workerRepo.ScheduleContainerRequests(worker, requests)
 	end := s.now()
