@@ -56,8 +56,8 @@ func (s *WorkerPoolSizer) tick() {
 }
 
 func (s *WorkerPoolSizer) size() {
-	if buyer, ok := s.controller.(*AgentWorkerPoolController); ok && buyer.workerPoolConfig.Buys() && buyer.provisioner != nil {
-		buyer.plan(s.sizing)
+	if pool := buyer(s.controller); pool != nil {
+		pool.plan(s.sizing)
 		return
 	}
 	freeCapacity, err := s.controller.FreeCapacity()

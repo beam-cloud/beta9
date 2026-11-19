@@ -1,11 +1,9 @@
 package scheduler
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -465,7 +463,7 @@ func (wpc *AgentWorkerPoolController) ensureMachineWorker(machine *compute.Agent
 	// of the kind the machine was bought as. Its worker says which that is,
 	// and the machine's own record when its worker is gone.
 	switch {
-	case !wpc.workerPoolConfig.Buys() || wpc.provisioner == nil:
+	case buyer(wpc) == nil:
 	case worker != nil:
 		spec.preemptable = worker.Preemptable
 	default:
@@ -650,89 +648,6 @@ func (wpc *AgentWorkerPoolController) bootingMachineWorker(machine ProvisionedMa
 	spec.buildVersion = types.WorkerImageVersion("", wpc.config.Worker.ImageTag)
 	spec.preemptable = machine.Spot || wpc.workerPoolConfig.Preemptable
 	return spec.worker()
-}
-
-// plan buys the machines the pool is short of. The pool's sizer runs it, on
-// one replica at a time, with every request that waits for the pool (Want),
-// its floor, and all it has and has coming in view. So requests that fit one
-// machine share it, and replicas buy nothing twice.
-func (wpc *AgentWorkerPoolController) plan(sizing *types.WorkerPoolSizingConfig) {
-	pool := wpc.poolName()
-	// Workers are read before wants: a request that is placed in between
-	// has then given up its want, and is not bought for again.
-	workers, err := wpc.workerRepo.GetAllWorkersInPool(pool)
-	wants, wantsErr := wpc.provisioner.Wants(wpc.ctx, pool)
-	booting, bootingErr := wpc.provisioner.Booting(wpc.ctx, pool)
-	if err := errors.Join(err, wantsErr, bootingErr); err != nil {
-		log.Error().Str("pool_name", pool).Err(err).Msg("failed to plan the pool's machines")
-		return
-	}
-	// The hardest to fit come first: work that may not be interrupted, then
-	// the biggest.
-	slices.SortFunc(wants, func(a, b MachineNeed) int {
-		return cmp.Or(compareBool(b.OnDemand, a.OnDemand), cmp.Compare(b.GPUCount, a.GPUCount), cmp.Compare(b.Memory, a.Memory),
-			cmp.Compare(b.CPU, a.CPU), cmp.Compare(b.HoursLost, a.HoursLost))
-	})
-	// The room there is: the workers that take work, and that of each
-	// machine that is coming, whatever has become of its Pending worker.
-	rooms := slices.DeleteFunc(workers, func(worker *types.Worker) bool { return worker.Status != types.WorkerStatusAvailable })
-	for _, machine := range booting {
-		coming := wpc.bootingMachineWorker(machine)
-		if !slices.ContainsFunc(rooms, func(room *types.Worker) bool { return room.Id == coming.Id }) {
-			rooms = append(rooms, coming)
-		}
-	}
-
-	// One machine is bought at a time, since what the next has to hold
-	// depends on the size of the last: the first the pool is short of that
-	// it can buy.
-	for {
-		short := slices.Compact(wpc.shortfall(wants, sizing, rooms))
-		i := slices.IndexFunc(short, func(need MachineNeed) bool { return wpc.provisioner.CanProvision(wpc.ctx, pool, need) })
-		if i < 0 {
-			return
-		}
-		worker, err := wpc.buyMachine(short[i])
-		if err != nil {
-			log.Error().Str("pool_name", pool).Err(err).Msg("failed to add worker")
-			return
-		}
-		rooms = append(rooms, worker)
-	}
-}
-
-// shortfall returns what the pool lacks a machine for: each waiting request
-// that fits no room once those before it have taken theirs, and a worker of
-// the default size when what is then left is under the floor.
-//
-// A request is taken to fit any worker with room for it. One that the
-// scheduler will not place there for another reason waits until the worker
-// fills up or leaves.
-func (wpc *AgentWorkerPoolController) shortfall(wants []MachineNeed, sizing *types.WorkerPoolSizingConfig, rooms []*types.Worker) []MachineNeed {
-	left := make([]*types.Worker, len(rooms))
-	for i, room := range rooms {
-		worker := *room
-		worker.Status = types.WorkerStatusAvailable // one that is coming counts in full
-		left[i] = &worker
-	}
-
-	var short []MachineNeed
-	for _, want := range wants {
-		cpu := wpc.workerPoolConfig.CPUShareMultiplier.Schedulable(want.CPU)
-		i := slices.IndexFunc(left, func(room *types.Worker) bool {
-			return room.FreeCpu >= cpu && room.FreeMemory >= want.Memory && room.FreeGpuCount >= want.GPUCount &&
-				!(want.OnDemand && room.Preemptable)
-		})
-		if i < 0 {
-			short = append(short, want)
-			continue
-		}
-		left[i].FreeCpu, left[i].FreeMemory, left[i].FreeGpuCount = left[i].FreeCpu-cpu, left[i].FreeMemory-want.Memory, left[i].FreeGpuCount-want.GPUCount
-	}
-	if poolCapacityFromWorkers(left).belowMinimum(sizing) {
-		short = append(short, wpc.machineNeed(sizing.DefaultWorkerCpu, sizing.DefaultWorkerMemory, sizing.DefaultWorkerGpuCount))
-	}
-	return short
 }
 
 // keepBootingWorkers keeps the Pending worker of every machine that is
