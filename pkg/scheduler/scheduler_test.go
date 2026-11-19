@@ -63,6 +63,7 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 // scheduleRequest places the request on the worker, as dispatching a batch
 // does with each request it planned.
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
+	s.leaveWaitlist(request)
 	return s.pushWorkerRequests(worker, []*types.ContainerRequest{s.prepareWorkerRequest(worker, request)})
 }
 

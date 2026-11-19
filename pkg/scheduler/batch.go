@@ -193,6 +193,14 @@ func (b *schedulingBatch) dispatchSchedules(schedules []plannedSchedule) {
 		return
 	}
 
+	// Requests stop waiting for a machine before they take their room, so
+	// that no pool sees both and buys for them again.
+	requests := make([]*types.ContainerRequest, len(schedules))
+	for i, schedule := range schedules {
+		requests[i] = schedule.request
+	}
+	b.scheduler.leaveWaitlist(requests...)
+
 	workerRequests := make([]*types.ContainerRequest, len(schedules))
 	for i, schedule := range schedules {
 		workerRequests[i] = b.scheduler.prepareWorkerRequest(schedule.worker, schedule.request)

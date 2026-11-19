@@ -10,6 +10,7 @@ var (
 	schedulerContainerRequests        string = "scheduler:container_requests"
 	schedulerBackgroundRequests       string = "scheduler:background_requests"
 	schedulerWaitlist                 string = "scheduler:waitlist"
+	schedulerWaitlistPools            string = "scheduler:waitlist:pools"
 	schedulerWorkerLock               string = "scheduler:worker:lock:%s"
 	schedulerWorkerProvisioningLock   string = "scheduler:worker:provisioning:lock:%s"
 	schedulerWorkerRequests           string = "scheduler:worker:requests:%s"
@@ -213,6 +214,12 @@ func (rk *redisKeys) SchedulerBackgroundRequests() string {
 // machine, by container ID.
 func (rk *redisKeys) SchedulerWaitlist() string {
 	return schedulerWaitlist
+}
+
+// SchedulerWaitlistPools holds when a request last joined each pool's
+// waitlist.
+func (rk *redisKeys) SchedulerWaitlistPools() string {
+	return schedulerWaitlistPools
 }
 
 func (rk *redisKeys) SchedulerWorkerLock(workerId string) string {

@@ -784,9 +784,6 @@ func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.Co
 }
 
 func (s *Scheduler) pushWorkerRequests(worker *types.Worker, requests []*types.ContainerRequest) error {
-	// Requests stop waiting for a machine before they take their room, so
-	// that no pool sees both and buys for them again.
-	s.leaveWaitlist(requests...)
 	start := s.now()
 	err := s.workerRepo.ScheduleContainerRequests(worker, requests)
 	end := s.now()

@@ -10,6 +10,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 )
 
@@ -46,9 +47,14 @@ func buyer(controller WorkerPoolController) *AgentWorkerPoolController {
 	return nil
 }
 
-// waitlistLapse is how long a request keeps its place on the waitlist after
-// it last asked for it.
-const waitlistLapse = 15 * time.Second
+const (
+	// waitlistLapse is how long a request keeps its place on the waitlist
+	// after it last asked for it.
+	waitlistLapse = 15 * time.Second
+	// waitlistRefresh is how long a request leaves its place as it is. It
+	// passes several times a second, and writes its place this often.
+	waitlistRefresh = waitlistLapse / 3
+)
 
 // Waitlist is the requests that wait for a pool to buy a machine, and the
 // machine each has to have. It is kept in Redis, by container ID: any
@@ -74,11 +80,17 @@ type waiting struct {
 // Add has the request with this ID wait for the pool to have a machine that
 // holds need, in place of what it waited for before.
 func (w *Waitlist) Add(ctx context.Context, pool, id string, need MachineNeed) error {
-	data, err := json.Marshal(waiting{Pool: pool, Need: need, At: w.clock.Now()})
+	now := w.clock.Now()
+	data, err := json.Marshal(waiting{Pool: pool, Need: need, At: now})
 	if err != nil {
 		return err
 	}
-	return w.rdb.HSet(ctx, common.RedisKeys.SchedulerWaitlist(), id, data).Err()
+	_, err = w.rdb.Pipelined(ctx, func(write redis.Pipeliner) error {
+		write.HSet(ctx, common.RedisKeys.SchedulerWaitlist(), id, data)
+		write.HSet(ctx, common.RedisKeys.SchedulerWaitlistPools(), pool, now.UnixMilli())
+		return nil
+	})
+	return err
 }
 
 // Remove has the requests wait no longer.
@@ -91,7 +103,14 @@ func (w *Waitlist) Remove(ctx context.Context, ids ...string) error {
 
 // For returns what the requests that wait for the pool need. A request whose
 // place has lapsed is forgotten: it was placed, has failed, or was given up.
+//
+// The waitlist is one for all pools. A pool that no request has joined for
+// as long as a place lasts has nothing on it, and reads none of it.
 func (w *Waitlist) For(ctx context.Context, pool string) ([]MachineNeed, error) {
+	joined, err := w.rdb.HGet(ctx, common.RedisKeys.SchedulerWaitlistPools(), pool).Int64()
+	if errors.Is(err, redis.Nil) || (err == nil && w.clock.Now().Sub(time.UnixMilli(joined)) >= waitlistLapse) {
+		return nil, nil
+	}
 	stored, err := w.rdb.HGetAll(ctx, common.RedisKeys.SchedulerWaitlist()).Result()
 	if err != nil {
 		return nil, fmt.Errorf("read the requests that wait for a machine: %w", err)
@@ -115,16 +134,23 @@ func (w *Waitlist) For(ctx context.Context, pool string) ([]MachineNeed, error) 
 // joinWaitlist puts the request on the waitlist of a pool that buys its
 // machines. The request asks on every pass for as long as it waits, for a
 // machine to be bought and then for it to boot. It may ask such a pool as
-// often as it likes.
+// often as it likes: it carries when it last did, and its place is written
+// again only once that is waitlistRefresh ago, or for another pool.
 func (s *Scheduler) joinWaitlist(request *types.ContainerRequest, pool *WorkerPool) {
 	buying := buyer(pool.Controller)
 	if buying == nil {
 		return
 	}
-	need := buying.machineFor(request, s.workerSizeFor(pool, request))
-	if err := s.waitlist.Add(s.ctx, buying.poolName(), request.ContainerId, need); err != nil {
-		requestLog(log.Warn(), request).Str("pool_name", pool.Name).Err(err).Msg("unable to have the request wait for the pool to buy a machine")
+	name, now := buying.poolName(), s.now()
+	if request.WaitlistPool == name && now.Sub(request.WaitlistedAt) < waitlistRefresh {
+		return
 	}
+	need := buying.machineFor(request, s.workerSizeFor(pool, request))
+	if err := s.waitlist.Add(s.ctx, name, request.ContainerId, need); err != nil {
+		requestLog(log.Warn(), request).Str("pool_name", pool.Name).Err(err).Msg("unable to have the request wait for the pool to buy a machine")
+		return
+	}
+	request.WaitlistPool, request.WaitlistedAt = name, now
 }
 
 // leaveWaitlist takes the requests off the waitlist, once they are placed or
@@ -133,6 +159,7 @@ func (s *Scheduler) leaveWaitlist(requests ...*types.ContainerRequest) {
 	ids := make([]string, len(requests))
 	for i, request := range requests {
 		ids[i] = request.ContainerId
+		request.WaitlistPool, request.WaitlistedAt = "", time.Time{}
 	}
 	if err := s.waitlist.Remove(s.ctx, ids...); err != nil {
 		log.Warn().Strs("container_ids", ids).Err(err).Msg("unable to take the requests off the waitlist for a machine")

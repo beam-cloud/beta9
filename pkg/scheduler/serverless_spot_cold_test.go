@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/compute"
+	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -147,31 +149,74 @@ func TestExplicitNonPreemptableRequestStillRejectsSpot(t *testing.T) {
 
 // Every replica has the same waitlist: nothing of it is kept in memory.
 func TestTheWaitlistIsTheSameForEveryReplica(t *testing.T) {
-	s, err := NewSchedulerForTest()
+	rdb, counts, err := repo.NewRedisClientForTestWithCounts()
 	require.NoError(t, err)
-	clock := common.NewFakeClock(time.Now())
-	one, other := NewWaitlist(s.requestBacklog.rdb, clock), NewWaitlist(s.requestBacklog.rdb, clock)
+	ctx, clock := context.Background(), common.NewFakeClock(time.Now())
+	one, other := NewWaitlist(rdb, clock), NewWaitlist(rdb, clock)
 	waiting := func(pool string) []MachineNeed {
-		needs, err := other.For(s.ctx, pool)
+		needs, err := other.For(ctx, pool)
 		require.NoError(t, err)
 		return needs
 	}
 	small, big := MachineNeed{GPUCount: 1, HoursLost: 0.1}, MachineNeed{GPUCount: 4, OnDemand: true}
-	require.NoError(t, one.Add(s.ctx, "spot-l40s", "b", big))
-	require.NoError(t, one.Add(s.ctx, "spot-l40s", "a", small))
-	require.NoError(t, one.Add(s.ctx, "spot-a10g", "c", small))
+	require.NoError(t, one.Add(ctx, "spot-l40s", "b", big))
+	require.NoError(t, one.Add(ctx, "spot-l40s", "a", small))
+	require.NoError(t, one.Add(ctx, "spot-a10g", "c", small))
 	require.ElementsMatch(t, []MachineNeed{small, big}, waiting("spot-l40s"))
 
 	// A request waits for one pool at a time, until it is taken off the
 	// waitlist or stops asking for its place.
-	require.NoError(t, one.Add(s.ctx, "spot-a10g", "a", small))
-	require.NoError(t, one.Remove(s.ctx, "b"))
+	require.NoError(t, one.Add(ctx, "spot-a10g", "a", small))
+	require.NoError(t, one.Remove(ctx, "b"))
 	require.Empty(t, waiting("spot-l40s"))
 	clock.Advance(waitlistLapse - time.Second)
-	require.NoError(t, one.Add(s.ctx, "spot-a10g", "c", big))
+	require.NoError(t, one.Add(ctx, "spot-a10g", "c", big))
 	clock.Advance(time.Second)
 	require.Equal(t, []MachineNeed{big}, waiting("spot-a10g"))
-	require.EqualValues(t, 1, s.requestBacklog.rdb.HLen(s.ctx, common.RedisKeys.SchedulerWaitlist()).Val(), "a place that lapsed is not kept")
+	require.EqualValues(t, 1, rdb.HLen(ctx, common.RedisKeys.SchedulerWaitlist()).Val(), "a place that lapsed is not kept")
+
+	// A pool that nothing waits for reads none of the waitlist: neither one
+	// that no request has joined, nor one whose places have all lapsed.
+	for _, pool := range []string{"spot-h100", "spot-l40s"} {
+		counts.Start()
+		require.Empty(t, waiting(pool))
+		commands, _ := counts.Stop()
+		require.Equal(t, map[string]int{"HGET": 1}, commands, pool)
+	}
+}
+
+// A request that waits passes several times a second. It keeps its place on
+// the waitlist for as long as it does, and writes it only now and then.
+func TestARequestThatWaitsWritesItsPlaceNowAndThen(t *testing.T) {
+	p := newBuyingPool(t, &fakeProvisioner{inStock: true})
+	s, counts := placementCostScheduler(t, 0)
+	clock := common.NewFakeClock(time.Now())
+	s.clock, s.waitlist = clock, NewWaitlist(s.requestBacklog.rdb, clock)
+	pool := &WorkerPool{Name: p.controller.poolName(), Config: p.controller.workerPoolConfig, Controller: p.controller}
+	request := placementCostSandbox("a")
+	writes := func() int {
+		counts.Start()
+		s.joinWaitlist(request, pool)
+		commands, _ := counts.Stop()
+		return commands["HSET"]
+	}
+
+	written := writes()
+	for range int(2 * waitlistLapse / time.Second) {
+		clock.Advance(time.Second)
+		written += writes()
+		waiting, err := s.waitlist.For(s.ctx, pool.Name)
+		require.NoError(t, err)
+		require.Len(t, waiting, 1)
+	}
+	require.Equal(t, 2*(1+int(2*waitlistLapse/waitlistRefresh)), written, "its place, and that the pool is waited for")
+
+	// It writes at once when it waits for another pool, and when it waits
+	// again after it left for a worker that had no room for it after all.
+	request.WaitlistPool = "spot-a10g"
+	require.Equal(t, 2, writes())
+	(&schedulingBatch{scheduler: s}).dispatchSchedules([]plannedSchedule{{request: request, worker: &types.Worker{Id: "gone"}}})
+	require.Equal(t, 2, writes())
 }
 
 // A pool that buys plans for every request that waits for it together.
