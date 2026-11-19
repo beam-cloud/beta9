@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -603,13 +604,13 @@ func (wpc *AgentWorkerPoolController) canBuyMachine(cpu int64, memory int64, gpu
 	return wpc.provisioner != nil && wpc.provisioner.CanProvision(wpc.ctx, wpc.poolName(), wpc.machineNeed(cpu, memory, gpuCount))
 }
 
-// buyMachine buys a machine that holds need and returns the Pending worker
-// that stands for it.
-func (wpc *AgentWorkerPoolController) buyMachine(need MachineNeed) (*types.Worker, error) {
+// buyMachine buys the first machine the pool is to have for needs and returns
+// the Pending worker that stands for it.
+func (wpc *AgentWorkerPoolController) buyMachine(needs ...MachineNeed) (*types.Worker, error) {
 	if wpc.provisioner == nil {
 		return nil, fmt.Errorf("pool %q buys its machines, but this gateway has nothing to buy them with", wpc.poolName())
 	}
-	machine, err := wpc.provisioner.Provision(wpc.ctx, wpc.poolName(), need)
+	machine, err := wpc.provisioner.Provision(wpc.ctx, wpc.poolName(), needs...)
 	if err != nil {
 		return nil, err
 	}
@@ -695,16 +696,17 @@ func (wpc *AgentWorkerPoolController) keepBootingWorkers(joined []*compute.Agent
 // depends on no provider code. pkg/provisioner implements it.
 type Provisioner interface {
 	// CanProvision reports whether the pool could buy a machine with room for
-	// need right now, not counting one it began to buy a moment ago. It is
-	// false when no provider of the pool has matching stock, the pool is at
-	// maxNodes or maxGPUs, a spend cap is reached, or a purchase for the pool
-	// from each of them has just failed for any reason but lack of stock.
-	// Lack of stock rules out only the offer that was asked for.
-	CanProvision(ctx context.Context, pool string, need MachineNeed) bool
+	// any of needs right now, not counting one it began to buy a moment ago.
+	// It is false when no provider of the pool has matching stock, the pool
+	// is at maxNodes or maxGPUs, a spend cap is reached, or a purchase for
+	// the pool from each of them has just failed for any reason but lack of
+	// stock. Lack of stock rules out only the offer that was asked for.
+	CanProvision(ctx context.Context, pool string, needs ...MachineNeed) bool
 
 	// Provision buys one machine for the pool and returns it before it has
-	// booted. The machine joins the pool on its own once it is up.
-	Provision(ctx context.Context, pool string, need MachineNeed) (*ProvisionedMachine, error)
+	// booted: the first of the machines that are best to buy for all of
+	// needs. The machine joins the pool on its own once it is up.
+	Provision(ctx context.Context, pool string, needs ...MachineNeed) (*ProvisionedMachine, error)
 
 	// Booting returns the pool's machines that have been bought and have not
 	// yet run a worker. Machine returns one that a pool bought and holds,
@@ -730,6 +732,13 @@ type MachineNeed struct {
 	OnDemand bool
 	// HoursLost is how many hours of work are lost when one is taken back.
 	HoursLost float64
+}
+
+// Compare orders needs by how hard it is to find them room, the hardest
+// first: work that may not be interrupted, then the biggest.
+func (n MachineNeed) Compare(other MachineNeed) int {
+	return cmp.Or(compareBool(other.OnDemand, n.OnDemand), cmp.Compare(other.GPUCount, n.GPUCount), cmp.Compare(other.Memory, n.Memory),
+		cmp.Compare(other.CPU, n.CPU), cmp.Compare(other.HoursLost, n.HoursLost))
 }
 
 // ProvisionedMachine is a machine that a pool bought.

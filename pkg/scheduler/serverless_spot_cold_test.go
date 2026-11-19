@@ -176,7 +176,7 @@ func TestABuyingPoolBuysWhatTheRequestsThatWaitForItLack(t *testing.T) {
 	sold(floor, "mnop", false)
 	require.Equal(t, 4, sold(floor, "q", true))
 	need := MachineNeed{CPU: 1000, Memory: 1024, GPUCount: 1}
-	require.Equal(t, []MachineNeed{need, need}, provider.asked, "once for the floor, then once for a request and the floor that need the same")
+	require.Equal(t, []MachineNeed{need, need, need}, provider.asked, "for the floor, then for a request and the floor together")
 }
 
 // Of two workers that are otherwise alike, work that is cheap to lose takes

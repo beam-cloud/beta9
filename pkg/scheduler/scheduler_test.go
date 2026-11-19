@@ -6667,13 +6667,13 @@ func (p *fakeProvisioner) Wants(ctx context.Context, pool string) ([]MachineNeed
 	return slices.Collect(maps.Values(p.wants)), nil
 }
 
-func (p *fakeProvisioner) CanProvision(ctx context.Context, pool string, need MachineNeed) bool {
-	p.asked = append(p.asked, need)
+func (p *fakeProvisioner) CanProvision(ctx context.Context, pool string, needs ...MachineNeed) bool {
+	p.asked = append(p.asked, needs...)
 	return p.inStock
 }
 
-func (p *fakeProvisioner) Provision(ctx context.Context, pool string, need MachineNeed) (*ProvisionedMachine, error) {
-	p.asked = append(p.asked, need)
+func (p *fakeProvisioner) Provision(ctx context.Context, pool string, needs ...MachineNeed) (*ProvisionedMachine, error) {
+	p.asked = append(p.asked, needs...)
 	if p.err != nil {
 		return nil, p.err
 	}

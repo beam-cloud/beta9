@@ -1364,7 +1364,7 @@ func TestChoose(t *testing.T) {
 		{
 			name: "a cheaper machine that is too small is passed over",
 			buy: purchase{
-				need:   scheduler.MachineNeed{GPUCount: 2},
+				needs:  []scheduler.MachineNeed{{GPUCount: 2}},
 				offers: []providers.Offer{l40s(costing(90)), l40s(costing(190), named("2L40S"), func(o *providers.Offer) { o.GPUCount = 2 })},
 			},
 			want: "2L40S in FIN-01",
@@ -1602,7 +1602,7 @@ func TestChooseSaysWhatLeftNoOffer(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := choose(purchase{pool: "spot-l40s", config: spotL40S(test.pool...), need: test.need, offers: test.offers})
+			_, err := choose(purchase{pool: "spot-l40s", config: spotL40S(test.pool...), needs: []scheduler.MachineNeed{test.need}, offers: test.offers})
 			require.EqualError(t, err, test.want)
 		})
 	}
@@ -3899,7 +3899,7 @@ func TestChooseWeighsSpotAgainstTheWorkLostWithIt(t *testing.T) {
 		{name: "a provider that often takes machines back", need: scheduler.MachineNeed{HoursLost: 0.5}, estimates: oftenTaken},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := choose(purchase{pool: "spot-l40s", config: both, need: test.need, offers: offers, estimates: test.estimates})
+			got, err := choose(purchase{pool: "spot-l40s", config: both, needs: []scheduler.MachineNeed{test.need}, offers: offers, estimates: test.estimates})
 			require.NoError(t, err)
 			require.Equal(t, test.spot, got.Spot)
 		})
@@ -3993,10 +3993,20 @@ func TestTheMarketsHistoryCountsOnceHoweverManyReplicasReadIt(t *testing.T) {
 	replica(&readLog{Log: told.log, read: func() { replica(told.log).Tick(w.ctx) }}).Tick(w.ctx)
 	require.Equal(t, once, learned())
 
+	// Nor does a replica that reads the history later undo what was learned
+	// since.
+	_, err := w.store.Learn(w.ctx, machine.outcome(w.clock.Now()).CameUp(time.Minute))
+	require.NoError(t, err)
+	since := learned()
+	require.NotEqual(t, once, since)
+	_, err = w.store.StartEstimates(w.ctx, nil)
+	require.NoError(t, err)
+	require.Equal(t, since, learned())
+
 	// What becomes of a machine before the history is read is in the
 	// history, and is not taken in twice either.
 	forget()
-	_, err := w.store.Learn(w.ctx, machine.outcome(w.clock.Now()).CameUp(time.Minute))
+	_, err = w.store.Learn(w.ctx, machine.outcome(w.clock.Now()).CameUp(time.Minute))
 	require.NoError(t, err)
 	require.Nil(t, learned())
 }

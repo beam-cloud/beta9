@@ -1,7 +1,6 @@
 package scheduler
 
 import (
-	"cmp"
 	"errors"
 	"slices"
 
@@ -20,10 +19,10 @@ import (
 //     pool puts the requests that wait into the room it has and has coming,
 //     and is short of a machine for those that fit none of it, and for its
 //     floor (shortfall).
-//  3. The provisioner buys a machine for the first of those that it can
-//     buy for: the one expected to cost least for it. The pool counts that
-//     machine's room and asks again, until it is short of nothing or can
-//     buy nothing.
+//  3. The provisioner works out which machines are best to buy for all of
+//     that together, and buys the first (pkg/provisioner/solve.go). The pool
+//     counts that machine's room and asks again, until it is short of
+//     nothing or can buy nothing.
 //  4. A machine has a Pending worker from the moment it is bought
 //     (buyMachine). A request waits for it as for any worker that is
 //     starting, and goes on saying that it waits: the plan then counts it
@@ -106,8 +105,8 @@ func (s *Scheduler) unwant(request *types.ContainerRequest) {
 }
 
 // plan buys the machines the pool is short of. The pool's sizer runs it, on
-// one replica at a time, with every request that waits for the pool (Want),
-// its floor, and all it has and has coming in view. So requests that fit one
+// one replica at a time, with every request that waits for the pool, its
+// floor, and all it has and has coming in view. So requests that fit one
 // machine share it, and replicas buy nothing twice.
 func (wpc *AgentWorkerPoolController) plan(sizing *types.WorkerPoolSizingConfig) {
 	pool := wpc.poolName()
@@ -120,12 +119,7 @@ func (wpc *AgentWorkerPoolController) plan(sizing *types.WorkerPoolSizingConfig)
 		log.Error().Str("pool_name", pool).Err(err).Msg("failed to plan the pool's machines")
 		return
 	}
-	// The hardest to fit come first: work that may not be interrupted, then
-	// the biggest.
-	slices.SortFunc(wants, func(a, b MachineNeed) int {
-		return cmp.Or(compareBool(b.OnDemand, a.OnDemand), cmp.Compare(b.GPUCount, a.GPUCount), cmp.Compare(b.Memory, a.Memory),
-			cmp.Compare(b.CPU, a.CPU), cmp.Compare(b.HoursLost, a.HoursLost))
-	})
+	slices.SortFunc(wants, MachineNeed.Compare)
 	// The room there is: the workers that take work, and that of each
 	// machine that is coming, whatever has become of its Pending worker.
 	rooms := slices.DeleteFunc(workers, func(worker *types.Worker) bool { return worker.Status != types.WorkerStatusAvailable })
@@ -136,16 +130,16 @@ func (wpc *AgentWorkerPoolController) plan(sizing *types.WorkerPoolSizingConfig)
 		}
 	}
 
-	// One machine is bought at a time, since what the next has to hold
-	// depends on the size of the last: the first the pool is short of that
-	// it can buy.
+	// The provisioner works out what to buy for all the pool is short of,
+	// and buys the first machine of that. The rest is worked out again with
+	// that machine's room counted: what there is to buy changes as it is
+	// bought.
 	for {
-		short := slices.Compact(wpc.shortfall(wants, sizing, rooms))
-		i := slices.IndexFunc(short, func(need MachineNeed) bool { return wpc.provisioner.CanProvision(wpc.ctx, pool, need) })
-		if i < 0 {
+		short := wpc.shortfall(wants, sizing, rooms)
+		if len(short) == 0 || !wpc.provisioner.CanProvision(wpc.ctx, pool, short...) {
 			return
 		}
-		worker, err := wpc.buyMachine(short[i])
+		worker, err := wpc.buyMachine(short...)
 		if err != nil {
 			log.Error().Str("pool_name", pool).Err(err).Msg("failed to add worker")
 			return
@@ -155,8 +149,9 @@ func (wpc *AgentWorkerPoolController) plan(sizing *types.WorkerPoolSizingConfig)
 }
 
 // shortfall returns what the pool lacks a machine for: each waiting request
-// that fits no room once those before it have taken theirs, and a worker of
-// the default size when what is then left is under the floor.
+// that fits no room once those before it have taken theirs, the hardest to
+// fit first, and a worker of the default size when what is then left is
+// under the floor.
 //
 // A request is taken to fit any worker with room for it. One that the
 // scheduler will not place there for another reason waits until the worker

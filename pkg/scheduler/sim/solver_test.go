@@ -2,6 +2,7 @@ package schedsim
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,6 +96,34 @@ func TestSolverBuysTheNextBestWhenAnOfferIsGone(t *testing.T) {
 	sim.Advance(5 * time.Minute)
 	require.Equal(t, 1, verda.Bought())
 	require.LessOrEqual(t, waited(sim, ids), time.Minute+5*time.Second)
+}
+
+// What a pool buys is worked out for all that waits for it together. Bought
+// for one request at a time, each had the cheapest machine that held it:
+// three small ones, and then the pool was at maxNodes with requests left
+// waiting.
+func TestSolverBuysTheMachinesThatCostLeastForAllThatWaits(t *testing.T) {
+	sim := New(t, strings.Replace(solverPool, "maxNodes: 8", "maxNodes: 3", 1))
+	verda := sim.Provider("verda")
+	sim.Provider("nebius").Stock("L40S", 0)
+	verda.Sell(providers.Offer{ID: "l40s-4x", Cloud: "verda", Region: "sim-1", GPU: "L40S", GPUCount: 4,
+		CPUMillicores: 4 * defaultMachineCPU, MemoryMB: 4 * defaultMachineMemoryMB, HourlyCostMicros: 320 * 10_000})
+	sim.Advance(20 * time.Second)
+	sold := func() []int { return []int{verda.Bought() - verda.sold("l40s-4x"), verda.sold("l40s-4x")} }
+
+	sim.Submit(Endpoint("L40S").For(3*time.Hour), 1)
+	sim.Advance(2 * time.Minute)
+	require.Equal(t, []int{1, 0}, sold(), "one request has the machine that holds it, and no more")
+
+	sim.Submit(Endpoint("L40S").For(3*time.Hour), 4)
+	sim.Advance(2 * time.Minute)
+	require.Equal(t, []int{1, 1}, sold(), "four share a machine that costs less than four small ones")
+
+	// The pool may buy one machine more.
+	sim.Submit(Endpoint("L40S").For(3*time.Hour), 3)
+	sim.Advance(2 * time.Minute)
+	require.Equal(t, []int{1, 2}, sold(), "three have the one machine that holds them all")
+	sim.ExpectWaiting(0)
 }
 
 // One pool buys from whichever provider costs least. With a pool for each

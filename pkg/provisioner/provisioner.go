@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"slices"
 	"strconv"
@@ -224,14 +225,15 @@ var (
 )
 
 // CanProvision reports whether the pool could buy a machine with room for
-// need now. It asks no provider: it answers from the last tick's offers.
+// any of needs now. It asks no provider: it answers from the last tick's
+// offers.
 //
 // When the pool cannot, it says why. It is asked often, for machines of many
 // sizes, so it says each thing that stands in the way once, and again only
 // after the pool has bought a machine in between. It says nothing of what
 // this replica has yet to read: the next tick reads it, and says so itself
 // when it cannot.
-func (p *Provisioner) CanProvision(ctx context.Context, pool string, need scheduler.MachineNeed) bool {
+func (p *Provisioner) CanProvision(ctx context.Context, pool string, needs ...scheduler.MachineNeed) bool {
 	held, err := p.recentRecords(ctx)
 	if err != nil {
 		log.Warn().Err(err).Str("pool_name", pool).Msg("provisioner: cannot read the machines held")
@@ -242,7 +244,7 @@ func (p *Provisioner) CanProvision(ctx context.Context, pool string, need schedu
 	held = slices.DeleteFunc(slices.Clone(held), func(m Machine) bool {
 		return m.Pool == pool && m.InstanceID == "" && m.Release == nil && p.clock.Now().Sub(m.CreatedAt) < wantFor
 	})
-	_, _, err = p.choose(pool, need, held)
+	_, _, err = p.choose(pool, needs, held)
 	unread := errors.Is(err, errNotBuying) || errors.Is(err, errNotListed)
 	if err != nil && !unread && p.unsaid(pool, err) {
 		log.Warn().Err(err).Str("pool_name", pool).Msg("provisioner: the pool cannot buy a machine")
@@ -269,9 +271,9 @@ func (p *Provisioner) unsaid(pool string, why error) bool {
 }
 
 // Provision buys one machine for the pool and returns it before it has
-// booted.
-func (p *Provisioner) Provision(ctx context.Context, pool string, need scheduler.MachineNeed) (*scheduler.ProvisionedMachine, error) {
-	machine, request, err := p.reserve(ctx, pool, need)
+// booted: the first of those it would buy for all of needs (see solve).
+func (p *Provisioner) Provision(ctx context.Context, pool string, needs ...scheduler.MachineNeed) (*scheduler.ProvisionedMachine, error) {
+	machine, request, err := p.reserve(ctx, pool, needs)
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +298,7 @@ func (p *Provisioner) Provision(ctx context.Context, pool string, need scheduler
 // checked against the records as they are. It holds everything about the
 // purchase but the provider's name for the machine, so that a purchase whose
 // answer is lost can be picked up from the record alone.
-func (p *Provisioner) reserve(ctx context.Context, pool string, need scheduler.MachineNeed) (Machine, providers.CreateRequest, error) {
+func (p *Provisioner) reserve(ctx context.Context, pool string, needs []scheduler.MachineNeed) (Machine, providers.CreateRequest, error) {
 	id := p.newID()
 	script, tokenHash, err := p.controlPlane.JoinScript(ctx, pool, id)
 	if err != nil {
@@ -310,7 +312,7 @@ func (p *Provisioner) reserve(ctx context.Context, pool string, need scheduler.M
 		Until:         p.clock.Now().Add(leaseFor),
 	}
 	machine, err := p.store.Reserve(ctx, func(held []Machine) (Machine, error) {
-		offer, config, err := p.choose(pool, need, held)
+		offer, config, err := p.choose(pool, needs, held)
 		if err != nil {
 			return Machine{}, err
 		}
@@ -409,13 +411,13 @@ func (p *Provisioner) Machine(ctx context.Context, id string) (*scheduler.Provis
 // choose decides what the pool would buy, with what this replica knows and
 // the records it is given. It returns the pool's config as it was when it
 // decided, which is the one to buy with.
-func (p *Provisioner) choose(pool string, need scheduler.MachineNeed, held []Machine) (providers.Offer, types.WorkerPoolConfig, error) {
+func (p *Provisioner) choose(pool string, needs []scheduler.MachineNeed, held []Machine) (providers.Offer, types.WorkerPoolConfig, error) {
 	now := p.clock.Now()
 
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	config, ok := p.pools[pool]
 	if !ok {
+		p.mu.Unlock()
 		return providers.Offer{}, config, errNotBuying
 	}
 	// What every provider the pool can buy from has in stock, and why the
@@ -439,20 +441,23 @@ func (p *Provisioner) choose(pool string, need scheduler.MachineNeed, held []Mac
 			inStock = append(inStock, p.inStockLocked(list, now)...)
 		}
 	}
-	if len(inStock) == 0 && unusable != nil {
-		return providers.Offer{}, config, unusable
-	}
-	offer, err := choose(purchase{
+	buying := purchase{
 		pool:       pool,
 		config:     config,
-		need:       need,
+		needs:      needs,
 		offers:     inStock,
 		held:       held,
 		limits:     p.limits,
 		spentToday: p.spentToday,
 		estimates:  p.estimates,
 		now:        now,
-	})
+	}
+	// What to buy is worked out with none of this held: it takes a while.
+	p.mu.Unlock()
+	if len(inStock) == 0 && unusable != nil {
+		return providers.Offer{}, config, unusable
+	}
+	offer, err := choose(buying)
 	return offer, config, err
 }
 
@@ -845,7 +850,9 @@ func (l Limits) dailySpent(spentToday float64) bool {
 type purchase struct {
 	pool   string
 	config types.WorkerPoolConfig
-	need   scheduler.MachineNeed
+	// needs is what the pool is short of a machine for. None is a machine
+	// for nothing in particular.
+	needs []scheduler.MachineNeed
 	// offers is what the pool's providers have in stock.
 	offers []providers.Offer
 	// held is every machine there is a record of, for every pool.
@@ -871,74 +878,79 @@ var (
 // of a dollar offers are priced in.
 const microsPerCent = 10_000
 
-// choose picks the machine to buy: of those in stock that the pool may buy
-// and that have room for what is needed, the one expected to cost least
-// (see best). It fails when the pool is at maxNodes or maxGPUs, when a spend
-// cap would be passed, and when nothing in stock is such a machine. It
+// choose picks the machine to buy: the first of those that are the best to
+// buy for what is needed, of what is in stock that the pool buys (see
+// solve). It fails when the pool is at maxNodes or maxGPUs, when a spend cap
+// would be passed, and when nothing in stock is a machine for any of it. It
 // changes nothing.
 func choose(p purchase) (providers.Offer, error) {
-	buying := p.config.Provisioning
-	machines, gpus := 0, 0
-	hourlyMicros := int64(0)
-	for _, machine := range p.held {
-		// A machine counts until its record is gone: until then it may still
-		// exist, and cost money.
-		hourlyMicros += machine.HourlyMicros
-		if machine.Pool == p.pool {
-			machines++
-			gpus += int(machine.GPUCount)
-		}
+	left, err := p.headroom()
+	if err != nil {
+		return providers.Offer{}, err
 	}
-	if machines >= buying.MaxNodes {
-		return providers.Offer{}, errAtMaxNodes
+	needs := p.needs
+	if len(needs) == 0 {
+		needs = []scheduler.MachineNeed{{}}
 	}
-	if buying.MaxGPUs > 0 && gpus >= buying.MaxGPUs {
-		return providers.Offer{}, errAtMaxGPUs
-	}
-	if p.limits.dailySpent(p.spentToday) {
-		return providers.Offer{}, errDailyCap
+	if buy := solve(needs, p.candidates(), left); len(buy) > 0 {
+		return buy[0].Offer, nil
 	}
 
-	var fitting []providers.Offer
+	// Why not, for the hardest of them to buy for. A machine that would
+	// take the pool over a limit stands in the way only when no other does.
+	hardest := slices.MinFunc(needs, scheduler.MachineNeed.Compare)
 	overMaxGPUs, overHourly := false, false
-	for _, offer := range p.offers {
-		// A machine its provider may take back is not bought for work that
-		// may not be interrupted.
-		if !sells(offer, p.config) || !holds(offer, p.need) || (offer.Spot && p.need.OnDemand) {
-			continue
+	for _, offer := range selling(p.offers, p.config) {
+		if holds(offer, hardest) {
+			overMaxGPUs = overMaxGPUs || int(offer.GPUCount) > left.gpus
+			overHourly = overHourly || offer.HourlyCostMicros > left.hourlyMicros
 		}
-		// A machine counts with every GPU it has, whatever is needed of
-		// them. One that would take the pool over maxGPUs is left out before
-		// the cheapest is picked, so that it does not stand in the way of a
-		// smaller one the pool may still buy.
-		if buying.MaxGPUs > 0 && gpus+int(offer.GPUCount) > buying.MaxGPUs {
-			overMaxGPUs = true
-			continue
-		}
-		if p.limits.MaxHourlyCents > 0 && hourlyMicros+offer.HourlyCostMicros > p.limits.MaxHourlyCents*microsPerCent {
-			overHourly = true
-			continue
-		}
-		fitting = append(fitting, offer)
 	}
-	if len(fitting) == 0 {
-		if overMaxGPUs {
-			return providers.Offer{}, errAtMaxGPUs
-		}
-		if overHourly {
-			return providers.Offer{}, errHourlyCap
-		}
-		return providers.Offer{}, noOffer(p)
+	switch {
+	case overMaxGPUs:
+		return providers.Offer{}, errAtMaxGPUs
+	case overHourly:
+		return providers.Offer{}, errHourlyCap
 	}
-	return p.best(fitting), nil
+	return providers.Offer{}, noOffer(p, hardest)
 }
 
-// best returns the offer that is expected to cost least an hour for what is
-// needed: its price, raised by how often such a machine is lost times the
-// work lost with it, plus what the wait for it is worth, which is longer the
-// less likely the machine is to come up. All of that is learned from what
+// headroom is how much more the pool may buy. A machine counts against it
+// with every GPU it has, and until its record is gone: until then it may
+// still exist, and cost money.
+func (p purchase) headroom() (headroom, error) {
+	buying := p.config.Provisioning
+	left := headroom{machines: buying.MaxNodes, gpus: math.MaxInt, hourlyMicros: math.MaxInt64}
+	if buying.MaxGPUs > 0 {
+		left.gpus = buying.MaxGPUs
+	}
+	if p.limits.MaxHourlyCents > 0 {
+		left.hourlyMicros = p.limits.MaxHourlyCents * microsPerCent
+	}
+	for _, machine := range p.held {
+		left.hourlyMicros -= machine.HourlyMicros
+		if machine.Pool == p.pool {
+			left.machines--
+			left.gpus -= int(machine.GPUCount)
+		}
+	}
+	switch {
+	case left.machines <= 0:
+		return left, errAtMaxNodes
+	case left.gpus <= 0:
+		return left, errAtMaxGPUs
+	case p.limits.dailySpent(p.spentToday):
+		return left, errDailyCap
+	}
+	return left, nil
+}
+
+// candidates are the offers in stock that the pool buys, the cheapest
+// first, with what to expect of each. All of that is learned from what
 // became of the machines bought before (watch.Estimates).
-func (p purchase) best(offers []providers.Offer) providers.Offer {
+func (p purchase) candidates() []*candidate {
+	offers := selling(p.offers, p.config)
+	slices.SortFunc(offers, byPrice)
 	// An offer that nothing has come up as is taken to be as fast as the
 	// fastest: one taken to be slow would never be tried.
 	fastest := unknownBoot
@@ -947,26 +959,23 @@ func (p purchase) best(offers []providers.Offer) providers.Offer {
 			fastest = min(fastest, boot)
 		}
 	}
-	wait := waitWorth * float64(cheapest(offers).HourlyCostMicros)
-	cost := func(offer providers.Offer) float64 {
+	candidates := make([]*candidate, len(offers))
+	for i, offer := range offers {
 		boot, odds, taken := p.estimates.Of(watch.OutcomeOf(offer), p.now)
-		return float64(offer.HourlyCostMicros)*(1+taken*p.need.HoursLost) + wait*cmp.Or(boot, fastest).Hours()/odds
+		candidates[i] = &candidate{Offer: offer, comeUp: cmp.Or(boot, fastest).Hours() / odds, taken: taken}
 	}
-	least := cost(slices.MinFunc(offers, func(a, b providers.Offer) int { return cmp.Compare(cost(a), cost(b)) }))
-	return cheapest(slices.DeleteFunc(slices.Clone(offers), func(offer providers.Offer) bool { return cost(offer) > least }))
+	return candidates
 }
 
-// cheapest returns the offer that costs least. Of several at one price, it
-// is always the same one.
-func cheapest(offers []providers.Offer) providers.Offer {
-	return slices.MinFunc(offers, func(a, b providers.Offer) int {
-		return cmp.Or(
-			cmp.Compare(a.HourlyCostMicros, b.HourlyCostMicros),
-			cmp.Compare(a.Region, b.Region),
-			cmp.Compare(a.ID, b.ID),
-			cmp.Compare(a.Cloud, b.Cloud),
-		)
-	})
+// byPrice orders offers by what they cost. Those at one price are always in
+// the same order.
+func byPrice(a, b providers.Offer) int {
+	return cmp.Or(
+		cmp.Compare(a.HourlyCostMicros, b.HourlyCostMicros),
+		cmp.Compare(a.Region, b.Region),
+		cmp.Compare(a.ID, b.ID),
+		cmp.Compare(a.Cloud, b.Cloud),
+	)
 }
 
 // obstacle is what stands between a pool and a machine to buy. The detail is
@@ -984,7 +993,7 @@ func (o obstacle) Error() string { return o.what + o.detail }
 // is asked for one thing at a time, from the room that is needed back to
 // spot or on-demand, until the provider has something: the last thing let go
 // of is what stands in the way.
-func noOffer(p purchase) error {
+func noOffer(p purchase, need scheduler.MachineNeed) error {
 	buying, from := p.config.Provisioning, strings.Join(p.config.Provisioning.Providers, ", ")
 	// What the pool buys, as one of them and as many.
 	one, many := strings.TrimSpace(p.config.GPUType), strings.TrimSpace(p.config.GPUType)
@@ -995,19 +1004,19 @@ func noOffer(p purchase) error {
 	asked := p.config
 	if len(selling(p.offers, asked)) > 0 {
 		kind := ""
-		if p.need.OnDemand {
+		if need.OnDemand {
 			kind = ", on demand"
 		}
 		return obstacle{
 			what:   fmt.Sprintf("no %s that %s has for the pool has room for what is needed", one, from),
-			detail: fmt.Sprintf(" (cpu %dm, memory %d MiB, gpus %d%s)", p.need.CPU, p.need.Memory, p.need.GPUCount, kind),
+			detail: fmt.Sprintf(" (cpu %dm, memory %d MiB, gpus %d%s)", need.CPU, need.Memory, need.GPUCount, kind),
 		}
 	}
 	asked.Provisioning.MaxNodeHourlyCents = 0
 	if atAnyPrice := selling(p.offers, asked); len(atAnyPrice) > 0 {
 		return obstacle{
 			what:   fmt.Sprintf("%s has no %s within provisioning.maxNodeHourlyCents %d", from, one, buying.MaxNodeHourlyCents),
-			detail: fmt.Sprintf(": the cheapest costs %s cents an hour", cents(cheapest(atAnyPrice).HourlyCostMicros)),
+			detail: fmt.Sprintf(": the cheapest costs %s cents an hour", cents(slices.MinFunc(atAnyPrice, byPrice).HourlyCostMicros)),
 		}
 	}
 	asked.Provisioning.Regions = nil
@@ -1069,10 +1078,10 @@ func sells(offer providers.Offer, pool types.WorkerPoolConfig) bool {
 }
 
 // holds reports whether a machine bought from the offer has room for need.
+// A machine its provider may take back has none for work that may not be
+// interrupted.
 func holds(offer providers.Offer, need scheduler.MachineNeed) bool {
-	return offer.CPUMillicores >= need.CPU &&
-		usableMemoryMB(offer.MemoryMB) >= need.Memory &&
-		offer.GPUCount >= need.GPUCount
+	return roomOf(offer).fits(sizeOf(need)) > 0 && !(offer.Spot && need.OnDemand)
 }
 
 const (
