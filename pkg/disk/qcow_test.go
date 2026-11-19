@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -55,7 +56,7 @@ func TestOfflineFormatFailurePreservesHeadAndCanBeRepeated(t *testing.T) {
 }
 
 func TestFormatQcowBaseOffline(t *testing.T) {
-	for _, name := range []string{"qemu-img", "mkfs.ext4", "e2fsck"} {
+	for _, name := range []string{"qemu-img", "mkfs.ext4", "e2fsck", "dumpe2fs"} {
 		if _, err := exec.LookPath(name); err != nil {
 			t.Skip(name + " is not installed")
 		}
@@ -73,6 +74,25 @@ func TestFormatQcowBaseOffline(t *testing.T) {
 	require.NoError(t, err)
 	_, err = execRunner(ctx, "e2fsck", "-fn", raw)
 	require.NoError(t, err)
+	// Two disks order a directory's entries alike only if they share this.
+	header, err := execRunner(ctx, "dumpe2fs", "-h", raw)
+	require.NoError(t, err)
+	require.Contains(t, string(header), directoryHashSeed)
+}
+
+func TestFormatExt4SeedsTheDirectoryHash(t *testing.T) {
+	var options string
+	m := NewManager(Config{Runner: func(_ context.Context, name string, args ...string) ([]byte, error) {
+		require.Equal(t, "mkfs.ext4", name)
+		for i, arg := range args {
+			if arg == "-E" {
+				options = args[i+1]
+			}
+		}
+		return nil, nil
+	}})
+	require.NoError(t, m.formatExt4(context.Background(), "/dev/null"))
+	require.Contains(t, strings.Split(options, ","), "hash_seed="+directoryHashSeed)
 }
 
 func TestCanonicalBaseKeepsChunksAcrossFlatten(t *testing.T) {
