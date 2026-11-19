@@ -157,6 +157,22 @@ func TestFreezeAnswersWhileTheKernelStillFreezes(t *testing.T) {
 	require.NoError(t, f.thaw(path("disk")))
 }
 
+func TestFreezeGivenUpOnStopsBeforeTheDisk(t *testing.T) {
+	kernel := newFakeKernel()
+	release := kernel.stall(t, "nested")
+	f, path := fakeFreezer(t, kernel, "nested", "image")
+	f.wait = 20 * time.Millisecond
+
+	require.ErrorContains(t, f.freeze(path("disk")), "did not freeze")
+	release()
+	undone := []string{"freeze nested", "thaw nested"}
+	require.Eventually(t, func() bool { return len(kernel.log()) == len(undone) }, 5*time.Second, time.Millisecond)
+	require.Equal(t, undone, kernel.log())
+
+	require.NoError(t, f.freeze(path("disk")))
+	require.Equal(t, append(undone, "freeze nested", "freeze image", "freeze disk"), kernel.log())
+}
+
 func TestHostThawUndoesAFreezeInFlight(t *testing.T) {
 	kernel := newFakeKernel()
 	release := kernel.stall(t, "disk")

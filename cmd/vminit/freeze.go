@@ -87,38 +87,43 @@ func newFreezer() *freezer {
 func (f *freezer) freeze(path string) error {
 	f.mu.Lock()
 	_, frozen := f.frozen[path]
-	stuck := f.active
-	if stuck != nil && !stuck.abandoned {
-		stuck = nil
+	var stuck *freezing
+	if f.active != nil && f.active.abandoned {
+		stuck = f.active
 	}
 	f.mu.Unlock()
-	if frozen {
+	switch {
+	case frozen:
 		return nil
-	}
-	if stuck != nil {
+	case stuck != nil:
 		return fmt.Errorf("the kernel has been freezing %s for %s", stuck.path, time.Since(stuck.began).Round(time.Second))
 	}
 
 	attempt := &freezing{path: path, began: time.Now(), done: make(chan struct{})}
 	go f.run(attempt)
-	timer := time.NewTimer(f.wait)
-	defer timer.Stop()
 	select {
 	case <-attempt.done:
 		return attempt.err
-	case <-timer.C:
+	case <-time.After(f.wait):
 	}
-	f.mu.Lock()
-	select {
-	case <-attempt.done:
-		f.mu.Unlock()
+	if !f.abandon(attempt) {
 		return attempt.err
-	default:
 	}
-	attempt.abandoned = true
-	f.mu.Unlock()
 	f.report("freeze of %s is not finished after %s", path, f.wait)
 	return fmt.Errorf("the kernel did not freeze %s within %s", path, f.wait)
+}
+
+// abandon stops waiting for an attempt, unless it has just finished.
+func (f *freezer) abandon(attempt *freezing) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	select {
+	case <-attempt.done:
+		return false
+	default:
+		attempt.abandoned = true
+		return true
+	}
 }
 
 // report logs without waiting: the journal that takes the line may itself be
@@ -173,26 +178,25 @@ func (f *freezer) run(attempt *freezing) {
 	}
 }
 
-// freezeStacked freezes the loop-backed filesystems ahead of the disk. One
-// that cannot be frozen, or is frozen already, is left as it is.
+// freezeStacked freezes the loop-backed filesystems ahead of the disk, for as
+// long as the host waits. One that cannot be frozen, or is frozen already, is
+// left as it is.
 func (f *freezer) freezeStacked(attempt *freezing) error {
 	dirs := f.loops(attempt.path)
 	for i, dir := range dirs {
 		err := f.ioctl(dir, ioctlFIFREEZE)
-		f.mu.Lock()
-		abandoned := attempt.abandoned
-		switch {
-		case err != nil:
+		if err != nil {
 			dir.Close()
-		case abandoned:
-			_ = f.thawFS(dir)
-		default:
+			if !errors.Is(err, unix.EBUSY) && !errors.Is(err, unix.EOPNOTSUPP) {
+				f.report("freeze %s ahead of %s: %v", dir.Name(), attempt.path, err)
+			}
+		}
+		f.mu.Lock()
+		if err == nil {
 			f.stacked = append(f.stacked, dir)
 		}
+		abandoned := attempt.abandoned
 		f.mu.Unlock()
-		if err != nil && !errors.Is(err, unix.EBUSY) && !errors.Is(err, unix.EOPNOTSUPP) {
-			f.report("freeze %s ahead of %s: %v", dir.Name(), attempt.path, err)
-		}
 		if abandoned {
 			for _, rest := range dirs[i+1:] {
 				rest.Close()
