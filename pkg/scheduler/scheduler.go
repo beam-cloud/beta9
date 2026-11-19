@@ -781,6 +781,11 @@ func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.Co
 }
 
 func (s *Scheduler) pushWorkerRequests(worker *types.Worker, requests []*types.ContainerRequest) error {
+	// A request stops waiting for a machine before it takes its room, so
+	// that no pool sees both and buys for it again.
+	for _, request := range requests {
+		s.unwant(request)
+	}
 	start := s.now()
 	err := s.workerRepo.ScheduleContainerRequests(worker, requests)
 	end := s.now()
@@ -1277,6 +1282,9 @@ type scoredWorker struct {
 	// score is the pool's priority, less the rank of the worker's GPU among
 	// those the request asked for.
 	score int32
+	// offKind is set when work that is cheap to lose would take an on-demand
+	// machine, or work that is not a machine its provider may take back.
+	offKind bool
 	// free is how much of the worker would stay unused.
 	free int64
 }
@@ -1294,9 +1302,10 @@ type scoredWorker struct {
 // Among the workers that are left, idle capacity comes before eviction, ahead
 // of pool priority: a worker that can start the request now beats a preferred
 // worker that first has to drain a managed endpoint replica (and throw away
-// its loaded model). Then the higher score, and last the best fit: the
-// fullest worker that still fits, so idle workers drain to zero, hit their
-// spindown timeout, and release their nodes.
+// its loaded model). Then the higher score, then the kind of machine the
+// work is best run on, and last the best fit: the fullest worker that still
+// fits, so idle workers drain to zero, hit their spindown timeout, and
+// release their nodes.
 func (a scoredWorker) before(b scoredWorker, tiered bool) int {
 	eviction := cmp.Compare(a.evictionRank, b.evictionRank)
 	tierEviction := 0
@@ -1310,6 +1319,7 @@ func (a scoredWorker) before(b scoredWorker, tiered bool) int {
 		cmp.Compare(a.storageRank, b.storageRank),
 		eviction,
 		cmp.Compare(b.score, a.score),
+		compareBool(a.offKind, b.offKind),
 		cmp.Compare(a.free, b.free),
 	)
 }
@@ -1365,6 +1375,7 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 			storageRank:  s.storagePreferenceRank(worker, request),
 			evictionRank: evictionRankForWorker(worker, request, tier.CPUReservation(pool, request.Cpu)),
 			score:        scoreWorkerForRequest(worker, request),
+			offKind:      worker.Preemptable != (hoursLost(request) < 1),
 			free:         workerFreeCapacityScore(worker, request),
 		})
 	}

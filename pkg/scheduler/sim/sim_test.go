@@ -20,7 +20,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"maps"
 	"math/rand"
 	"net"
 	"os"
@@ -823,9 +822,6 @@ type Run struct {
 	Pool      string
 	WorkerID  string
 	StartedAt time.Time
-	// Asked counts, by pool, the workers the scheduler had asked for on the
-	// request's behalf by the time it started.
-	Asked map[string]int
 }
 
 // Pool returns the pool the container last started on, or "".
@@ -1031,7 +1027,7 @@ func (w *Worker) startContainers(now time.Time) {
 			s.containers[request.ContainerId] = container
 			s.order = append(s.order, request.ContainerId)
 		}
-		container.Runs = append(container.Runs, Run{Pool: w.Pool, WorkerID: w.ID, StartedAt: now, Asked: maps.Clone(request.GrowAttempts)})
+		container.Runs = append(container.Runs, Run{Pool: w.Pool, WorkerID: w.ID, StartedAt: now})
 		w.running[request.ContainerId] = &run{container: container, request: request, endsAt: now.Add(container.spec.runFor)}
 		s.mu.Unlock()
 	}
@@ -1232,20 +1228,25 @@ func (s *Sim) addProviders() {
 	var fakes []providers.Provider
 	for _, name := range names {
 		pool := s.Config.Worker.Pools[name]
-		provider, ok := s.providers[pool.Provisioning.Provider]
-		if !ok {
-			provider = &Provider{
-				sim:       s,
-				Name:      pool.Provisioning.Provider,
-				fake:      providers.NewFake(pool.Provisioning.Provider, simOwner),
-				spot:      pool.Provisioning.Spot,
-				bootDelay: defaultBootDelay,
+		for _, from := range pool.Provisioning.Providers {
+			provider, ok := s.providers[from]
+			if !ok {
+				provider = &Provider{
+					sim:       s,
+					Name:      from,
+					fake:      providers.NewFake(from, simOwner),
+					spot:      pool.Provisioning.Spot,
+					bootDelay: defaultBootDelay,
+				}
+				s.providers[provider.Name] = provider
+				fakes = append(fakes, provider.fake)
 			}
-			s.providers[provider.Name] = provider
-			fakes = append(fakes, provider.fake)
+			provider.product(pool.GPUType, pool.Provisioning.Spot)
+			if pool.Provisioning.OnDemand {
+				provider.product(pool.GPUType, false)
+			}
+			provider.apply()
 		}
-		provider.product(pool.GPUType, pool.Provisioning.Spot)
-		provider.apply()
 	}
 	s.registry = providers.RegistryOf(fakes...)
 }
@@ -1526,6 +1527,21 @@ func (s *Sim) HourlyCents() int64 {
 	return total
 }
 
+// SpentCents is what every machine bought has cost so far, at the price it
+// was bought at, for as long as its provider had it.
+func (s *Sim) SpentCents() float64 {
+	s.discoverMachines()
+	total := 0.0
+	for _, machine := range s.machines {
+		until := machine.goneAt
+		if machine.state != machineGone {
+			until = s.Clock.Now()
+		}
+		total += float64(machine.quoted.HourlyCostMicros) / 10_000 * until.Sub(machine.boughtAt).Hours()
+	}
+	return total
+}
+
 // MachineRecords returns the record the provisioner holds for every machine.
 func (s *Sim) MachineRecords() []provisioner.Machine {
 	s.t.Helper()
@@ -1690,6 +1706,7 @@ type machine struct {
 	quoted    providers.Offer
 	boughtAt  time.Time
 	joinedAt  time.Time
+	goneAt    time.Time
 	bootDelay time.Duration
 	joins     bool
 	failsBoot bool
@@ -1896,7 +1913,7 @@ func (m *machine) cordon() {
 
 // stop ends the machine. The gateway is told nothing.
 func (m *machine) stop() {
-	m.state = machineGone
+	m.state, m.goneAt = machineGone, m.sim.Clock.Now()
 	if m.worker != nil {
 		m.worker.die()
 	}
@@ -3051,7 +3068,7 @@ worker:
     spot-l40s:
       gpuType: L40S
       provisioning:
-        provider: verda
+        providers: [verda]
         spot: true
         maxNodes: 4
         idleTimeout: 10m
@@ -3092,7 +3109,7 @@ func TestSpotPoolBuysOnlyItsGPUTypeFromItsProvider(t *testing.T) {
     spot-a10g:
       gpuType: A10G
       provisioning:
-        provider: nebius
+        providers: [nebius]
         spot: true
         maxNodes: 4
 `)
@@ -3160,7 +3177,7 @@ func TestPoolsThatBuyStayUnderTheSpendCap(t *testing.T) {
     spot-a10g:
       gpuType: A10G
       provisioning:
-        provider: nebius
+        providers: [nebius]
         spot: true
         maxNodes: 4
 providers:
@@ -3180,8 +3197,9 @@ providers:
 	require.Equal(t, 2, machines(sim, "verda")+machines(sim, "nebius"))
 	sim.ExpectWaiting(4)
 
-	// A machine that leaves makes room under the cap for another.
-	sim.Provider("verda").Reclaim(1)
+	// A machine that leaves makes room under the cap for another. The pool
+	// that plans first bought both.
+	sim.Provider("nebius").Reclaim(1)
 	sim.Advance(5 * time.Minute)
 	require.Equal(t, 2, machines(sim, "verda")+machines(sim, "nebius"))
 	require.Equal(t, 3, sim.Provider("verda").Bought()+sim.Provider("nebius").Bought())
@@ -3195,7 +3213,7 @@ worker:
     spot-l40s:
       gpuType: L40S
       provisioning:
-        provider: verda
+        providers: [verda]
         spot: true
         maxNodes: 4
         maxNodeHourlyCents: 80
@@ -3328,16 +3346,16 @@ worker:
     spot-verda-l40s:
       gpuType: L40S
       priority: 20
-      provisioning: {provider: verda, spot: true, maxNodes: 8}
+      provisioning: {providers: [verda], spot: true, maxNodes: 8}
     spot-nebius-l40s:
       gpuType: L40S
       priority: 10
-      provisioning: {provider: nebius, spot: true, maxNodes: 8}
+      provisioning: {providers: [nebius], spot: true, maxNodes: 8}
 `)
 	sim.Provider("verda").Stock("L40S", 2)
 	sim.Provider("nebius").Stock("L40S", 8)
 
-	ids := sim.Submit(Endpoint("L40S").For(time.Hour), 6)
+	sim.Submit(Endpoint("L40S").For(time.Hour), 6)
 	sim.Advance(6 * time.Minute)
 
 	sim.ExpectPlaced("spot-verda-l40s", 2)
@@ -3345,15 +3363,10 @@ worker:
 	sim.ExpectWaiting(0)
 	sim.ExpectFailed(0)
 
-	// The four that run at nebius went straight there: none asked verda for
-	// a machine it had already sold.
-	for _, id := range ids {
-		run := sim.Container(id).Runs[0]
-		if run.Pool == "spot-nebius-l40s" {
-			require.Zero(t, run.Asked["spot-verda-l40s"], "%s asked a pool that could not grow", id)
-			require.Equal(t, 1, run.Asked["spot-nebius-l40s"])
-		}
-	}
+	// All six waited for verda at first. Nothing was bought at nebius for
+	// the two that verda had a machine for.
+	require.Equal(t, 2, sim.Provider("verda").Bought())
+	require.Equal(t, 4, sim.Provider("nebius").Bought())
 }
 
 // A pool whose provider refuses the purchase is left alone for a while, and
@@ -3365,11 +3378,11 @@ worker:
     spot-verda-l40s:
       gpuType: L40S
       priority: 20
-      provisioning: {provider: verda, spot: true, maxNodes: 8}
+      provisioning: {providers: [verda], spot: true, maxNodes: 8}
     spot-nebius-l40s:
       gpuType: L40S
       priority: 10
-      provisioning: {provider: nebius, spot: true, maxNodes: 8}
+      provisioning: {providers: [nebius], spot: true, maxNodes: 8}
 `)
 	// verda lists the machine and then has none: the catalogue was stale.
 	sim.Provider("verda").RefuseCreates(providers.ErrOutOfStock)
@@ -3381,15 +3394,10 @@ worker:
 	require.Zero(t, machines(sim, "verda"))
 
 	// Two minutes on, verda lists the machine as before. It refused so
-	// recently that it is not asked again: one refusal is all there was.
+	// recently that it is not asked again.
 	ids = append(ids, sim.Submit(Endpoint("L40S").For(time.Hour), 1)...)
 	sim.Advance(2 * time.Minute)
 	require.Equal(t, "spot-nebius-l40s", sim.Container(ids[2]).Pool())
-	asked := 0
-	for _, id := range ids {
-		asked += sim.Container(id).Runs[0].Asked["spot-verda-l40s"]
-	}
-	require.Equal(t, 1, asked)
 }
 
 // A10G requests overflow into a spot pool of another GPU type that serves
@@ -3403,7 +3411,7 @@ worker:
     spot-l40s:
       gpuType: L40S
       alsoServes: [A10G]
-      provisioning: {provider: verda, spot: true, maxNodes: 4}
+      provisioning: {providers: [verda], spot: true, maxNodes: 4}
 `)
 	sim.Pool("a10g").RefuseWorkers()
 
@@ -3584,7 +3592,7 @@ worker:
   pools:
     spot-l40s:
       gpuType: L40S
-      provisioning: {provider: verda, spot: true, maxNodes: 4, bootTimeout: 5m}
+      provisioning: {providers: [verda], spot: true, maxNodes: 4, bootTimeout: 5m}
 `)
 	sim.Provider("verda").NeverJoin()
 
@@ -3790,12 +3798,12 @@ worker:
   pools:
     spot-l40s:
       gpuType: L40S
-      provisioning: {provider: verda, spot: true, maxNodes: 4, idleTimeout: 2m, bootTimeout: 3m}
+      provisioning: {providers: [verda], spot: true, maxNodes: 4, idleTimeout: 2m, bootTimeout: 3m}
       poolSizing:
         minFreeGPU: "1"
     spot-a10g:
       gpuType: A10G
-      provisioning: {provider: nebius, spot: true, maxNodes: 3, idleTimeout: 2m, bootTimeout: 3m}
+      provisioning: {providers: [nebius], spot: true, maxNodes: 3, idleTimeout: 2m, bootTimeout: 3m}
 providers:
   maxHourlyCents: 500
 `

@@ -14,7 +14,7 @@ func TestAppConfigIsChecked(t *testing.T) {
 			CleanupPendingWorkerAgeLimit: 10 * time.Minute,
 			Pools: map[string]WorkerPoolConfig{
 				"a10g": {GPUType: "A10G", Mode: PoolModeLocal, StalledAfter: Duration(2 * time.Minute)},
-				"spot": {GPUType: "L40S", AlsoServes: []string{"A10G"}, Provisioning: WorkerPoolProvisioningConfig{Provider: "verda", MaxNodes: 2}},
+				"spot": {GPUType: "L40S", AlsoServes: []string{"A10G"}, Provisioning: WorkerPoolProvisioningConfig{Providers: []string{"verda"}, MaxNodes: 2}},
 			},
 		}}
 		if change != nil {
@@ -139,7 +139,7 @@ func TestChainsThatNameNothingConvertToNothing(t *testing.T) {
 
 func TestProvisioningIsChecked(t *testing.T) {
 	buys := func(change func(*WorkerPoolConfig)) WorkerPoolConfig {
-		pool := WorkerPoolConfig{GPUType: "L40S", Provisioning: WorkerPoolProvisioningConfig{Provider: "verda", MaxNodes: 8}}
+		pool := WorkerPoolConfig{GPUType: "L40S", Provisioning: WorkerPoolProvisioningConfig{Providers: []string{"verda"}, MaxNodes: 8}}
 		if change != nil {
 			change(&pool)
 		}
@@ -154,14 +154,18 @@ func TestProvisioningIsChecked(t *testing.T) {
 		{name: "no block", pool: WorkerPoolConfig{GPUType: "L40S"}},
 		{name: "provider and maxNodes are enough", pool: buys(nil)},
 		{name: "every key", pool: buys(func(c *WorkerPoolConfig) {
-			c.Provisioning = WorkerPoolProvisioningConfig{Provider: "verda", Spot: true, MaxNodes: 1, MaxGPUs: 8, MaxNodeHourlyCents: 150,
+			c.Provisioning = WorkerPoolProvisioningConfig{Providers: []string{"verda"}, Spot: true, MaxNodes: 1, MaxGPUs: 8, MaxNodeHourlyCents: 150,
 				Regions: []string{"fin-01"}, IdleTimeout: Duration(time.Second), BootTimeout: Duration(time.Hour)}
 		})},
 		{name: "mode written out", pool: buys(func(c *WorkerPoolConfig) { c.Mode = PoolModeExternal })},
 		{name: "a CPU pool", pool: buys(func(c *WorkerPoolConfig) { c.GPUType = "" })},
-		{name: "no provider", pool: buys(func(c *WorkerPoolConfig) { c.Provisioning.Provider = "" }), wantErr: "needs a provider"},
+		{name: "no provider", pool: buys(func(c *WorkerPoolConfig) { c.Provisioning.Providers = nil }), wantErr: "needs a provider"},
 		{name: "only spot", pool: WorkerPoolConfig{Provisioning: WorkerPoolProvisioningConfig{Spot: true}}, wantErr: "needs a provider"},
-		{name: "blank provider", pool: buys(func(c *WorkerPoolConfig) { c.Provisioning.Provider = " " }), wantErr: "needs a provider"},
+		{name: "blank provider", pool: buys(func(c *WorkerPoolConfig) { c.Provisioning.Providers = []string{" "} }), wantErr: "needs a provider"},
+		{name: "several providers", pool: buys(func(c *WorkerPoolConfig) { c.Provisioning.Providers = []string{"verda", "nebius"} })},
+		{name: "a blank one of several", pool: buys(func(c *WorkerPoolConfig) { c.Provisioning.Providers = []string{"verda", ""} }), wantErr: "needs a provider"},
+		{name: "spot and on demand", pool: buys(func(c *WorkerPoolConfig) { c.Provisioning.Spot, c.Provisioning.OnDemand = true, true })},
+		{name: "on demand twice", pool: buys(func(c *WorkerPoolConfig) { c.Provisioning.OnDemand = true }), wantErr: "onDemand goes with provisioning.spot"},
 		{name: "no maxNodes", pool: buys(func(c *WorkerPoolConfig) { c.Provisioning.MaxNodes = 0 }), wantErr: "maxNodes must be at least 1"},
 		{name: "negative maxNodes", pool: buys(func(c *WorkerPoolConfig) { c.Provisioning.MaxNodes = -1 }), wantErr: "maxNodes must be at least 1"},
 		{name: "negative GPU cap", pool: buys(func(c *WorkerPoolConfig) { c.Provisioning.MaxGPUs = -1 }), wantErr: "maxGPUs cannot be negative"},
@@ -210,17 +214,22 @@ func TestReservationProviderBootTimeoutDefaultsAndOverride(t *testing.T) {
 }
 
 func TestPoolThatBuysJoinsThroughTheAgentAndSpotIsPreemptable(t *testing.T) {
-	spot := WorkerPoolConfig{Provisioning: WorkerPoolProvisioningConfig{Provider: "verda", Spot: true, MaxNodes: 2}}
+	spot := WorkerPoolConfig{Provisioning: WorkerPoolProvisioningConfig{Providers: []string{"verda"}, Spot: true, MaxNodes: 2}}
 	require.True(t, spot.Buys())
 	require.True(t, spot.AgentHosted(), "the scheduler must not start it as a Kubernetes pool")
 	spot.ApplyProvisioning()
 	require.Equal(t, PoolModeExternal, spot.Mode)
 	require.True(t, spot.Preemptable)
 
-	onDemand := WorkerPoolConfig{Provisioning: WorkerPoolProvisioningConfig{Provider: "verda", MaxNodes: 2}}
+	onDemand := WorkerPoolConfig{Provisioning: WorkerPoolProvisioningConfig{Providers: []string{"verda"}, MaxNodes: 2}}
 	onDemand.ApplyProvisioning()
 	require.Equal(t, PoolModeExternal, onDemand.Mode)
 	require.False(t, onDemand.Preemptable, "on-demand machines are not taken back")
+
+	both := WorkerPoolConfig{Provisioning: WorkerPoolProvisioningConfig{Providers: []string{"verda", "nebius"}, Spot: true, OnDemand: true, MaxNodes: 2}}
+	require.True(t, both.Buys())
+	both.ApplyProvisioning()
+	require.False(t, both.Preemptable, "it has machines for work that may not be interrupted")
 
 	kubernetes := WorkerPoolConfig{GPUType: "A10G", Mode: PoolModeLocal}
 	require.False(t, kubernetes.Buys())
@@ -231,12 +240,12 @@ func TestPoolThatBuysJoinsThroughTheAgentAndSpotIsPreemptable(t *testing.T) {
 // The pools API takes a pool's config as JSON and stores it as JSON.
 func TestProvisioningSurvivesJSON(t *testing.T) {
 	pool := WorkerPoolConfig{GPUType: "L40S", Provisioning: WorkerPoolProvisioningConfig{
-		Provider: "verda", Spot: true, MaxNodes: 8, MaxGPUs: 8, MaxNodeHourlyCents: 150, Regions: []string{"fin-01"},
+		Providers: []string{"verda"}, Spot: true, MaxNodes: 8, MaxGPUs: 8, MaxNodeHourlyCents: 150, Regions: []string{"fin-01"},
 		IdleTimeout: Duration(5 * time.Minute), BootTimeout: Duration(15 * time.Minute),
 	}}
 	encoded, err := json.Marshal(pool)
 	require.NoError(t, err)
-	require.Contains(t, string(encoded), `"provisioning":{"provider":"verda","spot":true,"max_nodes":8`)
+	require.Contains(t, string(encoded), `"provisioning":{"providers":["verda"],"spot":true,"max_nodes":8`)
 	require.Contains(t, string(encoded), `"max_gpus":8`)
 	require.Contains(t, string(encoded), `"idle_timeout":"5m0s","boot_timeout":"15m0s"`, "durations are written as they are in the config file")
 

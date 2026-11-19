@@ -738,7 +738,7 @@ func (s *Service) CreateManagedMachine(ctx context.Context, authInfo *auth.AuthI
 	}
 	if state.WorkerConfig.Buys() {
 		return nil, fmt.Errorf("%w: %q gets its machines from %s; raise provisioning.maxNodes for more",
-			model.ErrManagedPoolBuysMachines, state.Name, state.WorkerConfig.Provisioning.Provider)
+			model.ErrManagedPoolBuysMachines, state.Name, strings.Join(state.WorkerConfig.Provisioning.Providers, ", "))
 	}
 	machineID := "machine-" + uuid.NewString()
 	token, _, err := s.createManagedMachineJoinToken(ctx, state, machineID, defaultPrivateJoinTTL)
@@ -1014,13 +1014,12 @@ func (s *Service) createManagedMachineJoinToken(ctx context.Context, state *mode
 // gateway cannot buy from: one it has no credentials for, or one that is
 // disabled.
 func (s *Service) validateProvider(config types.WorkerPoolConfig) error {
-	if !config.Buys() {
+	names := config.Provisioning.Providers
+	i := slices.IndexFunc(names, func(name string) bool { return !s.providers.IsEnabled(name) })
+	if i < 0 {
 		return nil
 	}
-	name := config.Provisioning.Provider
-	if s.providers.IsEnabled(name) {
-		return nil
-	}
+	name := names[i]
 	// others names the providers a pool can buy from, after the word for
 	// what this one is not.
 	others := func(word string) string {
@@ -1030,7 +1029,7 @@ func (s *Service) validateProvider(config types.WorkerPoolConfig) error {
 		return "none are " + word
 	}
 	if _, configured := s.providers.Get(name); configured {
-		return fmt.Errorf("provisioning.provider %q is disabled under providers.disabled (%s)", name, others("enabled"))
+		return fmt.Errorf("provisioning.providers: %q is disabled under providers.disabled (%s)", name, others("enabled"))
 	}
-	return fmt.Errorf("provisioning.provider %q is not configured under providers (%s)", name, others("configured"))
+	return fmt.Errorf("provisioning.providers: %q is not configured under providers (%s)", name, others("configured"))
 }

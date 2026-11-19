@@ -1,9 +1,11 @@
 package scheduler
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -227,7 +229,7 @@ func (wpc *AgentWorkerPoolController) CanAddWorker(cpu int64, memory int64, gpuC
 
 func (wpc *AgentWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
 	if wpc.workerPoolConfig.Buys() {
-		return wpc.buyMachine(cpu, memory, gpuCount)
+		return wpc.buyMachine(wpc.machineNeed(cpu, memory, gpuCount))
 	}
 	machine, err := wpc.findMachineForRequest(cpu, memory, wpc.workerPoolConfig.GPUType, gpuCount)
 	if err != nil {
@@ -460,6 +462,9 @@ func (wpc *AgentWorkerPoolController) ensureMachineWorker(machine *compute.Agent
 		return nil, err
 	}
 	if worker != nil {
+		if wpc.workerPoolConfig.Buys() {
+			spec.preemptable = worker.Preemptable // as its machine was bought
+		}
 		spec.applyToWorker(worker)
 		if worker.CordonRequested || worker.RolloutGeneration != "" {
 			worker.Status = types.WorkerStatusDisabled
@@ -520,7 +525,7 @@ func (wpc *AgentWorkerPoolController) machineWorkerSpec(machineID string, cpu, m
 		machineID:            machineID,
 		requiresPoolSelector: wpc.workerPoolConfig.RequiresPoolSelector,
 		priority:             wpc.workerPoolConfig.Priority,
-		preemptable:          wpc.workerPoolConfig.Preemptable,
+		preemptable:          wpc.workerPoolConfig.Preemptable || wpc.workerPoolConfig.Provisioning.Spot,
 		runtime:              wpc.ContainerRuntime(),
 	}
 }
@@ -587,13 +592,13 @@ func (wpc *AgentWorkerPoolController) canBuyMachine(cpu int64, memory int64, gpu
 	return wpc.provisioner != nil && wpc.provisioner.CanProvision(wpc.ctx, wpc.poolName(), wpc.machineNeed(cpu, memory, gpuCount))
 }
 
-// buyMachine buys a machine with room for a worker of this size and returns
-// the Pending worker that stands for it.
-func (wpc *AgentWorkerPoolController) buyMachine(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
+// buyMachine buys a machine that holds need and returns the Pending worker
+// that stands for it.
+func (wpc *AgentWorkerPoolController) buyMachine(need MachineNeed) (*types.Worker, error) {
 	if wpc.provisioner == nil {
 		return nil, fmt.Errorf("pool %q buys its machines, but this gateway has nothing to buy them with", wpc.poolName())
 	}
-	machine, err := wpc.provisioner.Provision(wpc.ctx, wpc.poolName(), wpc.machineNeed(cpu, memory, gpuCount))
+	machine, err := wpc.provisioner.Provision(wpc.ctx, wpc.poolName(), need)
 	if err != nil {
 		return nil, err
 	}
@@ -630,7 +635,91 @@ func (wpc *AgentWorkerPoolController) bootingMachineWorker(machine ProvisionedMa
 	spec.workspaceID = wpc.workspaceID
 	spec.controlPlaneManaged = true
 	spec.buildVersion = types.WorkerImageVersion("", wpc.config.Worker.ImageTag)
+	spec.preemptable = machine.Spot || wpc.workerPoolConfig.Preemptable
 	return spec.worker()
+}
+
+// plan buys the machines the pool is short of. The pool's sizer runs it, on
+// one replica at a time, with every request that waits for the pool (Want),
+// its floor, and all it has and has coming in view. So requests that fit one
+// machine share it, and replicas buy nothing twice.
+func (wpc *AgentWorkerPoolController) plan(sizing *types.WorkerPoolSizingConfig) {
+	pool := wpc.poolName()
+	// Workers are read before wants: a request that is placed in between
+	// has then given up its want, and is not bought for again.
+	workers, err := wpc.workerRepo.GetAllWorkersInPool(pool)
+	wants, wantsErr := wpc.provisioner.Wants(wpc.ctx, pool)
+	booting, bootingErr := wpc.provisioner.Booting(wpc.ctx, pool)
+	if err := errors.Join(err, wantsErr, bootingErr); err != nil {
+		log.Error().Str("pool_name", pool).Err(err).Msg("failed to plan the pool's machines")
+		return
+	}
+	// The hardest to fit come first: work that may not be interrupted, then
+	// the biggest.
+	slices.SortFunc(wants, func(a, b MachineNeed) int {
+		return cmp.Or(compareBool(b.OnDemand, a.OnDemand), cmp.Compare(b.GPUCount, a.GPUCount), cmp.Compare(b.Memory, a.Memory),
+			cmp.Compare(b.CPU, a.CPU), cmp.Compare(b.HoursLost, a.HoursLost))
+	})
+	// The room there is: the workers that take work, and that of each
+	// machine that is coming, whatever has become of its Pending worker.
+	rooms := slices.DeleteFunc(workers, func(worker *types.Worker) bool { return worker.Status != types.WorkerStatusAvailable })
+	for _, machine := range booting {
+		coming := wpc.bootingMachineWorker(machine)
+		if !slices.ContainsFunc(rooms, func(room *types.Worker) bool { return room.Id == coming.Id }) {
+			rooms = append(rooms, coming)
+		}
+	}
+
+	// One machine is bought at a time, since what the next has to hold
+	// depends on the size of the last: the first the pool is short of that
+	// it can buy.
+	for {
+		short := slices.Compact(wpc.shortfall(wants, sizing, rooms))
+		i := slices.IndexFunc(short, func(need MachineNeed) bool { return wpc.provisioner.CanProvision(wpc.ctx, pool, need) })
+		if i < 0 {
+			return
+		}
+		worker, err := wpc.buyMachine(short[i])
+		if err != nil {
+			log.Error().Str("pool_name", pool).Err(err).Msg("failed to add worker")
+			return
+		}
+		rooms = append(rooms, worker)
+	}
+}
+
+// shortfall returns what the pool lacks a machine for: each waiting request
+// that fits no room once those before it have taken theirs, and a worker of
+// the default size when what is then left is under the floor.
+//
+// A request is taken to fit any worker with room for it. One that the
+// scheduler will not place there for another reason waits until the worker
+// fills up or leaves.
+func (wpc *AgentWorkerPoolController) shortfall(wants []MachineNeed, sizing *types.WorkerPoolSizingConfig, rooms []*types.Worker) []MachineNeed {
+	left := make([]*types.Worker, len(rooms))
+	for i, room := range rooms {
+		worker := *room
+		worker.Status = types.WorkerStatusAvailable // one that is coming counts in full
+		left[i] = &worker
+	}
+
+	var short []MachineNeed
+	for _, want := range wants {
+		cpu := wpc.workerPoolConfig.CPUShareMultiplier.Schedulable(want.CPU)
+		i := slices.IndexFunc(left, func(room *types.Worker) bool {
+			return room.FreeCpu >= cpu && room.FreeMemory >= want.Memory && room.FreeGpuCount >= want.GPUCount &&
+				!(want.OnDemand && room.Preemptable)
+		})
+		if i < 0 {
+			short = append(short, want)
+			continue
+		}
+		left[i].FreeCpu, left[i].FreeMemory, left[i].FreeGpuCount = left[i].FreeCpu-cpu, left[i].FreeMemory-want.Memory, left[i].FreeGpuCount-want.GPUCount
+	}
+	if poolCapacityFromWorkers(left).belowMinimum(sizing) {
+		short = append(short, wpc.machineNeed(sizing.DefaultWorkerCpu, sizing.DefaultWorkerMemory, sizing.DefaultWorkerGpuCount))
+	}
+	return short
 }
 
 // keepBootingWorkers keeps the Pending worker of every machine that is
@@ -671,15 +760,17 @@ func (wpc *AgentWorkerPoolController) keepBootingWorkers(joined []*compute.Agent
 }
 
 // Provisioner buys machines for pools that have a provisioning block. Such a
-// pool adds a worker by buying a machine.
+// pool adds a worker by buying a machine. It also keeps, for every replica,
+// the requests that wait for one.
 //
 // It is declared here, next to the pool that calls it, so the scheduler
 // depends on no provider code. pkg/provisioner implements it.
 type Provisioner interface {
 	// CanProvision reports whether the pool could buy a machine with room for
-	// need right now. It is false when the pool's provider has no matching
-	// stock, the pool is at maxNodes or maxGPUs, a spend cap is reached, or a
-	// purchase for the pool has just failed for any reason but lack of stock.
+	// need right now, not counting one it began to buy a moment ago. It is
+	// false when no provider of the pool has matching stock, the pool is at
+	// maxNodes or maxGPUs, a spend cap is reached, or a purchase for the pool
+	// from each of them has just failed for any reason but lack of stock.
 	// Lack of stock rules out only the offer that was asked for.
 	CanProvision(ctx context.Context, pool string, need MachineNeed) bool
 
@@ -690,6 +781,14 @@ type Provisioner interface {
 	// Booting returns the pool's machines that have been bought and have not
 	// yet run a worker.
 	Booting(ctx context.Context, pool string) ([]ProvisionedMachine, error)
+
+	// Want says that the request with this ID waits for the pool to have a
+	// machine that holds need. It lapses unless it is said again every few
+	// seconds, and a request waits for one pool at a time. Unwant takes it
+	// back, and Wants lists what waits for the pool.
+	Want(ctx context.Context, pool, id string, need MachineNeed) error
+	Unwant(ctx context.Context, id string) error
+	Wants(ctx context.Context, pool string) ([]MachineNeed, error)
 }
 
 // MachineNeed is the capacity a new machine must have.
@@ -697,6 +796,10 @@ type MachineNeed struct {
 	CPU      int64 // physical millicores
 	Memory   int64 // MiB
 	GPUCount uint32
+	// OnDemand rules out a machine its provider may take back.
+	OnDemand bool
+	// HoursLost is how many hours of work are lost when one is taken back.
+	HoursLost float64
 }
 
 // ProvisionedMachine is a machine that has been bought and is booting.
@@ -708,4 +811,6 @@ type ProvisionedMachine struct {
 	CPU       int64 // physical millicores
 	Memory    int64 // MiB
 	GPUCount  uint32
+	// Spot is whether its provider may take it back.
+	Spot bool
 }

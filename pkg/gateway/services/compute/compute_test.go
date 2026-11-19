@@ -6544,7 +6544,7 @@ func buyingTestService(config types.AppConfig) (*Service, *fakeComputeRepo) {
 func spotPool(change ...func(*types.WorkerPoolConfig)) types.WorkerPoolConfig {
 	pool := types.WorkerPoolConfig{
 		GPUType:      "L40S",
-		Provisioning: types.WorkerPoolProvisioningConfig{Provider: "verda", Spot: true, MaxNodes: 4},
+		Provisioning: types.WorkerPoolProvisioningConfig{Providers: []string{"verda"}, Spot: true, MaxNodes: 4},
 	}
 	for _, apply := range change {
 		apply(&pool)
@@ -9014,10 +9014,10 @@ func TestCreateManagedPoolThatBuysItsMachines(t *testing.T) {
 
 	// A pool cannot buy from a provider the gateway has no credentials for.
 	_, err = service.CreateManagedPool(ctx, clusterAdminAuth(), "spot-a10g", spotPool(func(pool *types.WorkerPoolConfig) {
-		pool.Provisioning.Provider = "nebius"
+		pool.Provisioning.Providers = []string{"nebius"}
 	}))
 	require.ErrorIs(t, err, model.ErrInvalidManagedPoolConfig)
-	require.ErrorContains(t, err, `provisioning.provider "nebius" is not configured under providers (configured: verda)`)
+	require.ErrorContains(t, err, `provisioning.providers: "nebius" is not configured under providers (configured: verda)`)
 
 	_, err = service.CreateManagedPool(ctx, clusterAdminAuth(), "spot-a10g", spotPool(func(pool *types.WorkerPoolConfig) {
 		pool.Provisioning.MaxNodes = 0
@@ -9027,7 +9027,7 @@ func TestCreateManagedPoolThatBuysItsMachines(t *testing.T) {
 
 	// The same goes for a change to a pool that exists.
 	_, err = service.UpdateManagedPool(ctx, clusterAdminAuth(), "spot-l40s", spotPool(func(pool *types.WorkerPoolConfig) {
-		pool.Provisioning.Provider = "nebius"
+		pool.Provisioning.Providers = []string{"nebius"}
 	}))
 	require.ErrorIs(t, err, model.ErrInvalidManagedPoolConfig)
 }
@@ -9054,10 +9054,10 @@ func TestCreateManagedPoolThatBuysFromADisabledProvider(t *testing.T) {
 			service, repo := buyingTestService(types.AppConfig{})
 			service.providers = providers.NewRegistry(tc.config, testOwner)
 			_, err := service.CreateManagedPool(context.Background(), clusterAdminAuth(), "spot-l40s", spotPool(func(pool *types.WorkerPoolConfig) {
-				pool.Provisioning.Provider = disabled
+				pool.Provisioning.Providers = []string{disabled}
 			}))
 			require.ErrorIs(t, err, model.ErrInvalidManagedPoolConfig)
-			require.ErrorContains(t, err, fmt.Sprintf("provisioning.provider %q is disabled under providers.disabled (%s)", disabled, tc.others))
+			require.ErrorContains(t, err, fmt.Sprintf("provisioning.providers: %q is disabled under providers.disabled (%s)", disabled, tc.others))
 			require.Empty(t, repo.pools, "a pool that cannot buy is not made")
 		})
 	}

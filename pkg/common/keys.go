@@ -141,6 +141,8 @@ var (
 	computeProvisionedLock      string = "compute:{provisioned}:lock"
 	computeProvisionedReconcile string = "compute:{provisioned}:reconcile"
 	computeProvisionedSoldOut   string = "compute:{provisioned}:sold_out"
+	computeProvisionedEstimates string = "compute:{provisioned}:estimates"
+	computeProvisionedWants     string = "compute:{provisioned}:wants"
 	computeProviderOwner        string = "compute:provider_owner"
 )
 
@@ -541,6 +543,18 @@ func (rk *redisKeys) ComputeProvisionedReconcileLock() string {
 // and until when, by offer.
 func (rk *redisKeys) ComputeProvisionedSoldOut() string {
 	return computeProvisionedSoldOut
+}
+
+// ComputeProvisionedEstimates holds what the outcomes of past purchases say
+// to expect of the next.
+func (rk *redisKeys) ComputeProvisionedEstimates() string {
+	return computeProvisionedEstimates
+}
+
+// ComputeProvisionedWants holds the requests that wait for a pool to buy a
+// machine, by container ID.
+func (rk *redisKeys) ComputeProvisionedWants() string {
+	return computeProvisionedWants
 }
 
 // ComputeProviderOwner holds the name this control plane puts on the

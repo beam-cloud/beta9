@@ -25,7 +25,7 @@ func TestAgentTailnetSSHOwnershipBoundary(t *testing.T) {
 		// A pool that buys its machines needs no mode in the config file.
 		{name: "serverless that buys its machines", change: func(s *Service, pool *model.PoolState, _ *model.AgentTokenState) {
 			s.appConfig.Worker.Pools[pool.Name] = types.WorkerPoolConfig{
-				Provisioning: types.WorkerPoolProvisioningConfig{Provider: "verda", Spot: true, MaxNodes: 2},
+				Provisioning: types.WorkerPoolProvisioningConfig{Providers: []string{"verda"}, Spot: true, MaxNodes: 2},
 			}
 		}, allow: true, key: "serverless-agent-key"},
 		{name: "private", change: func(_ *Service, _ *model.PoolState, agent *model.AgentTokenState) {

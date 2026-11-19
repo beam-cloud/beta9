@@ -92,7 +92,13 @@ func (s *Scheduler) chooseGrowth(route route, request *types.ContainerRequest) g
 		}
 
 		size := s.workerSizeFor(pool, request)
-		ok, err := pool.Controller.CanAddWorker(size.cpu, size.memory, size.gpuCount)
+		var ok bool
+		var err error
+		if controller, need := s.machineFor(pool, request); controller != nil {
+			ok = controller.provisioner.CanProvision(s.ctx, controller.poolName(), need)
+		} else {
+			ok, err = pool.Controller.CanAddWorker(size.cpu, size.memory, size.gpuCount)
+		}
 		if err != nil {
 			requestLog(log.Warn(), request).
 				Str("pool_name", pool.Name).
@@ -141,6 +147,12 @@ func (a *schedulingAttempt) grow() {
 	case choice.pool == nil:
 		a.askAgainLater("worker_provisioning_backoff")
 		return
+	case choice.pool.Config.Buys():
+		// Such a pool buys for all the requests that wait for it together
+		// (see AgentWorkerPoolController.plan).
+		s.want(a.request, choice.pool)
+		a.askAgainLater("worker_provisioning_in_progress")
+		return
 	}
 
 	// One worker at a time per container across scheduler replicas. A
@@ -165,6 +177,59 @@ func (a *schedulingAttempt) grow() {
 	reservationID := s.provisioning.addReservation(s, a.request, choice.pool, choice.size)
 	s.background(func() { s.addWorker(a.request, choice.pool, choice.size, reservationID) })
 	a.requeueForWorkerWait()
+}
+
+// want tells a pool that buys its machines that the request waits for one.
+// The request says so on every pass for as long as it waits, here and while
+// it waits for a machine that is booting, and takes it back when it is
+// placed or fails. It may ask such a pool as often as it likes.
+func (s *Scheduler) want(request *types.ContainerRequest, pool *WorkerPool) {
+	controller, need := s.machineFor(pool, request)
+	if controller == nil {
+		return
+	}
+	if err := controller.provisioner.Want(s.ctx, controller.poolName(), request.ContainerId, need); err != nil {
+		requestLog(log.Warn(), request).Str("pool_name", pool.Name).Err(err).Msg("unable to tell the pool that the request waits for a machine")
+	}
+}
+
+// machineFor returns the controller of a pool that buys its machines, and
+// the machine it has to have for the request: one with room for it, of a
+// kind it may run on.
+func (s *Scheduler) machineFor(pool *WorkerPool, request *types.ContainerRequest) (*AgentWorkerPoolController, MachineNeed) {
+	controller, ok := pool.Controller.(*AgentWorkerPoolController)
+	if !ok || !pool.Config.Buys() || controller.provisioner == nil {
+		return nil, MachineNeed{}
+	}
+	size := s.workerSizeFor(pool, request)
+	need := controller.machineNeed(size.cpu, size.memory, size.gpuCount)
+	need.OnDemand, need.HoursLost = !request.Preemptable, hoursLost(request)
+	return controller, need
+}
+
+// unwant takes back what want said.
+func (s *Scheduler) unwant(request *types.ContainerRequest) {
+	if s.provisioner == nil {
+		return
+	}
+	if err := s.provisioner.Unwant(s.ctx, request.ContainerId); err != nil {
+		requestLog(log.Warn(), request).Err(err).Msg("unable to tell the pool that the request no longer waits for a machine")
+	}
+}
+
+// hoursLost is how many hours of work are lost when the machine a request
+// runs on is taken back. It decides how much cheaper a spot machine has to
+// be to be bought for the request, and which workers the request prefers.
+func hoursLost(request *types.ContainerRequest) float64 {
+	switch kind := request.Stub.Type.Kind(); {
+	case request.IsBuildRequest(), request.HasDurableDiskMount():
+	case kind == types.StubTypeEndpoint, kind == types.StubTypeASGI, string(request.Stub.Type) == types.StubTypePodDeployment:
+		return 0.1 // another replica starts
+	case kind == types.StubTypeFunction, kind == types.StubTypeTaskQueue, kind == types.StubTypeScheduledJob:
+		return 0.5 // the task runs again
+	}
+	// Nobody runs a sandbox, a session or a build again: a working day.
+	return 8
 }
 
 // askAgainLater requeues a request that no pool could be asked for a worker

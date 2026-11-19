@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ func TestServerlessGPUColdDemandBuysSpotWithoutAFloor(t *testing.T) {
 			provider := &fakeProvisioner{inStock: true, sells: ProvisionedMachine{CPU: 16_000, Memory: 64_000, GPUCount: 1}}
 			poolConfig := types.WorkerPoolConfig{
 				GPUType: gpu.String(), ContainerRuntime: types.ContainerRuntimeGvisor.String(),
-				Provisioning: types.WorkerPoolProvisioningConfig{Provider: "nebius", Spot: true, MaxNodes: 1, MaxGPUs: 1},
+				Provisioning: types.WorkerPoolProvisioningConfig{Providers: []string{"nebius"}, Spot: true, MaxNodes: 1, MaxGPUs: 1},
 			}
 			poolConfig.ApplyProvisioning()
 			name := "spot-" + gpu.String()
@@ -41,6 +42,7 @@ func TestServerlessGPUColdDemandBuysSpotWithoutAFloor(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(controller.close)
 			s.workerPoolManager.SetPool(name, poolConfig, controller)
+			s.SetProvisioner(provider)
 
 			// A zero floor stays empty even after several sizing intervals.
 			fakeClock.Advance(3 * poolMonitoringInterval)
@@ -67,9 +69,12 @@ func TestServerlessGPUColdDemandBuysSpotWithoutAFloor(t *testing.T) {
 			require.NotNil(t, queued)
 			require.True(t, queued.Preemptable, "eligibility survives the actual backlog wire format")
 
+			// The request says that it waits, and the pool's next plan buys.
 			newSchedulingAttempt(s, queued, workers).run()
-			need := MachineNeed{CPU: 500, Memory: capacityMemoryForScheduling(request), GPUCount: 1}
-			require.Equal(t, []MachineNeed{need, need}, provider.asked, "CanProvision and Provision receive the actual request size")
+			require.Empty(t, provider.sold)
+			fakeClock.Advance(poolMonitoringInterval)
+			need := MachineNeed{CPU: 500, Memory: capacityMemoryForScheduling(request), GPUCount: 1, HoursLost: 8}
+			require.Equal(t, []MachineNeed{need, need, need}, provider.asked, "CanProvision and Provision receive the actual request")
 			require.Len(t, provider.sold, 1)
 			workers, err = s.workerRepo.GetAllWorkers()
 			require.NoError(t, err)
@@ -83,6 +88,7 @@ func TestServerlessGPUColdDemandBuysSpotWithoutAFloor(t *testing.T) {
 
 			// Waiting for the pending machine must not buy another machine.
 			newSchedulingAttempt(s, queued, workers).run()
+			fakeClock.Advance(poolMonitoringInterval)
 			require.Len(t, provider.sold, 1)
 
 			// Once the bought machine joins and its request stream is ready,
@@ -109,6 +115,7 @@ func TestServerlessGPUColdDemandBuysSpotWithoutAFloor(t *testing.T) {
 			require.Empty(t, scheduled.PoolSelector)
 			require.True(t, scheduled.Preemptable)
 			require.Len(t, provider.sold, 1)
+			require.Empty(t, provider.wants, "a request that is placed no longer waits")
 		})
 	}
 }
@@ -117,7 +124,7 @@ func TestExplicitNonPreemptableRequestStillRejectsSpot(t *testing.T) {
 	s, err := NewSchedulerForTest()
 	require.NoError(t, err)
 	s.workerPoolManager = NewWorkerPoolManager()
-	config := types.WorkerPoolConfig{GPUType: "H100", Provisioning: types.WorkerPoolProvisioningConfig{Provider: "nebius", Spot: true, MaxNodes: 1}}
+	config := types.WorkerPoolConfig{GPUType: "H100", Provisioning: types.WorkerPoolProvisioningConfig{Providers: []string{"nebius"}, Spot: true, MaxNodes: 1}}
 	config.ApplyProvisioning()
 	provider := &fakeProvisioner{inStock: true}
 	controller, err := NewAgentWorkerPoolController(AgentWorkerPoolControllerOptions{
@@ -134,4 +141,60 @@ func TestExplicitNonPreemptableRequestStillRejectsSpot(t *testing.T) {
 	_, err = s.selectWorkerFromWorkers([]*types.Worker{{Id: "spot-worker", Gpu: "H100", TotalGpuCount: 1, FreeGpuCount: 1, Preemptable: true, PoolName: "spot-h100", Status: types.WorkerStatusAvailable}}, request)
 	require.Error(t, err)
 	require.Empty(t, provider.asked, "the scheduler never weakens an explicit false request")
+}
+
+// A pool that buys plans for every request that waits for it together.
+func TestABuyingPoolBuysWhatTheRequestsThatWaitForItLack(t *testing.T) {
+	provider := &fakeProvisioner{inStock: true, sells: ProvisionedMachine{CPU: 64_000, Memory: 256_000, GPUCount: 4, Spot: true}}
+	p := newBuyingPool(t, provider, func(pool *types.WorkerPoolConfig) { pool.Provisioning.OnDemand = true })
+	none := types.WorkerPoolSizingConfig{}
+	sold := func(sizing types.WorkerPoolSizingConfig, waiting string, onDemand bool) int {
+		for _, id := range waiting {
+			require.NoError(t, provider.Want(p.ctx, "spot-l40s", string(id), MachineNeed{CPU: 1000, Memory: 1024, GPUCount: 1, OnDemand: onDemand}))
+		}
+		p.controller.plan(&sizing)
+		return len(provider.sold)
+	}
+
+	require.Equal(t, 1, sold(none, "abc", false), "three requests share a machine with four GPUs")
+	require.Equal(t, 1, sold(none, "d", false), "which has room for a fourth while it boots")
+	require.Equal(t, 2, sold(none, "e", false), "and none for a fifth")
+
+	// Work that may not be interrupted takes no room on a spot machine.
+	provider.sells.Spot = false
+	require.Equal(t, 3, sold(none, "f", true))
+	require.Equal(t, 3, sold(none, "ghi", false), "work that may be takes what room there is")
+
+	// The floor is kept on top of what waits: nine of twelve GPUs are taken.
+	floor := types.WorkerPoolSizingConfig{MinFreeGpu: 4, DefaultWorkerCpu: 1000, DefaultWorkerMemory: 1024, DefaultWorkerGpuCount: 1}
+	require.Equal(t, 4, sold(floor, "", false))
+	require.Equal(t, 4, sold(floor, "jkl", false))
+
+	// A pool that cannot buy holds what it has. Work that may not be
+	// interrupted has its room first, whenever it came.
+	provider.inStock, provider.asked = false, nil
+	sold(floor, "mnop", false)
+	require.Equal(t, 4, sold(floor, "q", true))
+	need := MachineNeed{CPU: 1000, Memory: 1024, GPUCount: 1}
+	require.Equal(t, []MachineNeed{need, need}, provider.asked, "once for the floor, then once for a request and the floor that need the same")
+}
+
+// Of two workers that are otherwise alike, work that is cheap to lose takes
+// the machine its provider may take back, and leaves the other for work that
+// is not.
+func TestWorkTakesTheKindOfMachineItIsBestRunOn(t *testing.T) {
+	s, err := NewSchedulerForTest()
+	require.NoError(t, err)
+	workers := []*types.Worker{}
+	for _, spot := range []bool{false, true, false} {
+		workers = append(workers, &types.Worker{Id: fmt.Sprintf("worker-%d", len(workers)), Status: types.WorkerStatusAvailable, PoolName: "default",
+			TotalCpu: 8000, FreeCpu: 8000, TotalMemory: 8192, FreeMemory: 8192, Preemptable: spot})
+	}
+	for kind, spot := range map[string]bool{types.StubTypeEndpointDeployment: true, types.StubTypeSandbox: false} {
+		request := &types.ContainerRequest{Cpu: 1000, Memory: 1024, Preemptable: true, Workspace: testWorkspaceWithStorage(),
+			Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(kind)}}}
+		worker, err := s.selectWorkerFromWorkers(workers, request)
+		require.NoError(t, err)
+		require.Equal(t, spot, worker.Preemptable, kind)
+	}
 }

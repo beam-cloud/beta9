@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -6645,6 +6646,25 @@ type fakeProvisioner struct {
 	asked []MachineNeed
 	// sold are the machines it sold. They are booting until removed.
 	sold []ProvisionedMachine
+	// wants are the requests that wait for a machine, by ID.
+	wants map[string]MachineNeed
+}
+
+func (p *fakeProvisioner) Want(ctx context.Context, pool, id string, need MachineNeed) error {
+	if p.wants == nil {
+		p.wants = map[string]MachineNeed{}
+	}
+	p.wants[id] = need
+	return nil
+}
+
+func (p *fakeProvisioner) Unwant(ctx context.Context, id string) error {
+	delete(p.wants, id)
+	return nil
+}
+
+func (p *fakeProvisioner) Wants(ctx context.Context, pool string) ([]MachineNeed, error) {
+	return slices.Collect(maps.Values(p.wants)), nil
 }
 
 func (p *fakeProvisioner) CanProvision(ctx context.Context, pool string, need MachineNeed) bool {
@@ -6690,7 +6710,7 @@ func newBuyingPool(t *testing.T, provisioner Provisioner, change ...func(*types.
 		GPUType:          "L40S",
 		ContainerRuntime: types.ContainerRuntimeRunc.String(),
 		Priority:         5,
-		Provisioning:     types.WorkerPoolProvisioningConfig{Provider: "verda", Spot: true, MaxNodes: 4},
+		Provisioning:     types.WorkerPoolProvisioningConfig{Providers: []string{"verda"}, Spot: true, MaxNodes: 4},
 	}
 	for _, apply := range change {
 		apply(&config)

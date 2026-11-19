@@ -210,7 +210,7 @@ func TestReadPoolSizing(t *testing.T) {
 		{
 			name: "nor has a pool that buys machines without GPUs",
 			pool: types.WorkerPoolConfig{
-				Provisioning: types.WorkerPoolProvisioningConfig{Provider: "hetzner", MaxNodes: 2},
+				Provisioning: types.WorkerPoolProvisioningConfig{Providers: []string{"hetzner"}, MaxNodes: 2},
 				PoolSizing:   types.WorkerPoolJobSpecPoolSizingConfig{MinFreeGPU: "1"},
 			},
 			want:    defaults(nil),

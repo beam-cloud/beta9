@@ -3,7 +3,8 @@
 //
 // The scheduler asks it three things: whether a pool can buy a machine now
 // (CanProvision), to buy one (Provision), and which machines are still
-// booting (Booting). Everything else happens on a tick, which compares each
+// booting (Booting). It also keeps the requests that wait for a machine
+// (Want). Everything else happens on a tick, which compares each
 // machine with what its provider and its worker say about it and gives back
 // the ones that failed, never joined, have nothing to run, or belong to a
 // pool that is gone.
@@ -60,12 +61,25 @@ const (
 	// lists, after the provider refused to sell it for lack of stock or
 	// failed to start a machine bought as it.
 	soldOutFor = 5 * time.Minute
-	// quotaBackoff is how long a pool does not buy after the provider
+	// quotaBackoff is how long a pool does not buy from a provider after it
 	// refused for quota.
 	quotaBackoff = 10 * time.Minute
-	// errorBackoff is how long a pool does not buy after a purchase failed
-	// for any other reason.
+	// errorBackoff is how long a pool does not buy from a provider after a
+	// purchase failed for any other reason.
 	errorBackoff = time.Minute
+
+	// wantFor is how long a request counts as waiting for a machine after
+	// it last said so.
+	wantFor = 15 * time.Second
+	// waitWorth is what an hour of waiting for a machine is worth, in hours
+	// of the cheapest machine that would do.
+	waitWorth = 10
+	// unknownBoot is how long a machine is taken to need to come up before
+	// any has.
+	unknownBoot = 5 * time.Minute
+	// estimatesFrom is how far back the market's history is read when
+	// nothing has been learned yet.
+	estimatesFrom = 30 * 24 * time.Hour
 
 	// leaseFor is how long ahead a provider that can delete a machine by
 	// itself is told to. Should every gateway be gone, the machines go too.
@@ -141,7 +155,10 @@ type Provisioner struct {
 	// The store has them for every replica, and the tick reads them from
 	// it. In between, a replica adds what it finds itself.
 	soldOut map[offerKey]time.Time
-	backoff map[string]time.Time // by pool, until when
+	backoff map[string]time.Time // by pool and provider, until when
+	// estimates are what past purchases say to expect of the next. The
+	// store has them for every replica; a map that is in use is not changed.
+	estimates watch.Estimates
 	// said is, by pool, what has stood in the way of buying a machine and
 	// been said since the pool last bought one. Each is said once.
 	said         map[string][]string
@@ -220,6 +237,11 @@ func (p *Provisioner) CanProvision(ctx context.Context, pool string, need schedu
 		log.Warn().Err(err).Str("pool_name", pool).Msg("provisioner: cannot read the machines held")
 		return false
 	}
+	// A machine the pool began to buy a moment ago does not count against
+	// it: whoever waits for the pool stays while it is bought.
+	held = slices.DeleteFunc(slices.Clone(held), func(m Machine) bool {
+		return m.Pool == pool && m.InstanceID == "" && m.Release == nil && p.clock.Now().Sub(m.CreatedAt) < wantFor
+	})
 	_, _, err = p.choose(pool, need, held)
 	unread := errors.Is(err, errNotBuying) || errors.Is(err, errNotListed)
 	if err != nil && !unread && p.unsaid(pool, err) {
@@ -320,10 +342,10 @@ func (p *Provisioner) refused(ctx context.Context, machine Machine, err error) {
 		p.markSoldOut(ctx, machine.offerKey)
 		p.abandon(ctx, machine)
 	case errors.Is(err, providers.ErrQuota):
-		p.backOff(machine.Pool, quotaBackoff)
+		p.backOff(machine, quotaBackoff)
 		p.abandon(ctx, machine)
 	default:
-		p.backOff(machine.Pool, errorBackoff)
+		p.backOff(machine, errorBackoff)
 	}
 }
 
@@ -382,29 +404,40 @@ func (p *Provisioner) choose(pool string, need scheduler.MachineNeed, held []Mac
 	if !ok {
 		return providers.Offer{}, config, errNotBuying
 	}
-	if _, ok := p.providers.Get(config.Provisioning.Provider); !ok {
-		return providers.Offer{}, config, fmt.Errorf("the pool buys from provider %q, which is not configured under providers", config.Provisioning.Provider)
+	// What every provider the pool can buy from has in stock, and why the
+	// first that it cannot buy from is none of them.
+	var inStock []providers.Offer
+	var unusable error
+	for _, name := range config.Provisioning.Providers {
+		list, listed := p.offers[name]
+		switch _, configured := p.providers.Get(name); {
+		case !configured:
+			unusable = cmp.Or(unusable, fmt.Errorf("the pool buys from provider %q, which is not configured under providers", name))
+		// A disabled provider lists no offers, which would read as one that
+		// has nothing in stock.
+		case !p.providers.IsEnabled(name):
+			unusable = cmp.Or(unusable, fmt.Errorf("the pool buys from provider %q, which is disabled under providers.disabled", name))
+		case !listed:
+			unusable = cmp.Or(unusable, errNotListed)
+		case now.Before(p.backoff[pool+"/"+name]):
+			unusable = cmp.Or(unusable, errBackingOff)
+		default:
+			inStock = append(inStock, p.inStockLocked(list, now)...)
+		}
 	}
-	// A disabled provider lists no offers, which would read as one that has
-	// nothing in stock.
-	if !p.providers.IsEnabled(config.Provisioning.Provider) {
-		return providers.Offer{}, config, fmt.Errorf("the pool buys from provider %q, which is disabled under providers.disabled", config.Provisioning.Provider)
-	}
-	list, listed := p.offers[config.Provisioning.Provider]
-	if !listed {
-		return providers.Offer{}, config, errNotListed
-	}
-	if now.Before(p.backoff[pool]) {
-		return providers.Offer{}, config, errBackingOff
+	if len(inStock) == 0 && unusable != nil {
+		return providers.Offer{}, config, unusable
 	}
 	offer, err := choose(purchase{
 		pool:       pool,
 		config:     config,
 		need:       need,
-		offers:     p.inStockLocked(list, now),
+		offers:     inStock,
 		held:       held,
 		limits:     p.limits,
 		spentToday: p.spentToday,
+		estimates:  p.estimates,
+		now:        now,
 	})
 	return offer, config, err
 }
@@ -438,10 +471,72 @@ func (p *Provisioner) markSoldOut(ctx context.Context, offer offerKey) {
 	}
 }
 
-func (p *Provisioner) backOff(pool string, d time.Duration) {
+func (p *Provisioner) backOff(machine Machine, d time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.backoff[pool] = p.clock.Now().Add(d)
+	p.backoff[machine.Pool+"/"+machine.Provider] = p.clock.Now().Add(d)
+}
+
+// learn writes what became of a machine to the market's history, and takes
+// it into what every replica expects of the next.
+func (p *Provisioner) learn(ctx context.Context, outcome watch.Outcome) {
+	p.outcomes.Record(outcome)
+	estimates, err := p.store.Learn(ctx, outcome)
+	if err != nil {
+		log.Warn().Err(err).Msg("provisioner: could not learn from what became of a machine")
+		return
+	}
+	p.mu.Lock()
+	p.estimates = estimates
+	p.mu.Unlock()
+}
+
+// want is a request that waits for a pool to have a machine for it.
+type want struct {
+	Pool string                `json:"pool"`
+	Need scheduler.MachineNeed `json:"need"`
+	At   time.Time             `json:"at"`
+}
+
+// Want takes note that the request with this ID waits for the pool to have
+// a machine that holds need, in place of what it waited for before.
+func (p *Provisioner) Want(ctx context.Context, pool, id string, need scheduler.MachineNeed) error {
+	data, err := json.Marshal(want{Pool: pool, Need: need, At: p.clock.Now()})
+	if err != nil {
+		return err
+	}
+	return p.store.rdb.HSet(ctx, common.RedisKeys.ComputeProvisionedWants(), id, data).Err()
+}
+
+// Unwant takes note that the request no longer waits for a machine.
+func (p *Provisioner) Unwant(ctx context.Context, id string) error {
+	return p.store.rdb.HDel(ctx, common.RedisKeys.ComputeProvisionedWants(), id).Err()
+}
+
+// Wants returns what the requests that wait for the pool need. A request
+// that has not said that it waits for wantFor is forgotten: it was placed,
+// has failed, or was given up.
+func (p *Provisioner) Wants(ctx context.Context, pool string) ([]scheduler.MachineNeed, error) {
+	stored, err := p.store.rdb.HGetAll(ctx, common.RedisKeys.ComputeProvisionedWants()).Result()
+	if err != nil {
+		return nil, fmt.Errorf("read the requests that wait for a machine: %w", err)
+	}
+	var needs []scheduler.MachineNeed
+	var lapsed []string
+	for id, data := range stored {
+		var waiting want
+		switch err := json.Unmarshal([]byte(data), &waiting); {
+		case err != nil || p.clock.Now().Sub(waiting.At) >= wantFor:
+			lapsed = append(lapsed, id)
+		case waiting.Pool == pool:
+			needs = append(needs, waiting.Need)
+		}
+	}
+	if len(lapsed) > 0 {
+		// Whoever reads next removes what this could not.
+		_ = p.store.rdb.HDel(ctx, common.RedisKeys.ComputeProvisionedWants(), lapsed...).Err()
+	}
+	return needs, nil
 }
 
 // sold takes one machine off the stock this replica remembers, so that it
@@ -518,6 +613,7 @@ type snapshot struct {
 	pools      map[string]types.WorkerPoolConfig
 	unloaded   map[string]error
 	overBudget bool
+	estimates  watch.Estimates
 }
 
 func (p *Provisioner) snapshot() snapshot {
@@ -527,6 +623,7 @@ func (p *Provisioner) snapshot() snapshot {
 		pools:      p.pools,
 		unloaded:   p.unloaded,
 		overBudget: p.limits.dailySpent(p.spentToday),
+		estimates:  p.estimates,
 	}
 }
 
@@ -541,7 +638,7 @@ func (s snapshot) knows(pool string) bool {
 // of its name, buying from its provider.
 func (s snapshot) buys(machine Machine) (types.WorkerPoolConfig, bool) {
 	config, ok := s.pools[machine.Pool]
-	if !ok || config.Provisioning.Provider != machine.Provider {
+	if !ok || !slices.Contains(config.Provisioning.Providers, machine.Provider) {
 		return types.WorkerPoolConfig{}, false
 	}
 	return config, true
@@ -709,6 +806,7 @@ func (m Machine) provisioned() scheduler.ProvisionedMachine {
 		CPU:       m.CPUMillicores,
 		Memory:    usableMemoryMB(m.MemoryMB),
 		GPUCount:  m.GPUCount,
+		Spot:      m.Spot,
 	}
 }
 
@@ -732,13 +830,16 @@ type purchase struct {
 	pool   string
 	config types.WorkerPoolConfig
 	need   scheduler.MachineNeed
-	// offers is what the pool's provider has in stock.
+	// offers is what the pool's providers have in stock.
 	offers []providers.Offer
 	// held is every machine there is a record of, for every pool.
 	held   []Machine
 	limits Limits
 	// spentToday is what machines have cost in the last 24 hours, in cents.
 	spentToday float64
+	// estimates are what past purchases say to expect of one made at now.
+	estimates watch.Estimates
+	now       time.Time
 }
 
 // Why a pool cannot buy a machine. When it is for want of an offer, noOffer
@@ -754,10 +855,11 @@ var (
 // of a dollar offers are priced in.
 const microsPerCent = 10_000
 
-// choose picks the machine to buy: the cheapest one in stock that the pool
-// may buy and that has room for what is needed. It fails when the pool is at
-// maxNodes or maxGPUs, when a spend cap would be passed, and when nothing in
-// stock is such a machine. It changes nothing.
+// choose picks the machine to buy: of those in stock that the pool may buy
+// and that have room for what is needed, the one expected to cost least
+// (see best). It fails when the pool is at maxNodes or maxGPUs, when a spend
+// cap would be passed, and when nothing in stock is such a machine. It
+// changes nothing.
 func choose(p purchase) (providers.Offer, error) {
 	buying := p.config.Provisioning
 	machines, gpus := 0, 0
@@ -782,9 +884,11 @@ func choose(p purchase) (providers.Offer, error) {
 	}
 
 	var fitting []providers.Offer
-	overMaxGPUs := false
+	overMaxGPUs, overHourly := false, false
 	for _, offer := range p.offers {
-		if !sells(offer, p.config) || !holds(offer, p.need) {
+		// A machine its provider may take back is not bought for work that
+		// may not be interrupted.
+		if !sells(offer, p.config) || !holds(offer, p.need) || (offer.Spot && p.need.OnDemand) {
 			continue
 		}
 		// A machine counts with every GPU it has, whatever is needed of
@@ -795,20 +899,45 @@ func choose(p purchase) (providers.Offer, error) {
 			overMaxGPUs = true
 			continue
 		}
+		if p.limits.MaxHourlyCents > 0 && hourlyMicros+offer.HourlyCostMicros > p.limits.MaxHourlyCents*microsPerCent {
+			overHourly = true
+			continue
+		}
 		fitting = append(fitting, offer)
 	}
 	if len(fitting) == 0 {
 		if overMaxGPUs {
 			return providers.Offer{}, errAtMaxGPUs
 		}
+		if overHourly {
+			return providers.Offer{}, errHourlyCap
+		}
 		return providers.Offer{}, noOffer(p)
 	}
-	offer := cheapest(fitting)
+	return p.best(fitting), nil
+}
 
-	if p.limits.MaxHourlyCents > 0 && hourlyMicros+offer.HourlyCostMicros > p.limits.MaxHourlyCents*microsPerCent {
-		return providers.Offer{}, errHourlyCap
+// best returns the offer that is expected to cost least an hour for what is
+// needed: its price, raised by how often such a machine is lost times the
+// work lost with it, plus what the wait for it is worth, which is longer the
+// less likely the machine is to come up. All of that is learned from what
+// became of the machines bought before (watch.Estimates).
+func (p purchase) best(offers []providers.Offer) providers.Offer {
+	// An offer that nothing has come up as is taken to be as fast as the
+	// fastest: one taken to be slow would never be tried.
+	fastest := unknownBoot
+	for _, offer := range offers {
+		if boot, _, _ := p.estimates.Of(watch.OutcomeOf(offer), p.now); boot > 0 {
+			fastest = min(fastest, boot)
+		}
 	}
-	return offer, nil
+	wait := waitWorth * float64(cheapest(offers).HourlyCostMicros)
+	cost := func(offer providers.Offer) float64 {
+		boot, odds, taken := p.estimates.Of(watch.OutcomeOf(offer), p.now)
+		return float64(offer.HourlyCostMicros)*(1+taken*p.need.HoursLost) + wait*cmp.Or(boot, fastest).Hours()/odds
+	}
+	least := cost(slices.MinFunc(offers, func(a, b providers.Offer) int { return cmp.Compare(cost(a), cost(b)) }))
+	return cheapest(slices.DeleteFunc(slices.Clone(offers), func(offer providers.Offer) bool { return cost(offer) > least }))
 }
 
 // cheapest returns the offer that costs least. Of several at one price, it
@@ -840,7 +969,7 @@ func (o obstacle) Error() string { return o.what + o.detail }
 // spot or on-demand, until the provider has something: the last thing let go
 // of is what stands in the way.
 func noOffer(p purchase) error {
-	buying := p.config.Provisioning
+	buying, from := p.config.Provisioning, strings.Join(p.config.Provisioning.Providers, ", ")
 	// What the pool buys, as one of them and as many.
 	one, many := strings.TrimSpace(p.config.GPUType), strings.TrimSpace(p.config.GPUType)
 	if one == "" {
@@ -849,35 +978,39 @@ func noOffer(p purchase) error {
 
 	asked := p.config
 	if len(selling(p.offers, asked)) > 0 {
+		kind := ""
+		if p.need.OnDemand {
+			kind = ", on demand"
+		}
 		return obstacle{
-			what:   fmt.Sprintf("no %s that %s has for the pool has room for what is needed", one, buying.Provider),
-			detail: fmt.Sprintf(" (cpu %dm, memory %d MiB, gpus %d)", p.need.CPU, p.need.Memory, p.need.GPUCount),
+			what:   fmt.Sprintf("no %s that %s has for the pool has room for what is needed", one, from),
+			detail: fmt.Sprintf(" (cpu %dm, memory %d MiB, gpus %d%s)", p.need.CPU, p.need.Memory, p.need.GPUCount, kind),
 		}
 	}
 	asked.Provisioning.MaxNodeHourlyCents = 0
 	if atAnyPrice := selling(p.offers, asked); len(atAnyPrice) > 0 {
 		return obstacle{
-			what:   fmt.Sprintf("%s has no %s within provisioning.maxNodeHourlyCents %d", buying.Provider, one, buying.MaxNodeHourlyCents),
+			what:   fmt.Sprintf("%s has no %s within provisioning.maxNodeHourlyCents %d", from, one, buying.MaxNodeHourlyCents),
 			detail: fmt.Sprintf(": the cheapest costs %s cents an hour", cents(cheapest(atAnyPrice).HourlyCostMicros)),
 		}
 	}
 	asked.Provisioning.Regions = nil
 	if anywhere := selling(p.offers, asked); len(anywhere) > 0 {
 		return obstacle{
-			what:   fmt.Sprintf("%s offers no %s in regions %v", buying.Provider, many, buying.Regions),
+			what:   fmt.Sprintf("%s offers no %s in regions %v", from, many, buying.Regions),
 			detail: "; it offers them in " + strings.Join(regionsOf(anywhere), ", "),
 		}
 	}
 	asked.Provisioning.Spot = !buying.Spot
 	switch theOtherWay := selling(p.offers, asked); {
 	case len(theOtherWay) > 0 && buying.Spot:
-		return fmt.Errorf("%s sells %s only on demand: remove provisioning.spot", buying.Provider, many)
+		return fmt.Errorf("%s sells %s only on demand: remove provisioning.spot", from, many)
 	case len(theOtherWay) > 0:
-		return fmt.Errorf("%s sells %s only as spot: set provisioning.spot", buying.Provider, many)
+		return fmt.Errorf("%s sells %s only as spot: set provisioning.spot", from, many)
 	case len(p.offers) > 0:
-		return fmt.Errorf("%s has no %s in stock", buying.Provider, one)
+		return fmt.Errorf("%s has no %s in stock", from, one)
 	}
-	return fmt.Errorf("%s is not known to have anything in stock", buying.Provider)
+	return fmt.Errorf("%s is not known to have anything in stock", from)
 }
 
 // selling returns what of the stock a pool that asks for this buys.
@@ -910,7 +1043,7 @@ func cents(micros int64) string {
 // spot or on-demand as configured, in its regions, within its price limit.
 func sells(offer providers.Offer, pool types.WorkerPoolConfig) bool {
 	buying := pool.Provisioning
-	return offer.Spot == buying.Spot &&
+	return (offer.Spot == buying.Spot || (!offer.Spot && buying.OnDemand)) &&
 		strings.EqualFold(offer.GPU, strings.TrimSpace(pool.GPUType)) &&
 		(offer.GPUCount > 0) == (offer.GPU != "") &&
 		(len(buying.Regions) == 0 || slices.Contains(buying.Regions, offer.Region)) &&
@@ -978,6 +1111,7 @@ func (p *Provisioner) refresh(ctx context.Context) {
 		p.refreshOffers(ctx, provider, now)
 	}
 	p.refreshSoldOut(ctx, now)
+	p.refreshEstimates(ctx, now)
 
 	if p.limits.MaxDailyCents > 0 {
 		spent, err := p.store.Spent(ctx, now)
@@ -1019,7 +1153,7 @@ func (p *Provisioner) refreshPools(ctx context.Context) {
 func providersOf(pools map[string]types.WorkerPoolConfig) []string {
 	names := make([]string, 0, len(pools))
 	for _, config := range pools {
-		names = append(names, config.Provisioning.Provider)
+		names = append(names, config.Provisioning.Providers...)
 	}
 	slices.Sort(names)
 	return slices.Compact(names)
@@ -1065,6 +1199,26 @@ func (p *Provisioner) refreshSoldOut(ctx context.Context, now time.Time) {
 	}
 	p.mu.Lock()
 	p.soldOut = soldOut
+	p.mu.Unlock()
+}
+
+// refreshEstimates loads what any replica learned from the machines that
+// were bought. When nothing has been learned yet, it starts from what the
+// market's history says became of them.
+func (p *Provisioner) refreshEstimates(ctx context.Context, now time.Time) {
+	estimates, err := p.store.Estimates(ctx)
+	if err == nil && estimates == nil {
+		var past []watch.Outcome
+		if past, err = p.outcomes.Read(ctx, now.Add(-estimatesFrom), now); err == nil {
+			estimates, err = p.store.Learn(ctx, past...)
+		}
+	}
+	if err != nil {
+		log.Warn().Err(err).Msg("provisioner: could not read what was learned from past purchases")
+		return
+	}
+	p.mu.Lock()
+	p.estimates = estimates
 	p.mu.Unlock()
 }
 
@@ -1194,6 +1348,9 @@ type sighting struct {
 	poolKnown bool
 	// overBudget reports whether providers.maxDailyCents has been spent.
 	overBudget bool
+	// usualBoot is how long machines bought like it take to come up, or
+	// zero when none has.
+	usualBoot time.Duration
 }
 
 // available reports whether the machine's worker is up and takes work.
@@ -1213,6 +1370,7 @@ func (s sighting) bootTimeout() time.Duration {
 
 func (p *Provisioner) sight(ctx context.Context, machine Machine, now time.Time, known snapshot, instances map[string][]providers.Instance, workers *poolWorkers) sighting {
 	s := sighting{now: now, poolKnown: known.knows(machine.Pool), overBudget: known.overBudget}
+	s.usualBoot, _, _ = known.estimates.Of(machine.outcome(now), now)
 	if config, buys := known.buys(machine); buys {
 		s.pool = &config
 	}
@@ -1404,6 +1562,11 @@ func withoutWorker(m *Machine, s sighting) (reason, end string) {
 		}
 		m.DownSince = time.Time{}
 	case m.ReadyAt.IsZero():
+		// Twice as long as machines bought like it take is long enough:
+		// another is expected to be up sooner.
+		if s.usualBoot > 0 {
+			timeout = min(timeout, 2*s.usualBoot)
+		}
 		if s.now.Sub(m.CreatedAt) >= timeout {
 			return fmt.Sprintf("it did not join its pool within %s", timeout), watch.ResultNeverUp
 		}
@@ -1479,7 +1642,7 @@ func (p *Provisioner) reconcileMachine(ctx context.Context, machine Machine, s s
 		}
 	}
 	if machine.ReadyAt.IsZero() && !next.ReadyAt.IsZero() {
-		p.outcomes.Record(next.outcome(s.now).CameUp(next.ReadyAt.Sub(next.CreatedAt)))
+		p.learn(ctx, next.outcome(s.now).CameUp(next.ReadyAt.Sub(next.CreatedAt)))
 	}
 	if next.Release == nil {
 		return
@@ -1522,7 +1685,7 @@ func (p *Provisioner) announceRelease(ctx context.Context, machine Machine, s si
 		// It ended when its provider ended it, which is no later than now.
 		// What is left of it is still to be deleted, which says nothing of
 		// how long it was had.
-		p.recordEnd(machine, s.now)
+		p.recordEnd(ctx, machine, s.now)
 	}
 	if machine.Release.SoldOut {
 		// The next machine is bought as something else, if anything else is
@@ -1544,11 +1707,11 @@ func (m *Machine) take(found Machine) {
 
 // recordEnd writes to the market's history that the machine ended at now,
 // and how. A machine that was never made has no end.
-func (p *Provisioner) recordEnd(machine Machine, now time.Time) {
+func (p *Provisioner) recordEnd(ctx context.Context, machine Machine, now time.Time) {
 	if machine.Release.End == "" {
 		return
 	}
-	p.outcomes.Record(machine.outcome(now).Ended(machine.Release.End, now.Sub(machine.CreatedAt)))
+	p.learn(ctx, machine.outcome(now).Ended(machine.Release.End, now.Sub(machine.CreatedAt)))
 }
 
 // finishRelease gives a machine back: the gateway forgets it, its provider
@@ -1585,7 +1748,7 @@ func (p *Provisioner) finishRelease(ctx context.Context, machine Machine, now ti
 		return
 	}
 	if !endedAtProvider(machine.Release.End) {
-		p.recordEnd(machine, now)
+		p.recordEnd(ctx, machine, now)
 	}
 }
 
@@ -1883,6 +2046,42 @@ func (s *Store) SoldOut(ctx context.Context, now time.Time) (map[offerKey]time.T
 		_ = s.rdb.HDel(ctx, common.RedisKeys.ComputeProvisionedSoldOut(), lapsed...).Err()
 	}
 	return marks, nil
+}
+
+// Estimates returns what has been learned from past purchases, or nil when
+// nothing has been yet.
+func (s *Store) Estimates(ctx context.Context) (watch.Estimates, error) {
+	data, err := s.rdb.Get(ctx, common.RedisKeys.ComputeProvisionedEstimates()).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read the estimates: %w", err)
+	}
+	var estimates watch.Estimates
+	return estimates, json.Unmarshal(data, &estimates)
+}
+
+// Learn takes outcomes into the estimates, for every replica, and returns
+// them as they are now.
+func (s *Store) Learn(ctx context.Context, outcomes ...watch.Outcome) (estimates watch.Estimates, err error) {
+	err = s.lock.WithLease(ctx, common.RedisKeys.ComputeProvisionedLock(), writeLock, func(ctx context.Context) error {
+		if estimates, err = s.Estimates(ctx); err != nil {
+			return err
+		}
+		if estimates == nil {
+			estimates = watch.Estimates{}
+		}
+		for _, outcome := range outcomes {
+			estimates.Learn(outcome)
+		}
+		data, err := json.Marshal(estimates)
+		if err != nil {
+			return err
+		}
+		return s.rdb.Set(ctx, common.RedisKeys.ComputeProvisionedEstimates(), data, 0).Err()
+	})
+	return estimates, err
 }
 
 // reconcileLock is held by the replica that runs a pass, which renews it for

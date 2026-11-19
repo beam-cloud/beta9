@@ -751,14 +751,14 @@ type WorkerPoolConfig struct {
 	// so they move on to the next pool in their route. Unset, the pool never
 	// counts as stalled and its requests wait.
 	StalledAfter Duration `key:"stalledAfter" json:"stalled_after,omitempty"`
-	// Provisioning makes the pool buy its machines from one provider. With
+	// Provisioning makes the pool buy its machines from providers. With
 	// poolSizing.minFree* the pool keeps that much free, and with alsoServes
 	// it takes overflow, like any other pool.
 	Provisioning WorkerPoolProvisioningConfig `key:"provisioning" json:"provisioning,omitzero"`
 }
 
 // WorkerPoolProvisioningConfig is where and how a pool buys machines.
-// Provider and MaxNodes are required.
+// Providers and MaxNodes are required.
 //
 // A pool that buys up to four spot L40S machines from Verda, with no more
 // than four GPUs between them, keeps one GPU free and takes the overflow of
@@ -771,7 +771,7 @@ type WorkerPoolConfig struct {
 //	      gpuType: L40S
 //	      alsoServes: [A10G]
 //	      provisioning:
-//	        provider: verda
+//	        providers: [verda]
 //	        spot: true
 //	        maxNodes: 4
 //	        maxGPUs: 4
@@ -794,11 +794,16 @@ type WorkerPoolConfig struct {
 //	    projects:
 //	    - id:
 type WorkerPoolProvisioningConfig struct {
-	// Provider is the key under providers that the machines are bought from.
-	Provider string `key:"provider" json:"provider"`
+	// Providers are the keys under providers that the machines are bought
+	// from: each from whichever is expected to cost least.
+	Providers []string `key:"providers" json:"providers"`
 	// Spot buys machines the provider may take back, which makes the pool
 	// preemptable. Without it the pool buys on-demand machines.
 	Spot bool `key:"spot" json:"spot,omitempty"`
+	// OnDemand has a spot pool buy on-demand machines too, when they are
+	// expected to cost less or work that may not be interrupted waits. The
+	// pool then takes such work.
+	OnDemand bool `key:"onDemand" json:"on_demand,omitempty"`
 	// MaxNodes is the most machines the pool holds, counting those that are
 	// still booting.
 	MaxNodes int `key:"maxNodes" json:"max_nodes"`
@@ -846,18 +851,19 @@ func (p WorkerPoolProvisioningConfig) BootWithin() time.Duration {
 // written reports whether the config file or the API set anything in the
 // block.
 func (p WorkerPoolProvisioningConfig) written() bool {
-	return p.Provider != "" || p.Spot || p.MaxNodes != 0 || p.MaxGPUs != 0 || p.MaxNodeHourlyCents != 0 ||
+	return len(p.Providers) > 0 || p.Spot || p.OnDemand || p.MaxNodes != 0 || p.MaxGPUs != 0 || p.MaxNodeHourlyCents != 0 ||
 		len(p.Regions) > 0 || p.IdleTimeout != 0 || p.BootTimeout != 0
 }
 
 // Buys reports whether the pool buys its machines from a provider.
 func (c WorkerPoolConfig) Buys() bool {
-	return c.Provisioning.Provider != ""
+	return len(c.Provisioning.Providers) > 0
 }
 
 // ApplyProvisioning fills in what a provisioning block implies. Machines that
 // are bought join through the agent, so the pool needs no mode. Spot machines
-// can be taken back, so the pool takes only work that may be interrupted.
+// can be taken back, so a pool that buys nothing else takes only work that
+// may be interrupted.
 func (c *WorkerPoolConfig) ApplyProvisioning() {
 	if !c.Buys() {
 		return
@@ -865,7 +871,7 @@ func (c *WorkerPoolConfig) ApplyProvisioning() {
 	if c.Mode == "" {
 		c.Mode = PoolModeExternal
 	}
-	if c.Provisioning.Spot {
+	if c.Provisioning.Spot && !c.Provisioning.OnDemand {
 		c.Preemptable = true
 	}
 }
@@ -924,8 +930,10 @@ func (c WorkerPoolConfig) validateProvisioning() error {
 	switch {
 	case !p.written():
 		return nil
-	case strings.TrimSpace(p.Provider) == "":
-		return fmt.Errorf("provisioning needs a provider: the key under providers to buy machines from")
+	case len(p.Providers) == 0 || slices.ContainsFunc(p.Providers, func(name string) bool { return strings.TrimSpace(name) == "" }):
+		return fmt.Errorf("provisioning needs a provider: provisioning.providers lists the keys under providers to buy machines from")
+	case p.OnDemand && !p.Spot:
+		return fmt.Errorf("provisioning.onDemand goes with provisioning.spot: without spot the pool buys on-demand machines already")
 	case p.MaxNodes < 1:
 		return fmt.Errorf("provisioning.maxNodes must be at least 1: it is the most machines the pool may hold")
 	case p.MaxGPUs < 0:
