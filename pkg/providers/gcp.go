@@ -454,6 +454,7 @@ func (c *GCP) regionOffers(ctx context.Context, name string) ([]Offer, error) {
 				MemoryMB:         machine.memoryMB,
 				StorageMB:        c.config.DiskGB * 1024,
 				HourlyCostMicros: price + hourlyDiskMicros(c.config.DiskGB, gcpDiskMicrosPerGBMonth),
+				DiskHourlyMicros: hourlyDiskMicros(c.config.DiskGB, gcpDiskMicrosPerGBMonth),
 				Spot:             true,
 			})
 		}
@@ -528,7 +529,7 @@ func (c *GCP) instanceBody(req CreateRequest, labels map[string]string, zone, ma
 			"autoDelete": true,
 			"initializeParams": map[string]any{
 				"sourceImage": c.config.Image,
-				"diskSizeGb":  strconv.FormatInt(c.config.DiskGB, 10),
+				"diskSizeGb":  strconv.FormatInt(req.diskGB(c.config.DiskGB), 10),
 				"diskType":    "zones/" + zone + "/diskTypes/" + gcpDiskType(machineType),
 			},
 		}},

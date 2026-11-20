@@ -811,6 +811,12 @@ type WorkerPoolProvisioningConfig struct {
 	// MaxNodeHourlyCents is the most one machine may cost per hour. Zero
 	// means any price.
 	MaxNodeHourlyCents int64 `key:"maxNodeHourlyCents" json:"max_node_hourly_cents,omitempty"`
+	// DiskGB is the least disk a machine has: enough for what the pool's
+	// work keeps on the machine, such as a model's weights. Where the
+	// provider sells the disk apart from the machine (AWS, GCP, Nebius,
+	// Verda) the machine is bought with a disk of this size, and its price
+	// is the price with it. Zero means the provider's diskGB.
+	DiskGB int64 `key:"diskGB" json:"disk_gb,omitempty"`
 	// Regions are the provider's own names for the regions to buy in. Empty
 	// means any region it offers.
 	Regions []string `key:"regions" json:"regions,omitempty"`
@@ -850,7 +856,7 @@ func (p WorkerPoolProvisioningConfig) BootWithin() time.Duration {
 // block.
 func (p WorkerPoolProvisioningConfig) written() bool {
 	return len(p.Providers) > 0 || p.Spot || p.OnDemand || p.MaxNodes != 0 || p.MaxGPUs != 0 || p.MaxNodeHourlyCents != 0 ||
-		len(p.Regions) > 0 || p.IdleTimeout != 0 || p.BootTimeout != 0
+		p.DiskGB != 0 || len(p.Regions) > 0 || p.IdleTimeout != 0 || p.BootTimeout != 0
 }
 
 // Buys reports whether the pool buys its machines from a provider.
@@ -951,6 +957,8 @@ func (c WorkerPoolConfig) validateProvisioning() error {
 		return fmt.Errorf("provisioning.maxGPUs needs a gpuType: a CPU pool has no GPUs to cap")
 	case p.MaxNodeHourlyCents < 0:
 		return fmt.Errorf("provisioning.maxNodeHourlyCents cannot be negative")
+	case p.DiskGB < 0:
+		return fmt.Errorf("provisioning.diskGB cannot be negative")
 	case c.Mode != "" && c.Mode != PoolModeExternal:
 		return fmt.Errorf("a pool with a provisioning block buys machines that join through the agent: remove mode %q", c.Mode)
 	}

@@ -174,6 +174,7 @@ func TestProvisioningIsChecked(t *testing.T) {
 		}), wantErr: "maxGPUs needs a gpuType"},
 		{name: "only a GPU cap", pool: WorkerPoolConfig{Provisioning: WorkerPoolProvisioningConfig{MaxGPUs: 8}}, wantErr: "needs a provider"},
 		{name: "negative price limit", pool: buys(func(c *WorkerPoolConfig) { c.Provisioning.MaxNodeHourlyCents = -1 }), wantErr: "maxNodeHourlyCents cannot be negative"},
+		{name: "negative disk size", pool: buys(func(c *WorkerPoolConfig) { c.Provisioning.DiskGB = -1 }), wantErr: "diskGB cannot be negative"},
 		{name: "a Kubernetes pool", pool: buys(func(c *WorkerPoolConfig) { c.Mode = PoolModeLocal }), wantErr: `remove mode "local"`},
 		{name: "a private pool", pool: buys(func(c *WorkerPoolConfig) { c.Mode = PoolModePrivate }), wantErr: `remove mode "private"`},
 		{name: "empty region", pool: buys(func(c *WorkerPoolConfig) { c.Provisioning.Regions = []string{"fin-01", ""} }), wantErr: "empty region"},

@@ -30,7 +30,6 @@ const (
 	terminalRetention  = 30 * time.Minute
 	schedulingGrace    = 10 * time.Minute
 	machineGrace       = 30 * time.Minute // a Spot replica's machine is bought and boots before it is scheduled
-	loadingGrace       = 30 * time.Minute
 	containerLostGrace = 20 * time.Second
 	maxStartsPerTick   = 8
 )

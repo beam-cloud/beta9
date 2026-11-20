@@ -35,6 +35,7 @@ func TestSpecValidate(t *testing.T) {
 		"too many gpus":     func(s *ManagedEndpointSpec) { s.Gpu = map[string]GpuSpec{"H100": {Count: 9}} },
 		"bad port":          func(s *ManagedEndpointSpec) { s.Port = 70000 },
 		"bad rollout":       func(s *ManagedEndpointSpec) { s.Rollout = "yolo" },
+		"endless load":      func(s *ManagedEndpointSpec) { s.LoadSeconds = MaxLoadSeconds + 1 },
 		"publication field": nil,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -49,6 +50,9 @@ func TestSpecValidate(t *testing.T) {
 			assert.Error(t, spec.Validate())
 		})
 	}
+	assert.Equal(t, 30*time.Minute, ReplicaProbe{}.LoadGrace(), "a replica whose app does not say has the default")
+	assert.Equal(t, time.Hour, ReplicaProbe{LoadSeconds: 3600}.LoadGrace())
+
 	for _, id := range []string{"", "acme/", "/model", "acme/model/extra", "acme model", "Acme/Model!"} {
 		spec := model
 		spec.ID = id

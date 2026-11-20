@@ -41,6 +41,7 @@ def test_endpoint_spec_is_runtime_only():
         "metrics",
         "rollout",
         "drain_seconds",
+        "load_seconds",
         "gpu",
     }, "publication (catalog, access, pricing) lives in config.yaml"
     assert ep.ports == [8000]
@@ -48,6 +49,11 @@ def test_endpoint_spec_is_runtime_only():
 
 def test_policy_fields_survive_pruning():
     assert ManagedEndpoint(id="a/b", drain_seconds=0).spec()["drain_seconds"] == 0
+
+
+def test_load_seconds_is_sent_only_when_set():
+    assert "load_seconds" not in ManagedEndpoint(id="a/b").spec()
+    assert ManagedEndpoint(id="a/b", load_seconds=3600).spec()["load_seconds"] == 3600
 
 
 @pytest.mark.parametrize(
