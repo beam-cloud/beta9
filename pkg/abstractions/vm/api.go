@@ -556,7 +556,10 @@ func (s *Service) createVM(ctx context.Context, info *auth.AuthInfo, opts types.
 	}
 
 	if err := s.start(ctx, info, v); err != nil {
-		s.failed(ctx, v, err)
+		if !opts.Queue || !s.queue(ctx, v, err) {
+			s.failed(ctx, v, err)
+		}
+
 		return v, nil
 	}
 

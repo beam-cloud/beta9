@@ -53,6 +53,36 @@ type runnerStore struct {
 	// published of them (see github_runner_cache_test.go).
 	caches    []*types.GitHubRunnerCache
 	published []*publishedCache
+	// The most runners that is set for a workspace, where one is.
+	limits map[uint]int
+}
+
+func (r *runnerStore) GetGitHubRunnerLimit(_ context.Context, ws uint) (*int, error) {
+	if limit, set := r.limits[ws]; set {
+		return &limit, nil
+	}
+	return nil, nil
+}
+
+func (r *runnerStore) SetGitHubRunnerLimit(_ context.Context, ws uint, limit *int) error {
+	if limit == nil {
+		delete(r.limits, ws)
+		return nil
+	}
+	if r.limits == nil {
+		r.limits = map[uint]int{}
+	}
+	r.limits[ws] = *limit
+	return nil
+}
+
+// most is how many runners a workspace may have, where allowed is how many
+// every workspace may.
+func (r *runnerStore) most(ws uint, allowed int) int {
+	if limit, set := r.limits[ws]; set {
+		return limit
+	}
+	return allowed
 }
 
 func (r *runnerStore) connected(id int64) bool {
@@ -356,6 +386,7 @@ func (r *runnerStore) ListDueGitHubRunnerJobs(ctx context.Context, limit int) ([
 	due := []types.GitHubRunnerJob{}
 	for _, job := range r.jobs {
 		running, _ := r.CountGitHubRunners(ctx, job.WorkspaceID)
+		limit := r.most(job.WorkspaceID, limit)
 		if r.due(job) && r.connected(job.InstallationID) && !r.installation.Paused && (limit <= 0 || running < limit) {
 			due = append(due, *job)
 		}
@@ -377,7 +408,7 @@ func (r *runnerStore) ClaimGitHubRunnerJob(ctx context.Context, job *types.GitHu
 			places++
 		}
 	}
-	if limit > 0 && places >= limit {
+	if limit := r.most(stored.WorkspaceID, limit); limit > 0 && places >= limit {
 		return false, nil
 	}
 
@@ -2002,6 +2033,127 @@ func TestGitHubRunnerLimit(t *testing.T) {
 	require.Equal(t, "Starting a runner", waiting()[8])
 }
 
+// A workspace may be allowed more runners than every workspace is, or
+// fewer, which only an administrator of the cluster sets. Its jobs past
+// what every workspace is allowed then get runners too.
+func TestGitHubRunnerLimitOfAWorkspace(t *testing.T) {
+	r, store, info, runtime := runnerFixture(t)
+	ctx := context.Background()
+
+	// The routes as the gateway serves them, for whoever caller is.
+	caller := info
+	e := echo.New()
+	api := e.Group("/vm", func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error { return next(&auth.HttpAuthContext{Context: c, AuthInfo: caller}) }
+	})
+	registerVMRoutes(api, r.s)
+	require.NoError(t, r.s.initGitHubRunners(api))
+	r.s.runners.github, r.s.runners.config = r.github, r.config
+	r = r.s.runners
+	r.config.RunnerLimit = 2
+	request := func(as *auth.AuthInfo, method, path, body string) (int, string) {
+		t.Helper()
+		caller = as
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, httptest.NewRequest(method, "/vm/github-runners/"+path, strings.NewReader(body)))
+		return rec.Code, strings.TrimSpace(rec.Body.String())
+	}
+
+	fakeGitHub(t, r, map[string]string{
+		"POST /repos/acme/repo/actions/runners/generate-jitconfig": `201 {"encoded_jit_config":"jit-secret"}`,
+	})
+	for id := int64(1); id <= 5; id++ {
+		require.NoError(t, store.SaveGitHubRunnerJob(ctx, queuedJob(id)))
+		store.jobs[id].ProvisionAt = at(time.Now().Add(time.Duration(id-10) * time.Second))
+	}
+	// provision starts a runner for each job that is due one, as a pass
+	// does, and returns how many runners were started in all.
+	provision := func() int {
+		t.Helper()
+		due, err := store.ListDueGitHubRunnerJobs(ctx, r.limit())
+		require.NoError(t, err)
+		for _, job := range due {
+			require.NoError(t, r.provision(ctx, job))
+		}
+		return len(runtime.requests)
+	}
+	// status is what the workspace is told of its runners.
+	status := func() string {
+		t.Helper()
+		code, body := request(info, http.MethodGet, info.Workspace.ExternalId, "")
+		require.Equal(t, http.StatusOK, code, body)
+		return body
+	}
+	// set asks for a limit of the workspace's, or with DELETE for none.
+	set := func(as *auth.AuthInfo, method, body string) (int, string) {
+		t.Helper()
+		return request(as, method, info.Workspace.ExternalId+"/limit", body)
+	}
+	admin := &auth.AuthInfo{Workspace: &types.Workspace{Id: 1, ExternalId: "operator"}, Token: &types.Token{TokenType: types.TokenTypeClusterAdmin}}
+	restricted := *info
+	restricted.Token = &types.Token{ExternalId: info.Token.ExternalId, TokenType: types.TokenTypeWorkspaceRestricted}
+
+	require.Equal(t, 2, provision())
+	require.Contains(t, status(), `"runners":{"running":2,"limit":2}`)
+
+	// Nobody else sets it, the workspace's own tokens included, and a limit
+	// is a number of runners, of a workspace that there is.
+	for _, as := range []*auth.AuthInfo{info, &restricted} {
+		for _, method := range []string{http.MethodPut, http.MethodDelete} {
+			code, body := set(as, method, `{"limit":4}`)
+			require.Equal(t, http.StatusUnauthorized, code, body)
+		}
+	}
+	for _, body := range []string{``, `{}`, `{"limit":-1}`, `{"limit":"4"}`, `{"limit":4.5}`, `{"limit":4,"workspace":7}`} {
+		code, answer := set(admin, http.MethodPut, body)
+		require.Equal(t, http.StatusBadRequest, code, "%s: %s", body, answer)
+	}
+	r.s.backend.(*vmBackend).unknown = "gone"
+	code, body := request(admin, http.MethodPut, "gone/limit", `{"limit":4}`)
+	require.Equal(t, http.StatusNotFound, code, body)
+	require.Empty(t, store.limits)
+	require.Equal(t, 2, provision())
+	require.Contains(t, status(), `"runners":{"running":2,"limit":2}`)
+
+	// With four allowed, the two jobs that have waited longest get runners
+	// without waiting for the next pass, and the fifth still waits.
+	code, body = set(admin, http.MethodPut, `{"limit":4}`)
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, `{"running":2,"limit":4}`, body)
+	select {
+	case <-r.wake:
+	default:
+		t.Fatal("the jobs that waited are not looked at until the next pass")
+	}
+	require.Equal(t, 4, provision())
+	require.Contains(t, status(), `"runners":{"running":4,"limit":4}`)
+	require.Zero(t, store.jobs[5].Attempts)
+	require.Equal(t, "Waiting for a free runner", strings.Trim(string(listedJobs(t, r, info)[5]["waiting"]), `"`))
+
+	// Fewer than it has: its runners stay, and it gets no other.
+	code, body = set(admin, http.MethodPut, `{"limit":1}`)
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, `{"running":4,"limit":1}`, body)
+	require.Equal(t, 4, provision())
+	for id := int64(1); id <= 4; id++ {
+		require.Equal(t, types.VMStateRunning, store.vm(7, store.jobs[id].VM).DesiredState, id)
+	}
+
+	// Any number.
+	code, body = set(admin, http.MethodPut, `{"limit":0}`)
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, `{"running":4,"limit":0}`, body)
+	require.Equal(t, 5, provision())
+
+	// What every workspace is allowed, again.
+	code, body = set(admin, http.MethodDelete, "")
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, `{"running":5,"limit":2}`, body)
+	require.NoError(t, store.SaveGitHubRunnerJob(ctx, queuedJob(6)))
+	require.Equal(t, 5, provision())
+	require.Contains(t, status(), `"runners":{"running":5,"limit":2}`)
+}
+
 // A runner that no queued job is left for goes at once, and not when its
 // time to be idle is up. GitHub refuses to let go of one it has given a job,
 // which is no error.
@@ -2345,37 +2497,74 @@ func TestGitHubRunnerJobWaitsForCapacity(t *testing.T) {
 	require.Empty(t, runtime.requests, "runners never restart")
 }
 
-// A runner that the workspace's concurrency limit has no room for waits for
-// room, and its job says so. It is not replaced: another would be refused
-// too, at the price of one more runner registered with GitHub.
+// queuedRunner provisions the runner of job 1 in a workspace that refuses to
+// start it, and returns its VM and a log of each status the VM is saved
+// with from then on, which is what anyone who lists the VMs can find.
+func queuedRunner(t *testing.T, r *githubRunners, store *runnerStore) (*types.VM, *types.GitHubRunnerJob, func() []string) {
+	t.Helper()
+	ctx := context.Background()
+	require.NoError(t, store.SaveGitHubRunnerJob(ctx, queuedJob(1)))
+	job := store.jobs[1]
+	require.NoError(t, r.provision(ctx, *job))
+	require.Nil(t, job.ProvisionAt, "the job has its runner")
+	v, err := store.GetVM(ctx, 7, job.VM)
+	require.NoError(t, err)
+
+	var statuses []string
+	store.onSave = func(saved *types.VM) { statuses = append(statuses, saved.Status) }
+	return v, job, func() []string { return statuses }
+}
+
+// A runner that the workspace's concurrency limit has no room for is queued
+// until there is room, and its job says so. It is never in error, which a
+// runner that keeps crashing is, and it is not replaced: another would be
+// refused too, at the price of one more runner registered with GitHub.
 func TestGitHubRunnerWaitsForRoomInTheWorkspaceLimit(t *testing.T) {
 	r, store, _, runtime := runnerFixture(t)
 	ctx := context.Background()
 	calls := fakeGitHub(t, r, map[string]string{
-		"GET /repos/acme/repo/actions/runners":      `200 {"runners":[{"id":9}]}`,
-		"DELETE /repos/acme/repo/actions/runners/9": `204 {}`,
+		"POST /repos/acme/repo/actions/runners/generate-jitconfig": `201 {"encoded_jit_config":"jit-secret"}`,
+		"GET /repos/acme/repo/actions/runners":                     `200 {"runners":[{"id":9}]}`,
+		"DELETE /repos/acme/repo/actions/runners/9":                `204 {}`,
 	})
-	store.jobs[1] = queuedJob(1)
-	store.jobs[1].VM, store.jobs[1].Attempts = "ghr-test", 1
-	job := store.jobs[1]
-	refused := (&types.ThrottledByConcurrencyLimitError{Reason: "cpu quota exceeded"}).Error()
-	v := &types.VM{ID: "vm-runner", Name: "ghr-test", WorkspaceID: 7, TokenID: "token", DesiredState: types.VMStateRunning,
-		Status: types.VMStateError, Error: refused, LaunchAttempts: 5, StubID: "stub",
-		CreatedAt: time.Now(), UpdatedAt: time.Now(), LastActiveAt: time.Now()}
-	runtime.diskName = rootDisk(v)
-	store.rows[v.ID] = v
+	runtime.refuse = &types.ThrottledByConcurrencyLimitError{Reason: "cpu quota exceeded"}
+	v, job, statuses := queuedRunner(t, r, store)
+	require.Equal(t, types.VMStateQueued, v.Status)
+	require.Equal(t, "Workspace CPU limit reached", v.Waiting)
+	require.Empty(t, v.Error)
+	require.Empty(t, v.ContainerID)
+	response, err := json.Marshal(r.s.response(v))
+	require.NoError(t, err)
+	require.Contains(t, string(response), `"status":"queued"`)
+	require.Contains(t, string(response), `"waiting":"Workspace CPU limit reached"`)
+	require.NotContains(t, string(response), "concurrency_limit_reached")
 
-	// However often it was refused, it stays, and it asks again at once:
-	// it starts as soon as there is room.
-	require.NoError(t, r.s.reconcileVM(ctx, v))
+	// However often it is refused, it stays as it is and asks again at
+	// once, so that it starts as soon as there is room.
+	for range 7 {
+		require.NoError(t, r.s.reconcileVM(ctx, v))
+	}
+	require.Equal(t, 8, runtime.refusals)
+	require.Equal(t, types.VMStateQueued, v.Status)
+	require.Empty(t, v.Error)
+	require.NotEmpty(t, statuses())
+	for _, status := range statuses() {
+		require.Equal(t, types.VMStateQueued, status, "it is never seen starting or in error between two refusals")
+	}
 	require.Equal(t, types.VMStateRunning, v.DesiredState)
 	require.Equal(t, "Workspace CPU limit reached", runnerWaiting(*job, false, false))
 	require.Nil(t, job.ProvisionAt, "no runner is started in its place")
 	require.Equal(t, 1, job.Attempts)
 	require.Empty(t, job.Error)
+	require.Len(t, calls(), 1, "GitHub keeps the runner it registered")
+
+	// There is room: it starts, and is then a VM like any that starts.
+	runtime.refuse = nil
+	require.NoError(t, r.s.reconcileVM(ctx, v))
 	require.Len(t, runtime.requests, 1)
-	require.Empty(t, calls(), "GitHub keeps the runner")
 	require.Equal(t, runtime.requests[0], v.ContainerID)
+	require.Equal(t, types.VMStateStarting, v.Status)
+	require.Empty(t, v.Waiting)
 	runtime.containers.states[v.ContainerID] = &types.ContainerState{ContainerId: v.ContainerID, Status: types.ContainerStatusPending, WorkerId: "worker"}
 	require.NoError(t, r.s.reconcileVM(ctx, v))
 	require.Equal(t, "Starting a runner", runnerWaiting(*job, false, false))
@@ -2387,6 +2576,149 @@ func TestGitHubRunnerWaitsForRoomInTheWorkspaceLimit(t *testing.T) {
 	require.NoError(t, r.s.reconcileVM(ctx, v))
 	require.Equal(t, types.VMStateDeleted, v.Status)
 	require.NotNil(t, job.ProvisionAt)
+}
+
+// A runner of a workspace that has run out of credit is queued as well, and
+// its job says what it waits for. Billing is asked for it no more often than
+// for a VM in error, and it starts once there is credit.
+func TestGitHubRunnerWaitsForCredit(t *testing.T) {
+	r, store, _, runtime := runnerFixture(t)
+	ctx := context.Background()
+	calls := fakeGitHub(t, r, map[string]string{
+		"POST /repos/acme/repo/actions/runners/generate-jitconfig": `201 {"encoded_jit_config":"jit-secret"}`,
+	})
+	gateway := r.s.gateway.(*vmGateway)
+	stubs := 0
+	asked := func() int {
+		if gateway.stub != nil {
+			stubs, gateway.stub = stubs+1, nil
+		}
+		return stubs
+	}
+
+	// The gateway asks billing before it makes the VM's stub.
+	gateway.refuse = "insufficient_credits: Out of credits. Add credits at https://platform.beam.cloud/settings/credits to keep running workloads."
+	v, job, statuses := queuedRunner(t, r, store)
+	require.Equal(t, types.VMStateQueued, v.Status)
+	require.Equal(t, "Workspace is out of credits", v.Waiting)
+	require.Empty(t, v.Error)
+	require.Equal(t, 1, asked())
+
+	// It was refused a moment ago, and is not started again yet.
+	require.NoError(t, r.s.reconcileVM(ctx, v))
+	require.Equal(t, 1, asked())
+	require.Equal(t, "Workspace is out of credits", runnerWaiting(*job, false, false))
+
+	// The scheduler refuses a VM that has its stub in the same words.
+	gateway.refuse = ""
+	runtime.refuse = &types.InsufficientCreditsError{Code: "insufficient_credits", Reason: "Out of credits."}
+	for range 6 {
+		v.UpdatedAt = time.Now().Add(-time.Minute)
+		require.NoError(t, r.s.reconcileVM(ctx, v))
+	}
+	require.Equal(t, 2, asked(), "the stub is made once")
+	require.Equal(t, 6, runtime.refusals)
+	require.Equal(t, types.VMStateQueued, v.Status)
+	for _, status := range statuses() {
+		require.Equal(t, types.VMStateQueued, status)
+	}
+	require.Nil(t, job.ProvisionAt, "no runner is started in its place")
+	require.Equal(t, 1, job.Attempts)
+	require.Len(t, calls(), 1, "GitHub keeps the runner it registered")
+
+	// Credit was added.
+	runtime.refuse = nil
+	v.UpdatedAt = time.Now().Add(-time.Minute)
+	require.NoError(t, r.s.reconcileVM(ctx, v))
+	require.Len(t, runtime.requests, 1)
+	require.Equal(t, types.VMStateStarting, v.Status)
+	require.Empty(t, v.Waiting)
+}
+
+// What billing refuses for another reason than credit does not pass on its
+// own, and neither does any other failure to start: the runner is in error,
+// and says why.
+func TestGitHubRunnerIsInErrorWhenItCannotStart(t *testing.T) {
+	for name, refuse := range map[string]func(*vmGateway, *vmRuntime) string{
+		"blocked workspace": func(gateway *vmGateway, _ *vmRuntime) string {
+			gateway.refuse = "workspace_blocked: This workspace has been blocked."
+			return gateway.refuse
+		},
+		"credit could not be read": func(_ *vmGateway, runtime *vmRuntime) string {
+			runtime.refuse = &types.InsufficientCreditsError{Code: "billing_unavailable", Reason: "unable to verify credit balance; try again shortly"}
+			return runtime.refuse.Error()
+		},
+		"an image that is not a credit": func(gateway *vmGateway, _ *vmRuntime) string {
+			gateway.refuse = "insufficient_credits_image is not a VM image"
+			return gateway.refuse
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, store, _, runtime := runnerFixture(t)
+			fakeGitHub(t, r, map[string]string{
+				"POST /repos/acme/repo/actions/runners/generate-jitconfig": `201 {"encoded_jit_config":"jit-secret"}`,
+			})
+			message := refuse(r.s.gateway.(*vmGateway), runtime)
+			v, _, _ := queuedRunner(t, r, store)
+			require.Equal(t, types.VMStateError, v.Status)
+			require.Equal(t, message, v.Error)
+			require.Empty(t, v.Waiting)
+		})
+	}
+}
+
+// Only a runner is queued. A VM that someone starts is refused in so many
+// words, as before, so that whoever waits for it is told at once.
+func TestVMRefusedByTheWorkspaceLimitIsInError(t *testing.T) {
+	r, _, info, runtime := runnerFixture(t)
+	ctx := auth.ContextWithAuthInfo(context.Background(), info)
+	runtime.refuse = &types.ThrottledByConcurrencyLimitError{Reason: "cpu quota exceeded"}
+	v, err := r.s.createVM(ctx, info, types.VMCreateOptions{Name: "ghr-mine", Spec: types.VMSpec{ImageID: "image"}})
+	require.NoError(t, err)
+	require.Equal(t, types.VMStateError, v.Status)
+	require.Equal(t, "concurrency_limit_reached: cpu quota exceeded", v.Error)
+
+	// Its name makes it no runner, as no job was given it, and the pass that
+	// tries it again is told that it failed.
+	v.UpdatedAt = time.Now().Add(-time.Minute)
+	require.ErrorIs(t, r.s.reconcileVM(ctx, v), runtime.refuse)
+	require.Equal(t, 2, runtime.refusals)
+	require.NotEqual(t, types.VMStateQueued, v.Status)
+	require.Empty(t, v.Waiting)
+}
+
+// A gateway from before runners were queued left one that the workspace's
+// limit had no room for in error. It is read as queued, and is at its next
+// pass.
+func TestGitHubRunnerLeftInErrorByAnOlderGatewayIsQueued(t *testing.T) {
+	r, store, _, runtime := runnerFixture(t)
+	ctx := context.Background()
+	calls := fakeGitHub(t, r, map[string]string{})
+	store.jobs[1] = queuedJob(1)
+	store.jobs[1].VM, store.jobs[1].Attempts = "ghr-test", 1
+	job := store.jobs[1]
+	refused := &types.ThrottledByConcurrencyLimitError{Reason: "cpu quota exceeded"}
+	v := &types.VM{ID: "vm-runner", Name: "ghr-test", WorkspaceID: 7, TokenID: "token", DesiredState: types.VMStateRunning,
+		Status: types.VMStateError, Error: refused.Error(), LaunchAttempts: 5, StubID: "stub",
+		CreatedAt: time.Now(), UpdatedAt: time.Now(), LastActiveAt: time.Now()}
+	runtime.diskName = rootDisk(v)
+	store.rows[v.ID] = v
+
+	runtime.refuse = refused
+	require.NoError(t, r.s.reconcileVM(ctx, v))
+	require.Equal(t, 1, runtime.refusals, "it asks at once, however often it was refused")
+	require.Equal(t, types.VMStateQueued, v.Status)
+	require.Equal(t, "Workspace CPU limit reached", v.Waiting)
+	require.Empty(t, v.Error)
+	require.Equal(t, types.VMStateRunning, v.DesiredState)
+	require.Equal(t, "Workspace CPU limit reached", runnerWaiting(*job, false, false))
+	require.Nil(t, job.ProvisionAt, "no runner is started in its place")
+	require.Empty(t, calls(), "GitHub keeps the runner")
+
+	runtime.refuse = nil
+	require.NoError(t, r.s.reconcileVM(ctx, v))
+	require.Len(t, runtime.requests, 1)
+	require.Equal(t, types.VMStateStarting, v.Status)
 }
 
 // A runner that waits for room in the workspace's limit is removed without
@@ -2410,9 +2742,8 @@ func TestGitHubRunnerWaitingForRoomGoesWithItsJob(t *testing.T) {
 			})
 			store.jobs[1] = queuedJob(1)
 			store.jobs[1].VM, store.jobs[1].Attempts = "ghr-test", 1
-			refused := (&types.ThrottledByConcurrencyLimitError{Reason: "cpu quota exceeded"}).Error()
 			v := &types.VM{ID: "vm-runner", Name: "ghr-test", WorkspaceID: 7, TokenID: "token", DesiredState: types.VMStateRunning,
-				Status: types.VMStateError, Error: refused, LaunchAttempts: 1, StubID: "stub",
+				Status: types.VMStateQueued, Waiting: "Workspace CPU limit reached", LaunchAttempts: 1, StubID: "stub",
 				CreatedAt: time.Now(), UpdatedAt: time.Now(), LastActiveAt: time.Now()}
 			runtime.diskName = rootDisk(v)
 			store.rows[v.ID] = v

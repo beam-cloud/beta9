@@ -169,6 +169,7 @@ def _show(info, as_json):
             for key, label in (
                 ("id", "ID"),
                 ("status", "Status"),
+                ("waiting", "Waiting"),
                 ("error", "Error"),
                 ("public_ipv6", "IPv6"),
                 ("terminal_url", "Terminal" if 7681 in protected else "Terminal (public)"),
@@ -543,6 +544,8 @@ def _vm_table(records, starts):
     colors = {
         "running": "green",
         "starting": "cyan",
+        # A GitHub runner that its workspace has no room or credit to start.
+        "queued": "yellow",
         "stopping": "yellow",
         "paused": "yellow",
         "stopped": "dim",

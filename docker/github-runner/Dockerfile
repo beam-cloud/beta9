@@ -94,6 +94,35 @@ RUN apt-get update \
     && printf '%s  %s\n' "$yq" /usr/bin/yq "$compose" /usr/libexec/docker/cli-plugins/docker-compose | sha256sum --check - \
     && chmod 0755 /usr/bin/yq /usr/libexec/docker/cli-plugins/docker-compose
 
+# The libraries that the browsers of Playwright load and the fonts they draw
+# with: every package that "npx playwright install-deps" installs on Ubuntu
+# 24.04, for Chromium, Firefox and WebKit. A job need not run install-deps,
+# which finds nothing to install if it does. It still downloads the browsers,
+# in the versions its Playwright asks for. The lists are those of Playwright
+# 1.65.1, in the order of
+# https://github.com/microsoft/playwright/blob/v1.65.1/packages/playwright-core/src/server/registry/nativeDeps.ts
+RUN apt-get update \
+    && apt-get install --no-install-recommends \
+        # tools
+        xvfb fonts-noto-color-emoji fonts-unifont libfontconfig1 libfreetype6 xfonts-cyrillic \
+        xfonts-scalable fonts-liberation fonts-ipafont-gothic fonts-wqy-zenhei fonts-tlwg-loma-otf \
+        fonts-freefont-ttf \
+        # chromium
+        libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 libcups2t64 \
+        libdbus-1-3 libdrm2 libgbm1 libglib2.0-0t64 libnspr4 libnss3 libpango-1.0-0 libx11-6 \
+        libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 \
+        # firefox, less what is above
+        libavcodec60 libcairo-gobject2 libgdk-pixbuf-2.0-0 libgtk-3-0t64 libpangocairo-1.0-0 \
+        libx11-xcb1 libxcb-shm0 libxcursor1 libxi6 libxrender1 \
+        # webkit, less what is above
+        gstreamer1.0-libav gstreamer1.0-plugins-bad gstreamer1.0-plugins-base \
+        gstreamer1.0-plugins-good libicu74 libatomic1 libenchant-2-2 libepoxy0 libevent-2.1-7t64 \
+        libflite1 libgles2 libgstreamer-gl1.0-0 libgstreamer-plugins-bad1.0-0 \
+        libgstreamer-plugins-base1.0-0 libgstreamer1.0-0 libgtk-4-1 libharfbuzz-icu0 libharfbuzz0b \
+        libhyphen0 libjpeg-turbo8 liblcms2-2 libmanette-0.2-0 libopus0 libpng16-16t64 \
+        libsecret-1-0 libvpx9 libwayland-client0 libwayland-egl1 libwayland-server0 libwebp7 \
+        libwebpdemux2 libwoff1 libxml2 libxslt1.1 libx264-164 libavif16
+
 # PostgreSQL's server and client programs, and the headers of libpq, from
 # PostgreSQL's own repository, which is not left for a job's apt-get to read.
 # A job runs createdb or psql against a database of its own, makes a cluster
