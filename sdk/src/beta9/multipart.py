@@ -691,7 +691,14 @@ class Beta9Handler(RemoteHandler):
                 local_path = local_path / Path(remote_path.volume_path).name
             local_path.parent.mkdir(parents=True, exist_ok=True)
 
-            callback, _ = self._setup_callbacks(local_path.relative_to(Path.cwd()))
+            # Show the path relative to the current directory when the file lands
+            # inside it, and the full path otherwise.
+            try:
+                task_name = local_path.relative_to(Path.cwd())
+            except ValueError:
+                task_name = local_path
+
+            callback, _ = self._setup_callbacks(task_name)
             beta9_download(
                 service=self.service,
                 remote_path=remote_path,
