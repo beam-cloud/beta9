@@ -31,13 +31,12 @@ func taskQueueAutoscalerSampleFunc(i *taskQueueInstance) (*taskQueueAutoscalerSa
 		queueLength = -1
 	}
 
-	currentContainers := 0
 	state, err := i.State()
 	if err != nil {
-		currentContainers = -1
+		return nil, err
 	}
 
-	currentContainers = state.PendingContainers + state.RunningContainers
+	currentContainers := state.PendingContainers + state.RunningContainers
 
 	sample := &taskQueueAutoscalerSample{
 		QueueLength:       int64(queueLength),
