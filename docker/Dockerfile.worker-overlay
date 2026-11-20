@@ -5,6 +5,8 @@ ARG WORKER_RUNTIME_IMAGE=public.ecr.aws/n4e0e1y0/beta9-worker@sha256:5792f3b5c2c
 
 # Built from docker/Dockerfile.microvm; CI checks this matches hack/microvm-image-tag.sh.
 ARG MICROVM_IMAGE=public.ecr.aws/n4e0e1y0/beta9-microvm:bbcac5c19b31
+# Built from docker/Dockerfile.vm-gpu against that kernel; CI checks this matches hack/microvm-image-tag.sh nvidia.
+ARG MICROVM_GPU_IMAGE=public.ecr.aws/n4e0e1y0/beta9-microvm:69f97c98348b-nvidia
 
 # MICROVM_DEV=1 also compiles the microvm integration test binary into the
 # image so hack/microvm-smoke.sh can run it in place with the worker's PATH.
@@ -44,6 +46,19 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 FROM ${MICROVM_IMAGE} AS microvm
 
+# NVIDIA modules and firmware for that kernel, as docker/Dockerfile.worker
+# takes them: amd64 only, as the guest image is.
+FROM ${MICROVM_GPU_IMAGE} AS microvm-gpu-guest
+
+FROM scratch AS microvm-gpu-amd64
+COPY --from=microvm-gpu-guest /usr/lib/modules/ /nvidia/modules/
+COPY --from=microvm-gpu-guest /usr/lib/firmware/nvidia/ /nvidia/firmware/nvidia/
+
+FROM scratch AS microvm-gpu-arm64
+WORKDIR /nvidia
+
+FROM microvm-gpu-${TARGETARCH} AS microvm-gpu
+
 FROM --platform=$TARGETPLATFORM ${WORKER_RUNTIME_IMAGE}
 
 ARG TARGETARCH
@@ -63,3 +78,4 @@ RUN cd /tmp && \
 COPY --link --from=binaries /out/ /usr/local/bin/
 COPY --link --from=microvm /microvm/bin/ /usr/local/bin/
 COPY --link --from=microvm /microvm/share/ /usr/local/share/beam/microvm/
+COPY --link --from=microvm-gpu /nvidia/ /usr/local/share/beam/microvm/nvidia/

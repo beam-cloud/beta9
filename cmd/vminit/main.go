@@ -106,6 +106,15 @@ func run() (int, error) {
 	if err := assembleRoot(vm); err != nil {
 		return -1, fmt.Errorf("assemble root: %w", err)
 	}
+	// A guest boots without them as it did before there were any. A root
+	// that takes the driver has its indexes, and so needs none.
+	hostDriver, err := installGPUDriver(microvm.NewRoot, vm)
+	if err != nil {
+		logf("gpu driver: not taken: %v", err)
+	}
+	if err := installKernelModules(microvm.NewRoot, vm.KernelModules); err != nil {
+		logf("install kernel module indexes: %v", err)
+	}
 	if err := pivotRoot(); err != nil {
 		return -1, fmt.Errorf("pivot root: %w", err)
 	}
@@ -128,15 +137,23 @@ func run() (int, error) {
 		if err := installEgressCA(); err != nil {
 			return -1, err
 		}
-		return -1, bootSystemd(spec, workload, <-lateDevices)
+		return -1, bootSystemd(spec, workload, <-lateDevices, hostDriver)
 	}
 
-	return runAgent(spec.Process, false, <-lateDevices, workload)
+	return runAgent(spec.Process, false, <-lateDevices, hostDriver, workload)
 }
 
 // lateDevices is what announceBoot learned: the workload waits for them here.
 // A systemd guest's units wait for them in adoptSystemdAgent instead.
-func runAgent(process *specs.Process, systemd, lateDevices bool, workload *workloadMemory) (int, error) {
+// hostDriver is whether the root took the host's NVIDIA driver, which this
+// agent then loads.
+func runAgent(process *specs.Process, systemd, lateDevices, hostDriver bool, workload *workloadMemory) (int, error) {
+	// Ahead of the GPU: the host takes about as long to plug it in as the
+	// modules do to load.
+	var driver *gpuDriver
+	if hostDriver {
+		driver = startGPUDriver()
+	}
 	if err := serveVsock(microvm.FSPort, handleFSConn); err != nil {
 		return -1, err
 	}
@@ -158,6 +175,7 @@ func runAgent(process *specs.Process, systemd, lateDevices bool, workload *workl
 	defer ctrl.close()
 	go workload.watchOOM(ctrl)
 	ctrl.systemd = systemd
+	ctrl.driver = driver
 	if lateDevices {
 		ctrl.devices = make(chan struct{})
 	}
@@ -426,11 +444,15 @@ func assembleRoot(vm *microvm.Spec) error {
 			return fmt.Errorf("mount %s on %s: %w", disk.Device, disk.MountPath, err)
 		}
 	}
-	// A guest boots without them as it did before there were any.
-	if err := installKernelModules(newRoot, vm.KernelModules); err != nil {
-		logf("install kernel module indexes: %v", err)
-	}
 	return nil
+}
+
+func kernelRelease() (string, error) {
+	var uts unix.Utsname
+	if err := unix.Uname(&uts); err != nil {
+		return "", err
+	}
+	return unix.ByteSliceToString(uts.Release[:]), nil
 }
 
 // installKernelModules gives a root the host's module indexes for the running
@@ -438,11 +460,10 @@ func assembleRoot(vm *microvm.Spec) error {
 // are copies in memory: a file of the host's would be one more that a paused
 // VM needs from the worker that resumes it.
 func installKernelModules(newRoot string, modules map[string]map[string][]byte) error {
-	var uts unix.Utsname
-	if err := unix.Uname(&uts); err != nil {
+	release, err := kernelRelease()
+	if err != nil {
 		return err
 	}
-	release := unix.ByteSliceToString(uts.Release[:])
 	target, err := kernelModulesTarget(newRoot, release, modules[release])
 	if err != nil || target == "" {
 		return err
@@ -800,6 +821,9 @@ type control struct {
 	// arrived; nil unless this agent's workload waits for them.
 	devices     chan struct{}
 	devicesOnce sync.Once
+	// driver is the host's NVIDIA driver, which this agent loads for the GPU
+	// the host plugs in; nil in a guest that did not take it.
+	driver *gpuDriver
 }
 
 // controlReconnectTimeout bounds how long init keeps trying to reach the
@@ -948,10 +972,13 @@ func (c *control) serve(childPid func() int) {
 			path := firstNonEmpty(msg.Text, microvm.DiskMount)
 			go func(id uint64) { c.ack(id, fr.thaw(path)) }(msg.ID)
 		case microvm.MsgRescan:
-			// Off the loop: a loaded driver probes the new device here.
+			// Off the loop: a loaded driver probes the new device here, and
+			// the host's is loaded first so that it does.
 			go func(id uint64) {
+				c.driver.await(gpuDriverLoadLimit)
 				err := os.WriteFile("/sys/bus/pci/rescan", []byte("1"), 0)
 				if err == nil {
+					c.driver.nameDevices()
 					c.devicesArrived()
 					go gpu.keep(gpuDriverWait)
 				}

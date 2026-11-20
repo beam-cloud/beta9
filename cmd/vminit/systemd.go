@@ -29,6 +29,10 @@ const systemdAgentPIDFile = "/run/beam-vm/agent.pid"
 // lateDevicesFile exists in a systemd guest until the devices the host plugs
 // in after boot have arrived (microvm.Spec.LateDevices). /run is new at boot.
 const lateDevicesFile = "/run/beam-vm/late-devices"
+
+// gpuDriverFile exists in a systemd guest whose root took the host's NVIDIA
+// driver, which its agent then loads.
+const gpuDriverFile = "/run/beam-vm/gpu-driver"
 const sshKeysUnit = `[Unit]
 Description=Beam VM SSH host keys
 Before=ssh.service
@@ -120,7 +124,7 @@ func systemdBinary() (string, error) {
 	return "", fmt.Errorf("persistent VMs require systemd in the image; install systemd and dbus or use the Beam VM image")
 }
 
-func bootSystemd(spec *specs.Spec, workload *workloadMemory, lateDevices bool) error {
+func bootSystemd(spec *specs.Spec, workload *workloadMemory, lateDevices, hostDriver bool) error {
 	binary, err := systemdBinary()
 	if err != nil {
 		return err
@@ -150,6 +154,11 @@ func bootSystemd(spec *specs.Spec, workload *workloadMemory, lateDevices bool) e
 
 	if lateDevices {
 		if err := os.WriteFile(lateDevicesFile, nil, 0600); err != nil {
+			return err
+		}
+	}
+	if hostDriver {
+		if err := os.WriteFile(gpuDriverFile, nil, 0600); err != nil {
 			return err
 		}
 	}
@@ -459,7 +468,8 @@ func runSystemdAgent() (int, error) {
 		return 1, err
 	}
 	defer workload.close()
-	return runAgent(&process, true, false, workload)
+	_, err = os.Lstat(gpuDriverFile)
+	return runAgent(&process, true, false, err == nil, workload)
 }
 
 // The agent starts beside PID 1's exec of systemd. Once its ordinary service

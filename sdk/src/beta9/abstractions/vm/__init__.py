@@ -188,8 +188,14 @@ class VM:
     and a 50 GiB root. Desktop is opt-in and needs at least 1024 MiB RAM.
     GPU VMs currently require x86_64. The stock NVIDIA image pairs its guest
     kernel, driver modules, userspace and GSP firmware. Host VFIO passthrough
-    does not require matching host NVIDIA drivers. Custom GPU images should
-    include /boot/beam/vmlinux built for their installed GPU modules.
+    does not require matching host NVIDIA drivers. A custom GPU image brings
+    its driver one of two ways. It includes /boot/beam/vmlinux built for its
+    installed GPU modules. Or it installs only the NVIDIA libraries, in the
+    stock image's driver version (that image's com.beam.nvidia-driver.version
+    label), and neither a kernel nor modules: the platform then loads its own
+    modules and firmware of that version for the kernel it boots, so the
+    image does not depend on that kernel. An image whose libraries are of
+    another version is left to load a driver of its own.
     A GPU VM pauses with what its CUDA programs keep on the GPU, given free
     guest memory to hold it, and resumes on any GPU of the same model. Pause
     is refused, and the VM keeps running, while another kind of program has

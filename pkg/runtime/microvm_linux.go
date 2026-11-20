@@ -50,6 +50,10 @@ type MicroVM struct {
 	// which sit beside it, by release and name; nil for a kernel that came
 	// without them.
 	kernelModules map[string]map[string][]byte
+	// gpuDriver is the directory of NVIDIA modules and firmware built for
+	// the guest kernel, which sits beside it; "" where the worker image
+	// has none.
+	gpuDriver string
 }
 
 var (
@@ -71,6 +75,7 @@ type microVMInstance struct {
 	vfio       *microVMVFIO
 	ram        *microVMRAM // huge page guest RAM, which a checkpoint saves
 	kernel     *os.File    // the image's kernel, until the hypervisor has inherited it
+	gpuDriver  string      // the directory shared at microvm.GPUDriverDir, which a checkpoint keeps
 
 	virtiofsd      *exec.Cmd
 	hypervisor     *exec.Cmd
@@ -142,8 +147,11 @@ func NewMicroVM(cfg Config) (Runtime, error) {
 		return nil, unavailable(fmt.Sprintf("create state root: %v", err))
 	}
 	sweepLeftoverVMs(cfg.MicroVMStateRoot)
-	m := &MicroVM{cfg: cfg, vms: map[string]*microVMInstance{}, kernelModules: microVMKernelModules(cfg.MicroVMKernelPath)}
+	m := &MicroVM{cfg: cfg, vms: map[string]*microVMInstance{}, kernelModules: microVMKernelModules(cfg.MicroVMKernelPath), gpuDriver: microVMGPUDriver(cfg.MicroVMKernelPath)}
 	if len(cfg.MicroVMVFIODevices) > 0 {
+		if m.gpuDriver == "" {
+			log.Warn().Msg("no NVIDIA driver for the guest kernel; GPU microvms need an image with its own kernel and modules")
+		}
 		if err := allowSurplusHugePages(microVMSurplusHugePagesPath, microVMMeminfoPath); err != nil {
 			log.Warn().Err(err).Msg("cannot allow surplus huge pages; GPU microvms start slowly unless the host reserves them")
 		}
@@ -186,6 +194,57 @@ func microVMKernelModules(kernel string) map[string]map[string][]byte {
 		}
 	}
 	return indexes
+}
+
+// microVMGPUDriver is the directory of NVIDIA modules and firmware that
+// came with a guest kernel, or "".
+func microVMGPUDriver(kernel string) string {
+	// The directory itself, which is what a guest is shown and a checkpoint
+	// copies: neither follows a link.
+	driver, err := filepath.EvalSymlinks(filepath.Join(filepath.Dir(kernel), microVMGPUDriverDir))
+	if err != nil {
+		return ""
+	}
+	for _, dir := range []string{microvm.GPUDriverModules, microvm.GPUDriverFirmware} {
+		if info, err := os.Stat(filepath.Join(driver, dir)); err != nil || !info.IsDir() {
+			return ""
+		}
+	}
+	return driver
+}
+
+// guestGPUDriver is the directory of NVIDIA modules and firmware to share
+// with a guest, or "". A guest that is given a GPU and boots this worker's
+// kernel is offered the driver built for that kernel; an image with a kernel
+// of its own has the modules built for it. A restored guest gets the files
+// its checkpoint kept: the driver it has loaded asks for its firmware again
+// when a GPU returns, and this worker's may be of another version.
+func (m *MicroVM) guestGPUDriver(inst *microVMInstance, restoreFrom string) (string, error) {
+	if restoreFrom != "" {
+		kept := filepath.Join(restoreFrom, checkpointGPUDriverDir)
+		info, err := os.Lstat(kept)
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		if err == nil && !info.IsDir() {
+			// A link would share whatever it names with the guest.
+			err = fmt.Errorf("%s is not a directory", kept)
+		}
+		return kept, err
+	}
+	if m.gpuDriver == "" || inst.vfio == nil || len(inst.vfio.paths) == 0 {
+		return "", nil
+	}
+	root, err := os.OpenRoot(inst.canvas)
+	if err != nil {
+		return "", fmt.Errorf("open image root: %w", err)
+	}
+	defer root.Close()
+	// kernelPath decides what to make of a kernel that is there.
+	if _, err := root.Lstat(MicroVMImageKernelPath); !os.IsNotExist(err) {
+		return "", nil
+	}
+	return m.gpuDriver, nil
 }
 
 // sweepLeftoverVMs kills the hypervisors and virtiofsd daemons a previous
@@ -670,6 +729,13 @@ func (m *MicroVM) Checkpoint(ctx context.Context, containerID string, opts *Chec
 		return fmt.Errorf("checkpoint guest init: %w", err)
 	}
 	steps := microvm.StartSteps()
+	// While the guest still runs: the files are the host's and do not change.
+	if err := keepGPUDriver(inst.gpuDriver, filepath.Join(opts.ImagePath, checkpointGPUDriverDir)); err != nil {
+		return fmt.Errorf("checkpoint GPU driver: %w", err)
+	}
+	if inst.gpuDriver != "" {
+		steps.Took("driver")
+	}
 	if passthrough {
 		// A booting guest answers before it has its devices.
 		select {
@@ -2066,6 +2132,21 @@ func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network
 			return fmt.Errorf("install cuda-checkpoint: %w", err)
 		}
 	}
+	driver, err := m.guestGPUDriver(inst, restoreFrom)
+	if err != nil {
+		return fmt.Errorf("find GPU driver: %w", err)
+	}
+	if driver != "" {
+		if err := inst.canvasDir(microvm.GPUDriverDir); err != nil {
+			return err
+		}
+		// Read-only, as guest init is: every guest of this worker shares
+		// these files.
+		if err := inst.bindCanvas(driver, filepath.Join(inst.canvas, microvm.GPUDriverDir), false, true); err != nil {
+			return fmt.Errorf("share GPU driver: %w", err)
+		}
+	}
+	inst.gpuDriver = driver
 
 	plan := microVMMountPlan(spec.Mounts)
 	mounts := make([]microvm.Mount, 0, len(plan))
@@ -2083,6 +2164,7 @@ func (m *MicroVM) prepareCanvas(inst *microVMInstance, spec *specs.Spec, network
 	guestSpec := microVMGuestSpec(spec, network, root, extra, mounts)
 	guestSpec.MountConcurrency = 4
 	guestSpec.LateDevices = passthrough
+	guestSpec.GPUDriver = driver != ""
 	// No image has the indexes of this kernel, and without them modprobe
 	// fails for a driver the kernel has built in. A booting guest takes them
 	// where its root has none; a restored one has what it booted with.

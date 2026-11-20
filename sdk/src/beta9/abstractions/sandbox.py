@@ -207,10 +207,13 @@ class Sandbox(Pod):
                 instance.docker.run("hello-world")
                 ```
         use_vm (bool):
-            Run the sandbox in its own virtual machine instead of a container. Only CPU sandboxes
-            are supported; the sandbox is scheduled exclusively onto microvm pools and fails if none
-            is available rather than falling back to a container. Docker, durable disks and memory
-            snapshots work as usual. Default is False.
+            Run the sandbox in its own virtual machine instead of a container. The sandbox is
+            scheduled exclusively onto microvm pools and fails if none is available rather than
+            falling back to a container. Docker, durable disks and memory snapshots work as usual.
+            A GPU is passed through to the VM, whose own kernel runs the NVIDIA driver: the image
+            needs the NVIDIA libraries in the driver version of
+            `beta9.abstractions.vm.DEFAULT_VM_GPU_BASE_IMAGE`, for which the platform loads the
+            kernel modules, or a kernel and modules of its own (see `VM`). Default is False.
         ports (Optional[List[int]]):
             List of ports to expose from the sandbox. When specified, these ports will be accessible
             via public URLs upon sandbox creation. Default is an empty list. You can also dynamically

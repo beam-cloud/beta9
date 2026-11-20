@@ -138,7 +138,14 @@ const (
 	checkpointVMDir    = "vm"         // Cloud Hypervisor snapshot: config.json, state.json, memory-ranges
 	checkpointRootDisk = "root.img"   // the scratch root disk, when the VM has one
 	checkpointInitFile = "guest-init" // executable backing the captured guest agent
+	// The NVIDIA modules and firmware of a guest that was offered the
+	// host's, laid out as microvm.GPUDriverDir is.
+	checkpointGPUDriverDir = "guest-nvidia"
 )
+
+// microVMGPUDriverDir is the directory beside the guest kernel that holds
+// the NVIDIA driver built for it, laid out as microvm.GPUDriverDir is.
+const microVMGPUDriverDir = "nvidia"
 
 // --- bundle -----------------------------------------------------------------
 
@@ -417,6 +424,51 @@ func copyFile(src, dst string, mode os.FileMode) error {
 		return err
 	}
 	return out.Close()
+}
+
+// keepGPUDriver gives a checkpoint the NVIDIA driver its guest was offered,
+// and none where the guest was offered none. The guest's kernel has those
+// modules loaded and asks for their firmware whenever a GPU arrives; the
+// worker that restores it may have a driver of another version. A guest that
+// was restored from this checkpoint has the checkpoint's copy already.
+func keepGPUDriver(driver, kept string) error {
+	if driver == "" {
+		return os.RemoveAll(kept)
+	}
+	offered, err := os.Stat(driver)
+	if err != nil {
+		return err
+	}
+	if has, err := os.Stat(kept); err == nil && os.SameFile(offered, has) {
+		return nil
+	}
+	if err := os.RemoveAll(kept); err != nil {
+		return err
+	}
+	return copyTree(driver, kept)
+}
+
+// copyTree copies the directories and regular files under src to dst, which
+// must not exist. Anything else there is not copied: a link would be
+// followed out of dst by whoever reads it.
+func copyTree(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		switch {
+		case entry.IsDir():
+			return os.Mkdir(target, 0o755)
+		case entry.Type().IsRegular():
+			return copyFile(path, target, 0o644)
+		}
+		return nil
+	})
 }
 
 func waitForPath(ctx context.Context, path string, timeout time.Duration, gaveUp func() bool) error {

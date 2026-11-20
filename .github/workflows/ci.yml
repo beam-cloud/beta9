@@ -90,6 +90,11 @@ jobs:
           for f in docker/Dockerfile.worker docker/Dockerfile.worker-overlay; do
             grep -qxF "$want" "$f" || { echo "$f must contain: $want"; exit 1; }
           done
+          # The NVIDIA modules a worker gives GPU guests are built for the kernel it boots.
+          want="ARG MICROVM_GPU_IMAGE=public.ecr.aws/n4e0e1y0/beta9-microvm:$(hack/microvm-image-tag.sh nvidia)"
+          for f in docker/Dockerfile.worker docker/Dockerfile.worker-overlay; do
+            grep -qxF "$want" "$f" || { echo "$f must contain: $want"; exit 1; }
+          done
           want="ARG KERNEL_DEVEL=public.ecr.aws/n4e0e1y0/beta9-microvm:$(hack/microvm-image-tag.sh)-kernel-devel"
           grep -qxF "$want" docker/Dockerfile.vm-gpu || { echo "docker/Dockerfile.vm-gpu must contain: $want"; exit 1; }
 

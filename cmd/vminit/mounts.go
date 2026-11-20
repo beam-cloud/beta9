@@ -96,9 +96,15 @@ func kernelModulesTarget(root, release string, indexes map[string][]byte) (strin
 			return "", fmt.Errorf("module index %q is not a file name", name)
 		}
 	}
+	return unusedRootDir(root, filepath.Join("/lib/modules", release))
+}
+
+// unusedRootDir is where a root has the directory path, which the host may
+// fill for the running kernel: "" where the root has files of its own there.
+func unusedRootDir(root, path string) (string, error) {
 	// /lib is a link in most images, and one that leaves the root would put
-	// the indexes in the image instead.
-	target, err := canonicalMountTarget(root, filepath.Join("/lib/modules", release))
+	// the host's files in the image instead.
+	target, err := canonicalMountTarget(root, path)
 	if err != nil {
 		return "", err
 	}
