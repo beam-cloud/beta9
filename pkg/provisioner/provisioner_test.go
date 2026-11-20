@@ -533,6 +533,35 @@ func TestThePoolsPriceLimitIsPassedToTheProvider(t *testing.T) {
 	require.Equal(t, int64(1_500_000), w.verda.Creates()[0].MaxHourlyCostMicros)
 }
 
+// A pool that asks for a disk buys its machines with it, where the provider
+// sells the disk apart: at the price with that disk, which is the price its
+// limit is held to and the price the machine is recorded at.
+func TestAPoolBuysItsMachinesWithTheDiskItAsksFor(t *testing.T) {
+	w := newWorld(t)
+	// A dollar an hour, five cents of it for a 200 GB disk: $1.20 with 1000.
+	w.verda.SetOffers(l40s(withDisk(200, 5)))
+	w.control.set(func(c *fakeControl) {
+		c.pools["spot-l40s"] = spotL40S(func(pool *types.WorkerPoolConfig) {
+			pool.Provisioning.MaxNodeHourlyCents, pool.Provisioning.DiskGB = 119, 1000
+		})
+	})
+	w.Tick(w.ctx)
+	require.False(t, w.CanProvision(w.ctx, "spot-l40s", anyMachine))
+
+	w.control.set(func(c *fakeControl) {
+		c.pools["spot-l40s"] = spotL40S(func(pool *types.WorkerPoolConfig) {
+			pool.Provisioning.MaxNodeHourlyCents, pool.Provisioning.DiskGB = 120, 1000
+		})
+	})
+	w.Tick(w.ctx)
+	machine := w.buy("spot-l40s")
+	require.Equal(t, int64(120*microsPerCent), machine.HourlyMicros)
+	created := w.verda.Creates()[0]
+	require.Equal(t, int64(1000), created.DiskGB)
+	require.Equal(t, int64(1000*1024), created.Offer.StorageMB)
+	require.Equal(t, int64(120*microsPerCent), created.MaxHourlyCostMicros)
+}
+
 // Invariant 5: every instance has a record written before the create call.
 func TestTheRecordIsWrittenBeforeTheProviderIsAsked(t *testing.T) {
 	var w *world
@@ -1264,6 +1293,15 @@ func l40s(change ...func(*providers.Offer)) providers.Offer {
 	return offer
 }
 
+// withDisk gives an offer a disk of gb gigabytes. Of its price, cents an
+// hour are the disk, which the provider sells apart; with zero the machine
+// comes with it.
+func withDisk(gb, cents int64) func(*providers.Offer) {
+	return func(offer *providers.Offer) {
+		offer.StorageMB, offer.DiskHourlyMicros = gb*1024, cents*microsPerCent
+	}
+}
+
 func costing(cents int64) func(*providers.Offer) {
 	return func(offer *providers.Offer) { offer.HourlyCostMicros = cents * microsPerCent }
 }
@@ -1302,6 +1340,8 @@ func TestSells(t *testing.T) {
 		{"without a price", l40s(costing(0)), spotL40S(), false},
 		{"at the pool's price limit", l40s(costing(150)), spotL40S(func(p *types.WorkerPoolConfig) { p.Provisioning.MaxNodeHourlyCents = 150 }), true},
 		{"over the pool's price limit", l40s(costing(151)), spotL40S(func(p *types.WorkerPoolConfig) { p.Provisioning.MaxNodeHourlyCents = 150 }), false},
+		{"with the disk the pool asks for", l40s(withDisk(1000, 0)), spotL40S(func(p *types.WorkerPoolConfig) { p.Provisioning.DiskGB = 1000 }), true},
+		{"with a smaller disk than the pool asks for", l40s(withDisk(999, 0)), spotL40S(func(p *types.WorkerPoolConfig) { p.Provisioning.DiskGB = 1000 }), false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1509,6 +1549,9 @@ func TestChooseSaysWhatLeftNoOffer(t *testing.T) {
 	payingAtMost := func(cents int64) func(*types.WorkerPoolConfig) {
 		return func(pool *types.WorkerPoolConfig) { pool.Provisioning.MaxNodeHourlyCents = cents }
 	}
+	withAtLeast := func(gb int64) func(*types.WorkerPoolConfig) {
+		return func(pool *types.WorkerPoolConfig) { pool.Provisioning.DiskGB = gb }
+	}
 
 	tests := []struct {
 		name   string
@@ -1571,6 +1614,18 @@ func TestChooseSaysWhatLeftNoOffer(t *testing.T) {
 			pool:   []func(*types.WorkerPoolConfig){payingAtMost(100), inRegions("FIN-02")},
 			offers: []providers.Offer{l40s(costing(90)), l40s(in("FIN-02"), func(o *providers.Offer) { o.HourlyCostMicros = 1_353_700 })},
 			want:   "verda has no L40S within provisioning.maxNodeHourlyCents 100: the cheapest costs 135.37 cents an hour",
+		},
+		{
+			name:   "a disk bigger than any machine comes with",
+			pool:   []func(*types.WorkerPoolConfig){withAtLeast(1000)},
+			offers: []providers.Offer{l40s(withDisk(200, 0)), l40s(withDisk(500, 0), named("1L40S.10V")), l40s(withDisk(2000, 0), onDemand)},
+			want:   "verda has no L40S with a disk of provisioning.diskGB 1000: the biggest is 500 GB",
+		},
+		{
+			name:   "a price limit under the price with the pool's disk",
+			pool:   []func(*types.WorkerPoolConfig){withAtLeast(1000), payingAtMost(100)},
+			offers: []providers.Offer{l40s(withDisk(200, 5))},
+			want:   "verda has no L40S within provisioning.maxNodeHourlyCents 100: the cheapest costs 120 cents an hour",
 		},
 		{
 			name:   "nothing the pool buys is big enough",

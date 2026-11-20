@@ -277,6 +277,7 @@ func (c *Verda) Offers(ctx context.Context, filter OfferFilter) ([]Offer, error)
 				MemoryMB:         int64(math.Round(instanceType.Memory.GB * 1024)),
 				StorageMB:        c.config.DiskGB * 1024,
 				HourlyCostMicros: price + catalogue.diskMicros,
+				DiskHourlyMicros: catalogue.diskMicros,
 				Spot:             location.spot,
 			})
 		}
@@ -352,7 +353,7 @@ func (c *Verda) Create(ctx context.Context, req CreateRequest) (Instance, error)
 		Description:  req.Name,
 		LocationCode: req.Offer.Region,
 		IsSpot:       req.Offer.Spot,
-		OSVolume:     verdaOSVolume{Name: req.Name, Size: c.config.DiskGB},
+		OSVolume:     verdaOSVolume{Name: req.Name, Size: req.diskGB(c.config.DiskGB)},
 		SSHKeyIDs:    c.config.SSHKeyIDs,
 		Tags:         verdaTagList(tags),
 	}

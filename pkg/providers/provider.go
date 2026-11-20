@@ -109,6 +109,10 @@ type Offer struct {
 	StorageMB     int64
 
 	HourlyCostMicros int64
+	// DiskHourlyMicros is how much of HourlyCostMicros is the disk, where
+	// the provider sells the disk apart from the machine. Zero where a
+	// machine comes with its disk.
+	DiskHourlyMicros int64
 	// Spot marks a machine the provider may take back at any time, sold for
 	// less. Create buys the offer as it is listed: spot when Spot is set.
 	Spot bool
@@ -126,6 +130,19 @@ type Offer struct {
 	Longitude         float64
 }
 
+// WithDisk is the offer with a disk of gb gigabytes in place of its own, at
+// the provider's price for it: what a purchase that asks for that disk pays.
+// It is the offer itself where a machine comes with its disk.
+func (o Offer) WithDisk(gb int64) Offer {
+	if gb <= 0 || o.DiskHourlyMicros <= 0 || o.StorageMB <= 0 {
+		return o
+	}
+	disk := o.DiskHourlyMicros * gb * 1024 / o.StorageMB
+	o.HourlyCostMicros += disk - o.DiskHourlyMicros
+	o.StorageMB, o.DiskHourlyMicros = gb*1024, disk
+	return o
+}
+
 type CreateRequest struct {
 	Offer Offer
 
@@ -136,6 +153,12 @@ type CreateRequest struct {
 	// StartupScript is shell that runs as root when the machine first
 	// boots. A provider may run it again on a later boot, as GCP does.
 	StartupScript string
+
+	// DiskGB is the size of the machine's disk, where the provider sells the
+	// disk apart from the machine: AWS, GCP, Nebius and Verda. Zero means
+	// the size the provider is configured with, which the offer is priced
+	// for.
+	DiskGB int64
 
 	// Tags are stored with the instance and returned by Get and List.
 	Tags map[string]string
@@ -904,6 +927,12 @@ const (
 	// hoursPerMonth is the month that a disk's price is for.
 	hoursPerMonth = 730
 )
+
+// diskGB is the size of the disk a create asks for: the request's, or the
+// provider's own.
+func (req CreateRequest) diskGB(configured int64) int64 {
+	return cmp.Or(req.DiskGB, configured)
+}
 
 // hourlyDiskMicros is what a disk of gb gigabytes costs an hour, in micros,
 // at a price for a gigabyte for a month. It is for the providers that have

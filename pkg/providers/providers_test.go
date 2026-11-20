@@ -2715,7 +2715,7 @@ func awsOffer(zone, instanceType, gpu string, gpus uint32, vcpus, memoryGiB, mic
 	return Offer{
 		ID: zone + "/" + instanceType, Provider: "aws", Cloud: "aws", InstanceType: instanceType, Region: zone[:len(zone)-1],
 		GPU: gpu, GPUCount: gpus, CPUMillicores: vcpus * 1000, MemoryMB: memoryGiB * 1024, StorageMB: 200 * 1024,
-		HourlyCostMicros: micros + awsTestDisk, Spot: true,
+		HourlyCostMicros: micros + awsTestDisk, DiskHourlyMicros: awsTestDisk, Spot: true,
 	}
 }
 
@@ -2950,7 +2950,7 @@ func TestAWSUsesTheSubnetsGroupsImageAndKeyItIsGiven(t *testing.T) {
 	require.NoError(t, err)
 	// The one zone that has a named subnet, with the price of the disk.
 	inC := awsOffer("us-east-1c", "g5.xlarge", "A10G", 1, 4, 16, 350_000)
-	inC.StorageMB, inC.HourlyCostMicros = 500*1024, 350_000+54_794
+	inC.StorageMB, inC.HourlyCostMicros, inC.DiskHourlyMicros = 500*1024, 350_000+54_794, 54_794
 	require.Equal(t, []Offer{inC}, offers)
 
 	_, err = client.Create(context.Background(), CreateRequest{Offer: inC, Name: "beam-a10g-a1b2c3d4"})
@@ -3872,7 +3872,7 @@ func gcpOffer(zone, machineType, gpu string, gpus uint32, vcpus, memoryGB, micro
 	return Offer{
 		ID: zone + "/" + machineType, Provider: "gcp", Cloud: "gcp", InstanceType: machineType, Region: zone[:strings.LastIndex(zone, "-")],
 		GPU: gpu, GPUCount: gpus, CPUMillicores: vcpus * 1000, MemoryMB: memoryGB * 1024, StorageMB: 200 * 1024,
-		HourlyCostMicros: micros + gcpTestDisk, Spot: true,
+		HourlyCostMicros: micros + gcpTestDisk, DiskHourlyMicros: gcpTestDisk, Spot: true,
 	}
 }
 
@@ -5504,17 +5504,17 @@ var (
 	nebiusH200 = Offer{
 		ID: "gpu-h200-sxm/1gpu-16vcpu-200gb", Provider: "nebius", Cloud: "nebius", InstanceType: "gpu-h200-sxm/1gpu-16vcpu-200gb",
 		Region: "eu-north1", GPU: "H200", GPUCount: 1, CPUMillicores: 16_000, MemoryMB: 200 * 1024, StorageMB: 200 * 1024,
-		HourlyCostMicros: 3_380_000 + nebiusTestDisk, Spot: true, Available: 2,
+		HourlyCostMicros: 3_380_000 + nebiusTestDisk, DiskHourlyMicros: nebiusTestDisk, Spot: true, Available: 2,
 	}
 	nebiusH200x8 = Offer{
 		ID: "gpu-h200-sxm/8gpu-128vcpu-1600gb", Provider: "nebius", Cloud: "nebius", InstanceType: "gpu-h200-sxm/8gpu-128vcpu-1600gb",
 		Region: "eu-north1", GPU: "H200", GPUCount: 8, CPUMillicores: 128_000, MemoryMB: 1600 * 1024, StorageMB: 200 * 1024,
-		HourlyCostMicros: 8*3_380_000 + nebiusTestDisk, Spot: true, Available: 1,
+		HourlyCostMicros: 8*3_380_000 + nebiusTestDisk, DiskHourlyMicros: nebiusTestDisk, Spot: true, Available: 1,
 	}
 	nebiusRTXPro6000 = Offer{
 		ID: "gpu-rtx6000/1gpu-24vcpu-218gb", Provider: "nebius", Cloud: "nebius", InstanceType: "gpu-rtx6000/1gpu-24vcpu-218gb",
 		Region: "us-central1", GPU: "RTXPro6000", GPUCount: 1, CPUMillicores: 24_000, MemoryMB: 218 * 1024, StorageMB: 200 * 1024,
-		HourlyCostMicros: 1_789_000 + nebiusTestDisk, Spot: true, Available: 2,
+		HourlyCostMicros: 1_789_000 + nebiusTestDisk, DiskHourlyMicros: nebiusTestDisk, Spot: true, Available: 2,
 	}
 )
 
@@ -5939,7 +5939,7 @@ func TestNebiusUsesTheImageFamilyAndDiskItIsGiven(t *testing.T) {
 	offers, err := client.Offers(ctx, OfferFilter{})
 	require.NoError(t, err)
 	want := nebiusH200
-	want.StorageMB, want.HourlyCostMicros = 500*1024, 3_380_000+48_630
+	want.StorageMB, want.HourlyCostMicros, want.DiskHourlyMicros = 500*1024, 3_380_000+48_630, 48_630
 	require.Equal(t, want, offers[0])
 
 	_, err = client.Create(ctx, CreateRequest{Offer: offers[0], Name: "beam-h200-a1b2c3d4"})
@@ -8050,11 +8050,16 @@ func newVerdaSite(t *testing.T) site {
 	}
 }
 
+// What a machine's 200 GB disk costs an hour: Verda sells it apart, at $0.20
+// a gigabyte a month.
+const verdaTestDisk = 54_795
+
+// verdaOffer is an offer at a price that includes verdaTestDisk.
 func verdaOffer(instanceType, region, gpu string, cores, memoryGB, micros int64, spot bool) Offer {
 	offer := Offer{
 		ID: instanceType, Provider: "verda", Cloud: "verda", InstanceType: instanceType, Region: region,
 		GPU: gpu, CPUMillicores: cores * 1000, MemoryMB: memoryGB * 1024, StorageMB: 200 * 1024,
-		HourlyCostMicros: micros, Spot: spot,
+		HourlyCostMicros: micros, DiskHourlyMicros: verdaTestDisk, Spot: spot,
 	}
 	if gpu != "" {
 		offer.GPUCount = 1
@@ -8067,10 +8072,9 @@ func TestVerdaOffersWhatEachLocationHasOnDemandAndAsSpot(t *testing.T) {
 	offers, err := api.client(testOwner).Offers(context.Background(), OfferFilter{})
 	require.NoError(t, err)
 
-	// Every price is the machine's plus $0.054795 an hour for its 200 GB
-	// disk, which Verda sells apart at $0.20 a gigabyte a month. The spot
-	// price is half the on-demand price.
-	const disk = 54_795
+	// Every price is the machine's plus its disk's. The spot price is half
+	// the on-demand price.
+	const disk = verdaTestDisk
 	require.Equal(t, []Offer{
 		verdaOffer("1L40S.20V", "FIN-01", "L40S", 20, 60, 1_998_000+disk, false),
 		verdaOffer("1L40S.20V", "FIN-02", "L40S", 20, 60, 1_998_000+disk, false),
@@ -8195,6 +8199,59 @@ func TestVerdaCreateSendsWhatVerdaNeeds(t *testing.T) {
 	require.Equal(t, map[string]string{
 		"beam-owner=" + testOwner + " beam-l40s-a1b2c3d4": "#!/usr/bin/env bash\nset -euo pipefail\ncurl -fsSL https://gateway.example/join | sh\n",
 	}, api.storedScripts())
+}
+
+// An offer is priced with the disk its provider is configured with. With
+// another, it costs what the provider charges for that one instead.
+func TestAnOfferWithAnotherDiskCostsTheDifference(t *testing.T) {
+	offer := awsOffer("us-east-1a", "g5.xlarge", "A10G", 1, 4, 16, 350_000)
+
+	// 1000 GB cost five times what 200 do.
+	bigger := offer.WithDisk(1000)
+	require.Equal(t, int64(1000*1024), bigger.StorageMB)
+	require.Equal(t, int64(5*awsTestDisk), bigger.DiskHourlyMicros)
+	require.Equal(t, int64(350_000+5*awsTestDisk), bigger.HourlyCostMicros)
+
+	require.Equal(t, offer, bigger.WithDisk(200))
+	require.Equal(t, offer, offer.WithDisk(0), "no disk asked for")
+
+	// A machine that comes with its disk is sold as it is.
+	whole := Offer{ID: "H100", StorageMB: 1000 * 1024, HourlyCostMicros: 3_300_000}
+	require.Equal(t, whole, whole.WithDisk(2000))
+}
+
+// A purchase that asks for a disk gets that one instead of the provider's,
+// where the disk is sold apart from the machine. A price limit is the
+// machine's, so the bigger disk leaves less of it for what AWS and Nebius
+// are given a limit for.
+func TestAPurchaseBuysTheDiskItAsksFor(t *testing.T) {
+	ctx := context.Background()
+
+	verda := newVerdaAPI(t)
+	_, err := verda.client(testOwner).Create(ctx, CreateRequest{Offer: Offer{ID: "1L40S.20V", Region: "FIN-01"}, Name: "beam-l40s-a1b2c3d4", DiskGB: 1000})
+	require.NoError(t, err)
+	require.Equal(t, float64(1000), verda.lastCreate()["os_volume"].(map[string]any)["size"])
+
+	gcp := newGCPAPI(t)
+	_, err = gcp.client(testOwner).Create(ctx, CreateRequest{Offer: gcpL4InA, Name: "beam-l4-a1b2c3d4", DiskGB: 1000})
+	require.NoError(t, err)
+	require.Equal(t, "1000", gcp.lastCreate()["disks"].([]any)[0].(map[string]any)["initializeParams"].(map[string]any)["diskSizeGb"])
+
+	// 1000 GB cost AWS $0.109589 an hour, of a limit of $0.50.
+	cloud := newAWSCloud(t)
+	_, err = cloud.client(testOwner).Create(ctx, CreateRequest{Offer: awsA10GInA, Name: "beam-a10g-a1b2c3d4", DiskGB: 1000, MaxHourlyCostMicros: 500_000})
+	require.NoError(t, err)
+	run := cloud.lastRun("us-east-1")
+	require.Equal(t, int32(1000), aws.ToInt32(run.BlockDeviceMappings[0].Ebs.VolumeSize))
+	require.Equal(t, "0.3904", aws.ToString(run.InstanceMarketOptions.SpotOptions.MaxPrice))
+
+	// And Nebius $0.09726, of a limit of $4.
+	nebius := newNebiusAPI(t)
+	_, err = nebius.client(testOwner).Create(ctx, CreateRequest{Offer: nebiusH200, Name: "beam-h200-a1b2c3d4", DiskGB: 1000, MaxHourlyCostMicros: 4_000_000})
+	require.NoError(t, err)
+	disk := nebius.lastCreate()["spec"].(map[string]any)["bootDisk"].(map[string]any)["managedDisk"].(map[string]any)["spec"].(map[string]any)
+	require.Equal(t, "1000", disk["sizeGibibytes"])
+	require.Equal(t, []string{nebiusNorth + " beamgpuh200sxmmax3902 3.902"}, nebius.limits())
 }
 
 func TestVerdaBuysOnDemandWithoutTheSpotSettings(t *testing.T) {

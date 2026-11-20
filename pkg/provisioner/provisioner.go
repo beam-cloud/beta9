@@ -353,6 +353,7 @@ func (p *Provisioner) reserve(ctx context.Context, pool string, needs []schedule
 		// The pool's price limit is the most it pays, whatever the provider
 		// charges later.
 		request.MaxHourlyCostMicros = config.Provisioning.MaxNodeHourlyCents * microsPerCent
+		request.DiskGB = config.Provisioning.DiskGB
 		record := newMachine(id, pool, offer, p.clock.Now())
 		record.TokenHash = tokenHash
 		record.Until = request.Until
@@ -992,6 +993,9 @@ func byPrice(a, b providers.Offer) int {
 	)
 }
 
+// byDisk orders offers by the size of their disks.
+func byDisk(a, b providers.Offer) int { return cmp.Compare(a.StorageMB, b.StorageMB) }
+
 // obstacle is what stands between a pool and a machine to buy. The detail is
 // how it stands this time: the room that was needed, a price, the regions on
 // offer. It differs from one request and one listing to the next, and what
@@ -1033,6 +1037,13 @@ func noOffer(p purchase, need scheduler.MachineNeed) error {
 			detail: fmt.Sprintf(": the cheapest costs %s cents an hour", cents(slices.MinFunc(atAnyPrice, byPrice).HourlyCostMicros)),
 		}
 	}
+	asked.Provisioning.DiskGB = 0
+	if withAnyDisk := selling(p.offers, asked); len(withAnyDisk) > 0 {
+		return obstacle{
+			what:   fmt.Sprintf("%s has no %s with a disk of provisioning.diskGB %d", from, one, buying.DiskGB),
+			detail: fmt.Sprintf(": the biggest is %d GB", slices.MaxFunc(withAnyDisk, byDisk).StorageMB/1024),
+		}
+	}
 	asked.Provisioning.Regions = nil
 	if anywhere := selling(p.offers, asked); len(anywhere) > 0 {
 		return obstacle{
@@ -1052,11 +1063,12 @@ func noOffer(p purchase, need scheduler.MachineNeed) error {
 	return fmt.Errorf("%s is not known to have anything in stock", from)
 }
 
-// selling returns what of the stock a pool that asks for this buys.
+// selling returns what of the stock a pool that asks for this buys, each
+// with the disk the pool asks for and at the price with it.
 func selling(stock []providers.Offer, asked types.WorkerPoolConfig) []providers.Offer {
 	var sold []providers.Offer
 	for _, offer := range stock {
-		if sells(offer, asked) {
+		if offer = offer.WithDisk(asked.Provisioning.DiskGB); sells(offer, asked) {
 			sold = append(sold, offer)
 		}
 	}
@@ -1079,13 +1091,15 @@ func cents(micros int64) string {
 }
 
 // sells reports whether the offer is something the pool buys: its GPU type,
-// spot or on-demand as configured, in its regions, within its price limit.
+// spot or on-demand as configured, in its regions, with a disk no smaller
+// than it asks for, within its price limit.
 func sells(offer providers.Offer, pool types.WorkerPoolConfig) bool {
 	buying := pool.Provisioning
 	return (offer.Spot == buying.Spot || (!offer.Spot && buying.OnDemand)) &&
 		strings.EqualFold(offer.GPU, strings.TrimSpace(pool.GPUType)) &&
 		(offer.GPUCount > 0) == (offer.GPU != "") &&
 		(len(buying.Regions) == 0 || slices.Contains(buying.Regions, offer.Region)) &&
+		offer.StorageMB >= buying.DiskGB*1024 &&
 		// Without a price there is no telling what it does to the caps.
 		offer.HourlyCostMicros > 0 &&
 		(buying.MaxNodeHourlyCents <= 0 || offer.HourlyCostMicros <= buying.MaxNodeHourlyCents*microsPerCent)

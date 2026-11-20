@@ -372,6 +372,7 @@ func (c *AWS) regionOffers(ctx context.Context, name string) ([]Offer, error) {
 			MemoryMB:         machine.memoryMiB,
 			StorageMB:        c.config.DiskGB * 1024,
 			HourlyCostMicros: DollarsToMicros(hourly) + hourlyDiskMicros(c.config.DiskGB, awsDiskMicrosPerGBMonth),
+			DiskHourlyMicros: hourlyDiskMicros(c.config.DiskGB, awsDiskMicrosPerGBMonth),
 			Spot:             true,
 		})
 	}
@@ -472,7 +473,7 @@ func (c *AWS) runInput(req CreateRequest, tags map[string]string, facts awsRegio
 	if req.MaxHourlyCostMicros > 0 {
 		// The limit is the machine's; AWS's is the instance's, less the
 		// disk. Without one AWS charges up to the on-demand price.
-		limit := req.MaxHourlyCostMicros - hourlyDiskMicros(c.config.DiskGB, awsDiskMicrosPerGBMonth)
+		limit := req.MaxHourlyCostMicros - hourlyDiskMicros(req.diskGB(c.config.DiskGB), awsDiskMicrosPerGBMonth)
 		if limit <= 0 {
 			return nil, fmt.Errorf("a price limit of %d micros an hour leaves nothing for an AWS instance", req.MaxHourlyCostMicros)
 		}
@@ -499,7 +500,7 @@ func (c *AWS) runInput(req CreateRequest, tags map[string]string, facts awsRegio
 		BlockDeviceMappings: []ec2types.BlockDeviceMapping{{
 			DeviceName: aws.String(facts.rootDevice),
 			Ebs: &ec2types.EbsBlockDevice{
-				VolumeSize:          aws.Int32(int32(c.config.DiskGB)),
+				VolumeSize:          aws.Int32(int32(req.diskGB(c.config.DiskGB))),
 				VolumeType:          ec2types.VolumeTypeGp3,
 				DeleteOnTermination: aws.Bool(true),
 			},

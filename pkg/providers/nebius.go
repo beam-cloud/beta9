@@ -336,6 +336,7 @@ func (c *Nebius) offerOf(advised nebiusAdvice, price nebiusSpotPrice) Offer {
 		MemoryMB:         int64(preset.Resources.MemoryGiB) * 1024,
 		StorageMB:        c.config.DiskGB * 1024,
 		HourlyCostMicros: int64(price.Price.Value)*int64(preset.Resources.GPUs) + hourlyDiskMicros(c.config.DiskGB, nebiusDiskMicrosPerGBMonth),
+		DiskHourlyMicros: hourlyDiskMicros(c.config.DiskGB, nebiusDiskMicrosPerGBMonth),
 		Spot:             true,
 		Available:        uint32(advised.Status.Preemptible.Available),
 	}
@@ -408,7 +409,7 @@ func (c *Nebius) Create(ctx context.Context, req CreateRequest) (Instance, error
 	// VM that is to have it.
 	policy := ""
 	if req.MaxHourlyCostMicros > 0 {
-		if policy, err = c.priceLimit(ctx, project, platform, req.Offer.GPUCount, req.MaxHourlyCostMicros); err != nil {
+		if policy, err = c.priceLimit(ctx, project, platform, req); err != nil {
 			return Instance{}, err
 		}
 	}
@@ -483,7 +484,7 @@ func (c *Nebius) spec(req CreateRequest, platform, preset, subnet, policy string
 			"managedDisk": map[string]any{
 				"name": req.Name,
 				"spec": map[string]any{
-					"sizeGibibytes":     strconv.FormatInt(c.config.DiskGB, 10),
+					"sizeGibibytes":     strconv.FormatInt(req.diskGB(c.config.DiskGB), 10),
 					"type":              nebiusDiskType,
 					"sourceImageFamily": map[string]string{"imageFamily": c.config.ImageFamily},
 				},
@@ -527,16 +528,17 @@ func nebiusCloudConfig(commands string) string {
 }
 
 // priceLimit returns the pricing policy that has Nebius take a VM back when
-// it would cost more than maxMicros an hour. Nebius limits the price of a
-// GPU, with a policy for a platform in a project, so the policy is found
+// it would cost more than the request allows an hour. Nebius limits the price
+// of a GPU, with a policy for a platform in a project, so the policy is found
 // among the project's by its platform and limit, and made when there is
 // none.
-func (c *Nebius) priceLimit(ctx context.Context, project nebiusProject, platform string, gpus uint32, maxMicros int64) (string, error) {
+func (c *Nebius) priceLimit(ctx context.Context, project nebiusProject, platform string, req CreateRequest) (string, error) {
+	gpus, maxMicros := req.Offer.GPUCount, req.MaxHourlyCostMicros
 	if gpus == 0 {
 		return "", fmt.Errorf("a Nebius price limit is for a GPU, and the offer has none")
 	}
 	// Nebius takes a limit in thousandths of a dollar.
-	perGPU := (maxMicros - hourlyDiskMicros(c.config.DiskGB, nebiusDiskMicrosPerGBMonth)) / int64(gpus) / 1000 * 1000
+	perGPU := (maxMicros - hourlyDiskMicros(req.diskGB(c.config.DiskGB), nebiusDiskMicrosPerGBMonth)) / int64(gpus) / 1000 * 1000
 	if perGPU <= 0 {
 		return "", fmt.Errorf("a price limit of %d micros an hour leaves nothing for the GPUs of a Nebius VM", maxMicros)
 	}
