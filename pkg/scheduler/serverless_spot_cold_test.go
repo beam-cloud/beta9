@@ -283,6 +283,29 @@ func TestManagedEndpointSpotReplicaFailsAtOnceWhenItsPoolCannotBuy(t *testing.T)
 	require.Nil(t, left, "the request is not left to wait")
 }
 
+// A machine counts against what its pool may buy from the moment it is
+// bought, and has its Pending worker a moment later. A replica that passes
+// in between waits for the machine: a pool of one machine would otherwise
+// fail the replica it had just bought for.
+func TestManagedEndpointSpotReplicaWaitsForAMachineThatWasJustBought(t *testing.T) {
+	s, err := NewSchedulerForTest()
+	require.NoError(t, err)
+	s.spawn, s.workerPoolManager = inline, NewWorkerPoolManager()
+	const pool = "spot-b200"
+	provider := &fakeProvisioner{inStock: false, sold: []ProvisionedMachine{{MachineID: "machine-a", CPU: 64_000, Memory: 2_097_152, GPUCount: 8, Spot: true}}}
+	spotPoolFor(t, s, pool, provider)
+	s.SetProvisioner(provider)
+
+	request := spotReplica(pool)
+	require.NoError(t, s.Run(request))
+	queued, err := s.requestBacklog.Pop()
+	require.NoError(t, err)
+	newSchedulingAttempt(s, queued, nil).run()
+	status, _ := s.containerRepo.GetContainerRequestStatus(request.ContainerId)
+	require.NotEqual(t, types.ContainerRequestStatusFailed, status, "the request waits")
+	require.Len(t, provider.sold, 1)
+}
+
 // A replica placed on Spot runs only in a Spot pool that takes managed
 // endpoints: not in one that also buys on demand, nor in one that did not
 // opt in, whatever its request names.

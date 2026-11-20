@@ -161,7 +161,7 @@ func (a *schedulingAttempt) grow() {
 	case choice.exhausted:
 		a.fail(types.ContainerSchedulingFailureProvisioningLimit)
 		return
-	case choice.pool == nil && isManagedRequest(a.request):
+	case choice.pool == nil && isManagedRequest(a.request) && !s.machineComing(route):
 		// Its pool has no machine coming and can buy none. The endpoint's
 		// controller places the replica again, in a pool that can.
 		a.fail(types.ContainerSchedulingFailureProvisioningLimit)
@@ -199,6 +199,25 @@ func (a *schedulingAttempt) grow() {
 	reservationID := s.provisioning.addReservation(s, a.request, choice.pool, choice.size)
 	s.background(func() { s.addWorker(a.request, choice.pool, choice.size, reservationID) })
 	a.requeueForWorkerWait()
+}
+
+// machineComing reports whether a pool of the route has bought a machine
+// that has not run a worker yet. Such a machine counts against what its
+// pool may buy from the moment it is bought, and has the Pending worker that
+// requests wait for a moment later: a request that passes in between finds
+// neither a worker nor a pool that can buy. A pool that cannot be asked is
+// taken to have one coming, since that says nothing about the request.
+func (s *Scheduler) machineComing(route route) bool {
+	for _, candidate := range route.pools {
+		buying := buyer(candidate.Controller)
+		if buying == nil {
+			continue
+		}
+		if booting, err := buying.provisioner.Booting(buying.ctx, buying.poolName()); err != nil || len(booting) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // askAgainLater requeues a request that no pool could be asked for a worker
