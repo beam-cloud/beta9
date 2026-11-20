@@ -1851,9 +1851,9 @@ func TestAnOfferWhoseMachineFailedToStartIsPassedOverForAWhile(t *testing.T) {
 	require.Equal(t, "hyperstack", w.buy("spot-l40s").Cloud)
 }
 
-// A machine its provider took back is replaced at once, by the same offer
-// if the provider still lists it: a provider that has no more says so when
-// it is asked.
+// A machine that ran and was then taken back is replaced at once, by the
+// same offer if the provider still lists it: a provider that has no more
+// says so when it is asked.
 func TestAnOfferWhoseMachineWasTakenBackIsBoughtAgain(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1869,6 +1869,7 @@ func TestAnOfferWhoseMachineWasTakenBackIsBoughtAgain(t *testing.T) {
 			w.verda.SetOffers(l40s(), l40s(in("FIN-02"), costing(140)))
 			w.Tick(w.ctx)
 			machine := w.buy("spot-l40s")
+			w.workers.join(machine)
 			w.after(launchGrace)
 
 			test.take(w, machine)
@@ -1878,6 +1879,36 @@ func TestAnOfferWhoseMachineWasTakenBackIsBoughtAgain(t *testing.T) {
 			require.Equal(t, "FIN-01", w.buy("spot-l40s").Region)
 		})
 	}
+}
+
+// A provider that has no spot machine to spare does not always say so when
+// it is asked: it sells one, and takes it back before it has come up. What
+// that machine was bought as is passed over for a while, like an offer the
+// provider refused to sell, so that the pool does not buy it over and over
+// while what waits for it waits.
+func TestAnOfferWhoseMachineWasTakenBackBeforeItRanIsPassedOverForAWhile(t *testing.T) {
+	taken := func(offers ...providers.Offer) *world {
+		w := newWorld(t)
+		w.verda.SetOffers(offers...)
+		w.Tick(w.ctx)
+		machine := w.buy("spot-l40s")
+		w.after(launchGrace)
+		w.verda.SetStatus(machine.InstanceID, providers.StatusInterrupted, "preempted")
+		w.after(tickInterval)
+		w.gone(machine)
+		return w
+	}
+
+	// The next machine is bought as something else.
+	w := taken(l40s(), l40s(in("FIN-02"), costing(140)))
+	require.Equal(t, "FIN-02", w.buy("spot-l40s").Region)
+
+	// A pool that buys nothing else has nothing to buy meanwhile, and says
+	// so to what would wait for it.
+	w = taken(l40s())
+	require.False(t, w.CanProvision(w.ctx, "spot-l40s", anyMachine))
+	w.every(tickInterval, soldOutFor)
+	require.True(t, w.CanProvision(w.ctx, "spot-l40s", anyMachine))
 }
 
 // A machine that is given back for a reason of the pool's own says nothing
@@ -3016,6 +3047,16 @@ func TestDecide(t *testing.T) {
 			was:  joined(),
 			seen: seen(time.Hour, providerHas(providers.StatusInterrupted), worker(types.WorkerStatusAvailable, busy)),
 			want: released("its provider took it back", watch.ResultInterrupted),
+		},
+		{
+			// A spot machine its provider could not spare: one bought as the
+			// same would go the same way.
+			name: "its provider took it back before it ran",
+			was:  machine(),
+			seen: seen(5*time.Minute, providerHas(providers.StatusInterrupted)),
+			want: func(m *Machine) {
+				m.Release = &Release{Reason: "its provider took it back before it ran", End: watch.ResultInterrupted, SoldOut: true}
+			},
 		},
 		{
 			name: "its provider failed to start it",

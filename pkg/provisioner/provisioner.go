@@ -58,8 +58,8 @@ const (
 	recordsMaxAge = time.Second
 
 	// soldOutFor is how long an offer is passed over, whatever the provider
-	// lists, after the provider refused to sell it for lack of stock or
-	// failed to start a machine bought as it.
+	// lists, after the provider refused to sell it for lack of stock, failed
+	// to start a machine bought as it, or took one back before it ran.
 	soldOutFor = 5 * time.Minute
 	// quotaBackoff is how long a pool does not buy from a provider after it
 	// refused for quota.
@@ -682,9 +682,9 @@ type Release struct {
 	// DrainUntil is how long the machine's work is waited for before it is
 	// given back anyway. Zero means it is given back at once.
 	DrainUntil time.Time `json:"drain_until,omitzero"`
-	// SoldOut is set when the provider could not start what it sold. What
-	// the machine was bought as is then passed over for a while, like an
-	// offer the provider refused to sell.
+	// SoldOut is set when the provider could not start what it sold, or
+	// took it back before it ran. What the machine was bought as is then
+	// passed over for a while, like an offer the provider refused to sell.
 	SoldOut bool `json:"sold_out,omitempty"`
 }
 
@@ -1447,7 +1447,7 @@ func decide(m Machine, s sighting) (next Machine, releaseIfIdle bool) {
 		return m, false // its provider may yet come to know of it
 	}
 	if reason, end := atProvider(&m, s); reason != "" {
-		m.Release = &Release{Reason: reason, End: end, SoldOut: reason == failedToStart}
+		m.Release = &Release{Reason: reason, End: end, SoldOut: reason == failedToStart || reason == takenBeforeItRan}
 		return m, false
 	}
 	if m.InstanceID == "" {
@@ -1470,6 +1470,12 @@ func decide(m Machine, s sighting) (next Machine, releaseIfIdle bool) {
 // before it ever ran a worker. What it was bought as is then passed over for
 // a while.
 const failedToStart = "its provider failed to start it"
+
+// takenBeforeItRan is why a spot machine is given back that its provider
+// took back before it ever ran a worker. The provider has none to spare, and
+// the next one bought as the same would go the same way: it is passed over
+// for a while too.
+const takenBeforeItRan = "its provider took it back before it ran"
 
 // lostStatus is why a machine is given back whose provider reports it in
 // this status: the provider no longer runs it.
@@ -1517,8 +1523,13 @@ func atProvider(m *Machine, s sighting) (reason, end string) {
 		}
 		// A machine that failed after it had run was started: what it was
 		// bought as can be run.
-		if s.instance.Status == providers.StatusFailed && m.ReadyAt.IsZero() {
-			return failedToStart, watch.ResultFailed
+		if m.ReadyAt.IsZero() {
+			switch s.instance.Status {
+			case providers.StatusFailed:
+				return failedToStart, watch.ResultFailed
+			case providers.StatusInterrupted:
+				return takenBeforeItRan, watch.ResultInterrupted
+			}
 		}
 		return lostStatus[s.instance.Status], lostEnd[s.instance.Status]
 	}
