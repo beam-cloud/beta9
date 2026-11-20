@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"net/http"
 	"slices"
 	"strconv"
@@ -71,6 +72,7 @@ const (
 	waitingGitHub   = "GitHub is limiting requests"
 	waitingCapacity = "Waiting for capacity"
 	waitingQuota    = "Workspace CPU limit reached"
+	waitingCredits  = "Workspace is out of credits"
 	waitingRetry    = "Retrying"
 	waitingStart    = "Starting a runner"
 	// A runner that could take the job is up, and the job is GitHub's to
@@ -146,6 +148,8 @@ func (s *Service) initGitHubRunners(api *echo.Group) error {
 	group.GET("/:workspaceId/jobs", auth.WithStrictWorkspaceAuth(r.jobs))
 	group.POST("/:workspaceId/jobs/:jobId/cancel", auth.WithStrictWorkspaceAuth(r.cancelJob))
 	group.POST("/:workspaceId/jobs/:jobId/stop", auth.WithStrictWorkspaceAuth(r.stopJob))
+	group.PUT("/:workspaceId/limit", auth.WithClusterAdminAuth(r.setLimit))
+	group.DELETE("/:workspaceId/limit", auth.WithClusterAdminAuth(r.setLimit))
 	if r.config.AppID == "" {
 		return nil
 	}
@@ -213,7 +217,7 @@ func (r *githubRunners) status(c echo.Context) error {
 // respond answers a request with the status of its workspace's runners.
 func (r *githubRunners) respond(c echo.Context, installation *types.GitHubRunnerInstallation) error {
 	ctx, info := requestContext(c)
-	running, err := r.s.repo.CountGitHubRunners(ctx, info.Workspace.Id)
+	runners, err := r.count(ctx, info.Workspace.Id)
 	if err != nil {
 		return err
 	}
@@ -222,7 +226,7 @@ func (r *githubRunners) respond(c echo.Context, installation *types.GitHubRunner
 		Enabled:      r.github != nil,
 		Installation: installation,
 		Sizes:        runnerSizes,
-		Runners:      runnerCount{Running: running, Limit: r.limit()},
+		Runners:      runners,
 	}
 	if installation != nil {
 		status.EnhancedCache = &installation.EnhancedCache
@@ -231,9 +235,63 @@ func (r *githubRunners) respond(c echo.Context, installation *types.GitHubRunner
 	return c.JSON(http.StatusOK, status)
 }
 
-// limit is the most runners a workspace has at once, or zero for any number.
+// limit is the most runners a workspace has at once unless another number
+// is set for it (setLimit), or zero for any number.
 func (r *githubRunners) limit() int {
 	return max(r.config.RunnerLimit, 0)
+}
+
+// count is how many runners a workspace has, and how many it may have.
+func (r *githubRunners) count(ctx context.Context, workspaceId uint) (runnerCount, error) {
+	running, err := r.s.repo.CountGitHubRunners(ctx, workspaceId)
+	if err != nil {
+		return runnerCount{}, err
+	}
+
+	limit, err := r.s.repo.GetGitHubRunnerLimit(ctx, workspaceId, r.limit())
+	return runnerCount{Running: running, Limit: limit}, err
+}
+
+// setLimit sets the most runners that a workspace has at once, which only an
+// administrator of the cluster may: PUT {"limit": n}, where zero is any
+// number, or DELETE for what every workspace is allowed. It answers with how
+// many runners the workspace has and may have. The workspace's CPU limit
+// still holds: a runner that it has no room for is queued.
+func (r *githubRunners) setLimit(c echo.Context) error {
+	ctx := c.Request().Context()
+	workspace, err := r.s.backend.GetWorkspaceByExternalId(ctx, c.Param("workspaceId"))
+	if errors.Is(err, sql.ErrNoRows) {
+		return echo.NewHTTPError(http.StatusNotFound, "workspace not found")
+	}
+	if err != nil {
+		return err
+	}
+
+	var req struct {
+		Limit *int `json:"limit"`
+	}
+	if c.Request().Method == http.MethodPut {
+		if err := decode(c, &req); err != nil {
+			return err
+		}
+
+		if req.Limit == nil || *req.Limit < 0 || *req.Limit > math.MaxInt32 {
+			return echo.NewHTTPError(http.StatusBadRequest, "limit must be a number of runners, or 0 for any number")
+		}
+	}
+
+	if err := r.s.repo.SetGitHubRunnerLimit(ctx, workspace.Id, req.Limit); err != nil {
+		return err
+	}
+
+	// The jobs that waited for a runner may be due one now.
+	r.poke()
+	runners, err := r.count(ctx, workspace.Id)
+	if err != nil {
+		return err
+	}
+
+	return c.JSON(http.StatusOK, runners)
 }
 
 // update changes the settings of the workspace's account that a request
@@ -273,12 +331,9 @@ func (r *githubRunners) update(c echo.Context) error {
 		}
 	}
 
-	// The jobs that waited are due, so the loop need not wait for its tick.
+	// The jobs that waited are due.
 	if req.Paused != nil && !installation.Paused {
-		select {
-		case r.wake <- struct{}{}:
-		default:
-		}
+		r.poke()
 	}
 
 	return r.respond(c, installation)
@@ -342,12 +397,8 @@ func (r *githubRunners) jobs(c echo.Context) error {
 
 // full reports whether a workspace has as many runners as it may.
 func (r *githubRunners) full(ctx context.Context, workspaceId uint) (bool, error) {
-	if r.limit() == 0 {
-		return false, nil
-	}
-
-	running, err := r.s.repo.CountGitHubRunners(ctx, workspaceId)
-	return running >= r.limit(), err
+	runners, err := r.count(ctx, workspaceId)
+	return runners.Limit > 0 && runners.Running >= runners.Limit, err
 }
 
 // runnerWaiting says what a queued job that no runner has taken waits for,
@@ -935,13 +986,19 @@ func (r *githubRunners) jobChanged(ctx context.Context, event runnerEvent) error
 	// A queued job is due for a runner. A job that started took one, which
 	// leaves the jobs that GitHub holds back a spare runner short.
 	if status == types.GitHubJobQueued || status == types.GitHubJobInProgress {
-		select {
-		case r.wake <- struct{}{}:
-		default:
-		}
+		r.poke()
 	}
 
 	return nil
+}
+
+// poke has this gateway's loop look at the jobs now, and not at its next
+// tick. The other gateways find in the database what changed at theirs.
+func (r *githubRunners) poke() {
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
 }
 
 // run starts the runners that jobs are due, as jobs are queued and every few
@@ -1177,6 +1234,8 @@ func (r *githubRunners) launch(ctx context.Context, job types.GitHubRunnerJob, s
 			RootLayer:           layer,
 		},
 		Metadata: map[string]string{"github.repository": job.Repository},
+		// The job waits on GitHub for as long as its runner has to.
+		Queue: true,
 	})
 	return err
 }
@@ -1201,7 +1260,7 @@ func (s *Service) reconcileRunner(ctx context.Context, v *types.VM) (bool, error
 	}
 
 	waiting := runner.JobStatus == ""
-	if waiting && throttled(v) {
+	if waiting && queued(v) {
 		// Its job no longer waits: GitHub cancelled it, or gave it another
 		// runner. This one would start only to be removed, in room that a
 		// queued job needs.
@@ -1211,9 +1270,9 @@ func (s *Service) reconcileRunner(ctx context.Context, v *types.VM) (bool, error
 			return true, s.repo.SaveVM(ctx, v)
 		}
 
-		// The workspace's limit has no room for this runner, and would have
-		// none for one in its place. It keeps asking: room comes as runners
-		// finish.
+		// The workspace has no room for this runner, or no credit, and would
+		// have none for one in its place. It keeps asking: room comes as
+		// runners finish, and credit when it is added.
 		v.LaunchAttempts = 0
 	}
 
@@ -1373,10 +1432,12 @@ func (r *githubRunners) idle(ctx context.Context, v *types.VM, runner *types.Git
 	return removed, err == nil && !removed, err
 }
 
-// throttled reports whether a VM's last launch was refused because its
-// workspace runs as much as its concurrency limit allows.
-func throttled(v *types.VM) bool {
-	return v.Status == types.VMStateError && v.ContainerID == "" && strings.Contains(v.Error, concurrencyLimitError)
+// queued reports whether a VM's last launch was refused for a reason that
+// passes on its own, which a runner waits out (Service.queue). A gateway
+// from before runners were queued left one that its workspace's concurrency
+// limit had no room for in error, which is read as the same.
+func queued(v *types.VM) bool {
+	return v.ContainerID == "" && (v.Status == types.VMStateQueued || v.Status == types.VMStateError && strings.Contains(v.Error, concurrencyLimitError))
 }
 
 var concurrencyLimitError = (&types.ThrottledByConcurrencyLimitError{}).Error()
@@ -1390,8 +1451,8 @@ func (s *Service) unplaced(v *types.VM) bool {
 
 // observe tells the job that a runner was started for what its VM is found
 // to be doing, when that changes: that the job waits for capacity while the
-// VM has no worker to start on, or for room in the workspace's limit, and
-// when the VM was ready. The worker says
+// VM has no worker to start on, or for what the VM is queued for, and when
+// the VM was ready. The worker says
 // when it started, to the second, which is nearer than when a pass finds it
 // running, some seconds later. No runner is held up for what its job is told.
 func (r *githubRunners) observe(ctx context.Context, v *types.VM, runner *types.GitHubRunner, state *types.ContainerState) {
@@ -1401,8 +1462,8 @@ func (r *githubRunners) observe(ctx context.Context, v *types.VM, runner *types.
 		waits = waitingCapacity
 	}
 
-	if runner.JobStatus == "" && throttled(v) {
-		waits = waitingQuota
+	if runner.JobStatus == "" && queued(v) {
+		waits = cmp.Or(v.Waiting, waitingQuota)
 	}
 
 	// That GitHub holds the job back is found out of a runner that is up

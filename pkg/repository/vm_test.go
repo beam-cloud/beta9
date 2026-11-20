@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"os"
@@ -722,30 +723,49 @@ func TestGitHubRunnerJobIsClaimedWithinTheLimit(t *testing.T) {
 		`AND NOT EXISTS (SELECT 1 FROM persistent_vm v WHERE v.workspace_id = r.workspace_id AND v.name = r.vm) ) ) + (`,
 		`d.workspace_id = j.workspace_id AND d.installation_id = j.installation_id`,
 		`d.provision_at <= NOW() AND (d.provision_at, d.id) < (j.provision_at, j.id) ) < $4);`)
-	job := types.GitHubRunnerJob{ID: 5, Attempts: 2}
+	// The limit is what the workspace of the job may have: the one the claim
+	// is given, unless one is set for it. It is read first, and the statement
+	// has it as a number.
+	limit := statement(`SELECT COALESCE((SELECT runner_limit FROM github_runner_limit WHERE workspace_id = $1), $2);`)
+	limited := func(most int) *sqlmock.Rows { return sqlmock.NewRows([]string{"limit"}).AddRow(most) }
+	job := types.GitHubRunnerJob{ID: 5, WorkspaceID: 8, Attempts: 2}
+	mock.ExpectQuery(limit).WithArgs(uint(8), 100).WillReturnRows(limited(100))
 	mock.ExpectExec(claim).WithArgs(int64(5), 2, "ghr-a", 100).WillReturnResult(sqlmock.NewResult(0, 1))
 	claimed, err := r.ClaimGitHubRunnerJob(ctx, &job, "ghr-a", 100)
 	require.NoError(t, err)
 	require.True(t, claimed)
-	require.Equal(t, types.GitHubRunnerJob{ID: 5, Attempts: 3, VM: "ghr-a"}, job)
+	require.Equal(t, types.GitHubRunnerJob{ID: 5, WorkspaceID: 8, Attempts: 3, VM: "ghr-a"}, job)
 
 	// A job that is not claimed, as one past the limit, stays as it is.
-	mock.ExpectExec(claim).WithArgs(int64(5), 3, "ghr-b", 100).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(limit).WithArgs(uint(8), 100).WillReturnRows(limited(250))
+	mock.ExpectExec(claim).WithArgs(int64(5), 3, "ghr-b", 250).WillReturnResult(sqlmock.NewResult(0, 0))
 	claimed, err = r.ClaimGitHubRunnerJob(ctx, &job, "ghr-b", 100)
 	require.NoError(t, err)
 	require.False(t, claimed)
-	require.Equal(t, types.GitHubRunnerJob{ID: 5, Attempts: 3, VM: "ghr-a"}, job)
+	require.Equal(t, types.GitHubRunnerJob{ID: 5, WorkspaceID: 8, Attempts: 3, VM: "ghr-a"}, job)
+
+	// Nor is one claimed when what its workspace may have cannot be read.
+	mock.ExpectQuery(limit).WithArgs(uint(8), 100).WillReturnError(sql.ErrConnDone)
+	claimed, err = r.ClaimGitHubRunnerJob(ctx, &job, "ghr-b", 100)
+	require.ErrorIs(t, err, sql.ErrConnDone)
+	require.False(t, claimed)
 
 	// The jobs of a workspace that is full are not listed as due, and the
-	// others are, the job due longest first.
+	// others are, the job due longest first. With no limit set for any
+	// workspace, that is one statement, of every workspace.
 	received := time.Date(2026, 11, 16, 9, 0, 0, 123_000_000, time.UTC)
 	columns := strings.Split(strings.Join(strings.Fields(githubRunnerJobColumns), ""), ",")
-	mock.ExpectQuery(statement(`WITH due AS (`, `WHERE provision_at <= NOW()`, `AND NOT i.paused`,
+	limits := statement(`SELECT $1::int UNION SELECT runner_limit FROM github_runner_limit ORDER BY 1;`)
+	listed := statement(`WITH due AS (`, `WHERE provision_at <= NOW()`,
+		`AND COALESCE((SELECT l.runner_limit FROM github_runner_limit l WHERE l.workspace_id = j.workspace_id), $2) = $1`, `AND NOT i.paused`,
 		`WHERE $1 <= 0 OR workspace_id NOT IN (`, `FROM (SELECT DISTINCT workspace_id FROM due) j WHERE (`,
-		`ORDER BY v.name LIMIT $1 ) runners ) + (`, `) >= $1 )`, `ORDER BY provision_at, id LIMIT 100;`)).
-		WithArgs(100).
-		WillReturnRows(sqlmock.NewRows(columns).AddRow(int64(5), int64(77), int64(42), 8, "acme/repo", "CI", "test", "", "beam-4vcpu-ubuntu-2404",
-			"queued", "", "", received, nil, nil, "ghr-a", 3, received, "boom", "Retrying", received, received.Add(time.Second), nil, nil, true))
+		`ORDER BY v.name LIMIT $1 ) runners ) + (`, `) >= $1 )`, `ORDER BY provision_at, id LIMIT 100;`)
+	row := func(id int64, workspace uint, due time.Time) []driver.Value {
+		return []driver.Value{id, int64(77), int64(42), int64(workspace), "acme/repo", "CI", "test", "", "beam-4vcpu-ubuntu-2404",
+			"queued", "", "", received, nil, nil, "ghr-a", 3, due, "boom", "Retrying", received, received.Add(time.Second), nil, nil, true}
+	}
+	mock.ExpectQuery(limits).WithArgs(100).WillReturnRows(limited(100))
+	mock.ExpectQuery(listed).WithArgs(100, 100).WillReturnRows(sqlmock.NewRows(columns).AddRow(row(5, 8, received)...))
 	due, err := r.ListDueGitHubRunnerJobs(ctx, 100)
 	require.NoError(t, err)
 	registered := received.Add(time.Second)
@@ -754,6 +774,29 @@ func TestGitHubRunnerJobIsClaimedWithinTheLimit(t *testing.T) {
 		Error: "boom", Waiting: "Retrying", ReceivedAt: &received, RegisteredAt: &registered, DefaultBranch: true}}, due,
 		"a due job says whether it is on a default branch, which decides what its runner keeps")
 
+	// The workspaces of each limit are asked for together, and the limit is
+	// a number in their statement. The jobs are still the hundred due
+	// longest.
+	mock.ExpectQuery(limits).WithArgs(100).WillReturnRows(limited(0).AddRow(100).AddRow(250))
+	others := sqlmock.NewRows(columns)
+	for id := int64(100); id < 200; id++ {
+		others.AddRow(row(id, 7, received.Add(time.Duration(id)*time.Second))...)
+	}
+	mock.ExpectQuery(listed).WithArgs(0, 100).WillReturnRows(sqlmock.NewRows(columns).AddRow(row(6, 11, received.Add(150*time.Second))...))
+	mock.ExpectQuery(listed).WithArgs(100, 100).WillReturnRows(others)
+	mock.ExpectQuery(listed).WithArgs(250, 100).WillReturnRows(sqlmock.NewRows(columns).
+		AddRow(row(7, 9, received)...).AddRow(row(4, 8, received)...))
+	due, err = r.ListDueGitHubRunnerJobs(ctx, 100)
+	require.NoError(t, err)
+	require.Len(t, due, 100)
+	ids := []int64{}
+	for _, job := range due {
+		ids = append(ids, job.ID)
+	}
+	require.Equal(t, []int64{4, 7, 100, 101}, ids[:4], "jobs due at the same time are in the order of their IDs")
+	require.Equal(t, []int64{148, 149, 6, 150}, ids[50:54])
+	require.Equal(t, int64(196), ids[99], "the three due last are past the hundred")
+
 	// Every runner of a workspace is counted for its status.
 	mock.ExpectQuery(statement(`SELECT (`, `v.workspace_id = j.workspace_id`, `ORDER BY v.name LIMIT NULL ) runners ) + (`,
 		`) FROM (SELECT $1::bigint AS workspace_id) j;`)).
@@ -761,6 +804,17 @@ func TestGitHubRunnerJobIsClaimedWithinTheLimit(t *testing.T) {
 	running, err := r.CountGitHubRunners(ctx, 8)
 	require.NoError(t, err)
 	require.Equal(t, 3, running)
+
+	// A workspace has a limit of its own once one is set for it, and until
+	// it is taken away again.
+	mock.ExpectExec(statement(`INSERT INTO github_runner_limit (workspace_id, runner_limit) VALUES ($1, $2)`,
+		`ON CONFLICT (workspace_id) DO UPDATE SET runner_limit = EXCLUDED.runner_limit, updated_at = NOW();`)).
+		WithArgs(uint(8), 250).WillReturnResult(sqlmock.NewResult(0, 1))
+	most := 250
+	require.NoError(t, r.SetGitHubRunnerLimit(ctx, 8, &most))
+	mock.ExpectExec(statement(`DELETE FROM github_runner_limit WHERE workspace_id = $1;`)).
+		WithArgs(uint(8)).WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, r.SetGitHubRunnerLimit(ctx, 8, nil))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -1361,6 +1415,7 @@ func TestVMGitHubRunnerQueueIntegration(t *testing.T) {
 		t.Cleanup(func() {
 			_, _ = db.Exec(`DELETE FROM github_runner_job WHERE workspace_id=$1`, id)
 			_, _ = db.Exec(`DELETE FROM github_runner_installation WHERE workspace_id=$1`, id)
+			_, _ = db.Exec(`DELETE FROM github_runner_limit WHERE workspace_id=$1`, id)
 			_, _ = db.Exec(`DELETE FROM persistent_vm WHERE workspace_id=$1`, id)
 			_, _ = db.Exec(`DELETE FROM workspace WHERE id=$1`, id)
 		})
@@ -1540,6 +1595,89 @@ func TestVMGitHubRunnerQueueIntegration(t *testing.T) {
 		require.Equal(t, i < 7, got, "job %d", i)
 	}
 	require.Equal(t, 9, runners(crowded))
+
+	// A workspace has the limit that is set for it, whatever the others
+	// have. This one has nine runners and 33 jobs that wait for one.
+	limit := func(workspace uint) int {
+		t.Helper()
+		most, err := repo.GetGitHubRunnerLimit(ctx, workspace, 9)
+		require.NoError(t, err)
+		return most
+	}
+	set := func(workspace uint, runners int) {
+		t.Helper()
+		require.NoError(t, repo.SetGitHubRunnerLimit(ctx, workspace, &runners))
+		require.Equal(t, runners, limit(workspace))
+	}
+	left := func() []int64 {
+		t.Helper()
+		jobs, err := repo.ListDueGitHubRunnerJobs(ctx, 9)
+		require.NoError(t, err)
+		due := []int64{}
+		for _, job := range jobs {
+			if job.WorkspaceID == crowded {
+				due = append(due, job.ID-base)
+			}
+		}
+		return due
+	}
+	require.Equal(t, 9, limit(crowded))
+	require.Empty(t, left(), "full at what every workspace is allowed")
+	set(crowded, 12)
+	require.Len(t, left(), 33)
+	require.Equal(t, int64(107), left()[0], "the job that has been due longest is first")
+
+	// However many gateways claim at once, the three that have waited
+	// longest get the room there now is, and the workspace is full again.
+	late := make([]types.GitHubRunnerJob, 33)
+	for i := range late {
+		late[i] = stored(crowded, 107+int64(i))
+	}
+	claimed = make([]bool, len(late))
+	claims = errgroup.Group{}
+	for i := range late {
+		claims.Go(func() (err error) {
+			claimed[i], err = repo.ClaimGitHubRunnerJob(ctx, &late[len(late)-1-i], "ghr-d"+fmt.Sprint(100+i), 9)
+			return err
+		})
+	}
+	require.NoError(t, claims.Wait())
+	slices.Reverse(claimed)
+	for i, got := range claimed {
+		require.Equal(t, i < 3, got, "job %d", i)
+	}
+	require.Equal(t, 12, runners(crowded))
+	require.Empty(t, left())
+
+	// Fewer than it has: it keeps its runners, and gets no other.
+	set(crowded, 5)
+	require.Equal(t, 12, runners(crowded))
+	require.Empty(t, left())
+	require.False(t, claim(crowded, 110, "ghr-d200", 9))
+
+	// Zero is any number, also where every workspace is allowed some.
+	set(crowded, 0)
+	require.Len(t, left(), 30)
+	require.True(t, claim(crowded, 139, "ghr-d201", 9), "nor does a job wait for those due longer to get theirs")
+	require.Equal(t, 13, runners(crowded))
+
+	// Another workspace is allowed what every workspace is, as before.
+	plain := newWorkspace()
+	installations[plain] = base + 3
+	require.NoError(t, repo.SaveGitHubRunnerInstallation(ctx, &types.GitHubRunnerInstallation{ID: base + 3, WorkspaceID: plain,
+		TokenID: "token", Account: "plain", AccountType: "Organization"}))
+	require.Equal(t, 9, limit(plain))
+	queue(plain, 200, 20)
+	queue(plain, 201, 10)
+	require.True(t, claim(plain, 200, "ghr-p0", 1))
+	require.False(t, claim(plain, 201, "ghr-p1", 1))
+	require.Equal(t, 1, runners(plain))
+
+	// Without a limit of its own again, it is full at nine, as it was.
+	require.NoError(t, repo.SetGitHubRunnerLimit(ctx, crowded, nil))
+	require.Equal(t, 9, limit(crowded))
+	require.Empty(t, left())
+	require.False(t, claim(crowded, 110, "ghr-d202", 9))
 
 	// Three jobs of a repository are queued, and each has a runner that is
 	// up and idle, so none is one too many.

@@ -137,7 +137,7 @@ func (g *Group) vmLifecycleCatalog() []mcpTool {
 			schema(props{
 				"all":      boolean(),
 				"metadata": stringMapSchema(),
-				"status":   enum("running", "starting", "stopped", "stopping", "paused", "pausing", "error", "deleted"),
+				"status":   enum("running", "starting", "queued", "stopped", "stopping", "paused", "pausing", "error", "deleted"),
 			}),
 			true, true, "beam:read",
 			g.vmList,

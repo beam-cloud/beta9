@@ -33,6 +33,7 @@ func (s *Service) failed(ctx context.Context, v *types.VM, err error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), vmFailureSaveTimeout)
 	defer cancel()
 	v.Error = err.Error()
+	v.Waiting = ""
 	v.Status = types.VMStateError
 	if v.ContainerID != "" {
 		if state, e := s.containers.GetContainerState(v.ContainerID); e == nil && state.Status == types.ContainerStatusRunning {
@@ -43,6 +44,41 @@ func (s *Service) failed(ctx context.Context, v *types.VM, err error) {
 	if e := s.repo.SaveVM(ctx, v); e != nil {
 		log.Error().Err(e).Str("vm_id", v.ID).Msg("persist VM failure")
 	}
+}
+
+// The code billing gives a workspace that has run out of credit.
+const insufficientCredits = "insufficient_credits"
+
+// queue records that a VM was refused a start for a reason that passes on
+// its own, and reports whether it was: its workspace runs as much as its
+// concurrency limit allows, or has run out of credit. Such a VM has not
+// failed, and is queued until it is let in (VMStateQueued). One that showed
+// an error between the times it asks, which is every pass, would look like
+// one that keeps crashing. A workspace that billing has blocked, or whose
+// credit could not be read, is told so by the error instead.
+func (s *Service) queue(ctx context.Context, v *types.VM, err error) bool {
+	var limit *types.ThrottledByConcurrencyLimitError
+	var credit *types.InsufficientCreditsError
+	waits := ""
+	switch {
+	case errors.As(err, &limit):
+		waits = waitingQuota
+	case errors.As(err, &credit) && (credit.Code == "" || credit.Code == insufficientCredits):
+		waits = waitingCredits
+	}
+
+	if waits == "" || v.ContainerID != "" {
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), vmFailureSaveTimeout)
+	defer cancel()
+	v.Status, v.Waiting, v.Error = types.VMStateQueued, waits, ""
+	if e := s.repo.SaveVM(ctx, v); e != nil {
+		log.Error().Err(e).Str("vm_id", v.ID).Msg("persist queued VM")
+	}
+
+	return true
 }
 
 func (s *Service) prepare(ctx context.Context, v *types.VM) error {
@@ -136,6 +172,12 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 	}
 
 	if !resp.Ok {
+		// The gateway asks billing before it makes a stub, and answers with
+		// the words of the scheduler's refusal, which is what this then is.
+		if code, reason, _ := strings.Cut(resp.ErrMsg, ": "); code == insufficientCredits {
+			return &types.InsufficientCreditsError{WorkspaceId: v.WorkspaceExternalID, Code: code, Reason: reason}
+		}
+
 		return fmt.Errorf("%s", resp.ErrMsg)
 	}
 
@@ -209,7 +251,11 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 		v.ContainerID = types.StubTypeVM + "-" + v.StubID + "-" + randomHexID()[:8]
 	}
 
-	v.Status = types.VMStateStarting
+	// A queued VM is starting once it is let in, and not each time it asks.
+	if v.Status != types.VMStateQueued {
+		v.Status = types.VMStateStarting
+	}
+
 	v.Error = ""
 	if err := s.repo.SaveVM(ctx, v); err != nil {
 		return err
@@ -223,6 +269,9 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 				return saveErr
 			}
 		}
+	} else if v.Status == types.VMStateQueued {
+		v.Status, v.Waiting = types.VMStateStarting, ""
+		return s.repo.SaveVM(ctx, v)
 	}
 
 	return err
@@ -490,7 +539,7 @@ func (s *Service) acknowledgeExitCode(containerID string, code int) {
 // Persist the final root before recording the optional artifact. A replacement
 // gateway retries the same artifact identity if it died between these writes.
 func (s *Service) finishStop(ctx context.Context, v *types.VM) error {
-	v.Status = types.VMStateStopped
+	v.Status, v.Waiting = types.VMStateStopped, ""
 	if v.DesiredState == types.VMStatePaused {
 		v.Status = types.VMStatePaused
 	}
@@ -688,14 +737,25 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 	}
 
 	info.Token = token
+	// A queued VM that has a runtime was let in by a gateway that did not
+	// get to say so. It is starting, and waits for nothing.
+	if v.Status == types.VMStateQueued && v.ContainerID != "" {
+		v.Status, v.Waiting = types.VMStateStarting, ""
+		if err := s.repo.SaveVM(ctx, v); err != nil {
+			return err
+		}
+	}
+
 	pause := 30 * time.Second
-	if runner && throttled(v) {
+	if runner && queued(v) && v.Waiting != waitingCredits {
 		// Room in the workspace's limit comes at any moment, and to be
-		// refused again costs nothing.
+		// refused again costs nothing. Credit comes when someone adds it,
+		// and billing is asked no more often for a runner than for any VM.
 		pause = 0
 	}
 
-	if v.Status == types.VMStateError && (v.LaunchAttempts >= 5 || time.Since(v.UpdatedAt) < pause) {
+	refused := v.Status == types.VMStateError || v.Status == types.VMStateQueued
+	if v.Status == types.VMStateError && v.LaunchAttempts >= 5 || refused && time.Since(v.UpdatedAt) < pause {
 		return nil
 	}
 
@@ -769,5 +829,10 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 		return nil
 	}
 
-	return s.start(ctx, info, v)
+	err = s.start(ctx, info, v)
+	if runner && s.queue(ctx, v, err) {
+		return nil
+	}
+
+	return err
 }

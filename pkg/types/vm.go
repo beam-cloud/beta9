@@ -23,6 +23,12 @@ const (
 	VMStatePausing  = "pausing"
 	VMStateError    = "error"
 	VMStateDeleted  = "deleted"
+	// VMStateQueued is a VM that has not failed and has nowhere to start
+	// yet: its workspace runs as much as it may, or has no credit. It asks
+	// again until it is let in, and VM.Waiting says what for. Only a GitHub
+	// runner waits so, as its job does on GitHub. Any other VM that is
+	// refused is in error, which whoever started it is told at once.
+	VMStateQueued = "queued"
 )
 
 // Writable VM root capacity in bytes, layered over the separate base image.
@@ -125,6 +131,9 @@ type VMCreateOptions struct {
 	// Older immutable desktop images use the empty (VNC) transport. Forks
 	// retain their image contract unless the caller explicitly changes it.
 	PreserveDesktopTransport bool
+	// Queue has a VM that its workspace has no room or credit to start
+	// wait for it as queued (VMStateQueued), where another is in error.
+	Queue bool
 }
 
 // VMKioskSpec launches an ordinary application on an isolated graphical session.
@@ -312,6 +321,7 @@ type VM struct {
 	DesiredState        string            `json:"desired_state"`
 	Status              string            `json:"status"`
 	Error               string            `json:"error,omitempty"`
+	Waiting             string            `json:"waiting,omitempty"` // what a queued VM waits for, in words a user is shown
 	StopReason          string            `json:"stop_reason,omitempty"`
 	Generation          int64             `json:"generation"`
 	LaunchAttempts      int               `json:"launch_attempts"`

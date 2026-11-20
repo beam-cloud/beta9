@@ -437,9 +437,13 @@ type vmBackend struct {
 	token        *types.Token
 	tokenError   error
 	deletedDisks int
+	unknown      string // the ID of a workspace that there is none of
 }
 
 func (b *vmBackend) GetWorkspaceByExternalId(_ context.Context, id string) (types.Workspace, error) {
+	if id == b.unknown && id != "" {
+		return types.Workspace{}, sql.ErrNoRows
+	}
 	return types.Workspace{Id: 7, ExternalId: id}, nil
 }
 
@@ -482,6 +486,9 @@ type vmRuntime struct {
 	forwardStatus   int
 	forwardHeaders  http.Header
 	iceHandler      func(net.Conn)
+	// What the scheduler refuses every launch with, and how many it has.
+	refuse   error
+	refusals int
 }
 
 func (r *vmRuntime) SetVMICEHandler(handler func(net.Conn)) { r.iceHandler = handler }
@@ -498,6 +505,11 @@ func (r *vmRuntime) RunVM(_ context.Context, info *auth.AuthInfo, stub, cid stri
 	r.launchToken = info.Token.ExternalId
 	r.checkpoint = checkpoint
 	r.checkpointDisks = disks
+	if r.refuse != nil {
+		r.refusals++
+		return r.refuse
+	}
+
 	r.requests = append(r.requests, cid)
 	r.containers.states[cid] = &types.ContainerState{ContainerId: cid, StubId: stub, Status: types.ContainerStatusRunning}
 	return nil
@@ -541,10 +553,16 @@ type vmGateway struct {
 	// The root layer the last stub was asked for with, which no request carries.
 	layer *types.RootLayer
 	stops int
+	// What a stub is refused with, as billing refuses a workspace one.
+	refuse string
 }
 
 func (g *vmGateway) GetOrCreateStub(ctx context.Context, in *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error) {
 	g.stub, g.layer = in, types.RootLayerFromContext(ctx)
+	if g.refuse != "" {
+		return &pb.GetOrCreateStubResponse{ErrMsg: g.refuse}, nil
+	}
+
 	return &pb.GetOrCreateStubResponse{Ok: true, StubId: uuid.NewString()}, nil
 }
 func (g *vmGateway) StopContainer(_ context.Context, in *pb.StopContainerRequest) (*pb.StopContainerResponse, error) {

@@ -541,5 +541,7 @@ abstractions:
   vm:
     githubRunners:
       # The most GitHub runners a workspace has at once. The jobs past it stay
-      # queued on GitHub until a runner finishes. 0 sets no limit.
+      # queued on GitHub until a runner finishes. 0 sets no limit. A cluster
+      # administrator sets another number for one workspace with
+      # PUT /api/v1/vm/github-runners/<workspace id>/limit {"limit": 250}.
       runnerLimit: 100
