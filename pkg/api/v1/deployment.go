@@ -120,6 +120,21 @@ func (g *DeploymentGroup) RetrieveDeployment(ctx echo.Context) error {
 		return HTTPNotFound()
 	} else {
 		deployment.Stub.SanitizeConfig()
+		if domains, err := g.backendRepo.ListCustomDomains(ctx.Request().Context(), workspace.Id, deployment.Name); err == nil && len(domains) > 0 {
+			matched := make([]types.CustomDomain, 0, len(domains))
+			for _, d := range domains {
+				if d.StubType != "" && d.StubType != deployment.StubType {
+					continue
+				}
+				if d.Version > 0 && d.Version != deployment.Version {
+					continue
+				}
+				matched = append(matched, d)
+			}
+			if len(matched) > 0 {
+				deployment.CustomDomains = common.CustomDomainNames(matched)
+			}
+		}
 		serializedDeployment, err := serializer.Serialize(deployment)
 		if err != nil {
 			return HTTPInternalServerError("Failed to serialize response")
@@ -183,6 +198,8 @@ func (g *DeploymentGroup) StartDeployment(ctx echo.Context) error {
 		"timestamp": time.Now().Unix(),
 	}})
 
+	common.InvalidateDeploymentCustomDomains(ctx.Request().Context(), g.backendRepo, g.redisClient, cc.AuthInfo.Workspace.Id, deploymentWithRelated.Name)
+
 	return ctx.NoContent(http.StatusOK)
 }
 
@@ -243,6 +260,8 @@ func (g *DeploymentGroup) DeleteDeployment(ctx echo.Context) error {
 	if err := g.backendRepo.DeleteDeployment(ctx.Request().Context(), deploymentWithRelated.Deployment); err != nil {
 		return HTTPInternalServerError("Failed to delete deployment")
 	}
+
+	common.InvalidateDeploymentCustomDomains(ctx.Request().Context(), g.backendRepo, g.redisClient, cc.AuthInfo.Workspace.Id, deploymentWithRelated.Name)
 
 	return ctx.NoContent(http.StatusOK)
 }

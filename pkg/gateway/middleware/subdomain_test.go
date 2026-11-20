@@ -28,8 +28,10 @@ func NewRedisClientForTest() (*common.RedisClient, error) {
 }
 
 type middlewareRepoForTest struct {
-	deployName string
-	stub       *types.Stub
+	deployName        string
+	stub              *types.Stub
+	customDomains     map[string]*types.CustomDomain
+	customDeployments map[string]*types.DeploymentWithRelated
 }
 
 func (r *middlewareRepoForTest) GetStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error) {
@@ -45,6 +47,23 @@ func (r *middlewareRepoForTest) GetDeploymentBySubdomain(ctx context.Context, su
 		},
 		Stub: *r.stub,
 	}, nil
+}
+
+func (r *middlewareRepoForTest) GetDeploymentByCustomDomain(ctx context.Context, domain string) (*types.DeploymentWithRelated, *types.CustomDomain, error) {
+	cd, ok := r.customDomains[domain]
+	if !ok {
+		return nil, nil, types.ErrCustomDomainNotFound
+	}
+	if dep, ok := r.customDeployments[domain]; ok {
+		return dep, cd, nil
+	}
+	return &types.DeploymentWithRelated{
+		Deployment: types.Deployment{
+			Name:      cd.DeploymentName,
+			Subdomain: cd.Subdomain,
+		},
+		Stub: *r.stub,
+	}, cd, nil
 }
 
 func TestSubdomainMiddleware(t *testing.T) {
@@ -457,4 +476,385 @@ func TestParseVersion(t *testing.T) {
 			assert.Equal(t, test.expected, common.ParseVersion(test.version))
 		})
 	}
+}
+
+func TestSubdomainMiddlewareCustomDomain(t *testing.T) {
+	publicStubID := "49a41870-bb61-4c45-aad1-68aaa7073c2e"
+	tests := []struct {
+		name           string
+		host           string
+		requestPath    string
+		customDomain   *types.CustomDomain
+		stub           *types.Stub
+		expectedPath   string
+		expectFallback bool
+	}{
+		{
+			name:        "authorized-endpoint-custom-domain",
+			host:        "api.mycompany.com",
+			requestPath: "/",
+			customDomain: &types.CustomDomain{
+				Domain:         "api.mycompany.com",
+				DeploymentName: "api-deploy",
+				Status:         types.CustomDomainStatusActive,
+			},
+			stub: &types.Stub{
+				Type:       types.StubType(types.StubTypeEndpointDeployment),
+				Config:     `{"authorized": true}`,
+				ExternalId: "11111111-1111-4111-8111-111111111111",
+			},
+			expectedPath: "/endpoint/api-deploy/latest",
+		},
+		{
+			name:        "public-endpoint-custom-domain",
+			host:        "public.mycompany.com",
+			requestPath: "/",
+			customDomain: &types.CustomDomain{
+				Domain:         "public.mycompany.com",
+				DeploymentName: "public-deploy",
+				Status:         types.CustomDomainStatusActive,
+			},
+			stub: &types.Stub{
+				Type:       types.StubType(types.StubTypeEndpointDeployment),
+				Config:     `{"authorized": false}`,
+				ExternalId: publicStubID,
+			},
+			expectedPath: "/endpoint/public/" + publicStubID,
+		},
+		{
+			name:        "asgi-custom-domain-preserves-subpath-and-trailing-slash",
+			host:        "asgi.mycompany.com:443",
+			requestPath: "/v1/items/",
+			customDomain: &types.CustomDomain{
+				Domain:         "asgi.mycompany.com",
+				DeploymentName: "asgi-deploy",
+				Status:         types.CustomDomainStatusActive,
+			},
+			stub: &types.Stub{
+				Type:       types.StubType(types.StubTypeASGIDeployment),
+				Config:     `{"authorized": true}`,
+				ExternalId: "22222222-2222-4222-8222-222222222222",
+			},
+			expectedPath: "/asgi/asgi-deploy/latest/v1/items/",
+		},
+		{
+			name:        "pod-custom-domain-auto-resolves-single-port",
+			host:        "pod.mycompany.com",
+			requestPath: "/",
+			customDomain: &types.CustomDomain{
+				Domain:         "pod.mycompany.com",
+				DeploymentName: "pod-deploy",
+				Status:         types.CustomDomainStatusActive,
+			},
+			stub: &types.Stub{
+				Type:       types.StubType(types.StubTypePodDeployment),
+				Config:     `{"authorized": true, "ports": [8000]}`,
+				ExternalId: "33333333-3333-4333-8333-333333333333",
+			},
+			expectedPath: "/pod/pod-deploy/latest/8000",
+		},
+		{
+			name:        "pod-custom-domain-explicit-port-and-version",
+			host:        "pod-explicit.mycompany.com",
+			requestPath: "/",
+			customDomain: &types.CustomDomain{
+				Domain:         "pod-explicit.mycompany.com",
+				DeploymentName: "pod-deploy",
+				Version:        2,
+				Port:           9000,
+				Status:         types.CustomDomainStatusActive,
+			},
+			stub: &types.Stub{
+				Type:       types.StubType(types.StubTypePodDeployment),
+				Config:     `{"authorized": true, "ports": [8000, 9000]}`,
+				ExternalId: "44444444-4444-4444-8444-444444444444",
+			},
+			expectedPath: "/pod/pod-deploy/v2/9000",
+		},
+		{
+			name:           "unknown-custom-domain-falls-through",
+			host:           "unknown.mycompany.com",
+			requestPath:    "/",
+			expectedPath:   "/",
+			expectFallback: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			redisClient, err := NewRedisClientForTest()
+			assert.NoError(t, err)
+
+			e := echo.New()
+			backendRepo := &middlewareRepoForTest{
+				customDomains: map[string]*types.CustomDomain{},
+				stub:          test.stub,
+			}
+			if test.customDomain != nil {
+				backendRepo.customDomains[test.customDomain.Domain] = test.customDomain
+			}
+
+			routed := false
+			fallbackCalled := false
+			handler := func(ctx echo.Context) error {
+				routed = true
+				assert.Equal(t, test.expectedPath, ctx.Request().URL.Path)
+				return ctx.String(http.StatusOK, "OK")
+			}
+			fallbackHandler := func(ctx echo.Context) error {
+				fallbackCalled = true
+				assert.Equal(t, test.expectedPath, ctx.Request().URL.Path)
+				return ctx.String(http.StatusNotFound, "not found")
+			}
+
+			epGroup := e.Group("/endpoint")
+			epGroup.GET("/:deploymentName/latest", handler)
+			epGroup.GET("/public/:stubId", handler)
+
+			asgiGroup := e.Group("/asgi")
+			asgiGroup.GET("/:deploymentName/latest", handler)
+			asgiGroup.GET("/:deploymentName/latest/:subPath", handler)
+
+			podGroup := e.Group("/pod")
+			podGroup.GET("/:deploymentName/latest/:port", handler)
+			podGroup.GET("/:deploymentName/latest/:port/:subPath", handler)
+			podGroup.GET("/:deploymentName/v:version/:port", handler)
+			podGroup.GET("/:deploymentName/v:version/:port/:subPath", handler)
+
+			mw := Subdomain("https://app.example.com", backendRepo, redisClient)
+
+			req := httptest.NewRequest(http.MethodGet, test.requestPath, nil)
+			req.Host = test.host
+			rec := httptest.NewRecorder()
+
+			c := e.NewContext(req, rec)
+			h := mw(fallbackHandler)
+			err = h(c)
+			assert.NoError(t, err)
+			assert.Equal(t, test.expectFallback, fallbackCalled)
+			assert.Equal(t, !test.expectFallback, routed)
+			_ = e.Shutdown(context.Background())
+		})
+	}
+}
+
+func TestIsCandidateCustomDomain(t *testing.T) {
+	tests := []struct {
+		host     string
+		base     string
+		expected bool
+	}{
+		{host: "app.example.com", base: "app.example.com", expected: false},
+		{host: "sub.app.example.com", base: "app.example.com", expected: false},
+		{host: "localhost:1993", base: "app.example.com", expected: false},
+		{host: "127.0.0.1:1993", base: "app.example.com", expected: false},
+		{host: "10.0.0.1", base: "app.example.com", expected: false},
+		{host: "api.customer.io:443", base: "app.example.com", expected: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.host, func(t *testing.T) {
+			assert.Equal(t, test.expected, IsCandidateCustomDomain(test.host, test.base))
+		})
+	}
+
+	assert.False(t, IsCandidateCustomDomain("grpc.example.com", "app.example.com", "grpc.example.com", "tcp.example.com"))
+	assert.False(t, IsCandidateCustomDomain("sub.tcp.example.com", "app.example.com", "grpc.example.com", "tcp.example.com"))
+	assert.False(t, IsCandidateCustomDomain("beta9-gateway.beta9.svc.cluster.local", "app.example.com"))
+}
+
+type countingRepo struct {
+	*middlewareRepoForTest
+	lookups int
+}
+
+func (r *countingRepo) GetDeploymentByCustomDomain(ctx context.Context, domain string) (*types.DeploymentWithRelated, *types.CustomDomain, error) {
+	r.lookups++
+	return r.middlewareRepoForTest.GetDeploymentByCustomDomain(ctx, domain)
+}
+
+func TestSubdomainMiddlewareNegativeCachesUnknownCustomDomain(t *testing.T) {
+	redisClient, err := NewRedisClientForTest()
+	assert.NoError(t, err)
+
+	// The miss cache is process-wide; start from a clean slate.
+	common.InvalidateCustomDomainCache(context.Background(), redisClient, "unknown.mycompany.com")
+
+	repo := &countingRepo{middlewareRepoForTest: &middlewareRepoForTest{
+		customDomains: map[string]*types.CustomDomain{},
+		stub:          &types.Stub{Type: types.StubType(types.StubTypeEndpointDeployment)},
+	}}
+
+	e := echo.New()
+	mw := Subdomain("https://app.example.com", repo, redisClient)
+	next := func(ctx echo.Context) error { return ctx.String(http.StatusNotFound, "nf") }
+
+	call := func() {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Host = "unknown.mycompany.com"
+		assert.NoError(t, mw(next)(e.NewContext(req, httptest.NewRecorder())))
+	}
+
+	call()
+	call()
+	call()
+	assert.Equal(t, 1, repo.lookups, "unknown domain should hit the repo once within the negative TTL")
+
+	common.InvalidateCustomDomainCache(context.Background(), redisClient, "unknown.mycompany.com")
+	call()
+	assert.Equal(t, 2, repo.lookups, "invalidation must clear the negative entry")
+}
+
+func TestSubdomainMiddlewareMultiReplicaSharedNegativeCache(t *testing.T) {
+	redisClient, err := NewRedisClientForTest()
+	assert.NoError(t, err)
+
+	common.InvalidateCustomDomainCache(context.Background(), redisClient, "shared.mycompany.com")
+
+	repo := &countingRepo{middlewareRepoForTest: &middlewareRepoForTest{
+		customDomains: map[string]*types.CustomDomain{},
+		stub:          &types.Stub{Type: types.StubType(types.StubTypeEndpointDeployment)},
+	}}
+
+	e := echo.New()
+	mw := Subdomain("https://app.example.com", repo, redisClient)
+	next := func(ctx echo.Context) error { return ctx.String(http.StatusNotFound, "nf") }
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "shared.mycompany.com"
+	assert.NoError(t, mw(next)(e.NewContext(req, httptest.NewRecorder())))
+	assert.Equal(t, 1, repo.lookups)
+
+	// Simulate another gateway replica verifying the domain and deleting ONLY the
+	// shared Redis key (without touching this replica's in-process memory).
+	assert.NoError(t, redisClient.Del(context.Background(), common.CustomDomainHandlerCacheKey("shared.mycompany.com")).Err())
+
+	req2 := httptest.NewRequest(http.MethodGet, "/", nil)
+	req2.Host = "shared.mycompany.com"
+	assert.NoError(t, mw(next)(e.NewContext(req2, httptest.NewRecorder())))
+	assert.Equal(t, 2, repo.lookups, "healthy Redis should bypass in-process miss cache when shared key is deleted")
+}
+
+func TestSubdomainMiddlewareIsolatesVerifiedCustomDomainFromGatewayRoutes(t *testing.T) {
+	redisClient, err := NewRedisClientForTest()
+	assert.NoError(t, err)
+	common.InvalidateCustomDomainCache(context.Background(), redisClient, "api.isolated.io", "stopped.isolated.io", "portless.isolated.io")
+
+	repo := &middlewareRepoForTest{
+		customDomains: map[string]*types.CustomDomain{
+			"api.isolated.io": {
+				Domain:         "api.isolated.io",
+				DeploymentName: "ep-app",
+				Status:         types.CustomDomainStatusActive,
+				Port:           8080, // should be ignored for non-Pod deployments
+			},
+			"portless.isolated.io": {
+				Domain:         "portless.isolated.io",
+				DeploymentName: "pod-app",
+				Status:         types.CustomDomainStatusActive,
+			},
+		},
+		customDeployments: map[string]*types.DeploymentWithRelated{
+			"api.isolated.io": {
+				Deployment: types.Deployment{Name: "ep-app", Subdomain: "ep-app-1234567"},
+				Stub:       types.Stub{Type: types.StubType(types.StubTypeEndpointDeployment), Config: `{"authorized": true}`},
+			},
+			"portless.isolated.io": {
+				Deployment: types.Deployment{Name: "pod-app", Subdomain: "pod-app-1234567"},
+				Stub:       types.Stub{Type: types.StubType(types.StubTypePodDeployment), Config: `{"authorized": true}`},
+			},
+		},
+	}
+
+	e := echo.New()
+	e.Use(Subdomain("https://app.example.com", repo, redisClient))
+	gatewayControlPlaneHit := false
+	e.GET("/api/v1/health", func(ctx echo.Context) error {
+		gatewayControlPlaneHit = true
+		return ctx.String(http.StatusOK, "gw-health")
+	})
+	epHit := false
+	e.GET("/endpoint/:deploymentName/latest", func(ctx echo.Context) error {
+		epHit = true
+		return ctx.String(http.StatusOK, "ep")
+	})
+
+	// 1. Valid root request routes to /endpoint/ep-app/latest (ignoring stray port 8080).
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "api.isolated.io"
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, epHit)
+	assert.False(t, gatewayControlPlaneHit)
+
+	// 2. Request to /api/v1/health on verified custom domain MUST return 404, not Gateway health.
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req.Host = "api.isolated.io"
+	rec = httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.False(t, gatewayControlPlaneHit)
+
+	// 3. Dot-segment traversal cannot escape handlerPath back to /api/v1/health.
+	req = httptest.NewRequest(http.MethodGet, "/../../../../api/v1/health", nil)
+	req.Host = "api.isolated.io"
+	rec = httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.False(t, gatewayControlPlaneHit)
+
+	// 4. Pod with no resolved port, missing pinned port, or corrupt config returns 404.
+	repo.customDomains["staleport.isolated.io"] = &types.CustomDomain{
+		Domain: "staleport.isolated.io", DeploymentName: "pod-app", Port: 9090, Status: types.CustomDomainStatusActive,
+	}
+	repo.customDeployments["staleport.isolated.io"] = &types.DeploymentWithRelated{
+		Deployment: types.Deployment{Name: "pod-app", Subdomain: "pod-app-1234567"},
+		Stub:       types.Stub{Type: types.StubType(types.StubTypePodDeployment), Config: `{"authorized": true, "ports": [8000]}`},
+	}
+	repo.customDomains["corrupt.isolated.io"] = &types.CustomDomain{
+		Domain: "corrupt.isolated.io", DeploymentName: "pod-app", Port: 8000, Status: types.CustomDomainStatusActive,
+	}
+	repo.customDeployments["corrupt.isolated.io"] = &types.DeploymentWithRelated{
+		Deployment: types.Deployment{Name: "pod-app", Subdomain: "pod-app-1234567"},
+		Stub:       types.Stub{Type: types.StubType(types.StubTypePodDeployment), Config: `{not-json`},
+	}
+	for _, host := range []string{"portless.isolated.io", "staleport.isolated.io", "corrupt.isolated.io"} {
+		common.InvalidateCustomDomainCache(context.Background(), redisClient, host)
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+		req.Host = host
+		rec = httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+		assert.False(t, gatewayControlPlaneHit)
+	}
+
+	// 5. Verified domain with inactive deployment returns 404 and does not hit Gateway routes.
+	repo.customDomains["stopped.isolated.io"] = &types.CustomDomain{Domain: "stopped.isolated.io", Status: types.CustomDomainStatusActive}
+	repo.customDeployments["stopped.isolated.io"] = nil
+	// Simulate GetDeploymentByCustomDomain returning inactive error when cd exists.
+	inactiveRepo := &inactiveCustomDomainRepo{middlewareRepoForTest: repo}
+	e2 := echo.New()
+	e2.Use(Subdomain("https://app.example.com", inactiveRepo, redisClient))
+	e2.GET("/api/v1/health", func(ctx echo.Context) error {
+		gatewayControlPlaneHit = true
+		return ctx.String(http.StatusOK, "gw-health")
+	})
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req.Host = "stopped.isolated.io"
+	rec = httptest.NewRecorder()
+	e2.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.False(t, gatewayControlPlaneHit)
+}
+
+type inactiveCustomDomainRepo struct {
+	*middlewareRepoForTest
+}
+
+func (r *inactiveCustomDomainRepo) GetDeploymentByCustomDomain(_ context.Context, domain string) (*types.DeploymentWithRelated, *types.CustomDomain, error) {
+	if cd, ok := r.customDomains[domain]; ok {
+		return nil, cd, types.ErrCustomDomainDeploymentInactive
+	}
+	return nil, nil, types.ErrCustomDomainNotFound
 }

@@ -4,7 +4,7 @@ import math
 import os
 import re
 import threading
-from typing import Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 import cloudpickle
 
@@ -147,6 +147,7 @@ class RunnerAbstraction(BaseAbstraction):
         checkpoint_readiness_timeout: int = 600,
         checkpoint_readiness_interval: int = 1,
         cpu_tier: Optional[CpuTier] = None,
+        custom_domain: Optional[Union[str, Sequence[Any]]] = None,
     ) -> None:
         super().__init__()
 
@@ -248,6 +249,9 @@ class RunnerAbstraction(BaseAbstraction):
         self.tmp_files: List[TempFile] = []
         self.is_websocket: bool = False
         self.ports: List[int] = ports or []
+        self.custom_domain: List[str] = self.parse_custom_domain(custom_domain)
+        if self.tcp and self.custom_domain:
+            raise ValueError("custom_domain is not supported when tcp=True")
         self.inputs: Optional[Schema] = inputs
         self.outputs: Optional[Schema] = outputs
         self.client: Optional[Client] = None
@@ -336,6 +340,18 @@ class RunnerAbstraction(BaseAbstraction):
                     terminal.print("\t", end="")
                 terminal.url(url_text)
 
+            if self.custom_domain and not self.tcp and getattr(self, "deployment_id", ""):
+                scheme = (
+                    "http" if isinstance(res.url, str) and res.url.startswith("http://") else "https"
+                )
+                for domain in self.custom_domain:
+                    terminal.print("\tCustom domain (requires DNS verification): ", end="")
+                    terminal.url(f"{scheme}://{domain}")
+                terminal.detail(
+                    f"\tAdd the DNS records shown by `{terminal.cli_name()} domain list -d {self.name}`, "
+                    f"then run `{terminal.cli_name()} domain verify <domain>` to activate it."
+                )
+
             terminal.print("")
             return res
 
@@ -355,7 +371,27 @@ class RunnerAbstraction(BaseAbstraction):
                 "-d '{}'",
             ]
 
-        terminal.resource("Endpoint", {"URL": res.url})
+        resource_fields = {"URL": res.url}
+        has_deployment = bool(getattr(self, "deployment_id", ""))
+        if self.custom_domain and has_deployment:
+            scheme = (
+                "ws"
+                if self.is_websocket and isinstance(res.url, str) and res.url.startswith("ws://")
+                else "wss"
+                if self.is_websocket
+                else "http"
+                if isinstance(res.url, str) and res.url.startswith("http://")
+                else "https"
+            )
+            resource_fields["Custom URL"] = ", ".join(
+                f"{scheme}://{domain}" for domain in self.custom_domain
+            )
+        terminal.resource("Endpoint", resource_fields)
+        if self.custom_domain and has_deployment:
+            terminal.detail(
+                f"Add the DNS records shown by `{terminal.cli_name()} domain list -d {self.name}`, "
+                f"then run `{terminal.cli_name()} domain verify <domain>` to activate the domain."
+            )
         if self.authorized and os.getenv("BETA9_TOKEN") != self.config_context.token:
             terminal.detail("Set the token from your selected profile:", dim=False)
             terminal.print("export BETA9_TOKEN='<your-profile-token>'", crop=False)
@@ -502,6 +538,37 @@ class RunnerAbstraction(BaseAbstraction):
         if isinstance(gpu, list):
             return [GpuType(normalize_gpu_type(g)).value for g in gpu]
         return [GpuType(normalize_gpu_type(gpu)).value]
+
+    def parse_custom_domain(self, value: Optional[Union[str, Sequence[Any]]]) -> List[str]:
+        if value is None:
+            return []
+
+        raw_items: List[str] = []
+
+        def _collect(item: Any) -> None:
+            if item is None:
+                return
+            if isinstance(item, str):
+                for part in item.split(","):
+                    cleaned = part.strip().rstrip(".").lower()
+                    if cleaned:
+                        raw_items.append(cleaned)
+                return
+            if isinstance(item, (list, tuple)):
+                for nested in item:
+                    _collect(nested)
+                return
+            raise ValueError("custom_domain must be a string or sequence of domain strings")
+
+        _collect(value)
+
+        seen = set()
+        domains: List[str] = []
+        for domain in raw_items:
+            if domain not in seen:
+                seen.add(domain)
+                domains.append(domain)
+        return domains
 
     def parse_pool(self, pool: Optional[Union[str, Pool]]):
         if pool is None:
@@ -698,6 +765,10 @@ class RunnerAbstraction(BaseAbstraction):
         inputs: Optional[SchemaProto],
         outputs: Optional[SchemaProto],
     ) -> GetOrCreateStubRequest:
+        extra = dict(self.extra)
+        if self.custom_domain:
+            extra["custom_domain"] = self.custom_domain
+
         return GetOrCreateStubRequest(
             object_id=self.object_id,
             image_id=self.image_id,
@@ -736,7 +807,7 @@ class RunnerAbstraction(BaseAbstraction):
             concurrent_requests=self.concurrent_requests,
             checkpoint_enabled=self.checkpoint_enabled,
             checkpoint_trigger=self._checkpoint_trigger_proto(),
-            extra=json.dumps(self.extra),
+            extra=json.dumps(extra),
             entrypoint=self.entrypoint,
             ports=self.ports,
             inputs=inputs,

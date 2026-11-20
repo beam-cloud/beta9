@@ -49,6 +49,8 @@ func stopDeployments(ctx context.Context, deployments []types.DeploymentWithRela
 			"stub_type": deployment.StubType,
 			"timestamp": time.Now().Unix(),
 		}})
+
+		common.InvalidateDeploymentCustomDomains(ctx, clients.backendRepo, clients.redisClient, deployment.Deployment.WorkspaceId, deployment.Name)
 	}
 
 	return nil

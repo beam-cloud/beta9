@@ -158,6 +158,7 @@ class Endpoint(RunnerAbstraction):
         outputs: Optional[Schema] = None,
         pool: Optional[Union[str, Pool]] = None,
         cpu_tier: Optional[CpuTier] = None,
+        custom_domain: Optional[Union[str, List[str]]] = None,
     ):
         super().__init__(
             cpu=cpu,
@@ -188,6 +189,7 @@ class Endpoint(RunnerAbstraction):
             inputs=inputs,
             outputs=outputs,
             pool=pool,
+            custom_domain=custom_domain,
         )
 
         self._endpoint_stub: Optional[EndpointServiceStub] = None
@@ -326,6 +328,7 @@ class ASGI(Endpoint):
         checkpoint_enabled: bool = False,
         pool: Optional[Union[str, Pool]] = None,
         cpu_tier: Optional[CpuTier] = None,
+        custom_domain: Optional[Union[str, List[str]]] = None,
     ):
         self.concurrent_requests = concurrent_requests
         super().__init__(
@@ -352,6 +355,7 @@ class ASGI(Endpoint):
             checkpoint_enabled=checkpoint_enabled,
             app=app,
             pool=pool,
+            custom_domain=custom_domain,
         )
 
         self.is_asgi = True
@@ -468,6 +472,7 @@ class RealtimeASGI(ASGI):
         checkpoint_enabled: bool = False,
         pool: Optional[Union[str, Pool]] = None,
         cpu_tier: Optional[CpuTier] = None,
+        custom_domain: Optional[Union[str, List[str]]] = None,
     ):
         super().__init__(
             cpu=cpu,
@@ -493,6 +498,7 @@ class RealtimeASGI(ASGI):
             concurrent_requests=concurrent_requests,
             checkpoint_enabled=checkpoint_enabled,
             pool=pool,
+            custom_domain=custom_domain,
         )
         self.is_websocket = True
 

@@ -206,6 +206,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
         serving_protocol: str = "",
         serving: Optional[ServingConfig] = None,
         cpu_tier: Optional[CpuTier] = None,
+        custom_domain: Optional[Union[str, List[str]]] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -238,6 +239,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
             app_kind=app_kind,
             serving_protocol=serving_protocol,
             serving=serving,
+            custom_domain=custom_domain,
         )
         self.parent = self
         self.func = None
@@ -373,6 +375,15 @@ class Pod(RunnerAbstraction, DeployableMixin):
             terminal.error("You must specify an entrypoint.")
             return {}, False
 
+        if self.custom_domain and self.tcp:
+            terminal.error("Custom domains are not supported for raw TCP pods.", exit=False)
+            return {}, False
+        if self.custom_domain and not self.ports:
+            terminal.error(
+                "Custom domains on Pods require at least one exposed port.", exit=False
+            )
+            return {}, False
+
         ignore_patterns = []
         if is_custom_image:
             ignore_patterns = ["*"]
@@ -420,7 +431,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
         elif deploy_response.err_msg:
             terminal.error(deploy_response.err_msg, exit=False)
 
-        return {
+        result = {
             "deployment_id": deploy_response.deployment_id,
             "stub_id": self.stub_id,
             "status": "accepted" if deploy_response.ok else "failed",
@@ -429,7 +440,10 @@ class Pod(RunnerAbstraction, DeployableMixin):
             "version": deploy_response.version,
             "warning": warn_msg,
             "rollout_action": rollout_action,
-        }, deploy_response.ok
+        }
+        if deploy_response.ok and self.custom_domain:
+            result["custom_domains"] = list(self.custom_domain)
+        return result, deploy_response.ok
 
     def generate_deployment_artifacts(self, **kwargs):
         """

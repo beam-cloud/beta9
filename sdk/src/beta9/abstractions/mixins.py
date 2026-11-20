@@ -99,7 +99,7 @@ class DeployableMixin:
         elif deploy_response.err_msg:
             terminal.error(deploy_response.err_msg, exit=False)
 
-        return {
+        result = {
             "deployment_id": deploy_response.deployment_id,
             "stub_id": self.parent.stub_id,
             "status": "accepted" if deploy_response.ok else "failed",
@@ -108,7 +108,10 @@ class DeployableMixin:
             "version": deploy_response.version,
             "warning": warn_msg,
             "rollout_action": rollout_action,
-        }, deploy_response.ok
+        }
+        if deploy_response.ok and getattr(self.parent, "custom_domain", None):
+            result["custom_domains"] = list(self.parent.custom_domain)
+        return result, deploy_response.ok
 
     def _attach_and_sync(self, container_id: str, sync_dir: str):
         try:

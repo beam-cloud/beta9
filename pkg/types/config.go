@@ -235,6 +235,18 @@ type HTTPConfig struct {
 	Port             int        `key:"port" json:"port"`
 	EnablePrettyLogs bool       `key:"enablePrettyLogs" json:"enable_pretty_logs"`
 	CORS             CORSConfig `key:"cors" json:"cors"`
+	// DomainCheckToken, when set, must be passed via X-Domain-Check-Token,
+	// Authorization: Bearer, or ?token= to /api/v1/domain/check (used by
+	// reverse proxies for on-demand TLS). Strongly recommended in production;
+	// requests carrying a valid token bypass the per-IP rate limit.
+	DomainCheckToken string `key:"domainCheckToken" json:"domain_check_token"`
+	// DomainCheckAllowUnauthenticated lets /api/v1/domain/check answer without a
+	// token when DomainCheckToken is empty. Off by default: with no token the
+	// endpoint is disabled (404). Intended for local development only.
+	DomainCheckAllowUnauthenticated bool `key:"domainCheckAllowUnauthenticated" json:"domain_check_allow_unauthenticated"`
+	// ReservedHosts are additional platform hostnames (e.g. load balancer or
+	// internal service names) that must never be treated as custom domains.
+	ReservedHosts []string `key:"reservedHosts" json:"reserved_hosts"`
 }
 
 func (h *HTTPConfig) GetExternalURL() string {

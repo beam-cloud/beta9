@@ -21,6 +21,7 @@ from . import (
     deployment,
     dev,
     disk,
+    domain,
     endpoints,
     image,
     login,
@@ -141,6 +142,7 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli.register(volume)
     cli.register(vm)
     cli.register(disk)
+    cli.register(domain)
     cli.register(image)
     cli.register(logs)
     cli.register(config)

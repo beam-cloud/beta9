@@ -203,6 +203,7 @@ class Service(Pod):
         serving_protocol: str = "",
         serving: Optional[ServingConfig] = None,
         cpu_tier: Optional[CpuTier] = None,
+        custom_domain: Optional[Union[str, List[str]]] = None,
     ) -> None:
         if command is not None and entrypoint:
             raise ValueError("Specify either command or entrypoint, not both.")
@@ -250,6 +251,7 @@ class Service(Pod):
             app_kind=app_kind,
             serving_protocol=serving_protocol,
             serving=serving,
+            custom_domain=custom_domain,
         )
         self.is_service = True
         self.configure_replicas(
