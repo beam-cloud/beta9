@@ -212,6 +212,10 @@ func (l *ContainerStream) waitForWorkerAddress(ctx context.Context, containerID 
 
 		state, stateErr := l.containerRepo.GetContainerState(containerID)
 		if stateErr != nil || state == nil || state.Status == types.ContainerStatusStopping {
+			// The scheduler says why it gave up on a container.
+			if failure, err := l.containerRepo.GetContainerRequestFailure(containerID); err == nil && failure != nil {
+				return "", &ContainerNotScheduledError{Failure: *failure}
+			}
 			return "", fmt.Errorf("container stopped before it was assigned to a worker")
 		}
 		if err := tell(containerPending(state, time.Now())); err != nil {

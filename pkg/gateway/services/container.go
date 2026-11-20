@@ -390,6 +390,8 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 	// Wait for the container stream or the client message loop to finish
 	select {
 	case err := <-streamErrCh:
+		// A container the scheduler gave up on: the client is told why.
+		abstractions.NotScheduled(stream, err)
 		return err
 	case err := <-clientMsgErrCh:
 		cancel()

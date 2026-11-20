@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -61,6 +62,36 @@ const (
 	// endpoint replicas, and once the scheduling window ends for Spot.
 	ContainerSchedulingFailureNoOpportunisticCapacity ContainerSchedulingFailureReason = "no_opportunistic_capacity"
 )
+
+// ContainerRequestFailure is why the scheduler gave up on a container
+// request, and what the request asked for. It is kept for a while after the
+// container's state is gone (ContainerRequestStatusTTL), for whoever was
+// waiting for the container.
+type ContainerRequestFailure struct {
+	Reason ContainerSchedulingFailureReason `json:"reason"`
+	// PoolSelector is the pool the request named, if it named one.
+	PoolSelector string `json:"pool_selector,omitempty"`
+	// Gpus are the GPU types the request could run on, in the order it asked
+	// for them. A request for no GPU has none.
+	Gpus []string `json:"gpus,omitempty"`
+	// WaitedSeconds is how long the scheduler tried.
+	WaitedSeconds int64 `json:"waited_seconds,omitempty"`
+}
+
+// NoCapacity reports whether the scheduler gave up for want of capacity:
+// the same request can succeed later, and one for other hardware can succeed
+// now.
+func (f ContainerRequestFailure) NoCapacity() bool {
+	switch f.Reason {
+	case ContainerSchedulingFailureProvisioningLimit,
+		ContainerSchedulingFailureWorkerCapacityTimeout,
+		ContainerSchedulingFailureRetryLimit,
+		ContainerSchedulingFailureManagedFallbackNoCapacity,
+		ContainerSchedulingFailureNoOpportunisticCapacity:
+		return true
+	}
+	return false
+}
 
 // @go2proto
 type Worker struct {
@@ -645,6 +676,21 @@ const (
 	ContainerNetworkPolicyBlock     ContainerNetworkPolicy = "block"
 	ContainerNetworkPolicyAllowList ContainerNetworkPolicy = "allowlist"
 )
+
+// RequestedGpus are the GPU types the request can run on, in the order it
+// asked for them.
+func (c *ContainerRequest) RequestedGpus() []string {
+	var gpus []string
+	for _, gpu := range c.GpuRequest {
+		if gpu != "" && gpu != string(NO_GPU) && !slices.Contains(gpus, gpu) {
+			gpus = append(gpus, gpu)
+		}
+	}
+	if len(gpus) == 0 && c.Gpu != "" && c.Gpu != string(NO_GPU) {
+		gpus = append(gpus, c.Gpu)
+	}
+	return gpus
+}
 
 func (c *ContainerRequest) RequiresGPU() bool {
 	for _, gpu := range c.GpuRequest {

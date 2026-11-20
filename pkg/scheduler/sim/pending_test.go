@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -236,4 +237,60 @@ func TestRequestThatLosesItsWorkerSaysWhatItWaitsForAgain(t *testing.T) {
 	sim.Advance(5 * time.Minute)
 	sim.ExpectRequeued(1)
 	require.Equal(t, "provisioning/worker_starting", pendingOf(sim, ids[0]))
+}
+
+// failureOf is why the scheduler gave up on a container, as whoever waited
+// for it reads it.
+func failureOf(sim *Sim, containerID string) types.ContainerRequestFailure {
+	sim.t.Helper()
+	failure, err := sim.containerRepo.GetContainerRequestFailure(containerID)
+	require.NoError(sim.t, err)
+	require.NotNil(sim.t, failure, "nothing says why the scheduler gave up on %s", containerID)
+	return *failure
+}
+
+// A request that waits out the scheduling limit with no capacity to be had
+// is given up on, and what it asked for and how long it waited are kept for
+// its caller.
+func TestRequestThatNeverGetsCapacityIsGivenUpOnWithWhy(t *testing.T) {
+	sim := New(t, buyingSpotThenOnDemand)
+	sim.Provider("verda").Stock("L40S", 0)
+	sim.Provider("nebius").Stock("L40S", 0)
+
+	ids := sim.Submit(Function("L40S").Preemptable(true).For(time.Hour), 1)
+	sim.Advance(19 * time.Minute)
+	require.Equal(t, "waiting_for_capacity/no_capacity", pendingOf(sim, ids[0]))
+	sim.ExpectFailed(0)
+
+	sim.Advance(90 * time.Second)
+	sim.ExpectFailed(1)
+	failure := failureOf(sim, ids[0])
+	require.Equal(t, types.ContainerSchedulingFailureWorkerCapacityTimeout, failure.Reason)
+	require.Equal(t, []string{"L40S"}, failure.Gpus)
+	require.Empty(t, failure.PoolSelector)
+	require.InDelta(t, 20*60, failure.WaitedSeconds, 5)
+	require.True(t, failure.NoCapacity())
+}
+
+// A pool that cannot start a worker however often it is asked gives the
+// request up sooner, and that is a lack of capacity too.
+func TestRequestWhoseWorkersNeverStartIsGivenUpOnForWantOfCapacity(t *testing.T) {
+	sim := New(t, onePool)
+	sim.Pool("a10g").RefuseWorkers()
+
+	ids := sim.Submit(Endpoint("A10G").For(time.Hour), 1)
+	sim.Advance(time.Minute)
+
+	sim.ExpectFailed(1)
+	failure := failureOf(sim, ids[0])
+	require.Equal(t, types.ContainerSchedulingFailureProvisioningLimit, failure.Reason)
+	require.Equal(t, []string{"A10G"}, failure.Gpus)
+	require.True(t, failure.NoCapacity())
+	require.Less(t, failure.WaitedSeconds, int64(60))
+
+	// Why is kept for as long as the request is known to have failed.
+	sim.Advance(types.ContainerRequestStatusTTL)
+	kept, err := sim.containerRepo.GetContainerRequestFailure(ids[0])
+	require.NoError(t, err)
+	require.Nil(t, kept)
 }

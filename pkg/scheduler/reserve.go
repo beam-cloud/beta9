@@ -161,15 +161,23 @@ func (a *schedulingAttempt) fail(reason types.ContainerSchedulingFailureReason) 
 	if err := a.scheduler.containerRepo.DeleteContainerState(a.request.ContainerId); err != nil {
 		requestLog(log.Error(), a.request).Err(err).Msg("failed to delete container state after scheduling failure")
 	}
-	if err := a.scheduler.containerRepo.SetContainerRequestStatus(a.request.ContainerId, types.ContainerRequestStatusFailed); err != nil {
+	// Whoever waits for the container is told why there will not be one.
+	failure := types.ContainerRequestFailure{
+		Reason:       reason,
+		PoolSelector: a.request.PoolSelector,
+		Gpus:         a.request.RequestedGpus(),
+	}
+	if !a.request.Timestamp.IsZero() {
+		failure.WaitedSeconds = int64(a.scheduler.since(a.request.Timestamp) / time.Second)
+	}
+	if err := a.scheduler.containerRepo.SetContainerRequestFailure(a.request.ContainerId, failure); err != nil {
 		requestLog(log.Error(), a.request).Err(err).Msg("failed to record container request scheduling failure")
 	}
 	if a.request.TaskId != "" && a.scheduler.eventBus != nil {
 		if _, err := a.scheduler.eventBus.Send(common.NewContainerSchedulingFailedEvent(common.ContainerSchedulingFailure{
-			TaskID:       a.request.TaskId,
-			ContainerID:  a.request.ContainerId,
-			PoolSelector: a.request.PoolSelector,
-			Reason:       reason,
+			TaskID:                  a.request.TaskId,
+			ContainerID:             a.request.ContainerId,
+			ContainerRequestFailure: failure,
 		})); err != nil {
 			requestLog(log.Error(), a.request).Err(err).Msg("failed to publish container scheduling failure")
 		}

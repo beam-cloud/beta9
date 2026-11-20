@@ -31,6 +31,7 @@ var (
 	schedulerBackendRouteMachineID    string = "scheduler:route:machine_id:{%s}"
 	schedulerBackendRouteMachineIDRev string = "scheduler:route:machine_id:{%s}:rev"
 	schedulerContainerRequestStatus   string = "scheduler:container:request_status:%s"
+	schedulerContainerRequestFailure  string = "scheduler:container:request_failure:%s"
 	schedulerContainerIndex           string = "scheduler:container:index:%s"
 	schedulerContainerWorkerIndex     string = "scheduler:container:worker:index:%s"
 	schedulerContainerWorkspaceIndex  string = "scheduler:container:workspace:index:%s"
@@ -316,6 +317,10 @@ func (rk *redisKeys) SchedulerBackendRouteMachineIDRevision(machineID string) st
 
 func (rk *redisKeys) SchedulerContainerRequestStatus(containerId string) string {
 	return fmt.Sprintf(schedulerContainerRequestStatus, containerId)
+}
+
+func (rk *redisKeys) SchedulerContainerRequestFailure(containerId string) string {
+	return fmt.Sprintf(schedulerContainerRequestFailure, containerId)
 }
 
 func (rk *redisKeys) SchedulerWorkerAddress(containerId string) string {

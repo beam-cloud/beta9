@@ -11,6 +11,8 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type testContainerStreamClient struct {
@@ -260,17 +262,37 @@ func TestContainerStreamWithNobodyToTellDoesNotReadWhatItsContainerWaitsFor(t *t
 	require.Zero(t, commands["HGETALL"])
 }
 
-// A request the scheduler gives up on ends the wait at once.
+// A request the scheduler gives up on ends the wait at once, with why.
 func TestContainerStreamStopsWaitingWhenTheSchedulerGivesUp(t *testing.T) {
 	s := waitForPendingContainer(t, nil)
 	s.waitsFor(types.ContainerPendingWaitingForCapacity, types.ContainerPendingNoCapacity, time.Now())
 	for s.nextTold().Phase != types.ContainerPendingWaitingForCapacity {
 	}
 
+	failure := types.ContainerRequestFailure{
+		Reason: types.ContainerSchedulingFailureWorkerCapacityTimeout, Gpus: []string{"A10G"}, WaitedSeconds: 1200,
+	}
+	require.NoError(t, s.repo.DeleteContainerState(pendingStreamContainer))
+	require.NoError(t, s.repo.SetContainerRequestFailure(pendingStreamContainer, failure))
+
+	var notScheduled *ContainerNotScheduledError
+	require.ErrorAs(t, s.result().err, &notScheduled)
+	require.Equal(t, failure, notScheduled.Failure)
+	require.Equal(t, codes.ResourceExhausted, status.Code(notScheduled))
+	require.Equal(t, "No A10G capacity became available in 20 minutes.", notScheduled.Error())
+}
+
+// A request that failed with no reason kept ends the wait as it did before
+// reasons were kept.
+func TestContainerStreamStopsWaitingForARequestThatFailedWithoutAReason(t *testing.T) {
+	s := waitForPendingContainer(t, nil)
+
 	require.NoError(t, s.repo.DeleteContainerState(pendingStreamContainer))
 	require.NoError(t, s.repo.SetContainerRequestStatus(pendingStreamContainer, types.ContainerRequestStatusFailed))
 
-	require.ErrorContains(t, s.result().err, "container stopped before it was assigned to a worker")
+	err := s.result().err
+	require.ErrorContains(t, err, "container stopped before it was assigned to a worker")
+	require.Equal(t, codes.Unknown, status.Code(err))
 }
 
 func (c *testContainerStreamClient) StreamLogsWithReady(_ context.Context, _ string, output chan common.OutputMsg, ready func()) error {

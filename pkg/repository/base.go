@@ -76,6 +76,8 @@ type ContainerRepository interface {
 	DeleteContainerState(containerId string) error
 	SetContainerRequestStatus(containerId string, status types.ContainerRequestStatus) error
 	GetContainerRequestStatus(containerId string) (types.ContainerRequestStatus, error)
+	SetContainerRequestFailure(containerId string, failure types.ContainerRequestFailure) error
+	GetContainerRequestFailure(containerId string) (*types.ContainerRequestFailure, error)
 	SetWorkerAddress(containerId string, addr string) error
 	GetWorkerAddress(ctx context.Context, containerId string) (string, error)
 	SetContainerAddressMap(containerId string, addressMap map[int32]string) error

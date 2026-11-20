@@ -306,11 +306,39 @@ class AuthTokenInterceptor(
     intercept_stream_stream = intercept_call_stream
 
 
+# The trailer of a stream that ended because the scheduler gave up on its
+# container. Its value is why (worker_capacity_timeout, ...).
+SCHEDULING_FAILURE_TRAILER = "x-beta9-scheduling-failure"
+
+
+def scheduling_failure(error: grpc.RpcError) -> str:
+    """Why the scheduler gave up on the container a call waited for, or "" if it did not."""
+    try:
+        trailers = error.trailing_metadata() or ()
+    except Exception:
+        return ""
+    return next((value for key, value in trailers if key == SCHEDULING_FAILURE_TRAILER), "")
+
+
 def handle_grpc_error(error: grpc.RpcError):
     code = error.code()
     details = error.details()
 
-    if code == grpc.StatusCode.UNAUTHENTICATED:
+    if scheduling_failure(error):
+        # The gateway's message says what there was none of, and for how long.
+        if code == grpc.StatusCode.RESOURCE_EXHAUSTED:
+            terminal.error(
+                details,
+                code="CAPACITY",
+                hint=(
+                    "Try again in a few minutes. For a GPU, list more than one type "
+                    '(gpu=["A10G", "T4"]) so that whichever has capacity is used, or reserve '
+                    f"one: `{terminal.cli_name()} machine list` shows what can be reserved."
+                ),
+            )
+        else:
+            terminal.error(details, code="NOT_SCHEDULED")
+    elif code == grpc.StatusCode.UNAUTHENTICATED:
         terminal.error(
             "Unauthorized: Invalid auth token provided.",
             code="NOT_AUTHENTICATED",

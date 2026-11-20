@@ -2261,6 +2261,42 @@ func (cr *ContainerRedisRepository) GetContainerRequestStatus(containerId string
 	return types.ContainerRequestStatus(status), nil
 }
 
+// SetContainerRequestFailure marks a container request as one the scheduler
+// gave up on, and keeps why. Whoever sees the request failed can read why:
+// the reason is stored first.
+func (cr *ContainerRedisRepository) SetContainerRequestFailure(containerId string, failure types.ContainerRequestFailure) error {
+	encoded, err := json.Marshal(failure)
+	if err != nil {
+		return err
+	}
+
+	ctx := context.TODO()
+	pipe := cr.rdb.TxPipeline()
+	pipe.Set(ctx, common.RedisKeys.SchedulerContainerRequestFailure(containerId), encoded, types.ContainerRequestStatusTTL)
+	pipe.Set(ctx, common.RedisKeys.SchedulerContainerRequestStatus(containerId), string(types.ContainerRequestStatusFailed), types.ContainerRequestStatusTTL)
+	_, err = pipe.Exec(ctx)
+	return err
+}
+
+// GetContainerRequestFailure returns why the scheduler gave up on a
+// container request, or nil if it did not, or did so too long ago for the
+// reason to have been kept.
+func (cr *ContainerRedisRepository) GetContainerRequestFailure(containerId string) (*types.ContainerRequestFailure, error) {
+	encoded, err := cr.rdb.Get(context.TODO(), common.RedisKeys.SchedulerContainerRequestFailure(containerId)).Bytes()
+	if err == redis.Nil {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	failure := &types.ContainerRequestFailure{}
+	if err := json.Unmarshal(encoded, failure); err != nil {
+		return nil, err
+	}
+	return failure, nil
+}
+
 func (cr *ContainerRedisRepository) SetBuildContainerTTL(containerId string, ttl time.Duration) error {
 	return cr.rdb.Set(context.TODO(), common.RedisKeys.ImageBuildContainerTTL(containerId), "1", ttl).Err()
 }

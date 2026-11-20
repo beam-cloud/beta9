@@ -544,6 +544,8 @@ const (
 	EventAttrStatus             = "status"
 	EventAttrTaskID             = "task_id"
 	EventAttrPoolSelector       = "pool_selector"
+	EventAttrGpus               = "gpus"
+	EventAttrWaitedSeconds      = "waited_seconds"
 	EventAttrTimeoutSeconds     = "timeout_seconds"
 	EventAttrTotalRequests      = "total_requests"
 	EventAttrDurationUs         = "duration_us"
