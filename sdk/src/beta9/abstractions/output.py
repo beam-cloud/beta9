@@ -1,5 +1,6 @@
 import os
 import shutil
+import tempfile
 import uuid
 import zipfile
 from datetime import datetime
@@ -164,12 +165,16 @@ class Output(BaseAbstraction):
             ```
         """
         cls.prepare_tmp_dir()
-        path = cls._tmp_dir / str(uuid.uuid4())
+        with tempfile.TemporaryDirectory(dir=cls._tmp_dir) as staging_dir:
+            path = Path(staging_dir) / str(uuid.uuid4())
+            with open(path, "wb") as tmp_file:
+                shutil.copyfileobj(file_handle, tmp_file)
 
-        with open(path, "wb") as tmp_file:
-            shutil.copyfileobj(file_handle, tmp_file)
-
-        return cls(path=path)
+            output = cls(path=path)
+            owned_dir = cls._tmp_dir / str(id(output))
+            Path(staging_dir).rename(owned_dir)
+            output.path = owned_dir / path.name
+            return output
 
     @classmethod
     def prepare_tmp_dir(cls) -> None:
