@@ -93,7 +93,7 @@ func (c *controller) reconcile(ctx context.Context) (err error) {
 		return err
 	}
 	live := c.observeReplicas(ctx, replicas)
-	inv, err := c.inventory(live)
+	inv, err := c.inventory(live, replicas)
 	if err != nil {
 		return err
 	}
@@ -374,7 +374,7 @@ func localityOf(name string, cfg types.WorkerPoolConfig) string {
 	return cmp.Or(strings.TrimSpace(cfg.Locality), name)
 }
 
-func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInventory, error) {
+func (c *controller) inventory(replicas, known []*types.EndpointReplica) (*clusterInventory, error) {
 	workers, err := c.s.workers.GetAllWorkers()
 	if err != nil {
 		return nil, err
@@ -408,6 +408,13 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 			slices.SortFunc(pools, func(a, b eligiblePool) int { return strings.Compare(a.Name, b.Name) })
 		}
 	}
+	// A worker that a replica was scheduled on has joined. When its machine
+	// is lost its pool makes it pending again, with all its room, until the
+	// pool lets go of the machine: that is not a machine on its way.
+	joined := map[string]bool{}
+	for _, r := range known {
+		joined[r.WorkerID] = true
+	}
 	for _, w := range workers {
 		if w == nil || w.Gpu == "" {
 			continue
@@ -420,7 +427,7 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 		}
 		// The worker of a machine a Spot pool bought is pending until the
 		// machine joins, and the scheduler keeps its room for what waits.
-		booting := w.Status == types.WorkerStatusPending && w.Preemptable && cfg.Buys()
+		booting := w.Status == types.WorkerStatusPending && w.Preemptable && cfg.Buys() && !joined[w.Id]
 		if w.Status != types.WorkerStatusAvailable && !booting {
 			continue
 		}

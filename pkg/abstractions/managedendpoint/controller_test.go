@@ -32,7 +32,7 @@ func TestInventoryPlacesInEligiblePoolsOnly(t *testing.T) {
 	require.NoError(t, s.workers.AddWorker(&types.Worker{Id: "w2", PoolName: "opt-out", Gpu: "H100", TotalGpuCount: 8, FreeGpuCount: 8, Status: types.WorkerStatusAvailable}))
 	require.NoError(t, s.workers.AddWorker(&types.Worker{Id: "spot", PoolName: "gpu-b", Gpu: "H100", TotalGpuCount: 8, FreeGpuCount: 8, Status: types.WorkerStatusAvailable, Preemptable: true}))
 
-	inv, err := s.controller.inventory(nil)
+	inv, err := s.controller.inventory(nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []eligiblePool{{Name: "gpu-a", Locality: "us-east"}, {Name: "gpu-b", Locality: "gpu-b"}}, inv.pools["H100"])
 	assert.Equal(t, []eligiblePool{{Name: "cpu-a", Locality: "cpu-a"}}, inv.pools[types.CPUInventoryKey])
@@ -109,7 +109,7 @@ func TestSpotInventoryIsTheMachinesOfSpotPools(t *testing.T) {
 			Preemptable: true, TotalGpuCount: 8, FreeGpuCount: 8, FreeCpu: cpu, FreeMemory: memory}))
 	}
 
-	inv, err := s.controller.inventory(nil)
+	inv, err := s.controller.inventory(nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []eligiblePool{{Name: "spot-a", Locality: "spot-a", Spot: true}, {Name: "spot-b", Locality: "spot-b", Spot: true}}, inv.spot[gpu])
 	assert.Equal(t, []eligiblePool{{Name: "mixed", Locality: "mixed"}, {Name: "stable", Locality: "stable"}}, inv.pools[gpu])
@@ -152,9 +152,19 @@ func TestSpotInventoryIsTheMachinesOfSpotPools(t *testing.T) {
 	require.NoError(t, s.containers.SetContainerState(waiting.ContainerID, &types.ContainerState{
 		ContainerId: waiting.ContainerID, Status: types.ContainerStatusPending, Cpu: cpu, Memory: 512 * 1024,
 	}))
-	inv, err = s.controller.inventory([]*types.EndpointReplica{waiting})
+	inv, err = s.controller.inventory([]*types.EndpointReplica{waiting}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]bool{"spot-a": true}, inv.buying)
+
+	// A machine that is lost has its worker made pending again, with all its
+	// room, until its pool lets go of it. A replica ran there: it is not a
+	// machine that is coming, and the replica's replacement goes elsewhere.
+	lost := versionReplica(t, s, "lost", 1, types.ReplicaStatusFailed)
+	lost.WorkerID = "b-bought"
+	inv, err = s.controller.inventory(nil, []*types.EndpointReplica{lost})
+	require.NoError(t, err)
+	assert.NotContains(t, inv.workers, "b-bought")
+	assert.Contains(t, inv.workers, "b-big")
 
 	// The idle GPUs of the other pools are not a Spot placement's to take,
 	// and a machine its provider may take back is no one else's.
@@ -457,7 +467,7 @@ func TestInventoryCountsSchedulingReplicasAsTaken(t *testing.T) {
 		{ID: "pending", GPU: "H100", GPUCount: 2, PoolName: "gpu-a", Status: types.ReplicaStatusScheduling},
 		{ID: "placed", GPU: "H100", GPUCount: 1, PoolName: "gpu-a", Status: types.ReplicaStatusLoading},
 		{ID: "elsewhere", GPU: "H100", GPUCount: 1, PoolName: "other", Status: types.ReplicaStatusScheduling},
-	})
+	}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, uint32(2), inv.idle("H100", "gpu-a"), "a replica the scheduler has not placed yet still holds its GPUs; a placed one is already in the worker's count")
 }
@@ -1160,7 +1170,7 @@ func TestInventoryRejectsFragmentedGPUs(t *testing.T) {
 	for _, id := range []string{"w1", "w2"} {
 		require.NoError(t, s.workers.AddWorker(&types.Worker{Id: id, PoolName: "gpu-a", Gpu: "H100", TotalGpuCount: 1, FreeGpuCount: 1, Status: types.WorkerStatusAvailable}))
 	}
-	inv, err := s.controller.inventory(nil)
+	inv, err := s.controller.inventory(nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, uint32(2), inv.idle("H100", "gpu-a"))
 	assert.False(t, inv.canPlace("H100", 2))
