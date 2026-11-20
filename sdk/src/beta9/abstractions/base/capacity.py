@@ -116,9 +116,11 @@ def offer_hardware_label(offer: PoolOffer, nodes: int = 1) -> str:
     return hardware
 
 
-def no_offers_error(gpu_label: str) -> None:
+def no_offers_error(gpu_label: str, pricing: str = "on_demand") -> None:
+    """Report that nothing is offered for a GPU; pricing is what was asked for (on_demand, spot, any)."""
+    kind = {"spot": "spot ", "any": ""}.get(pricing, "on-demand ")
     terminal.error(
-        f"No on-demand offers currently available for {gpu_label}.",
+        f"No {kind}offers currently available for {gpu_label}.",
         exit=False,
         hint=no_offers_hint(),
     )
@@ -294,12 +296,27 @@ def _run_interactive_capacity_flow(
     return response
 
 
+# How the machines of an offer are sold, as PoolConfig.pricing names it. On
+# demand is the default and is sent as nothing.
+PRICING_ON_DEMAND = ""
+PRICING_SPOT = "spot"
+PRICING_ANY = "any"
+
+
 def fetch_offers(
-    gateway_stub, gpus: List[str], limit: int = MAX_OFFER_CHOICES
+    gateway_stub,
+    gpus: List[str],
+    limit: int = MAX_OFFER_CHOICES,
+    pricing: str = PRICING_ON_DEMAND,
 ) -> Optional[List[PoolOffer]]:
-    """Fetch on-demand offers sorted by price; None indicates a fetch error."""
+    """
+    Fetch offers sorted by price; None indicates a fetch error. Offers are
+    on-demand unless pricing asks for spot machines, or for both ("any").
+    """
     with terminal.progress("Finding available hardware..."):
-        res = gateway_stub.list_pool_offers(ListPoolOffersRequest(pool=PoolConfig(gpu=gpus)))
+        res = gateway_stub.list_pool_offers(
+            ListPoolOffersRequest(pool=PoolConfig(gpu=gpus, pricing=pricing))
+        )
     if not res.ok:
         terminal.error(f"Failed to list hardware offers: {res.err_msg}", exit=False)
         return None
@@ -316,6 +333,8 @@ def _offer_columns(offer: PoolOffer) -> tuple:
     region = offer.region_display_name or offer.region or "any region"
     hardware = offer_hardware_label(offer)
     details = []
+    if offer.spot:
+        details.append("spot, can be taken back")
     if offer.cpu_millicores:
         details.append(f"{offer.cpu_millicores // 1000} vCPU")
     if offer.memory_mb:
@@ -368,6 +387,8 @@ def pool_config_for_offer(
         max_spend=max_spend,
         providers=[offer.provider] if offer.provider else [],
         offer_id=offer.id,
+        # A machine that is sold both ways is two offers with one ID.
+        pricing=PRICING_SPOT if offer.spot else PRICING_ON_DEMAND,
     )
 
 

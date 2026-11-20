@@ -12,22 +12,33 @@ def gpu_inventory_table(
     supported_gpus: Dict[str, bool],
     cheapest_offers: Dict[str, PoolOffer],
     offers_available: bool = True,
+    cheapest_spot_offers: Optional[Dict[str, PoolOffer]] = None,
 ) -> Table:
     """
     One row per GPU type that has any capacity signal: live serverless
-    workers, a serverless pool config (scale-to-zero), or an on-demand offer.
-    GPU types with no capacity anywhere are summarized in the caption so
-    they never stretch the table.
+    workers, a serverless pool config (scale-to-zero), or an offer to reserve,
+    on demand or spot. GPU types with no capacity anywhere are summarized in
+    the caption so they never stretch the table.
     """
-    gpu_types = sorted(set(live_gpus) | set(supported_gpus) | set(cheapest_offers))
+    cheapest_spot_offers = cheapest_spot_offers or {}
+    gpu_types = sorted(
+        set(live_gpus) | set(supported_gpus) | set(cheapest_offers) | set(cheapest_spot_offers)
+    )
     hidden = 0
     rows = []
+
+    def price(offer: Optional[PoolOffer]) -> str:
+        if offer is not None:
+            return f"${offer.hourly_cost_micros / 1_000_000:.2f}/hr"
+        return "[dim]—[/dim]" if offers_available else "[dim]?[/dim]"
+
     for gpu_type in gpu_types:
         live = live_gpus.get(gpu_type, False)
         supported = supported_gpus.get(gpu_type, False)
         offer = cheapest_offers.get(gpu_type)
+        spot_offer = cheapest_spot_offers.get(gpu_type)
 
-        if not live and not supported and offer is None:
+        if not live and not supported and offer is None and spot_offer is None:
             hidden += 1
             continue
 
@@ -38,15 +49,7 @@ def gpu_inventory_table(
         else:
             serverless = "[dim]—[/dim]"
 
-        if offer is not None:
-            hourly = offer.hourly_cost_micros / 1_000_000
-            on_demand = f"${hourly:.2f}/hr"
-        elif offers_available:
-            on_demand = "[dim]—[/dim]"
-        else:
-            on_demand = "[dim]?[/dim]"
-
-        rows.append((gpu_type, serverless, on_demand))
+        rows.append((gpu_type, serverless, price(offer), price(spot_offer)))
 
     caption = None
     if hidden > 0:
@@ -57,6 +60,7 @@ def gpu_inventory_table(
         Column("GPU", no_wrap=True),
         Column("Serverless", no_wrap=True),
         Column("On-demand", justify="right", no_wrap=True),
+        Column("Spot", justify="right", no_wrap=True),
         box=box.SIMPLE,
         caption=caption,
         caption_justify="left",
@@ -66,7 +70,9 @@ def gpu_inventory_table(
     for row in rows:
         table.add_row(*row)
     if not rows:
-        table.add_row("[dim]—[/dim]", "[dim]no capacity visible[/dim]", "[dim]—[/dim]")
+        table.add_row(
+            "[dim]—[/dim]", "[dim]no capacity visible[/dim]", "[dim]—[/dim]", "[dim]—[/dim]"
+        )
 
     return table
 

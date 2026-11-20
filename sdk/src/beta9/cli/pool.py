@@ -261,6 +261,7 @@ def _pool_offer_table(offers: List[PoolOffer]) -> Table:
         Column("Instance"),
         Column("Nodes", justify="right"),
         Column("Compute"),
+        Column("Spot"),
         Column("$/hr", justify="right"),
         Column("Available", justify="right"),
         box=box.SIMPLE,
@@ -279,6 +280,7 @@ def _pool_offer_table(offers: List[PoolOffer]) -> Table:
             offer.display_name or offer.instance_type,
             str(offer.node_count or 1),
             ", ".join(compute) if compute else "-",
+            "yes" if offer.spot else "-",
             f"${offer.hourly_cost_micros / 1_000_000:.4f}",
             str(offer.available),
         )
@@ -451,12 +453,16 @@ def create(
 
 @management.command(
     name="offers",
-    help="Browse raw on-demand offers. For an interactive picker, use 'machine reserve'.",
+    help="Browse raw offers, on-demand unless --pricing says otherwise. For an "
+    "interactive picker, use 'machine reserve'.",
     epilog="""
     Examples:
 
       # Show CPU offers from Hetzner
       {cli_name} pool offers --provider hetzner
+
+      # Show spot and on-demand offers for an L4, cheapest first
+      {cli_name} pool offers --gpu L4 --pricing any
 
       # Show offers for a 2-node L4 pool
       {cli_name} pool offers --gpu L4 --nodes 2 --ttl 6h --max-spend 20
@@ -470,6 +476,14 @@ def create(
 @click.option("--ttl", default="1h", show_default=True, help="Reservation duration.")
 @click.option("--max-spend", type=float, default=1, show_default=True, help="Maximum spend in USD.")
 @click.option("--min-reliability", type=click.FloatRange(0, 1), default=0)
+@click.option(
+    "--pricing",
+    type=click.Choice(("on_demand", "spot", "any")),
+    default="on_demand",
+    show_default=True,
+    help="How the machines are sold. A spot machine costs less, and its provider may "
+    "take it back at any time; 'any' lists both.",
+)
 @click.option("--format", type=click.Choice(("table", "json")), default="table", show_default=True)
 @extraclick.pass_service_client
 def offers(
@@ -481,9 +495,12 @@ def offers(
     ttl: str,
     max_spend: float,
     min_reliability: float,
+    pricing: str,
     format: str,
 ):
     pool = _managed_pool_config("", provider, region, gpu, nodes, ttl, max_spend, min_reliability)
+    # On demand is the default, and is sent as nothing.
+    pool.pricing = "" if pricing == "on_demand" else pricing
     res = service.gateway.list_pool_offers(ListPoolOffersRequest(pool=pool))
     if not res.ok:
         return terminal.error(res.err_msg)

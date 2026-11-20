@@ -8,6 +8,8 @@ from .. import terminal
 from ..abstractions.base.capacity import (
     DEFAULT_ONDEMAND_TTL,
     INDEFINITE_TTL,
+    PRICING_ANY,
+    PRICING_ON_DEMAND,
     cli_name,
     fetch_offers,
     launch_failure_hint,
@@ -58,10 +60,13 @@ def management():
     pass
 
 
-def _cheapest_offers_by_gpu(offers: Sequence[PoolOffer]) -> Dict[str, PoolOffer]:
+def _cheapest_offers_by_gpu(
+    offers: Sequence[PoolOffer], spot: bool = False
+) -> Dict[str, PoolOffer]:
+    """The cheapest offer for each GPU type, among those sold on demand or those sold as spot."""
     cheapest: Dict[str, PoolOffer] = {}
     for offer in offers:
-        if not offer.gpu:
+        if not offer.gpu or bool(offer.spot) != spot:
             continue
         current = cheapest.get(offer.gpu)
         if current is None or offer.hourly_cost_micros < current.hourly_cost_micros:
@@ -84,6 +89,7 @@ def _machine_list_renderables(
             res.supported_gpus,
             _cheapest_offers_by_gpu(offers or []),
             offers_available=offers is not None,
+            cheapest_spot_offers=_cheapest_offers_by_gpu(offers or [], spot=True),
         ),
         "",
         _section_header("Your machines"),
@@ -101,7 +107,9 @@ def _fetch_offers_quiet(service: ServiceClient) -> List[PoolOffer]:
     """Fetch offers without any decorative output, for JSON consumers."""
     from ..clients.gateway import ListPoolOffersRequest, PoolConfig
 
-    res = service.gateway.list_pool_offers(ListPoolOffersRequest(pool=PoolConfig()))
+    res = service.gateway.list_pool_offers(
+        ListPoolOffersRequest(pool=PoolConfig(pricing=PRICING_ANY))
+    )
     return list(res.offers) if res.ok else []
 
 
@@ -109,8 +117,11 @@ def _inventory_json(
     res: ListMachinesResponse, offers: Optional[Sequence[PoolOffer]]
 ) -> List[Dict[str, Any]]:
     cheapest = _cheapest_offers_by_gpu(offers or [])
+    cheapest_spot = _cheapest_offers_by_gpu(offers or [], spot=True)
     inventory = []
-    for gpu_type in sorted(set(res.gpus) | set(res.supported_gpus) | set(cheapest)):
+    for gpu_type in sorted(
+        set(res.gpus) | set(res.supported_gpus) | set(cheapest) | set(cheapest_spot)
+    ):
         if res.gpus.get(gpu_type):
             serverless = "ready"
         elif res.supported_gpus.get(gpu_type):
@@ -118,11 +129,13 @@ def _inventory_json(
         else:
             serverless = "none"
         offer = cheapest.get(gpu_type)
+        spot_offer = cheapest_spot.get(gpu_type)
         inventory.append(
             {
                 "gpu": gpu_type,
                 "serverless": serverless,
                 "on_demand": offer.to_dict(casing=Casing.SNAKE) if offer else None,  # type: ignore
+                "spot": spot_offer.to_dict(casing=Casing.SNAKE) if spot_offer else None,  # type: ignore
             }
         )
     return inventory
@@ -130,7 +143,7 @@ def _inventory_json(
 
 @management.command(
     name="list",
-    help="Show GPU inventory (serverless + on-demand pricing) and your machines.",
+    help="Show GPU inventory (serverless, on-demand and spot pricing) and your machines.",
     epilog="""
     Examples:
 
@@ -140,7 +153,7 @@ def _inventory_json(
       # List the first 10 machines
       {cli_name} machine list --limit 10
 
-      # Skip fetching on-demand offer pricing (faster)
+      # Skip fetching on-demand and spot offer pricing (faster)
       {cli_name} machine list --no-offers
 
       # List machines and output in JSON format
@@ -172,7 +185,7 @@ def _inventory_json(
     "show_offers",
     default=True,
     show_default=True,
-    help="Include on-demand offer pricing in the inventory.",
+    help="Include on-demand and spot offer pricing in the inventory.",
 )
 @extraclick.pass_service_client
 def list_machines(
@@ -201,7 +214,7 @@ def list_machines(
 
     offers: Optional[List[PoolOffer]] = []
     if show_offers:
-        offers = fetch_offers(service.gateway, [], limit=0)
+        offers = fetch_offers(service.gateway, [], limit=0, pricing=PRICING_ANY)
 
     for renderable in _machine_list_renderables(res, offers):
         terminal.print(renderable)
@@ -328,13 +341,16 @@ def restart_agent(
 
 @management.command(
     name="reserve",
-    help="Reserve on-demand hardware. Interactive in a terminal; scriptable "
+    help="Reserve on-demand or spot hardware. Interactive in a terminal; scriptable "
     "(picks the cheapest offer) when piped or given --yes.",
     epilog="""
     Examples:
 
       # Pick from the cheapest available A6000 offers
       {cli_name} machine reserve --gpu A6000
+
+      # Pick a spot machine: cheaper, and its provider may take it back at any time
+      {cli_name} machine reserve --gpu A6000 --pricing spot
 
       # Script/agent friendly: cheapest A6000 for 2h, no prompts
       {cli_name} machine reserve --gpu A6000 --ttl 2h --yes
@@ -355,6 +371,14 @@ def restart_agent(
 @click.option("--name", default="", help="Pool name (defaults to ondemand-<gpu>).")
 @click.option("--max-spend", type=float, default=0.0, help="Max spend in USD (auto if omitted).")
 @click.option(
+    "--pricing",
+    type=click.Choice(("on_demand", "spot", "any")),
+    default="on_demand",
+    show_default=True,
+    help="How the machine is sold. A spot machine costs less, and its provider may take "
+    "it back at any time; 'any' offers both.",
+)
+@click.option(
     "--yes",
     "-y",
     is_flag=True,
@@ -368,6 +392,7 @@ def reserve_machine(
     ttl: Optional[str],
     name: str,
     max_spend: float,
+    pricing: str,
     yes: bool,
 ):
     if ttl is not None and ttl.strip().lower() in ("indefinite", "none", "manual"):
@@ -378,11 +403,16 @@ def reserve_machine(
             hint="use a number with a unit (45m, 6h, 2d) or 'indefinite'",
         )
 
-    offers = fetch_offers(service.gateway, list(gpu), limit=15)
+    offers = fetch_offers(
+        service.gateway,
+        list(gpu),
+        limit=15,
+        pricing=PRICING_ON_DEMAND if pricing == "on_demand" else pricing,
+    )
     if offers is None:
         return
     if not offers:
-        return no_offers_error(", ".join(gpu) if gpu else "your request")
+        return no_offers_error(", ".join(gpu) if gpu else "your request", pricing)
 
     # Scripts and agents get deterministic behavior: cheapest offer, no prompts.
     interactive = terminal.is_interactive() and not yes
@@ -400,6 +430,8 @@ def reserve_machine(
         f"Reserve {offer_hardware_label(offer, nodes)} for ~${hourly * nodes:.2f}/hr? "
         f"{ttl_label(ttl).capitalize()}, max spend ${pool.max_spend:.2f}."
     )
+    if offer.spot:
+        summary += " Spot: its provider may take it back at any time."
     if interactive:
         if not terminal.confirm(summary, default=True):
             return
