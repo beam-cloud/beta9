@@ -3,6 +3,7 @@ package image
 import (
 	"context"
 	"database/sql"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
@@ -94,6 +95,42 @@ func (is *ContainerImageService) verifyExplicitImageID(ctx context.Context, reco
 	return &imageVerifyResult{imageID: imageID, exists: exists, valid: true}, nil
 }
 
+// authorizeBaseImages refuses base images in the build registry that the
+// workspace may not run. Workers pull base images with credentials for the
+// whole registry, so only the runner image and the workspace's images, by tag,
+// are allowed there.
+func (is *ContainerImageService) authorizeBaseImages(ctx context.Context, opts *BuildOpts) error {
+	config := is.config.ImageService
+	if config.BuildRegistry == "" {
+		return nil
+	}
+	images := []BaseImage{{Registry: opts.BaseImageRegistry, Repo: opts.BaseImageName, Tag: opts.BaseImageTag, Digest: opts.BaseImageDigest}}
+	for _, ref := range dockerfileBaseImages(opts.Dockerfile) {
+		if image, err := ExtractImageNameAndTag(ref); err == nil {
+			images = append(images, image)
+		}
+	}
+	for _, image := range images {
+		if !strings.EqualFold(image.Registry, config.BuildRegistry) {
+			continue
+		}
+		if strings.EqualFold(image.Registry, config.Runner.BaseImageRegistry) && image.Repo == config.Runner.BaseImageName {
+			continue
+		}
+		if image.Repo != config.BuildRepositoryName || image.Tag == "" || image.Digest != "" {
+			return errors.Errorf("base image %s not found", image.String())
+		}
+		authInfo, _ := auth.AuthInfoFromContext(ctx)
+		if authInfo == nil || authInfo.Workspace == nil {
+			return errors.New("workspace is required")
+		}
+		if err := repository.AuthorizeImage(ctx, is.backendRepo, authInfo.Workspace.ExternalId, image.Tag); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (is *ContainerImageService) buildOptionsFromVerifyRequest(ctx context.Context, in *pb.VerifyImageBuildRequest) (*BuildOpts, error) {
 	tag := in.PythonVersion
 	if in.PythonVersion == types.Python3.String() {
@@ -158,6 +195,10 @@ func (is *ContainerImageService) prepareBuildOptionsForImageID(ctx context.Conte
 			return err
 		}
 		opts.addPythonRequirements()
+	}
+
+	if err := is.authorizeBaseImages(ctx, opts); err != nil {
+		return err
 	}
 
 	if in.Dockerfile != "" {

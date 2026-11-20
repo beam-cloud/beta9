@@ -18,12 +18,18 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// buildahAuthFileArgs gives the Dockerfile build the credentials for its base
+// image's registry, except the build registry's: those can read every image
+// there, and a base image from it is pulled before the build starts.
 func (c *ImageClient) buildahAuthFileArgs(ctx context.Context, request *types.ContainerRequest, imageRef, runroot string) ([]string, error) {
+	registry := reg.ParseRegistry(imageRef)
+	if registry != "" && strings.EqualFold(registry, c.getBuildRegistry()) {
+		return nil, nil
+	}
 	args := c.buildahAuthArgs(ctx, request, imageRef)
 	if len(args) == 0 {
 		return nil, nil
 	}
-	registry := reg.ParseRegistry(imageRef)
 	if registry == "" {
 		return nil, fmt.Errorf("registry credentials require a source image")
 	}
