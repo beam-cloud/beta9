@@ -95,6 +95,18 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 		}
 		return c.finishReplica(ctx, replica, c.exitStatus(replica), "container exited")
 	}
+	// A managed container's record can outlive a lost worker by many minutes.
+	// Spot replacements follow the worker's lease once the container was running.
+	if replica.Spot && state.Status == types.ContainerStatusRunning && state.WorkerId != "" {
+		_, err := c.s.workers.GetWorkerById(state.WorkerId)
+		var notFound *types.ErrWorkerNotFound
+		if errors.As(err, &notFound) {
+			return c.stopAndFinish(ctx, replica, types.ReplicaStatusFailed, "Spot worker lost")
+		}
+		if err != nil {
+			return err
+		}
+	}
 	if replica.WorkerID != state.WorkerId || replica.MachineID != state.MachineId {
 		// Pending delivery can move to another worker. Protection and ownership
 		// checks must follow that assignment, including its provider attribution.
@@ -404,6 +416,7 @@ func (c *controller) startReplica(ctx context.Context, endpoint *types.ManagedEn
 		Mounts:            mounts,
 		Ports:             []uint32{endpoint.Spec.Port},
 		PoolSelector:      pool.Name,
+		Preemptable:       pool.Spot,
 		OpportunisticOnly: true,
 		Evictable:         !protected,
 		DrainSeconds:      drainSeconds,
@@ -422,6 +435,7 @@ func (c *controller) startReplica(ctx context.Context, endpoint *types.ManagedEn
 		Protected:   !request.Evictable,
 		Locality:    pool.Locality,
 		PoolName:    pool.Name,
+		Spot:        pool.Spot,
 		ContainerID: containerID,
 		Status:      types.ReplicaStatusScheduling,
 		SecretHash:  secretHash,

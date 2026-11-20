@@ -2,6 +2,7 @@ package managedendpoint
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -26,6 +27,68 @@ const publishedModel = `acme/model:
       priority: 1
       minReplicas: 1
 `
+
+func TestApplyRepoValidatesSpotPlacementAndPreservesLastFleetOnInvalidPool(t *testing.T) {
+	ctx := context.Background()
+	s := newServiceForTest(t)
+	app := seedEndpoint(t, s)
+	optedIn := types.WorkerPoolManagedEndpointsConfig{Enabled: true}
+	s.appConfig.Worker.Pools = map[string]types.WorkerPoolConfig{
+		"spot":    {GPUType: "H100", ManagedEndpoints: optedIn, Preemptable: true},
+		"durable": {GPUType: "H100", ManagedEndpoints: optedIn},
+		"opt-out": {GPUType: "H100", Preemptable: true},
+		"wrong":   {GPUType: "B300", ManagedEndpoints: optedIn, Preemptable: true},
+		"mixed": {
+			GPUType: "H100", ManagedEndpoints: optedIn, Preemptable: true,
+			Provisioning: types.WorkerPoolProvisioningConfig{Providers: []string{"test"}, Spot: true, OnDemand: true},
+		},
+	}
+	config := func(serverless bool, pool string) string {
+		return fmt.Sprintf("acme/model:\n  enabled: true\n  pricing: {request: \"0\"}\n  gpus:\n    H100: {priority: 1, maxReplicas: 1, serverless: %t, spotPool: %s}\n", serverless, pool)
+	}
+	apply := func(t *testing.T, dryRun bool, sha string, serverless bool, pool string) *pb.ApplyRepoResponse {
+		t.Helper()
+		out, err := s.ApplyRepo(adminCtx(), &pb.ApplyRepoRequest{Sha: sha, DryRun: dryRun,
+			ConfigYaml: config(serverless, pool), Endpoints: []*pb.RepoEndpoint{repoEndpoint(app.Spec.ID, app)},
+		})
+		require.NoError(t, err)
+		return out
+	}
+	require.True(t, apply(t, false, "valid", true, "spot").Ok)
+	for _, pool := range []string{"unknown", "durable", "opt-out", "wrong", "mixed"} {
+		t.Run(pool, func(t *testing.T) {
+			result := apply(t, true, "", true, pool)
+			assert.False(t, result.Ok)
+			require.Len(t, result.Errors, 1)
+			assert.Contains(t, result.Errors[0], "must name a Spot-only H100 pool with managedEndpoints.enabled")
+		})
+	}
+	assert.Contains(t, apply(t, true, "", false, "spot").Errors, "config.yaml: acme/model: H100: spotPool requires a serverless GPU placement")
+	result := apply(t, true, "", true, "123")
+	require.Len(t, result.Errors, 1)
+	assert.Contains(t, result.Errors[0], "must be a non-empty pool name")
+	assert.False(t, apply(t, false, "bad", true, "wrong").Ok)
+	fleet, err := s.repo.GetFleet(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "valid", fleet.GitSHA)
+	assert.Equal(t, "spot", fleet.Placements(app.Spec.ID)["H100"].SpotPool)
+}
+
+func TestApplyRepoWarnsWhenOrdinaryPlacementHasOnlySpotPools(t *testing.T) {
+	s := newServiceForTest(t)
+	app := seedEndpoint(t, s)
+	s.appConfig.Worker.Pools = map[string]types.WorkerPoolConfig{
+		"spot": {GPUType: "H100", Preemptable: true, ManagedEndpoints: types.WorkerPoolManagedEndpointsConfig{Enabled: true}},
+	}
+	out, err := s.ApplyRepo(adminCtx(), &pb.ApplyRepoRequest{
+		DryRun:     true,
+		ConfigYaml: publishedModel,
+		Endpoints:  []*pb.RepoEndpoint{repoEndpoint(app.Spec.ID, app)},
+	})
+	require.NoError(t, err)
+	require.True(t, out.Ok)
+	assert.Equal(t, []string{"config.yaml: acme/model: no pool on this cluster hosts H100 for ordinary placements"}, out.Warnings)
+}
 
 func TestApplyRepoDryRunValidatesWithoutApplying(t *testing.T) {
 	s := newServiceForTest(t)

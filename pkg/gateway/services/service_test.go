@@ -133,7 +133,7 @@ func TestPrivatePoolPolicyBypassesManagedLimitsRegardlessOfFallback(t *testing.T
 		t.Fatal("expected omitted fallback to default to internal")
 	}
 	request := &pb.GetOrCreateStubRequest{Cpu: 2000, Memory: 2048, Gpu: "H100", GpuCount: 8}
-	if got := policy.validateManagedLimits(gws, request, &types.Workspace{}); got != "" {
+	if got := policy.validateManagedLimits(gws, request, &types.Workspace{}, nil); got != "" {
 		t.Fatalf("managed limit error = %q, want empty", got)
 	}
 	if policy.checkManagedGPUCapacity() {
@@ -147,7 +147,7 @@ func TestPrivatePoolPolicyBypassesManagedLimitsRegardlessOfFallback(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := failPolicy.validateManagedLimits(gws, request, &types.Workspace{}); got != "" {
+	if got := failPolicy.validateManagedLimits(gws, request, &types.Workspace{}, nil); got != "" {
 		t.Fatalf("managed limit error = %q, want empty", got)
 	}
 
@@ -155,7 +155,7 @@ func TestPrivatePoolPolicyBypassesManagedLimitsRegardlessOfFallback(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := selectorPolicy.validateManagedLimits(gws, request, &types.Workspace{}); got != "" {
+	if got := selectorPolicy.validateManagedLimits(gws, request, &types.Workspace{}, nil); got != "" {
 		t.Fatalf("selector managed limit error = %q, want empty", got)
 	}
 
@@ -163,7 +163,7 @@ func TestPrivatePoolPolicyBypassesManagedLimitsRegardlessOfFallback(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := managedPolicy.validateManagedLimits(gws, request, &types.Workspace{}); got == "" {
+	if got := managedPolicy.validateManagedLimits(gws, request, &types.Workspace{}, nil); got == "" {
 		t.Fatal("managed workload should still enforce stub limits")
 	}
 	if !managedPolicy.checkManagedGPUCapacity() {

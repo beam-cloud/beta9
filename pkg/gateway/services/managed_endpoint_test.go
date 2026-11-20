@@ -42,3 +42,30 @@ func TestManagedEndpointRejectsPublicationFields(t *testing.T) {
 	_, err = gws.managedEndpointStubConfig(context.Background(), admin, req)
 	require.ErrorContains(t, err, "exactly one JSON object")
 }
+
+func TestManagedEndpointReplicaMemoryLimit(t *testing.T) {
+	gws := &GatewayService{appConfig: types.AppConfig{
+		GatewayService:   types.GatewayServiceConfig{StubLimits: types.StubLimits{Cpu: 32_000, Memory: 32 * 1024}},
+		ManagedEndpoints: types.ManagedEndpointsConfig{Enabled: true, MaxReplicaMemoryMiB: 512 * 1024},
+	}}
+	admin := &auth.AuthInfo{Token: &types.Token{TokenType: types.TokenTypeClusterAdmin}, Workspace: &types.Workspace{Id: 1}}
+	req := &pb.GetOrCreateStubRequest{
+		StubType:        types.StubTypeManagedEndpointDeployment,
+		ManagedEndpoint: `{"endpoint":{"id":"deepseek/model","kind":"llm","gpu":{"B300":{"count":2}}}}`,
+		Entrypoint:      []string{"engine"},
+		Cpu:             16_000,
+		Memory:          512 * 1024,
+	}
+	policy := stubResourcePolicy{}
+	config, err := gws.managedEndpointStubConfig(context.Background(), admin, req)
+	require.NoError(t, err)
+	require.Empty(t, policy.validateManagedLimits(gws, req, admin.Workspace, config))
+	_, err = gws.managedEndpointStubConfig(context.Background(), nil, req)
+	require.ErrorContains(t, err, "cluster admin")
+	require.Equal(t, "Memory must be 32GiB or less.", policy.validateManagedLimits(gws, req, admin.Workspace, nil))
+
+	req.Memory++
+	require.Equal(t, "Memory must be 512GiB or less.", policy.validateManagedLimits(gws, req, admin.Workspace, config))
+	gws.appConfig.ManagedEndpoints.MaxReplicaMemoryMiB = 0
+	require.Equal(t, "Memory must be 32GiB or less.", policy.validateManagedLimits(gws, req, admin.Workspace, config))
+}

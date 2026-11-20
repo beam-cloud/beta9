@@ -15,6 +15,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/common/llmroute"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 )
@@ -144,7 +145,7 @@ func protectedReplicas(fleet *types.Fleet, endpoints map[string]*types.ManagedEn
 	}
 	if !preemptionEnabled {
 		for _, r := range live {
-			if r.Alive() && !fleet.Placements(r.EndpointID)[r.GPU].Serverless {
+			if r.Alive() && !r.Spot && !fleet.Placements(r.EndpointID)[r.GPU].Serverless {
 				desired[r.ID] = true
 			}
 		}
@@ -160,7 +161,7 @@ func protectedReplicas(fleet *types.Fleet, endpoints map[string]*types.ManagedEn
 			}
 			var candidates []*types.EndpointReplica
 			for _, r := range live {
-				if r.EndpointID == id && r.GPU == gpu && r.Alive() {
+				if r.EndpointID == id && r.GPU == gpu && r.Alive() && !r.Spot {
 					candidates = append(candidates, r)
 				}
 			}
@@ -250,7 +251,7 @@ func (c *controller) readDemand(ctx context.Context, fleet *types.Fleet, live []
 			}
 		}
 		demand := out[replica.EndpointID]
-		if demand == nil || !replica.Alive() {
+		if demand == nil || !replica.Alive() || !spotPlacementMatches(fleet.Placements(replica.EndpointID)[replica.GPU].SpotPool, replica) {
 			continue
 		}
 		if !replica.Serving() {
@@ -269,6 +270,12 @@ func (c *controller) readDemand(ctx context.Context, fleet *types.Fleet, live []
 type eligiblePool struct {
 	Name     string
 	Locality string
+	Spot     bool
+}
+
+type spotPoolInventory struct {
+	pool  eligiblePool
+	floor *types.WorkerPoolSizingConfig
 }
 
 type inventoryWorker struct {
@@ -281,9 +288,10 @@ type inventoryWorker struct {
 // the idle GPUs of their ready workers. The scheduler enforces the same pool
 // floors at admission; a start it refuses backs the endpoint off.
 type clusterInventory struct {
-	pools   map[string][]eligiblePool
-	workers map[string]*inventoryWorker
-	floors  map[string]uint32 // pool -> minFreeGPU
+	pools     map[string][]eligiblePool
+	spotPools map[string]spotPoolInventory
+	workers   map[string]*inventoryWorker
+	floors    map[string]uint32 // pool -> minFreeGPU
 }
 
 type replicaResources struct{ cpu, memory int64 }
@@ -331,6 +339,24 @@ func (c *controller) pools(gpu string) []string {
 	return out
 }
 
+func allowsOrdinaryPlacement(cfg types.WorkerPoolConfig) bool {
+	return cfg.ManagedEndpoints.Enabled && !cfg.Preemptable && !cfg.AllowsManagedEndpointSpot()
+}
+
+func (c *controller) hasOrdinaryPool(gpu string) bool {
+	for _, cfg := range c.poolConfigs() {
+		if allowsOrdinaryPlacement(cfg) && types.GPUKey(cfg.GPUType) == gpu {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *controller) spotPoolHosts(name, gpu string) bool {
+	cfg, ok := c.poolConfig(name)
+	return ok && cfg.AllowsManagedEndpointSpot() && types.GPUKey(cfg.GPUType) == gpu
+}
+
 func localityOf(name string, cfg types.WorkerPoolConfig) string {
 	return cmp.Or(strings.TrimSpace(cfg.Locality), name)
 }
@@ -340,25 +366,34 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 	if err != nil {
 		return nil, err
 	}
-	inv := &clusterInventory{pools: map[string][]eligiblePool{}, workers: map[string]*inventoryWorker{}, floors: map[string]uint32{}}
-	for name, cfg := range c.poolConfigs() {
+	inv := &clusterInventory{pools: map[string][]eligiblePool{}, spotPools: map[string]spotPoolInventory{}, workers: map[string]*inventoryWorker{}, floors: map[string]uint32{}}
+	configs := c.poolConfigs()
+	for name, cfg := range configs {
 		if !cfg.ManagedEndpoints.Enabled {
 			continue
 		}
 		key := types.GPUKey(cfg.GPUType)
-		inv.pools[key] = append(inv.pools[key], eligiblePool{Name: name, Locality: localityOf(name, cfg)})
-		floor, _ := strconv.ParseUint(cfg.PoolSizing.MinFreeGPU, 10, 32)
-		inv.floors[name] = uint32(floor)
+		pool := eligiblePool{Name: name, Locality: localityOf(name, cfg)}
+		if cfg.AllowsManagedEndpointSpot() && key != types.CPUInventoryKey {
+			pool.Spot = true
+			inv.spotPools[name] = spotPoolInventory{pool: pool, floor: scheduler.PoolHeadroom(cfg)}
+		} else if allowsOrdinaryPlacement(cfg) {
+			inv.pools[key] = append(inv.pools[key], pool)
+			floor, _ := strconv.ParseUint(cfg.PoolSizing.MinFreeGPU, 10, 32)
+			inv.floors[name] = uint32(floor)
+		}
 	}
 	for _, pools := range inv.pools {
 		slices.SortFunc(pools, func(a, b eligiblePool) int { return strings.Compare(a.Name, b.Name) })
 	}
 	for _, w := range workers {
-		// Match admission: hosted requests do not opt into Preemptable workers.
-		if w == nil || w.Status != types.WorkerStatusAvailable || w.Gpu == "" || w.Preemptable {
+		if w == nil || w.Status != types.WorkerStatusAvailable || w.Gpu == "" {
 			continue
 		}
-		if cfg, ok := c.poolConfig(w.PoolName); !ok || !cfg.ManagedEndpoints.Enabled {
+		cfg, ok := configs[w.PoolName]
+		_, spot := inv.spotPools[w.PoolName]
+		if !ok || (spot && !w.CanHostManagedEndpointSpot(w.PoolName, types.GPUKey(cfg.GPUType))) ||
+			(!spot && (w.Preemptable || !allowsOrdinaryPlacement(cfg))) {
 			continue
 		}
 		inv.workers[w.Id] = &inventoryWorker{pool: w.PoolName, gpu: types.GPUKey(w.Gpu), free: w.FreeGpuCount, total: w.TotalGpuCount, cpu: w.FreeCpu, memory: w.FreeMemory}
@@ -366,6 +401,19 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 	// Replicas still waiting for a worker hold GPUs no worker reports yet.
 	for _, r := range replicas {
 		if r.Status != types.ReplicaStatusScheduling || r.WorkerID != "" || r.GPU == types.CPUInventoryKey {
+			continue
+		}
+		if r.Spot {
+			var res replicaResources
+			if c.s.containers != nil {
+				if state, err := c.s.containers.GetContainerState(r.ContainerID); err == nil && state != nil {
+					res, _ = reservedReplicaResources(state.Cpu, state.Memory)
+				}
+			}
+			inv.placeSpot(r.GPU, r.PoolName, r.GPUCount, res)
+			continue
+		}
+		if _, spot := inv.spotPools[r.PoolName]; spot {
 			continue
 		}
 		for need := max(r.GPUCount, 1); need > 0; {
@@ -446,4 +494,51 @@ func (inv *clusterInventory) place(gpu string, count uint32) (eligiblePool, bool
 	w.free -= max(count, 1)
 	i := slices.IndexFunc(inv.pools[gpu], func(p eligiblePool) bool { return p.Name == w.pool })
 	return inv.pools[gpu][i], true
+}
+
+// spotWorker requires the entire replica on one ready worker while the pool
+// retains its configured headroom across all ready Spot workers.
+func (inv *clusterInventory) spotWorker(gpu, poolName string, count uint32, res replicaResources) *inventoryWorker {
+	if inv == nil {
+		return nil
+	}
+	pool, ok := inv.spotPools[poolName]
+	if !ok {
+		return nil
+	}
+	need := max(count, 1)
+	var capacity replicaResources
+	var freeGPUs uint64
+	var best *inventoryWorker
+	var bestID string
+	for id, w := range inv.workers {
+		if w.pool != poolName || w.gpu != gpu {
+			continue
+		}
+		capacity.cpu += w.cpu
+		capacity.memory += w.memory
+		if w.cpu > 0 && w.memory > 0 {
+			freeGPUs += uint64(w.free)
+		}
+		if w.free >= need && w.cpu >= res.cpu && w.memory >= res.memory && (best == nil || w.free > best.free || w.free == best.free && id < bestID) {
+			best, bestID = w, id
+		}
+	}
+	if floor := pool.floor; floor != nil &&
+		(freeGPUs < uint64(floor.MinFreeGpu)+uint64(need) ||
+			capacity.cpu-res.cpu < floor.MinFreeCpu || capacity.memory-res.memory < floor.MinFreeMemory) {
+		return nil
+	}
+	return best
+}
+
+func (inv *clusterInventory) placeSpot(gpu, poolName string, count uint32, res replicaResources) (eligiblePool, bool) {
+	w := inv.spotWorker(gpu, poolName, count, res)
+	if w == nil {
+		return eligiblePool{}, false
+	}
+	w.free -= max(count, 1)
+	w.cpu -= res.cpu
+	w.memory -= res.memory
+	return inv.spotPools[poolName].pool, true
 }

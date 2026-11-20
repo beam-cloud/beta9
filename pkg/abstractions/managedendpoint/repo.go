@@ -200,6 +200,7 @@ func (s *Service) reviewFleet(r *review) {
 		return
 	}
 	r.fleet = fleet
+	var invalidSpotPools []string
 	for _, id := range slices.Sorted(maps.Keys(fleet.Endpoints)) {
 		entry := fleet.Endpoints[id]
 		app := r.apps[id]
@@ -216,14 +217,24 @@ func (s *Service) reviewFleet(r *review) {
 			}
 		}
 		for _, gpu := range slices.Sorted(maps.Keys(entry.GPUs)) {
+			placement := entry.GPUs[gpu]
+			if placement.SpotPool != "" && !s.controller.spotPoolHosts(placement.SpotPool, gpu) {
+				err := fmt.Sprintf("config.yaml: %s: spotPool %q must name a Spot-only %s pool with managedEndpoints.enabled", id, placement.SpotPool, gpu)
+				r.fail("%s", err)
+				invalidSpotPools = append(invalidSpotPools, err)
+			}
 			_, declared := app.Spec.Gpu[gpu]
 			switch {
 			case !declared:
 				r.fail("config.yaml: %s does not declare gpu %q in its app", id, gpu)
-			case r.in.DryRun && entry.Enabled && len(s.controller.pools(gpu)) == 0:
-				r.warn("config.yaml: %s: no pool on this cluster hosts %s", id, gpu)
+			case r.in.DryRun && entry.Enabled && placement.SpotPool == "" && !s.controller.hasOrdinaryPool(gpu):
+				r.warn("config.yaml: %s: no pool on this cluster hosts %s for ordinary placements", id, gpu)
 			}
 		}
+	}
+	if len(invalidSpotPools) > 0 {
+		r.state.FleetError = strings.Join(invalidSpotPools, "\n")
+		r.fleet = nil
 	}
 }
 

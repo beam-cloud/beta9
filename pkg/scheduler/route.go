@@ -176,6 +176,10 @@ func poolCanRun(pool *WorkerPool, query routeQuery) bool {
 	case config.Mode == types.PoolModeProvider && !isManagedRequest(request):
 		// Machines a workspace contributes run only managed endpoint replicas.
 		return false
+	case isManagedSpotRequest(request) &&
+		(!request.OpportunisticOnly || request.PoolSelector != pool.Name || !config.AllowsManagedEndpointSpot() ||
+			!slices.Contains(query.gpus, types.GPUKey(config.GPUType))):
+		return false
 	case !request.Preemptable && config.Preemptable:
 		return false
 	case query.buildPool != "" && pool.Name == query.buildPool && !request.IsBuildRequest():
@@ -208,6 +212,10 @@ func isManagedRequest(request *types.ContainerRequest) bool {
 	return request != nil && request.Stub.Type.IsManagedEndpoint()
 }
 
+func isManagedSpotRequest(request *types.ContainerRequest) bool {
+	return isManagedRequest(request) && request.Preemptable
+}
+
 // rankOf reports whether a worker's pool lets it take the request, and how
 // far down the route that puts it: 0 for a worker with a GPU the request
 // asked for, otherwise the rank of its pool.
@@ -229,6 +237,11 @@ func (r route) rankOf(worker *types.Worker) (rank int, ok bool) {
 	switch {
 	case rank == cannotRun:
 		return 0, false
+	case isManagedSpotRequest(r.query.request):
+		// Managed Spot requires the pool policy and actual worker to agree
+		// even across asynchronous pool and worker updates.
+		return 0, len(r.pools) == 1 &&
+			worker.CanHostManagedEndpointSpot(r.pools[0].Name, types.GPUKey(r.pools[0].Config.GPUType))
 	case r.query.request.PoolSelector != "":
 		return 0, name == r.query.request.PoolSelector
 	case rank == 0 || workspaceOwned(worker):
@@ -280,8 +293,10 @@ func (s *Scheduler) routeFor(request *types.ContainerRequest) route {
 // selectedPool is the pool a request names: the workspace's own pool of that
 // name if it has one, otherwise the shared one.
 func (s *Scheduler) selectedPool(request *types.ContainerRequest) (*WorkerPool, bool) {
-	if pool, ok := s.privateAgentPool(request.WorkspaceId, request.PoolSelector); ok {
-		return pool, true
+	if !isManagedSpotRequest(request) {
+		if pool, ok := s.privateAgentPool(request.WorkspaceId, request.PoolSelector); ok {
+			return pool, true
+		}
 	}
 	return s.workerPoolManager.GetPool(request.PoolSelector)
 }
@@ -305,7 +320,7 @@ func (s *Scheduler) growthRouteFor(request *types.ContainerRequest) (route, erro
 func (r route) eligible(workers []*types.Worker) []*types.Worker {
 	// A machine pin has already chosen the worker, whose pool may need a
 	// selector the request does not carry.
-	pinned := r.query.request.MachineId != ""
+	pinned := r.query.request.MachineId != "" && !isManagedSpotRequest(r.query.request)
 
 	filtered := []*types.Worker{}
 	for _, worker := range workers {
