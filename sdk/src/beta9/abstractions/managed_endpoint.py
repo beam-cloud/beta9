@@ -83,6 +83,9 @@ class ManagedEndpoint(RunnerAbstraction):
         gpu: GPU types the engine can run on, optionally with per-type ``Gpu`` settings.
             ``config.yaml`` sets replica minimums, limits, priority, and preemption.
         drain_seconds: Grace for in-flight requests on eviction or replacement; ``0`` is immediate.
+        load_seconds: How long a replica may take to pass its health check once its container
+            runs, before it is stopped and started again. ``0`` is the platform's 30 minutes;
+            say more for an engine that fetches or loads hundreds of gigabytes.
         rollout: ``wait_for_capacity`` preserves the last serving replica. ``replace`` allows
             downtime to release its GPU for a new version when there is no spare capacity.
 
@@ -101,6 +104,7 @@ class ManagedEndpoint(RunnerAbstraction):
         metrics: str = "",
         gpu: GpuArg = None,
         drain_seconds: int = 5,
+        load_seconds: int = 0,
         cpu: Union[int, float, str] = 4.0,
         memory: Union[int, str] = "16Gi",
         volumes: Optional[List[Union[Volume, CloudBucket]]] = None,
@@ -115,6 +119,7 @@ class ManagedEndpoint(RunnerAbstraction):
         self.health = health
         self.metrics = metrics
         self.drain_seconds = int(drain_seconds)
+        self.load_seconds = int(load_seconds)
         if rollout not in {"wait_for_capacity", "replace"}:
             raise ValueError("rollout must be wait_for_capacity or replace")
         self.rollout = rollout
@@ -152,6 +157,7 @@ class ManagedEndpoint(RunnerAbstraction):
                 "health": self.health,
                 "metrics": self.metrics,
                 "rollout": self.rollout,
+                "load_seconds": self.load_seconds or None,
             }
         )
         # Zero means immediate eviction and must not be pruned.

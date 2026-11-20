@@ -122,8 +122,21 @@ type ManagedEndpointSpec struct {
 	Gpu          map[string]GpuSpec `json:"gpu,omitempty"`
 	Rollout      Rollout            `json:"rollout,omitempty"`
 	DrainSeconds uint32             `json:"drain_seconds"`
-	Entrypoint   []string           `json:"entrypoint,omitempty"`
+	// LoadSeconds is how long a replica may take to answer its health check
+	// once its container runs: what a model server needs to fetch and load
+	// its weights. Zero means DefaultLoadSeconds.
+	LoadSeconds uint32   `json:"load_seconds,omitempty"`
+	Entrypoint  []string `json:"entrypoint,omitempty"`
 }
+
+const (
+	// DefaultLoadSeconds is how long a replica has to load where its app
+	// does not say.
+	DefaultLoadSeconds = 30 * 60
+	// MaxLoadSeconds bounds how long a replica that never loads holds its
+	// GPUs.
+	MaxLoadSeconds = 2 * 60 * 60
+)
 
 var endpointIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)?$`)
 
@@ -163,6 +176,9 @@ func (s *ManagedEndpointSpec) Validate() error {
 	}
 	if len(s.Entrypoint) == 0 {
 		fail("entrypoint is required")
+	}
+	if s.LoadSeconds > MaxLoadSeconds {
+		fail("load_seconds %d exceeds %d", s.LoadSeconds, MaxLoadSeconds)
 	}
 	if s.Rollout != "" && s.Rollout != RolloutWaitForCapacity && s.Rollout != RolloutReplace {
 		fail("rollout %q must be %s or %s", s.Rollout, RolloutWaitForCapacity, RolloutReplace)
@@ -532,6 +548,15 @@ type ReplicaProbe struct {
 	Port    uint32 `json:"port"`
 	Health  string `json:"health,omitempty"`
 	Metrics string `json:"metrics,omitempty"`
+	// LoadSeconds is how long the replica has to become ready. Zero, as in
+	// the record of a replica started before there was one, means
+	// DefaultLoadSeconds.
+	LoadSeconds uint32 `json:"load_seconds,omitempty"`
+}
+
+// LoadGrace is how long a replica with this contract may load.
+func (p ReplicaProbe) LoadGrace() time.Duration {
+	return time.Duration(cmp.Or(p.LoadSeconds, DefaultLoadSeconds)) * time.Second
 }
 
 func (r *EndpointReplica) Serving() bool { return r != nil && r.Status == ReplicaStatusReady }

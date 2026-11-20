@@ -203,7 +203,7 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 	if replica.Address != "" && (!replica.HarnessEnabled || replica.EngineReady) {
 		c.probeReplica(ctx, replica)
 	}
-	if replica.Status == types.ReplicaStatusLoading && replica.LoadingFor(now) > loadingGrace {
+	if replica.Status == types.ReplicaStatusLoading && replica.LoadingFor(now) > replica.Probe.LoadGrace() {
 		return c.stopAndFinish(ctx, replica, types.ReplicaStatusFailed, "did not become ready within grace period")
 	}
 	return nil
@@ -276,7 +276,7 @@ func (c *controller) probeReplica(ctx context.Context, replica *types.EndpointRe
 
 // probeFor snapshots the probe contract of the deployment a replica is started from.
 func probeFor(spec *types.ManagedEndpointSpec) types.ReplicaProbe {
-	probe := types.ReplicaProbe{Port: spec.Port, Health: spec.Health}
+	probe := types.ReplicaProbe{Port: spec.Port, Health: spec.Health, LoadSeconds: spec.LoadSeconds}
 	if spec.Kind == types.EndpointKindLLM {
 		probe.Metrics = llmroute.NormalizeMetricsPath(spec.Metrics)
 	}

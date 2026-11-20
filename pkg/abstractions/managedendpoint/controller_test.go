@@ -628,19 +628,42 @@ func TestReloadHasFreshLoadingGrace(t *testing.T) {
 	s.applyHeartbeat(r, &pb.HarnessHeartbeatRequest{Status: "loading"})
 	assert.Equal(t, since, r.LoadingSince)
 	// ...and does expire once the phase itself outlives the grace.
-	r.LoadingSince = time.Now().Add(-loadingGrace - time.Minute)
+	r.LoadingSince = time.Now().Add(-r.Probe.LoadGrace() - time.Minute)
 	require.NoError(t, s.controller.syncReplica(context.Background(), r))
 	assert.Equal(t, types.ReplicaStatusFailed, r.Status)
 
 	// Initial startup still measures from container start.
 	fresh := seedReplica(t, s, endpoint)
-	fresh.StartedAt = time.Now().Add(-loadingGrace - time.Minute)
+	fresh.StartedAt = time.Now().Add(-fresh.Probe.LoadGrace() - time.Minute)
 	require.NoError(t, s.containers.SetContainerState(fresh.ContainerID, &types.ContainerState{ContainerId: fresh.ContainerID, Status: types.ContainerStatusRunning}))
 	require.NoError(t, s.controller.syncReplica(context.Background(), fresh))
 	assert.Equal(t, types.ReplicaStatusLoading, fresh.Status, "scheduling -> loading starts the phase clock now")
-	fresh.LoadingSince = time.Now().Add(-loadingGrace - time.Minute)
+	fresh.LoadingSince = time.Now().Add(-fresh.Probe.LoadGrace() - time.Minute)
 	require.NoError(t, s.controller.syncReplica(context.Background(), fresh))
 	assert.Equal(t, types.ReplicaStatusFailed, fresh.Status)
+}
+
+// A replica has as long to load as its app says its model takes: a server
+// that fetches hundreds of gigabytes is not stopped at the default, and is
+// still stopped once its own time is up.
+func TestAReplicaLoadsForAsLongAsItsAppSays(t *testing.T) {
+	s := newServiceForTest(t)
+	s.containers = repository.NewContainerRedisRepositoryForTest(s.rdb)
+	endpoint := seedEndpoint(t, s)
+	endpoint.Spec.LoadSeconds = 60 * 60
+	replica := seedReplica(t, s, endpoint)
+	replica.Probe = probeFor(&endpoint.Spec)
+	replica.Status = types.ReplicaStatusLoading
+	require.NoError(t, s.containers.SetContainerState(replica.ContainerID, &types.ContainerState{ContainerId: replica.ContainerID, Status: types.ContainerStatusRunning}))
+
+	replica.LoadingSince = time.Now().Add(-45 * time.Minute)
+	require.NoError(t, s.controller.syncReplica(context.Background(), replica))
+	assert.Equal(t, types.ReplicaStatusLoading, replica.Status, "past the default, within what the app asks for")
+
+	replica.LoadingSince = time.Now().Add(-61 * time.Minute)
+	require.NoError(t, s.controller.syncReplica(context.Background(), replica))
+	assert.Equal(t, types.ReplicaStatusFailed, replica.Status)
+	assert.Equal(t, "did not become ready within grace period", replica.StatusReason)
 }
 
 func TestSyncReplicaBacksOffWhenSchedulerFailsRequest(t *testing.T) {
