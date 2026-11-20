@@ -74,7 +74,9 @@ func spotInventory(gpu string, grows []string, workers map[string]*inventoryWork
 	for _, name := range pools {
 		inv.spot[gpu] = append(inv.spot[gpu], eligiblePool{Name: name, Locality: name, Spot: true})
 	}
-	inv.canGrow = func(pool string, _ uint32, _ replicaResources) bool { return slices.Contains(grows, pool) }
+	inv.outlook = func(pool string, _ uint32, _ replicaResources) scheduler.MachineOutlook {
+		return scheduler.MachineOutlook{CanBuy: slices.Contains(grows, pool)}
+	}
 	return inv
 }
 
@@ -118,9 +120,9 @@ func TestSpotInventoryIsTheMachinesOfSpotPools(t *testing.T) {
 	// A replica needs all of its GPUs, CPU and memory on one ready Spot
 	// machine: spot-a has none, and nothing here can buy one.
 	assert.Nil(t, inv.spotWorker(gpu, "spot-a", 2, res))
-	pool, placed := inv.placeSpot(gpu, 2, res, nil, true)
+	choice, placed := inv.placeSpot(gpu, 2, res, nil, true)
 	require.True(t, placed)
-	assert.Equal(t, "spot-b", pool.Name)
+	assert.Equal(t, "spot-b", choice.pool.Name)
 	assert.EqualValues(t, 0, inv.workers["b-exact"].free, "the fullest machine that fits takes it, as the scheduler packs them")
 	for range 3 {
 		_, placed = inv.placeSpot(gpu, 2, res, nil, true)
@@ -156,7 +158,7 @@ func TestSpotInventoryIsTheMachinesOfSpotPools(t *testing.T) {
 
 	// The idle GPUs of the other pools are not a Spot placement's to take,
 	// and a machine its provider may take back is no one else's.
-	pool, placed = inv.place(gpu, 2)
+	pool, placed := inv.place(gpu, 2)
 	require.True(t, placed)
 	assert.Equal(t, "stable", pool.Name)
 	assert.NotContains(t, inv.workers, "mixed-spot")
@@ -169,8 +171,8 @@ func TestSpotPlacementSpreadsAMinimumAndPacksDemand(t *testing.T) {
 		return map[string]*inventoryWorker{"b": {pool: "b", gpu: gpu, free: 8, total: 8, cpu: 64_000, memory: 4 * 640 * 1024}}
 	}
 	place := func(inv *clusterInventory, held map[string]int, spread bool) string {
-		pool, _ := inv.placeSpot(gpu, 2, res, held, spread)
-		return pool.Name
+		choice, _ := inv.placeSpot(gpu, 2, res, held, spread)
+		return choice.pool.Name
 	}
 
 	// A minimum goes to the pool with the fewest of the endpoint's replicas,
@@ -219,6 +221,61 @@ func TestSpotPlacementSpreadsAMinimumAndPacksDemand(t *testing.T) {
 	assert.Equal(t, "c", place(inv, map[string]int{"c": 5}, true))
 	inv = spotInventory(gpu, nil, nil, "a", "b", "c")
 	assert.Empty(t, place(inv, nil, true))
+}
+
+// A replica goes where machines are kept, and among such pools where one
+// comes up sooner. The market's history says which those are.
+func TestSpotPlacementGoesWhereMachinesAreKept(t *testing.T) {
+	const gpu = "B200"
+	res := replicaResources{cpu: 16_000, memory: 640 * 1024}
+	hourly := func(taken float64, comeUp time.Duration) scheduler.MachineOutlook {
+		return scheduler.MachineOutlook{CanBuy: true, Taken: taken, ComeUp: comeUp}
+	}
+	inventory := func(workers map[string]*inventoryWorker, outlooks map[string]scheduler.MachineOutlook) *clusterInventory {
+		inv := spotInventory(gpu, nil, workers, "a", "b", "c")
+		inv.outlook = func(pool string, _ uint32, _ replicaResources) scheduler.MachineOutlook { return outlooks[pool] }
+		return inv
+	}
+	place := func(inv *clusterInventory, held map[string]int, spread bool) string {
+		choice, _ := inv.placeSpot(gpu, 2, res, held, spread)
+		return choice.pool.Name
+	}
+
+	// Three pools that keep their machines for a day or more: a minimum is
+	// spread over them, whichever is kept longest or comes up soonest.
+	kept := map[string]scheduler.MachineOutlook{"a": hourly(0.04, 9*time.Minute), "b": hourly(0.01, 6*time.Minute), "c": hourly(0.02, 3*time.Minute)}
+	assert.Equal(t, "c", place(inventory(nil, kept), nil, true), "lost twice as often as b, and up three minutes sooner")
+	assert.Equal(t, "b", place(inventory(nil, kept), map[string]int{"c": 1}, true))
+	assert.Equal(t, "a", place(inventory(nil, kept), map[string]int{"b": 1, "c": 1}, true))
+
+	// How long a machine is kept counts for more than how soon it is up:
+	// one that is up in a minute and lost every two hours comes after one
+	// that takes ten and is kept for a day.
+	outlooks := map[string]scheduler.MachineOutlook{"a": hourly(0.5, time.Minute), "b": hourly(0.04, 10*time.Minute)}
+	assert.Equal(t, "b", place(inventory(nil, outlooks), nil, true))
+
+	// A pool whose machines are taken back within minutes is passed over
+	// while the others hold fewer replicas than it loses machines an hour.
+	outlooks = map[string]scheduler.MachineOutlook{"a": hourly(0.02, 4*time.Minute), "b": hourly(0.02, 4*time.Minute), "c": hourly(3, 30*time.Minute)}
+	assert.Equal(t, "a", place(inventory(nil, outlooks), map[string]int{"a": 1, "b": 1}, true))
+	assert.Equal(t, "b", place(inventory(nil, outlooks), map[string]int{"a": 2, "b": 1}, true))
+	assert.Equal(t, "c", place(inventory(nil, outlooks), map[string]int{"a": 4, "b": 4}, true))
+
+	// A machine that is ready is no wait, which decides between pools that
+	// keep theirs as long. It does not make up for a pool that does not.
+	ready := func() map[string]*inventoryWorker {
+		return map[string]*inventoryWorker{"c": {pool: "c", gpu: gpu, free: 8, total: 8, cpu: 64_000, memory: 4 * 640 * 1024}}
+	}
+	outlooks = map[string]scheduler.MachineOutlook{"a": hourly(0.02, 4*time.Minute), "c": hourly(0.03, 4*time.Minute)}
+	assert.Equal(t, "c", place(inventory(ready(), outlooks), nil, true))
+	outlooks["c"] = hourly(1, 4*time.Minute)
+	assert.Equal(t, "a", place(inventory(ready(), outlooks), nil, true))
+	// Requests that are waiting take it all the same: it serves them now.
+	assert.Equal(t, "c", place(inventory(ready(), outlooks), nil, false))
+
+	// A pool that can buy no more is still known by the machines it has.
+	outlooks = map[string]scheduler.MachineOutlook{"a": hourly(0.02, 4*time.Minute), "c": {Taken: 2}}
+	assert.Equal(t, "a", place(inventory(ready(), outlooks), nil, true))
 }
 
 func versionReplica(t *testing.T, s *Service, id string, version uint, status types.ReplicaStatus) *types.EndpointReplica {

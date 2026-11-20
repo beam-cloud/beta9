@@ -4003,6 +4003,52 @@ func TestWhatWasLearnedIsReadFromTheMarketsHistory(t *testing.T) {
 	require.Equal(t, "FIN-02", w.record(bought.MachineID).Region, "the offer whose machine never came up is passed over")
 }
 
+// What a pool is asked to expect of its machines is what became of those
+// bought before as the one it would buy now: how long they took to come up,
+// and how often they were taken back. A pool that can buy no more is known
+// by the machines it has.
+func TestAPoolSaysWhatToExpectOfItsMachines(t *testing.T) {
+	w := newWorld(t, func(opts *Options) { opts.Outcomes = nil })
+	w.control.pools["spot-l40s"] = spotL40S(func(pool *types.WorkerPoolConfig) { pool.Provisioning.MaxNodes = 2 })
+	w.verda.SetOffers(l40s(), l40s(in("FIN-02"), costing(300)))
+	w.Tick(w.ctx)
+
+	// Nothing has been bought yet: a spot machine is taken to come up in
+	// five minutes and to be lost once in twenty hours.
+	require.Equal(t, scheduler.MachineOutlook{CanBuy: true, ComeUp: unknownBoot, Taken: 1.0 / 20}, w.Expect(w.ctx, "spot-l40s", anyMachine))
+	require.Zero(t, w.Expect(w.ctx, "no-such-pool", anyMachine))
+
+	// Three machines were seen up after three minutes, and each was taken
+	// back within the half hour.
+	for range 3 {
+		machine := w.buy("spot-l40s")
+		w.after(2 * time.Minute)
+		w.workers.join(machine)
+		w.workers.work(machine, true)
+		w.every(time.Minute, 20*time.Minute)
+		w.verda.SetStatus(machine.InstanceID, providers.StatusInterrupted, "preempted")
+		w.after(tickInterval)
+		w.gone(machine)
+	}
+	outlook := w.Expect(w.ctx, "spot-l40s", anyMachine)
+	require.True(t, outlook.CanBuy)
+	require.InDelta(t, 3, outlook.ComeUp.Minutes(), 0.1)
+	require.InDelta(t, 1, outlook.Taken, 0.1, "lost three times in an hour and a bit of its own, and two hours of its provider's")
+
+	// The region where none was lost is expected to keep its machines.
+	elsewhere := w.Expect(w.ctx, "spot-l40s", scheduler.MachineNeed{HoursLost: 8})
+	require.True(t, elsewhere.CanBuy)
+	require.Less(t, elsewhere.Taken, outlook.Taken/2, "work that loses a day is bought the dearer machine that is kept")
+
+	// At maxNodes the pool buys nothing, and is known by what it has.
+	first, second := w.buy("spot-l40s"), w.buy("spot-l40s")
+	require.Equal(t, []string{"FIN-01", "FIN-01"}, []string{first.Region, second.Region})
+	full := w.Expect(w.ctx, "spot-l40s", anyMachine)
+	require.False(t, full.CanBuy)
+	require.InDelta(t, outlook.Taken, full.Taken, 1e-9)
+	require.InDelta(t, outlook.ComeUp.Minutes(), full.ComeUp.Minutes(), 1e-9)
+}
+
 // readLog is a history that does something more once it has been read.
 type readLog struct {
 	watch.Log

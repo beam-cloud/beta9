@@ -294,7 +294,13 @@ func (c *controller) room(ctx context.Context, gpu string, s *slot, pass int, in
 	if res == nil {
 		return eligiblePool{}, false // never buy a machine for an unknown request shape
 	}
-	return inv.placeSpot(gpu, s.gpuCount(gpu), *res, s.held, pass == passMinimum)
+	choice, ok := inv.placeSpot(gpu, s.gpuCount(gpu), *res, s.held, pass == passMinimum)
+	if ok {
+		log.Info().Str("endpoint_id", s.id()).Str("gpu", gpu).Str("pool", choice.pool.Name).Int("held", s.held[choice.pool.Name]).
+			Float64("taken_per_hour", choice.outlook.Taken).Dur("wait", choice.wait()).
+			Msg("managed endpoints: chose a Spot pool")
+	}
+	return choice.pool, ok
 }
 
 func (c *controller) inBackoff(ctx context.Context, endpointID, gpu string) bool {

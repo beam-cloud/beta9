@@ -107,19 +107,27 @@ func (s *Scheduler) chooseGrowth(route route, request *types.ContainerRequest) g
 	return growth{exhausted: exhausted}
 }
 
-// PoolCanGrow reports whether the pool would add a worker with this much
-// room now: buy a machine, where it buys them. The managed endpoint
-// controller asks before it places a replica in a pool that has no room.
-func (s *Scheduler) PoolCanGrow(name string, cpu, memory int64, gpuCount uint32) bool {
+// PoolOutlook is what to expect of the pool for a replica of a managed
+// endpoint that needs a worker with this much room: whether the pool would
+// add one now, by buying a machine where it buys them, how long that
+// machine takes to come up, and how often an hour the pool's machines are
+// taken back. The managed endpoint controller asks before it places a
+// replica, so that it goes where it is likely to stay.
+func (s *Scheduler) PoolOutlook(name string, cpu, memory int64, gpuCount uint32) MachineOutlook {
 	if s == nil || s.workerPoolManager == nil {
-		return false
+		return MachineOutlook{}
 	}
 	pool, ok := s.workerPoolManager.GetPool(name)
 	if !ok {
-		return false
+		return MachineOutlook{}
+	}
+	if buying := buyer(pool.Controller); buying != nil {
+		need := buying.machineNeed(cpu, memory, gpuCount)
+		need.HoursLost = replicaHoursLost
+		return buying.provisioner.Expect(buying.ctx, buying.poolName(), need)
 	}
 	can, err := pool.Controller.CanAddWorker(cpu, memory, gpuCount)
-	return err == nil && can
+	return MachineOutlook{CanBuy: err == nil && can}
 }
 
 // canGrow reports whether some pool would add a worker for the request now.

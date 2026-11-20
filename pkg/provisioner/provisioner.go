@@ -233,22 +233,55 @@ var (
 // this replica has yet to read: the next tick reads it, and says so itself
 // when it cannot.
 func (p *Provisioner) CanProvision(ctx context.Context, pool string, needs ...scheduler.MachineNeed) bool {
+	_, _, can := p.wouldBuy(ctx, pool, needs)
+	return can
+}
+
+// wouldBuy is the offer the pool would buy for needs now, with the machines
+// there is a record of, and whether there is one.
+func (p *Provisioner) wouldBuy(ctx context.Context, pool string, needs []scheduler.MachineNeed) (providers.Offer, []Machine, bool) {
 	held, err := p.recentRecords(ctx)
 	if err != nil {
 		log.Warn().Err(err).Str("pool_name", pool).Msg("provisioner: cannot read the machines held")
-		return false
+		return providers.Offer{}, nil, false
 	}
 	// A machine the pool is still buying does not count against it: whoever
 	// waits for the pool stays while it is bought.
-	held = slices.DeleteFunc(slices.Clone(held), func(m Machine) bool {
+	counted := slices.DeleteFunc(slices.Clone(held), func(m Machine) bool {
 		return m.Pool == pool && m.InstanceID == "" && m.Release == nil && p.clock.Now().Sub(m.CreatedAt) < buyGrace
 	})
-	_, _, err = p.choose(pool, needs, held)
+	offer, _, err := p.choose(pool, needs, counted)
 	unread := errors.Is(err, errNotBuying) || errors.Is(err, errNotListed)
 	if err != nil && !unread && p.unsaid(pool, err) {
 		log.Warn().Err(err).Str("pool_name", pool).Msg("provisioner: the pool cannot buy a machine")
 	}
-	return err == nil
+	return offer, held, err == nil
+}
+
+// Expect says what the machines bought before say to expect of the pool's:
+// of the one it would buy for needs now and, when it can buy none, of those
+// it has. Like CanProvision, it asks no provider.
+func (p *Provisioner) Expect(ctx context.Context, pool string, needs ...scheduler.MachineNeed) scheduler.MachineOutlook {
+	offer, held, can := p.wouldBuy(ctx, pool, needs)
+	now := p.clock.Now()
+	p.mu.Lock()
+	estimates := p.estimates
+	p.mu.Unlock()
+	if can {
+		comeUp, taken := expect(estimates, offer, now, unknownBoot)
+		return scheduler.MachineOutlook{CanBuy: true, ComeUp: time.Duration(comeUp * float64(time.Hour)), Taken: taken}
+	}
+	var comeUp, taken, has float64
+	for _, machine := range held {
+		if machine.Pool == pool && machine.Release == nil {
+			hours, rate := expect(estimates, machine.offer(), now, unknownBoot)
+			comeUp, taken, has = comeUp+hours, taken+rate, has+1
+		}
+	}
+	if has == 0 {
+		return scheduler.MachineOutlook{}
+	}
+	return scheduler.MachineOutlook{ComeUp: time.Duration(comeUp / has * float64(time.Hour)), Taken: taken / has}
 }
 
 // unsaid reports whether the pool has not yet said that this stands in the
@@ -704,10 +737,10 @@ func newMachine(id, pool string, offer providers.Offer, now time.Time) Machine {
 	}
 }
 
-// outcome is what the market's history is told became of the machine at
-// now: what it was bought as, where, and for how much.
-func (m Machine) outcome(now time.Time) watch.Outcome {
-	outcome := watch.OutcomeOf(providers.Offer{
+// offer is what the machine was bought as, as far as the market's history
+// tells offers apart.
+func (m Machine) offer() providers.Offer {
+	return providers.Offer{
 		ID:               m.OfferID,
 		Provider:         m.Provider,
 		Cloud:            m.Cloud,
@@ -717,7 +750,13 @@ func (m Machine) outcome(now time.Time) watch.Outcome {
 		GPUCount:         m.GPUCount,
 		HourlyCostMicros: m.HourlyMicros,
 		Spot:             m.Spot,
-	})
+	}
+}
+
+// outcome is what the market's history is told became of the machine at
+// now: what it was bought as, where, and for how much.
+func (m Machine) outcome(now time.Time) watch.Outcome {
+	outcome := watch.OutcomeOf(m.offer())
 	outcome.Source = watch.SourcePool
 	outcome.At = now
 	return outcome
@@ -912,10 +951,19 @@ func (p purchase) candidates() []*candidate {
 	}
 	candidates := make([]*candidate, len(offers))
 	for i, offer := range offers {
-		boot, odds, taken := p.estimates.Of(watch.OutcomeOf(offer), p.now)
-		candidates[i] = &candidate{Offer: offer, comeUp: cmp.Or(boot, fastest).Hours() / odds, taken: taken}
+		comeUp, taken := expect(p.estimates, offer, p.now, fastest)
+		candidates[i] = &candidate{Offer: offer, comeUp: comeUp, taken: taken}
 	}
 	return candidates
+}
+
+// expect is what the machines bought before say to expect of one bought as
+// the offer: how many hours it takes to come up, which is its boot time over
+// the odds that it boots at all, and how often an hour it is lost. unknown
+// is how long it is taken to boot in when none has.
+func expect(estimates watch.Estimates, offer providers.Offer, now time.Time, unknown time.Duration) (comeUp, taken float64) {
+	boot, odds, taken := estimates.Of(watch.OutcomeOf(offer), now)
+	return cmp.Or(boot, unknown).Hours() / odds, taken
 }
 
 // byPrice orders offers by what they cost. Those at one price are always in

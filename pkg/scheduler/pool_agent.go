@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/compute"
@@ -722,6 +723,11 @@ type Provisioner interface {
 	// needs. The machine joins the pool on its own once it is up.
 	Provision(ctx context.Context, pool string, needs ...MachineNeed) (*ProvisionedMachine, error)
 
+	// Expect says what the machines bought before say to expect of the
+	// pool's: of the one it would buy for needs now and, when it can buy
+	// none, of those it has.
+	Expect(ctx context.Context, pool string, needs ...MachineNeed) MachineOutlook
+
 	// Booting returns the pool's machines that have been bought and have not
 	// yet run a worker.
 	Booting(ctx context.Context, pool string) ([]ProvisionedMachine, error)
@@ -729,6 +735,19 @@ type Provisioner interface {
 	// Machine returns a machine that a pool bought and holds, booting or
 	// not, or nil when none has that ID.
 	Machine(ctx context.Context, machineID string) (*ProvisionedMachine, error)
+}
+
+// MachineOutlook is what the market's history says to expect of a pool's
+// machines: how long they took to come up, and how long they were kept.
+type MachineOutlook struct {
+	// CanBuy reports whether the pool can buy a machine now.
+	CanBuy bool
+	// ComeUp is how long the machine it would buy takes to come up: its
+	// boot time, over the odds that it boots at all.
+	ComeUp time.Duration
+	// Taken is how often an hour a machine of the pool is lost to its
+	// provider.
+	Taken float64
 }
 
 // MachineNeed is the capacity a new machine must have.

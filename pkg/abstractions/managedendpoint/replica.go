@@ -24,6 +24,7 @@ import (
 const (
 	probeTimeout     = 3 * time.Second
 	reasonWorkerLost = "worker lost"
+	reasonNoMachine  = "scheduler failed the request"
 )
 
 // observeReplicas syncs each replica with its container and returns the ones still alive.
@@ -84,7 +85,7 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 		}
 		if replica.Status == types.ReplicaStatusScheduling {
 			if status, err := c.s.containers.GetContainerRequestStatus(replica.ContainerID); err == nil && status == types.ContainerRequestStatusFailed {
-				return c.finishReplica(ctx, replica, types.ReplicaStatusFailed, "scheduler failed the request")
+				return c.finishReplica(ctx, replica, types.ReplicaStatusFailed, reasonNoMachine)
 			}
 		}
 		// A new gateway has not observed worker/harness reconnection yet. Give

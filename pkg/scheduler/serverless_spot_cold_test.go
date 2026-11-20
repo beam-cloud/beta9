@@ -191,11 +191,15 @@ func TestManagedEndpointSpotReplicaHasItsPoolBuyAMachine(t *testing.T) {
 	clock := common.NewFakeClock(time.Now().Add(-3 * poolMonitoringInterval))
 	s.clock, s.spawn, s.workerPoolManager = clock, inline, NewWorkerPoolManager()
 	const pool = "spot-b200"
-	provider := &fakeProvisioner{inStock: true, sells: ProvisionedMachine{CPU: 64_000, Memory: 2_097_152, GPUCount: 8, Spot: true}}
+	provider := &fakeProvisioner{inStock: true, sells: ProvisionedMachine{CPU: 64_000, Memory: 2_097_152, GPUCount: 8, Spot: true}, comesUpIn: 4 * time.Minute, taken: 0.25}
 	controller := spotPoolFor(t, s, pool, provider)
 	s.SetProvisioner(provider)
-	require.True(t, s.PoolCanGrow(pool, 16_000, 640*1024, 2))
-	require.False(t, s.PoolCanGrow("no-such-pool", 16_000, 640*1024, 2))
+	// The controller is told what to expect of the machine the pool would
+	// buy for the replica, which is asked for as the replica's request is.
+	require.Equal(t, MachineOutlook{CanBuy: true, ComeUp: 4 * time.Minute, Taken: 0.25}, s.PoolOutlook(pool, 16_000, 640*1024, 2))
+	require.EqualValues(t, replicaHoursLost, provider.asked[0].HoursLost)
+	provider.asked = nil
+	require.Zero(t, s.PoolOutlook("no-such-pool", 16_000, 640*1024, 2))
 
 	var queued []*types.ContainerRequest
 	for range 2 {
@@ -264,7 +268,7 @@ func TestManagedEndpointSpotReplicaFailsAtOnceWhenItsPoolCannotBuy(t *testing.T)
 	provider := &fakeProvisioner{inStock: false}
 	spotPoolFor(t, s, pool, provider)
 	s.SetProvisioner(provider)
-	require.False(t, s.PoolCanGrow(pool, 16_000, 640*1024, 2))
+	require.False(t, s.PoolOutlook(pool, 16_000, 640*1024, 2).CanBuy)
 
 	request := spotReplica(pool)
 	require.NoError(t, s.Run(request))

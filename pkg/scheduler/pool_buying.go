@@ -184,11 +184,21 @@ func (wpc *AgentWorkerPoolController) machineFor(request *types.ContainerRequest
 	return need
 }
 
+// replicaHoursLost is how many hours of work are lost when the machine under
+// a replica of a managed endpoint is taken back. Its model loads again on
+// another machine, which for a large one takes a quarter of an hour, and
+// what it served waits or is turned away meanwhile. That is worth more than
+// the machine's time, so a replica goes where machines are kept, and to a
+// machine that comes up sooner only among those.
+const replicaHoursLost = 8
+
 // hoursLost is how many hours of work are lost when the machine a request
 // runs on is taken back. It decides how much cheaper a spot machine has to
 // be to be bought for the request, and which workers the request prefers.
 func hoursLost(request *types.ContainerRequest) float64 {
 	switch kind := request.Stub.Type.Kind(); {
+	case request.Stub.Type.IsManagedEndpoint():
+		return replicaHoursLost
 	case request.IsBuildRequest(), request.HasDurableDiskMount():
 	case kind == types.StubTypeEndpoint, kind == types.StubTypeASGI, string(request.Stub.Type) == types.StubTypePodDeployment:
 		return 0.1 // another replica starts
