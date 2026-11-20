@@ -185,11 +185,9 @@ func (wpc *AgentWorkerPoolController) machineFor(request *types.ContainerRequest
 }
 
 // replicaHoursLost is how many hours of work are lost when the machine under
-// a replica of a managed endpoint is taken back. Its model loads again on
-// another machine, which for a large one takes a quarter of an hour, and
-// what it served waits or is turned away meanwhile. That is worth more than
-// the machine's time, so a replica goes where machines are kept, and to a
-// machine that comes up sooner only among those.
+// a replica of a managed endpoint is taken back: its model loads again for
+// a quarter of an hour, and what it served waits or is turned away. A
+// replica so goes where machines are kept before where they come up soonest.
 const replicaHoursLost = 8
 
 // hoursLost is how many hours of work are lost when the machine a request

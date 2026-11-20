@@ -70,7 +70,7 @@ func TestInventoryPlacesInEligiblePoolsOnly(t *testing.T) {
 // spotInventory is the Spot pools of a GPU type and what each can do for a
 // replica: grows lists the pools that can buy a machine.
 func spotInventory(gpu string, grows []string, workers map[string]*inventoryWorker, pools ...string) *clusterInventory {
-	inv := &clusterInventory{spot: map[string][]eligiblePool{}, workers: workers}
+	inv := &clusterInventory{spot: map[string][]eligiblePool{}, workers: workers, buying: map[string]bool{}}
 	for _, name := range pools {
 		inv.spot[gpu] = append(inv.spot[gpu], eligiblePool{Name: name, Locality: name, Spot: true})
 	}
@@ -260,12 +260,8 @@ func TestSpotPlacementGoesWhereMachinesAreKept(t *testing.T) {
 	assert.Equal(t, "a", place(inventory(nil, outlooks), map[string]int{"a": 1, "b": 1}, true))
 	assert.Equal(t, "b", place(inventory(nil, outlooks), map[string]int{"a": 2, "b": 1}, true))
 	assert.Equal(t, "c", place(inventory(nil, outlooks), map[string]int{"a": 4, "b": 4}, true))
-	// The choice says what it was made on, and what it passed over.
-	choice, _ := inventory(nil, outlooks).placeSpot(gpu, 2, res, map[string]int{"a": 2, "b": 1}, true)
-	assert.InDelta(t, 1+0.02+4.0/60, choice.load, 1e-9)
-	require.Len(t, choice.over, 2)
-	assert.Equal(t, []string{"a", "c"}, []string{choice.over[0].pool.Name, choice.over[1].pool.Name})
-	assert.InDelta(t, 3.5, choice.over[1].load, 1e-9, "three lost an hour, and half an hour to wait")
+	choice, _ := inventory(nil, outlooks).placeSpot(gpu, 2, res, nil, true)
+	assert.InDelta(t, 0.02+4.0/60, choice.load(nil), 1e-9, "what it loses an hour, and the hours to wait")
 
 	// A machine that is ready is no wait, which decides between pools that
 	// keep theirs as long. It does not make up for a pool that does not.

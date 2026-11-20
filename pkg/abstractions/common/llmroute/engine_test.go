@@ -114,11 +114,8 @@ vllm:time_per_output_token_seconds_count{model_name="qwen"} 20
 }
 
 func TestProbes(t *testing.T) {
-	defaults := []string{"/v1/models", "/health", "/server_info", "/get_model_info"}
-	require.Equal(t, defaults, ReadinessPaths("v1/models"))
-	require.Equal(t, defaults, ReadinessPaths(" "))
-	require.Equal(t, append(defaults, "/metrics"), ReadinessPaths("/metrics"))
-	require.Equal(t, "/metrics", NormalizeMetricsPath(""))
+	require.Equal(t, "/metrics", NormalizeMetricsPath(" "))
+	require.Equal(t, "/metrics", NormalizeMetricsPath("/metrics"))
 	require.Equal(t, "/custom", NormalizeMetricsPath("custom"))
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -134,8 +131,9 @@ func TestProbes(t *testing.T) {
 	defer server.Close()
 	ctx := context.Background()
 
-	require.True(t, CheckReady(ctx, server.Client(), server.URL, ReadinessPaths(""), time.Second))
-	require.False(t, CheckReady(ctx, server.Client(), server.URL, []string{"/missing"}, time.Second))
+	require.True(t, Ready(ctx, server.Client(), server.URL, " "), "one of the paths engines answer on")
+	require.True(t, Ready(ctx, server.Client(), server.URL, "/health"))
+	require.False(t, Ready(ctx, server.Client(), server.URL, "/missing"), "only the path it names counts")
 
 	metrics, ok, err := FetchEngineMetrics(ctx, server.Client(), server.URL+"/metrics", EngineMetrics{})
 	require.NoError(t, err)

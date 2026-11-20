@@ -263,25 +263,26 @@ func (p *Provisioner) wouldBuy(ctx context.Context, pool string, needs []schedul
 // it has. Like CanProvision, it asks no provider.
 func (p *Provisioner) Expect(ctx context.Context, pool string, needs ...scheduler.MachineNeed) scheduler.MachineOutlook {
 	offer, held, can := p.wouldBuy(ctx, pool, needs)
+	offers := []providers.Offer{offer}
+	if !can {
+		offers = nil
+		for _, machine := range held {
+			if machine.Pool == pool && machine.Release == nil {
+				offers = append(offers, machine.offer())
+			}
+		}
+	}
 	now := p.clock.Now()
 	p.mu.Lock()
 	estimates := p.estimates.Having(running(held, now)...)
 	p.mu.Unlock()
-	if can {
+	outlook := scheduler.MachineOutlook{CanBuy: can}
+	for _, offer := range offers {
 		comeUp, taken := expect(estimates, offer, now, unknownBoot)
-		return scheduler.MachineOutlook{CanBuy: true, ComeUp: time.Duration(comeUp * float64(time.Hour)), Taken: taken}
+		outlook.ComeUp += time.Duration(comeUp * float64(time.Hour) / float64(len(offers)))
+		outlook.Taken += taken / float64(len(offers))
 	}
-	var comeUp, taken, has float64
-	for _, machine := range held {
-		if machine.Pool == pool && machine.Release == nil {
-			hours, rate := expect(estimates, machine.offer(), now, unknownBoot)
-			comeUp, taken, has = comeUp+hours, taken+rate, has+1
-		}
-	}
-	if has == 0 {
-		return scheduler.MachineOutlook{}
-	}
-	return scheduler.MachineOutlook{ComeUp: time.Duration(comeUp / has * float64(time.Hour)), Taken: taken / has}
+	return outlook
 }
 
 // unsaid reports whether the pool has not yet said that this stands in the

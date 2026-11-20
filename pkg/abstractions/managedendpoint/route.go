@@ -79,7 +79,7 @@ type router struct {
 	tables   sync.Map // endpoint id -> *llmroute.Table, which replica holds which prompt
 	inflight sync.Map // replica id -> *atomic.Int64, this gateway's share of the replica's slots
 	ejected  sync.Map // replica id -> time.Time until which it sits out after failing a request
-	running  running  // requests in flight, ended when their replica is lost
+	running  sync.Map // *routeRequest -> flight, ended when its replica is lost
 }
 
 func newRouter(s *Service) *router {

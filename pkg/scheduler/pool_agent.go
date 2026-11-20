@@ -738,16 +738,11 @@ type Provisioner interface {
 }
 
 // MachineOutlook is what the market's history says to expect of a pool's
-// machines: how long they took to come up, and how long they were kept.
+// machines.
 type MachineOutlook struct {
-	// CanBuy reports whether the pool can buy a machine now.
-	CanBuy bool
-	// ComeUp is how long the machine it would buy takes to come up: its
-	// boot time, over the odds that it boots at all.
-	ComeUp time.Duration
-	// Taken is how often an hour a machine of the pool is lost to its
-	// provider.
-	Taken float64
+	CanBuy bool          // the pool can buy a machine now
+	ComeUp time.Duration // how long one takes to come up: its boot time, over the odds that it boots
+	Taken  float64       // how often an hour one is lost to its provider
 }
 
 // MachineNeed is the capacity a new machine must have.

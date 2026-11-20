@@ -107,16 +107,11 @@ func (s *Scheduler) chooseGrowth(route route, request *types.ContainerRequest) g
 	return growth{exhausted: exhausted}
 }
 
-// PoolOutlook is what to expect of the pool for a replica of a managed
-// endpoint that needs a worker with this much room: whether the pool would
-// add one now, by buying a machine where it buys them, how long that
-// machine takes to come up, and how often an hour the pool's machines are
-// taken back. The managed endpoint controller asks before it places a
-// replica, so that it goes where it is likely to stay.
+// PoolOutlook is what the managed endpoint controller weighs before it
+// places a replica that needs this much room in the pool: whether the pool
+// would add a worker for it now and, where it buys machines, how long one
+// takes to come up and how often an hour they are taken back.
 func (s *Scheduler) PoolOutlook(name string, cpu, memory int64, gpuCount uint32) MachineOutlook {
-	if s == nil || s.workerPoolManager == nil {
-		return MachineOutlook{}
-	}
 	pool, ok := s.workerPoolManager.GetPool(name)
 	if !ok {
 		return MachineOutlook{}
@@ -158,12 +153,10 @@ func (a *schedulingAttempt) grow() {
 
 	choice := s.chooseGrowth(route, a.request)
 	switch {
-	case choice.exhausted:
-		a.fail(types.ContainerSchedulingFailureProvisioningLimit)
-		return
-	case choice.pool == nil && isManagedRequest(a.request) && !s.machineComing(route):
-		// Its pool has no machine coming and can buy none. The endpoint's
-		// controller places the replica again, in a pool that can.
+	case choice.exhausted, choice.pool == nil && isManagedRequest(a.request) && !s.machineComing(route):
+		// A managed endpoint's replica does not wait for a pool that has no
+		// machine coming and can buy none: its controller places it again,
+		// in a pool that can.
 		a.fail(types.ContainerSchedulingFailureProvisioningLimit)
 		return
 	case choice.pool == nil:
@@ -202,22 +195,18 @@ func (a *schedulingAttempt) grow() {
 }
 
 // machineComing reports whether a pool of the route has bought a machine
-// that has not run a worker yet. Such a machine counts against what its
-// pool may buy from the moment it is bought, and has the Pending worker that
-// requests wait for a moment later: a request that passes in between finds
-// neither a worker nor a pool that can buy. A pool that cannot be asked is
-// taken to have one coming, since that says nothing about the request.
+// that has yet to run a worker. Between its purchase and its Pending worker
+// a request finds neither a worker to wait for nor a pool that can buy. A
+// pool that cannot be asked is taken to have one coming.
 func (s *Scheduler) machineComing(route route) bool {
-	for _, candidate := range route.pools {
-		buying := buyer(candidate.Controller)
+	return slices.ContainsFunc(route.pools, func(pool routedPool) bool {
+		buying := buyer(pool.Controller)
 		if buying == nil {
-			continue
+			return false
 		}
-		if booting, err := buying.provisioner.Booting(buying.ctx, buying.poolName()); err != nil || len(booting) > 0 {
-			return true
-		}
-	}
-	return false
+		booting, err := buying.provisioner.Booting(buying.ctx, buying.poolName())
+		return err != nil || len(booting) > 0
+	})
 }
 
 // askAgainLater requeues a request that no pool could be asked for a worker

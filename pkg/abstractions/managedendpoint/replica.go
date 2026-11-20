@@ -99,21 +99,19 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 		}
 		// A machine that is taken back with notice stops its containers
 		// before it goes.
-		if left, err := c.workerLeft(replica.WorkerID); err == nil && left && replica.Alive() {
+		if left, err := c.workerLeft(replica.WorkerID, true); err == nil && left && replica.Alive() {
 			return c.finishReplica(ctx, replica, types.ReplicaStatusFailed, reasonWorkerLost)
 		}
 		return c.finishReplica(ctx, replica, c.exitStatus(replica), "container exited")
 	}
 	// A container's record outlives the machine it ran on by many minutes,
 	// and its worker's by none: a replica whose worker is gone is lost.
-	if state.Status == types.ContainerStatusRunning && state.WorkerId != "" {
-		_, err := c.s.workers.GetWorkerById(state.WorkerId)
-		var notFound *types.ErrWorkerNotFound
-		if errors.As(err, &notFound) {
-			return c.stopAndFinish(ctx, replica, types.ReplicaStatusFailed, reasonWorkerLost)
-		}
-		if err != nil {
+	if state.Status == types.ContainerStatusRunning {
+		switch gone, err := c.workerLeft(state.WorkerId, false); {
+		case err != nil:
 			return err
+		case gone:
+			return c.stopAndFinish(ctx, replica, types.ReplicaStatusFailed, reasonWorkerLost)
 		}
 	}
 	if replica.WorkerID != state.WorkerId || replica.MachineID != state.MachineId {
@@ -238,11 +236,7 @@ func (c *controller) exitStatus(replica *types.EndpointReplica) types.ReplicaSta
 func (c *controller) probeReplica(ctx context.Context, replica *types.EndpointReplica) {
 	client := c.s.probeClient(replica.Address)
 	baseURL := "http://replica"
-	paths := llmroute.ReadinessPaths("")
-	if strings.TrimSpace(replica.Probe.Health) != "" {
-		paths = []string{replica.Probe.Health}
-	}
-	ready := llmroute.CheckReady(ctx, client, baseURL, paths, probeTimeout)
+	ready := llmroute.Ready(ctx, client, baseURL, replica.Probe.Health)
 	now := time.Now()
 	if !replica.HarnessEnabled {
 		replica.LastHeartbeat = now
@@ -289,9 +283,9 @@ func probeFor(spec *types.ManagedEndpointSpec) types.ReplicaProbe {
 	return probe
 }
 
-// workerLeft reports whether a replica's worker is gone or on its way out:
-// its machine was taken back.
-func (c *controller) workerLeft(workerID string) (bool, error) {
+// workerLeft reports whether a replica's worker is gone, its machine taken
+// back, or with leaving, on its way out: it no longer takes work.
+func (c *controller) workerLeft(workerID string, leaving bool) (bool, error) {
 	if workerID == "" {
 		return false, nil
 	}
@@ -300,7 +294,7 @@ func (c *controller) workerLeft(workerID string) (bool, error) {
 	if errors.As(err, &notFound) {
 		return true, nil
 	}
-	return err == nil && worker != nil && worker.Status != types.WorkerStatusAvailable, err
+	return leaving && err == nil && worker != nil && worker.Status != types.WorkerStatusAvailable, err
 }
 
 // finishReplica records a terminal status. A replica that failed before it

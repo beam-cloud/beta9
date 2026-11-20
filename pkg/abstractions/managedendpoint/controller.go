@@ -305,15 +305,11 @@ type clusterInventory struct {
 	spot    map[string][]eligiblePool // by GPU key, sorted by name
 	workers map[string]*inventoryWorker
 	floors  map[string]uint32 // pool -> minFreeGPU
-	// outlook is what to expect of a Spot pool for a replica: whether it
-	// would buy a machine with room for it now, how long that machine takes
-	// to come up, and how often an hour the pool's machines are taken back.
-	// The market's history says: what became of the machines bought before.
+	// outlook is what to expect of a Spot pool for a replica; see
+	// scheduler.PoolOutlook.
 	outlook func(pool string, gpus uint32, res replicaResources) scheduler.MachineOutlook
 	// buying is the Spot pools with a replica that waits for a machine no
-	// worker stands for yet. A pool is asked for one machine at a time:
-	// what it can still buy, and what room is left on the machine it gets,
-	// is known only once that machine is.
+	// worker stands for yet.
 	buying map[string]bool
 }
 
@@ -383,7 +379,10 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 	if err != nil {
 		return nil, err
 	}
-	inv := &clusterInventory{pools: map[string][]eligiblePool{}, spot: map[string][]eligiblePool{}, workers: map[string]*inventoryWorker{}, floors: map[string]uint32{}}
+	inv := &clusterInventory{
+		pools: map[string][]eligiblePool{}, spot: map[string][]eligiblePool{},
+		workers: map[string]*inventoryWorker{}, floors: map[string]uint32{}, buying: map[string]bool{},
+	}
 	if c.s.scheduler != nil {
 		inv.outlook = func(pool string, gpus uint32, res replicaResources) scheduler.MachineOutlook {
 			return c.s.scheduler.PoolOutlook(pool, res.cpu, res.memory, gpus)
@@ -438,7 +437,7 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 			if w := inv.spotWorker(r.GPU, r.PoolName, r.GPUCount, res); w != nil {
 				inv.takeSpot(w, r.GPUCount, res)
 			} else {
-				inv.awaitMachine(r.PoolName)
+				inv.buying[r.PoolName] = true
 			}
 			continue
 		}
@@ -540,60 +539,39 @@ func (inv *clusterInventory) place(gpu string, count uint32) (eligiblePool, bool
 // with room for all of it, a ready one before one that is booting, and the
 // fullest of those, as the scheduler packs them.
 func (inv *clusterInventory) spotWorker(gpu, pool string, count uint32, res replicaResources) *inventoryWorker {
-	if inv == nil {
-		return nil
-	}
-	need := max(count, 1)
-	var best *inventoryWorker
-	var bestID string
-	for id, w := range inv.workers {
-		if w.pool != pool || w.gpu != gpu || w.free < need || w.cpu < res.cpu || w.memory < res.memory {
-			continue
+	for _, booting := range []bool{false, true} {
+		var best *inventoryWorker
+		var bestID string
+		for id, w := range inv.workers {
+			fits := w.pool == pool && w.gpu == gpu && w.booting == booting && w.free >= max(count, 1) && w.cpu >= res.cpu && w.memory >= res.memory
+			if fits && (best == nil || w.free < best.free || w.free == best.free && id < bestID) {
+				best, bestID = w, id
+			}
 		}
-		if best == nil || cmp.Or(compareBool(!w.booting, !best.booting), cmp.Compare(w.free, best.free), strings.Compare(id, bestID)) < 0 {
-			best, bestID = w, id
+		if best != nil {
+			return best
 		}
 	}
-	return best
+	return nil
 }
 
 func (inv *clusterInventory) takeSpot(w *inventoryWorker, count uint32, res replicaResources) {
 	w.free, w.cpu, w.memory = w.free-max(count, 1), w.cpu-res.cpu, w.memory-res.memory
 }
 
-// awaitMachine records that a replica in the pool waits for a machine that
-// has yet to be bought.
-func (inv *clusterInventory) awaitMachine(pool string) {
-	if inv.buying == nil {
-		inv.buying = map[string]bool{}
-	}
-	inv.buying[pool] = true
-}
-
 // spotRoom reports whether a Spot machine that is ready has room for a replica.
 func (inv *clusterInventory) spotRoom(gpu string, count uint32, res replicaResources) bool {
-	if inv == nil {
-		return false
-	}
-	return slices.ContainsFunc(inv.spot[gpu], func(pool eligiblePool) bool {
+	return inv != nil && slices.ContainsFunc(inv.spot[gpu], func(pool eligiblePool) bool {
 		w := inv.spotWorker(gpu, pool.Name, count, res)
 		return w != nil && !w.booting
 	})
 }
 
-// spotChoice is a Spot pool a replica could go to: the machine there that
-// it would take, or none when the pool would buy one, and what the market's
-// history says to expect of the pool's machines.
+// spotChoice is a Spot pool a replica could go to.
 type spotChoice struct {
 	pool    eligiblePool
-	worker  *inventoryWorker
+	worker  *inventoryWorker // the machine there it would take; nil when the pool would buy one
 	outlook scheduler.MachineOutlook
-	// load is what the pool counted as holding when it was chosen: its
-	// replicas of the endpoint, the machines it loses an hour, and the
-	// hours the replica waits for one. over are the pools that could have
-	// taken the replica and were passed over, with theirs.
-	load float64
-	over []spotChoice
 }
 
 func (c spotChoice) ready() bool { return c.worker != nil && !c.worker.booting }
@@ -607,19 +585,23 @@ func (c spotChoice) wait() time.Duration {
 	return c.outlook.ComeUp
 }
 
+// load is what the pool counts as holding, where held is the endpoint's
+// replicas by pool: one more for each machine it loses an hour, and for each
+// hour the replica would wait for a machine there.
+func (c spotChoice) load(held map[string]int) float64 {
+	return float64(held[c.pool.Name]) + c.outlook.Taken + c.wait().Hours()
+}
+
 // placeSpot picks the Spot pool for a replica, among those that have a
-// machine with room for it, ready or booting, or can buy one. held is how
-// many replicas of the endpoint each pool has.
+// machine with room for it, ready or booting, or can buy one.
 //
 // A minimum is there to survive the loss of a machine, and Spot machines are
 // lost a market at a time, so it is spread: its next copy goes to the pool
-// with the fewest. A pool counts as holding one more for each machine it
-// loses an hour, and for each hour the replica would wait for a machine
-// there. So among pools that keep their machines a minimum is spread
-// evenly, and goes where it serves soonest among equals. A pool that loses
-// its machines as fast as it buys them is passed over until the others hold
-// several, and how long a machine takes to come up decides between pools
-// that keep theirs about as long.
+// with the least load. So among pools that keep their machines a minimum is
+// spread evenly, and goes where it serves soonest among equals. A pool that
+// loses its machines as fast as it buys them is passed over until the others
+// hold several, and how long a machine takes to come up decides between
+// pools that keep theirs about as long.
 //
 // A copy started for requests that are waiting goes where a machine is
 // ready, as it serves minutes sooner there, and among such pools as a
@@ -628,48 +610,38 @@ func (inv *clusterInventory) placeSpot(gpu string, count uint32, res replicaReso
 	if inv == nil {
 		return spotChoice{}, false
 	}
-	// Of two that are level, a machine that is bought comes before one that
-	// is yet to be, and the pool that is listed first before the other.
-	compare := func(a, b spotChoice) int {
-		level := cmp.Or(cmp.Compare(a.load, b.load), compareBool(a.worker != nil, b.worker != nil))
-		if spread {
-			return level
+	before := func(a, b spotChoice) bool {
+		switch {
+		case !spread && a.ready() != b.ready():
+			return a.ready()
+		case a.load(held) != b.load(held):
+			return a.load(held) < b.load(held)
 		}
-		return cmp.Or(compareBool(a.ready(), b.ready()), level)
+		// Of two that are level, a machine that is bought comes first.
+		return a.worker != nil && b.worker == nil
 	}
-	var candidates []spotChoice
+	var best *spotChoice
 	for _, pool := range inv.spot[gpu] {
-		candidate := spotChoice{pool: pool, worker: inv.spotWorker(gpu, pool.Name, count, res)}
+		choice := spotChoice{pool: pool, worker: inv.spotWorker(gpu, pool.Name, count, res)}
 		if inv.outlook != nil {
-			candidate.outlook = inv.outlook(pool.Name, max(count, 1), res)
+			choice.outlook = inv.outlook(pool.Name, max(count, 1), res)
 		}
-		if candidate.worker == nil && (inv.buying[pool.Name] || !candidate.outlook.CanBuy) {
+		// A pool is asked for one machine at a time: what it can still buy,
+		// and the room left on the machine it gets, is known once it has it.
+		if choice.worker == nil && (inv.buying[pool.Name] || !choice.outlook.CanBuy) {
 			continue
 		}
-		candidate.load = float64(held[pool.Name]) + candidate.outlook.Taken + candidate.wait().Hours()
-		candidates = append(candidates, candidate)
+		if best == nil || before(choice, *best) {
+			best = &choice
+		}
 	}
-	if len(candidates) == 0 {
+	switch {
+	case best == nil:
 		return spotChoice{}, false
-	}
-	slices.SortStableFunc(candidates, compare)
-	best := candidates[0]
-	best.over = candidates[1:]
-	if best.worker == nil {
-		inv.awaitMachine(best.pool.Name)
-	} else {
+	case best.worker == nil:
+		inv.buying[best.pool.Name] = true
+	default:
 		inv.takeSpot(best.worker, count, res)
 	}
-	return best, true
-}
-
-// compareBool orders true before false.
-func compareBool(a, b bool) int {
-	switch {
-	case a == b:
-		return 0
-	case a:
-		return -1
-	}
-	return 1
+	return *best, true
 }

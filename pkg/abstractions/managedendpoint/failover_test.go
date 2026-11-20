@@ -295,7 +295,10 @@ func TestLostReplicaEndsItsRequests(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("the lost replica's request was not ended")
 	}
-	assert.True(t, r.running.empty())
+	r.running.Range(func(_, _ any) bool {
+		t.Error("a request that finished is still in flight")
+		return false
+	})
 
 	// A harness replica is lost as soon as its heartbeats stop, before the
 	// controller records it.

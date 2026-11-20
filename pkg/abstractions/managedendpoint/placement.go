@@ -296,13 +296,8 @@ func (c *controller) room(ctx context.Context, gpu string, s *slot, pass int, in
 	}
 	choice, ok := inv.placeSpot(gpu, s.gpuCount(gpu), *res, s.held, pass == passMinimum)
 	if ok {
-		over := make([]string, len(choice.over))
-		for i, other := range choice.over {
-			over[i] = fmt.Sprintf("%s=%.2f", other.pool.Name, other.load)
-		}
-		log.Info().Str("endpoint_id", s.id()).Str("gpu", gpu).Str("pool", choice.pool.Name).Int("held", s.held[choice.pool.Name]).
-			Float64("taken_per_hour", choice.outlook.Taken).Dur("wait", choice.wait()).Float64("load", choice.load).
-			Strs("passed_over", over).Msg("managed endpoints: chose a Spot pool")
+		log.Info().Str("endpoint_id", s.id()).Str("gpu", gpu).Str("pool", choice.pool.Name).Float64("load", choice.load(s.held)).
+			Float64("taken_per_hour", choice.outlook.Taken).Dur("wait", choice.wait()).Msg("managed endpoints: chose a Spot pool")
 	}
 	return choice.pool, ok
 }

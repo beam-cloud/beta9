@@ -10,7 +10,6 @@ import (
 	"mime"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/common/llmroute"
@@ -82,7 +81,8 @@ func (r *router) attempt(ctx context.Context, rq *routeRequest, app *types.Manag
 	}()
 	running, lose := context.WithCancelCause(leased)
 	defer lose(nil)
-	defer r.running.add(replica.ID, lose)()
+	r.running.Store(rq, flight{replica.ID, lose})
+	defer r.running.Delete(rq)
 	retry, err = r.proxy(running, rq, app, replica)
 	if cause := context.Cause(running); retry && cause != nil {
 		err = cause // why the gateway gave up on the replica, not how the transport reported it
@@ -228,58 +228,15 @@ func (rq *routeRequest) cacheKey() string {
 	return strings.TrimSpace(rq.ctx.Request().Header.Get(headerSession))
 }
 
-// running tracks the requests in flight on each replica so they can be ended
-// when the replica is lost. A dead machine sends nothing, not even a reset:
-// without this its requests would hang until the caller gave up.
-type running struct {
-	mu       sync.Mutex
-	next     uint64
-	requests map[string]map[uint64]context.CancelCauseFunc // replica id -> its requests
-}
-
-// add registers a request; the returned func removes it.
-func (t *running) add(replicaID string, cancel context.CancelCauseFunc) func() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.next++
-	id := t.next
-	if t.requests == nil {
-		t.requests = map[string]map[uint64]context.CancelCauseFunc{}
-	}
-	if t.requests[replicaID] == nil {
-		t.requests[replicaID] = map[uint64]context.CancelCauseFunc{}
-	}
-	t.requests[replicaID][id] = cancel
-	return func() {
-		t.mu.Lock()
-		defer t.mu.Unlock()
-		if delete(t.requests[replicaID], id); len(t.requests[replicaID]) == 0 {
-			delete(t.requests, replicaID)
-		}
-	}
-}
-
-// drop ends the requests of every replica not in live.
-func (t *running) drop(live map[string]bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	for replicaID, requests := range t.requests {
-		if !live[replicaID] {
-			for _, cancel := range requests {
-				cancel(errReplicaLost)
-			}
-		}
-	}
-}
-
-func (t *running) empty() bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return len(t.requests) == 0
+// flight is a request in flight on a replica, and how to end it.
+type flight struct {
+	replicaID string
+	lose      context.CancelCauseFunc
 }
 
 // watch ends the requests of replicas that were lost: finished by the
-// controller, or silent past the heartbeat bound.
+// controller, or silent past the heartbeat bound. A dead machine sends
+// nothing, not even a reset: its requests would hang until the caller gave up.
 func (r *router) watch(ctx context.Context) {
 	ticker := time.NewTicker(lostCheckInterval)
 	defer ticker.Stop()
@@ -294,7 +251,12 @@ func (r *router) watch(ctx context.Context) {
 }
 
 func (r *router) dropLost(ctx context.Context) {
-	if r.running.empty() {
+	var flights []flight
+	r.running.Range(func(_, f any) bool {
+		flights = append(flights, f.(flight))
+		return true
+	})
+	if len(flights) == 0 {
 		return
 	}
 	replicas, err := r.s.repo.ListAllReplicas(ctx)
@@ -306,7 +268,11 @@ func (r *router) dropLost(ctx context.Context) {
 	for _, replica := range replicas {
 		live[replica.ID] = !replica.Status.Terminal() && !r.s.silent(replica, now)
 	}
-	r.running.drop(live)
+	for _, f := range flights {
+		if !live[f.replicaID] {
+			f.lose(errReplicaLost)
+		}
+	}
 }
 
 var hopHeaders = map[string]bool{
