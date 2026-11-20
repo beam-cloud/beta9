@@ -25,6 +25,25 @@ class RemoteExecutionError(RuntimeError):
         super().__init__(f"Remote task {task_id} {status} (exit code {exit_code})\n{output}".rstrip())
 
 
+class NoCapacityError(SystemExit):
+    """
+    A call was given up on because no machine could be had for it: the
+    scheduler gave up, or the call waited as long as it was allowed to.
+    The function did not run.
+
+    A script that does not catch it exits with status 1, after the reason
+    is printed. One that catches it can run the call some other way.
+    """
+
+    def __init__(self, message: str, hint: str = ""):
+        self.message = message
+        self.hint = hint
+        super().__init__(1)
+
+    def __str__(self) -> str:
+        return self.message
+
+
 class FunctionSetResultError(RunnerException):
     def __init__(self):
         super().__init__("Unable to set function result")

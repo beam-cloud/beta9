@@ -183,6 +183,30 @@ def progress(task_name: str) -> Generator[rich.status.Status, None, None]:
                 _current_status = None
 
 
+@contextmanager
+def progress_paused() -> Generator[None, None, None]:
+    """
+    Take the progress spinner off screen while something else has the
+    terminal: a prompt, or steps with spinners of their own. It is back,
+    as it was, afterwards.
+    """
+    global _current_status, _status_count
+
+    with _status_lock:
+        status, count = _current_status, _status_count
+        if status is not None:
+            status.stop()
+        _current_status, _status_count = None, 0
+
+    try:
+        yield
+    finally:
+        with _status_lock:
+            _current_status, _status_count = status, count
+            if status is not None:
+                status.start()
+
+
 class _LiveText:
     """Spinner text that is worked out each time the spinner is drawn."""
 
@@ -215,8 +239,9 @@ def spinner_visible() -> bool:
 
 
 def note(text: str) -> None:
-    """A dim line about the step that is running."""
-    _console.print(Text(f"  {text}", style="dim"))
+    """A dim line, or several, about the step that is running."""
+    for line in text.splitlines():
+        _console.print(Text(f"  {line}", style="dim"))
 
 
 def progress_open(file: Union[str, PathLike, bytes], mode: str, **kwargs: Any) -> BytesIO:

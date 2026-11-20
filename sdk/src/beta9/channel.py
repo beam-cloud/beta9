@@ -41,7 +41,7 @@ from .config import (
     save_config,
 )
 from .env import is_remote
-from .exceptions import RunnerException
+from .exceptions import NoCapacityError, RunnerException
 
 GRPC_MAX_MESSAGE_SIZE = 16 * 1024 * 1024
 _channels = weakref.WeakSet()
@@ -327,15 +327,15 @@ def handle_grpc_error(error: grpc.RpcError):
     if scheduling_failure(error):
         # The gateway's message says what there was none of, and for how long.
         if code == grpc.StatusCode.RESOURCE_EXHAUSTED:
-            terminal.error(
-                details,
-                code="CAPACITY",
-                hint=(
-                    "Try again in a few minutes. For a GPU, list more than one type "
-                    '(gpu=["A10G", "T4"]) so that whichever has capacity is used, or reserve '
-                    f"one: `{terminal.cli_name()} machine list` shows what can be reserved."
-                ),
+            hint = (
+                "Try again in a few minutes. For a GPU, list more than one type "
+                '(gpu=["A10G", "T4"]) so that whichever has capacity is used, or reserve '
+                f"one: `{terminal.cli_name()} machine list` shows what can be reserved."
             )
+            terminal.error(details, code="CAPACITY", hint=hint, exit=False)
+            terminal.reset_terminal()
+            # Exits like any other reported error, unless its caller catches it.
+            raise NoCapacityError(details, hint)
         else:
             terminal.error(details, code="NOT_SCHEDULED")
     elif code == grpc.StatusCode.UNAUTHENTICATED:

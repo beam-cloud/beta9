@@ -282,6 +282,57 @@ func TestContainerStreamStopsWaitingWhenTheSchedulerGivesUp(t *testing.T) {
 	require.Equal(t, "No A10G capacity became available in 20 minutes.", notScheduled.Error())
 }
 
+// A container that is stopped while it waits ends the wait within a few
+// reads of its state. Nothing tells the repository that it was stopped, so
+// the repository's answer would come only when it stops waiting itself.
+func TestContainerStreamStopsWaitingForAContainerThatWasStopped(t *testing.T) {
+	for name, remove := range map[string]bool{"its state is removed": true, "its state says it is stopping": false} {
+		t.Run(name, func(t *testing.T) {
+			s := waitForPendingContainer(t, nil)
+			s.waitsFor(types.ContainerPendingProvisioning, types.ContainerPendingWorkerStarting, time.Now())
+			for s.nextTold().Phase != types.ContainerPendingProvisioning {
+			}
+
+			// As the scheduler stops a container that no worker has.
+			marked, err := s.repo.MarkPendingContainerStoppingIfUnassigned(pendingStreamContainer, 60, 0)
+			require.NoError(t, err)
+			require.True(t, marked)
+			if remove {
+				require.NoError(t, s.repo.DeleteContainerState(pendingStreamContainer))
+			}
+
+			err = s.result().err
+			require.ErrorContains(t, err, "container stopped before it was assigned to a worker")
+			require.Equal(t, codes.Unknown, status.Code(err))
+		})
+	}
+}
+
+// A client hears what its container waits for again while that stays the
+// same, with how long it has been.
+func TestContainerStreamTellsAgainWhatAContainerStillWaitsFor(t *testing.T) {
+	retell := pendingRetellInterval
+	pendingRetellInterval = 50 * time.Millisecond
+	t.Cleanup(func() { pendingRetellInterval = retell })
+
+	s := waitForPendingContainer(t, nil)
+	since := time.Now().Add(-40 * time.Second)
+	s.waitsFor(types.ContainerPendingWaitingForCapacity, types.ContainerPendingNoCapacity, since)
+	for s.nextTold().Phase != types.ContainerPendingWaitingForCapacity {
+	}
+
+	first := time.Now()
+	for range 3 {
+		again := s.nextTold()
+		require.Equal(t, types.ContainerPendingWaitingForCapacity, again.Phase)
+		require.Equal(t, types.ContainerPendingNoCapacity, again.Reason)
+		require.InDelta(t, 40, again.WaitedSeconds(), 2)
+	}
+	// Three more in no less than three intervals, less the one that was
+	// under way.
+	require.GreaterOrEqual(t, time.Since(first), 2*pendingRetellInterval)
+}
+
 // A request that failed with no reason kept ends the wait as it did before
 // reasons were kept.
 func TestContainerStreamStopsWaitingForARequestThatFailedWithoutAReason(t *testing.T) {

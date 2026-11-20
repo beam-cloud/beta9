@@ -25,11 +25,17 @@ var workerAddressPollInterval = time.Second
 // A stream that waits for a worker reads what its container waits for after
 // pendingReadInterval, and then after twice as long each time, up to
 // maxPendingReadInterval. So a container that a worker takes at once costs no
-// read, and one that waits for a machine costs one every few seconds. Tests
-// shorten these.
+// read, and one that waits for a machine costs one every few seconds.
+//
+// The client is told each change, and what has not changed once more every
+// pendingRetellInterval: a client that hears nothing cannot tell how long it
+// has waited, or decide that it has waited long enough.
+//
+// Tests shorten these.
 var (
 	pendingReadInterval    = time.Second
 	maxPendingReadInterval = 5 * time.Second
+	pendingRetellInterval  = 10 * time.Second
 )
 
 // ErrWorkerUnreachable wraps a failure to connect to the worker running a container.
@@ -138,9 +144,19 @@ func (l *ContainerStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, c
 	return l.handleStreams(ctx, containerId, outputChan, keyEventChan, clientResult)
 }
 
+// notAssigned is how the wait ends for a container that will not get a
+// worker: with why the scheduler gave up on it, if it did.
+func (l *ContainerStream) notAssigned(containerID string) error {
+	if failure, err := l.containerRepo.GetContainerRequestFailure(containerID); err == nil && failure != nil {
+		return &ContainerNotScheduledError{Failure: *failure}
+	}
+	return fmt.Errorf("container stopped before it was assigned to a worker")
+}
+
 // waitForWorkerAddress waits until a worker has the container, and returns
 // where to reach it. Until then it tells the client what the container waits
-// for, each time that changes.
+// for: each time that changes, and every pendingRetellInterval while it does
+// not.
 func (l *ContainerStream) waitForWorkerAddress(ctx context.Context, containerID string) (string, error) {
 	// What this starts ends with it.
 	ctx, cancel := context.WithCancel(ctx)
@@ -149,13 +165,17 @@ func (l *ContainerStream) waitForWorkerAddress(ctx context.Context, containerID 
 	ticker := time.NewTicker(workerAddressPollInterval)
 	defer ticker.Stop()
 
-	// told is what the client was told last.
+	// told is what the client was told last, and toldAt when.
 	var told ContainerPending
+	var toldAt time.Time
 	tell := func(pending ContainerPending) error {
-		if l.pendingCallback == nil || pending.Phase == "" || (pending.Phase == told.Phase && pending.Reason == told.Reason) {
+		if l.pendingCallback == nil || pending.Phase == "" {
 			return nil
 		}
-		told = pending
+		if pending.Phase == told.Phase && pending.Reason == told.Reason && time.Since(toldAt) < pendingRetellInterval {
+			return nil
+		}
+		told, toldAt = pending, time.Now()
 		return l.pendingCallback(pending)
 	}
 
@@ -180,19 +200,44 @@ func (l *ContainerStream) waitForWorkerAddress(ctx context.Context, containerID 
 			found <- hostname
 		}()
 
-		hostname, answered := "", false
+		// stopped is set by a read that finds the container stopped before
+		// a worker had it.
+		hostname, answered, stopped := "", false, false
 		for !answered {
 			select {
 			case hostname = <-found:
 				answered = true
 			case <-readNow:
-				// A state that cannot be read says nothing. If the container
-				// is gone, the answer about its worker is what ends the wait.
-				if state, err := l.containerRepo.GetContainerState(containerID); err == nil && state != nil {
+				state, err := l.containerRepo.GetContainerState(containerID)
+				var notFound *types.ErrContainerStateNotFound
+				switch {
+				case err == nil && state.Status != types.ContainerStatusStopping:
+					stopped = false
 					if err := tell(containerPending(state, time.Now())); err != nil {
 						return "", err
 					}
+				case err == nil || errors.As(err, &notFound):
+					// The container was stopped, or the scheduler gave up on
+					// it. The repository answers only when the scheduler
+					// gave up, so a container that was stopped would be
+					// waited for until the repository stops waiting, minutes
+					// from now. The next read ends the wait instead: by then
+					// the scheduler has stored why it gave up, which it does
+					// just after it removes the state.
+					if !stopped {
+						stopped = true
+						read.Reset(pendingReadInterval)
+						continue
+					}
+					select {
+					case hostname = <-found:
+						answered = true
+						continue
+					default:
+						return "", l.notAssigned(containerID)
+					}
 				}
+				// A state that cannot be read says nothing.
 				readIn = min(2*readIn, maxPendingReadInterval)
 				read.Reset(readIn)
 			}
@@ -212,11 +257,7 @@ func (l *ContainerStream) waitForWorkerAddress(ctx context.Context, containerID 
 
 		state, stateErr := l.containerRepo.GetContainerState(containerID)
 		if stateErr != nil || state == nil || state.Status == types.ContainerStatusStopping {
-			// The scheduler says why it gave up on a container.
-			if failure, err := l.containerRepo.GetContainerRequestFailure(containerID); err == nil && failure != nil {
-				return "", &ContainerNotScheduledError{Failure: *failure}
-			}
-			return "", fmt.Errorf("container stopped before it was assigned to a worker")
+			return "", l.notAssigned(containerID)
 		}
 		if err := tell(containerPending(state, time.Now())); err != nil {
 			return "", err

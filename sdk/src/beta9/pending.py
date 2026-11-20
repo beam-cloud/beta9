@@ -10,7 +10,7 @@ like a spinner that does not move.
 
 import threading
 import time
-from typing import Any, Dict, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Optional, Set, Tuple
 
 from . import terminal
 
@@ -45,7 +45,8 @@ def describe(phase: str, reason: str = "") -> str:
     return ""
 
 
-def _clock(seconds: float) -> str:
+def clock(seconds: float) -> str:
+    """A length of time as a spinner counts it: 1:15."""
     minutes, seconds = divmod(max(int(seconds), 0), 60)
     return f"{minutes}:{seconds:02d}"
 
@@ -80,7 +81,7 @@ class PendingStatus:
             # Only a container that was said to wait is said to have stopped.
             if self._shown is None:
                 return
-            text = f"placed on a machine after {_clock(now - self._began)}, starting the container"
+            text = f"placed on a machine after {clock(now - self._began)}, starting the container"
             since = None
         else:
             text = describe(phase, reason)
@@ -97,8 +98,12 @@ class PendingStatus:
             terminal.update_progress(f"{self._title} · {text}")
         else:
             terminal.update_progress(
-                lambda: f"{self._title} · {text} ({_clock(time.monotonic() - since)})"
+                lambda: f"{self._title} · {text} ({clock(time.monotonic() - since)})"
             )
+
+    def advise(self, text: Callable[[], str]) -> None:
+        """Say what can be done about a wait: one line of output."""
+        terminal.note(text())
 
     def clear(self) -> None:
         """The container runs, or the call is over: the spinner gets its own text back."""
@@ -146,6 +151,13 @@ class PendingTally:
                 return
             self._draw()
 
+    def _advise(self, text: Callable[[], str]) -> None:
+        with self._lock:
+            if "advice" in self._said:
+                return
+            self._said.add("advice")
+        terminal.note(text())
+
     def _drop(self, status: "_TallyStatus") -> None:
         with self._lock:
             if self._waiting.pop(status, None) is not None:
@@ -171,5 +183,88 @@ class _TallyStatus:
         if pending.phase:
             self._tally._set(self, pending.phase, pending.reason)
 
+    def advise(self, text: Callable[[], str]) -> None:
+        """Say what can be done about a wait, once for the batch."""
+        self._tally._advise(text)
+
     def clear(self) -> None:
         self._tally._drop(self)
+
+
+class Wait:
+    """How long one call has gone without a machine, by what the gateway says.
+
+    The gateway says what a call waits for when that changes, and again every
+    few seconds while it does not. So a call that waits is heard from often
+    enough to be given up on, or asked about, close to the time.
+
+    limit is the longest the call may go without a machine, and ask_after how
+    long it may go without capacity before its caller is asked what to do
+    about it. Both are in seconds, and 0 is never.
+    """
+
+    def __init__(self, limit: float = 0.0, ask_after: float = 0.0) -> None:
+        self.limit = limit
+        self.phase = ""
+        self.reason = ""
+        self._ask_after = ask_after
+        self._asked = False
+        # When the call began to wait for a machine, on the monotonic clock.
+        self._began: Optional[float] = None
+        # The time it has had no capacity to wait for: the stretches that are
+        # over, and when the one under way began.
+        self._without = 0.0
+        self._without_since: Optional[float] = None
+
+    def told(self, pending: Any) -> None:
+        """Take what a response says the call waits for, if it says anything."""
+        phase = pending.phase
+        if not phase:
+            return
+        if phase == STARTING:
+            self.placed()
+            return
+
+        # The gateway says how long the container has been in its phase, and
+        # the wait counts from there: a client that joins late, or whose
+        # clock stood still for a while, has waited as long as the gateway
+        # says.
+        now = time.monotonic()
+        since = now - pending.waited_seconds
+        self._began = since if self._began is None else min(self._began, since)
+        if phase != WAITING_FOR_CAPACITY:
+            self._without = self.without_capacity()
+            self._without_since = None
+        elif self._without_since is None:
+            self._without_since = since
+        else:
+            self._without_since = min(self._without_since, since)
+        self.phase, self.reason = phase, pending.reason
+
+    def placed(self) -> None:
+        """A machine has the call. If it waits again, for another attempt, it starts over."""
+        self.phase = self.reason = ""
+        self._began = self._without_since = None
+        self._without = 0.0
+
+    def seconds(self) -> float:
+        """How long the call has gone without a machine."""
+        return 0.0 if self._began is None else time.monotonic() - self._began
+
+    def without_capacity(self) -> float:
+        """How long the call has had no capacity to wait for."""
+        if self._without_since is None:
+            return self._without
+        return self._without + time.monotonic() - self._without_since
+
+    def over_limit(self) -> bool:
+        return self.limit > 0 and self._began is not None and self.seconds() >= self.limit
+
+    def ask(self) -> bool:
+        """True once, when the call has gone long enough without capacity to ask about."""
+        if self._asked or self._ask_after <= 0 or self.phase != WAITING_FOR_CAPACITY:
+            return False
+        if self.without_capacity() < self._ask_after:
+            return False
+        self._asked = True
+        return True
