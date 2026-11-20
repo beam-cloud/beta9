@@ -15,6 +15,14 @@ import (
 // megabytes, and thousands of live conversations.
 const tableSize = 1 << 16
 
+// minSlack is how many more requests than the least loaded replica one may
+// have in flight, at the least, and still be sent the prompts it holds. An
+// engine runs a few requests in one batch about as fast as one, and a prompt
+// that leaves its replica is computed again from its first token. With a
+// slack of one, six conversations at a time over two replicas had two in
+// ten move midway, each to compute 17,000 tokens again.
+const minSlack = 4
+
 // Replica is one place a request could run.
 type Replica struct {
 	ID   string
@@ -57,7 +65,7 @@ func (t *Table) Rank(p Prompt, replicas []Replica) []int {
 		id := xxhash.Sum64String(r.ID)
 		slack := int64(0)
 		if p.Key != 0 {
-			slack = max(1, r.Max/4)
+			slack = max(minSlack, r.Max/4)
 		}
 		choices[i] = choice{
 			index:  i,

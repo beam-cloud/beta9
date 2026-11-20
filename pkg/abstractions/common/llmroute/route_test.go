@@ -161,15 +161,26 @@ func TestRankBoundsLoad(t *testing.T) {
 	load := func(a, b int64) []Replica {
 		return []Replica{{ID: "a", Load: a, Max: 8}, {ID: "b", Load: b, Max: 8}}
 	}
-	assert.Equal(t, "a", first(table, p, load(2, 0)), "a cached prefix is worth a quarter of the engine's slots")
-	assert.Equal(t, "b", first(table, p, load(3, 0)), "past the bound the prompt spills")
-	assert.Equal(t, "a", first(table, p, load(5, 3)), "the bound follows the least loaded replica")
+	assert.Equal(t, "a", first(table, p, load(4, 0)), "a cached prefix is worth a few requests in the same batch")
+	assert.Equal(t, "b", first(table, p, load(5, 0)), "past the bound the prompt spills")
+	assert.Equal(t, "a", first(table, p, load(7, 3)), "the bound follows the least loaded replica")
 	assert.Equal(t, "b", first(table, p, load(8, 7)), "a full replica is the last resort")
 	assert.Equal(t, []int{0, 1}, table.Rank(p, load(8, 8)), "among equally full replicas the cache still decides")
 
-	unbounded := []Replica{{ID: "a", Load: 1}, {ID: "b"}}
-	assert.Equal(t, "a", first(table, p, unbounded), "an unbounded engine tolerates one extra request")
-	unbounded[0].Load = 2
+	large := []Replica{{ID: "a", Load: 16, Max: 64}, {ID: "b", Max: 64}}
+	assert.Equal(t, "a", first(table, p, large), "a large engine is worth a quarter of its slots")
+	large[0].Load = 17
+	assert.Equal(t, "b", first(table, p, large))
+
+	// An engine of four slots keeps its prompts until it is full.
+	small := []Replica{{ID: "a", Load: 3, Max: 4}, {ID: "b", Max: 4}}
+	assert.Equal(t, "a", first(table, p, small))
+	small[0].Load = 4
+	assert.Equal(t, "b", first(table, p, small))
+
+	unbounded := []Replica{{ID: "a", Load: 4}, {ID: "b"}}
+	assert.Equal(t, "a", first(table, p, unbounded), "an engine that says nothing of its slots is taken to batch a few requests")
+	unbounded[0].Load = 5
 	assert.Equal(t, "b", first(table, p, unbounded))
 
 	// A request with nothing to keep together goes to the least loaded replica.
