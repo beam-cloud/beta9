@@ -78,7 +78,7 @@ func spotInventory(gpu string, grows []string, workers map[string]*inventoryWork
 	return inv
 }
 
-func TestSpotInventoryIsTheReadyMachinesOfSpotPools(t *testing.T) {
+func TestSpotInventoryIsTheMachinesOfSpotPools(t *testing.T) {
 	const gpu, cpu, memory = "B200", 16_000, 640 * 1024
 	s := newServiceForTest(t)
 	optIn := types.WorkerPoolManagedEndpointsConfig{Enabled: true}
@@ -102,8 +102,10 @@ func TestSpotInventoryIsTheReadyMachinesOfSpotPools(t *testing.T) {
 	worker("mixed-spot", "mixed", 8, cpu, memory, true)
 	worker("stable", "stable", 8, cpu, memory, false)
 	worker("opt-out", "opt-out", 8, cpu, memory, true)
-	require.NoError(t, s.workers.AddWorker(&types.Worker{Id: "b-pending", PoolName: "spot-b", Gpu: gpu, Status: types.WorkerStatusPending,
-		Preemptable: true, TotalGpuCount: 8, FreeGpuCount: 8, FreeCpu: cpu, FreeMemory: memory}))
+	for id, pool := range map[string]string{"a-pending": "spot-a", "b-bought": "spot-b"} {
+		require.NoError(t, s.workers.AddWorker(&types.Worker{Id: id, PoolName: pool, Gpu: gpu, Status: types.WorkerStatusPending,
+			Preemptable: true, TotalGpuCount: 8, FreeGpuCount: 8, FreeCpu: cpu, FreeMemory: memory}))
+	}
 
 	inv, err := s.controller.inventory(nil)
 	require.NoError(t, err)
@@ -128,8 +130,29 @@ func TestSpotInventoryIsTheReadyMachinesOfSpotPools(t *testing.T) {
 	assert.EqualValues(t, cpu, inv.workers["b-big"].cpu)
 	_, placed = inv.placeSpot(gpu, 2, res, nil, true)
 	require.True(t, placed)
+
+	// A machine the pool bought has room before it joins, and is taken once
+	// the ready ones are full. A pending worker of a pool that buys none is
+	// not such a machine.
+	assert.NotContains(t, inv.workers, "a-pending")
+	assert.EqualValues(t, 8, inv.workers["b-bought"].free)
+	assert.False(t, inv.spotRoom(gpu, 2, res), "it does not serve as soon as a ready one")
+	_, placed = inv.placeSpot(gpu, 2, res, nil, true)
+	require.True(t, placed)
+	assert.EqualValues(t, 6, inv.workers["b-bought"].free)
 	_, placed = inv.placeSpot(gpu, 2, res, nil, true)
 	assert.False(t, placed, "room that is taken is not offered again this tick")
+
+	// A replica that waits in a pool with no machine for it has one coming.
+	waiting := versionReplica(t, s, "waiting", 1, types.ReplicaStatusScheduling)
+	waiting.Spot, waiting.GPU, waiting.GPUCount, waiting.PoolName = true, gpu, 2, "spot-a"
+	s.containers = repository.NewContainerRedisRepositoryForTest(s.rdb)
+	require.NoError(t, s.containers.SetContainerState(waiting.ContainerID, &types.ContainerState{
+		ContainerId: waiting.ContainerID, Status: types.ContainerStatusPending, Cpu: cpu, Memory: 512 * 1024,
+	}))
+	inv, err = s.controller.inventory([]*types.EndpointReplica{waiting})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]bool{"spot-a": true}, inv.buying)
 
 	// The idle GPUs of the other pools are not a Spot placement's to take,
 	// and a machine its provider may take back is no one else's.
@@ -166,6 +189,29 @@ func TestSpotPlacementSpreadsAMinimumAndPacksDemand(t *testing.T) {
 	}
 	assert.Equal(t, "a", place(inv, map[string]int{"b": 7}, false))
 	assert.Equal(t, "c", place(inv, map[string]int{"a": 1, "b": 7}, false))
+
+	// A pool is asked for one machine at a time. The next replica waits for
+	// that machine to stand in the pool, where it may have room for both.
+	inv = spotInventory(gpu, []string{"a"}, nil, "a")
+	assert.Equal(t, "a", place(inv, nil, true))
+	assert.Empty(t, place(inv, map[string]int{"a": 1}, true))
+	bought := map[string]*inventoryWorker{"bought": {pool: "a", gpu: gpu, free: 4, total: 8, cpu: 64_000, memory: 4 * 640 * 1024, booting: true}}
+	inv = spotInventory(gpu, []string{"a"}, bought, "a")
+	assert.Equal(t, "a", place(inv, map[string]int{"a": 1}, true))
+	assert.Equal(t, "a", place(inv, map[string]int{"a": 2}, true))
+	assert.EqualValues(t, 0, bought["bought"].free)
+	assert.Empty(t, inv.buying, "neither was bought a machine")
+	assert.Equal(t, "a", place(inv, map[string]int{"a": 3}, true))
+	assert.Empty(t, place(inv, map[string]int{"a": 4}, true))
+
+	// A copy for waiting requests goes to a machine that is ready before
+	// one that is booting, and to either before one is bought.
+	workers := ready()
+	workers["bought"] = &inventoryWorker{pool: "a", gpu: gpu, free: 8, total: 8, cpu: 64_000, memory: 4 * 640 * 1024, booting: true}
+	inv = spotInventory(gpu, []string{"c"}, workers, "a", "b", "c")
+	assert.Equal(t, "b", place(inv, map[string]int{"b": 1}, false))
+	assert.Equal(t, "a", place(inv, map[string]int{"b": 2}, true))
+	assert.Empty(t, inv.buying)
 
 	// A pool that has no room and can buy no machine is passed over, so a
 	// market that is sold out does not hold a replica back.

@@ -290,6 +290,8 @@ type inventoryWorker struct {
 	pool, gpu   string
 	free, total uint32
 	cpu, memory int64 // free, in scheduler units
+	// booting is a machine a Spot pool has bought that has yet to join.
+	booting bool
 }
 
 // clusterInventory is where replicas may run. A pool that opted in is one of
@@ -305,6 +307,11 @@ type clusterInventory struct {
 	// canGrow reports whether a pool would add a machine with room for a
 	// replica now.
 	canGrow func(pool string, gpus uint32, res replicaResources) bool
+	// buying is the Spot pools with a replica that waits for a machine no
+	// worker stands for yet. A pool is asked for one machine at a time:
+	// what it can still buy, and what room is left on the machine it gets,
+	// is known only once that machine is.
+	buying map[string]bool
 }
 
 type replicaResources struct{ cpu, memory int64 }
@@ -400,15 +407,22 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 		}
 	}
 	for _, w := range workers {
-		if w == nil || w.Status != types.WorkerStatusAvailable || w.Gpu == "" {
+		if w == nil || w.Gpu == "" {
 			continue
 		}
 		// A machine its provider may take back hosts the replicas of Spot
 		// placements, and no others: admission holds the same line.
-		if cfg, ok := configs[w.PoolName]; !ok || !cfg.ManagedEndpoints.Enabled || w.Preemptable != cfg.AllowsManagedEndpointSpot() {
+		cfg, ok := configs[w.PoolName]
+		if !ok || !cfg.ManagedEndpoints.Enabled || w.Preemptable != cfg.AllowsManagedEndpointSpot() {
 			continue
 		}
-		inv.workers[w.Id] = &inventoryWorker{pool: w.PoolName, gpu: types.GPUKey(w.Gpu), free: w.FreeGpuCount, total: w.TotalGpuCount, cpu: w.FreeCpu, memory: w.FreeMemory}
+		// The worker of a machine a Spot pool bought is pending until the
+		// machine joins, and the scheduler keeps its room for what waits.
+		booting := w.Status == types.WorkerStatusPending && w.Preemptable && cfg.Buys()
+		if w.Status != types.WorkerStatusAvailable && !booting {
+			continue
+		}
+		inv.workers[w.Id] = &inventoryWorker{pool: w.PoolName, gpu: types.GPUKey(w.Gpu), free: w.FreeGpuCount, total: w.TotalGpuCount, cpu: w.FreeCpu, memory: w.FreeMemory, booting: booting}
 	}
 	// Replicas still waiting for a worker hold GPUs no worker reports yet.
 	for _, r := range replicas {
@@ -416,9 +430,13 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 			continue
 		}
 		if r.Spot {
-			// It takes a ready machine of its pool, or waits for one to be bought.
+			// It takes a machine of its pool, or waits for one to be bought.
 			res := c.reserved(r)
-			inv.takeSpot(inv.spotWorker(r.GPU, r.PoolName, r.GPUCount, res), r.GPUCount, res)
+			if w := inv.spotWorker(r.GPU, r.PoolName, r.GPUCount, res); w != nil {
+				inv.takeSpot(w, r.GPUCount, res)
+			} else {
+				inv.awaitMachine(r.PoolName)
+			}
 			continue
 		}
 		for need := max(r.GPUCount, 1); need > 0; {
@@ -515,8 +533,9 @@ func (inv *clusterInventory) place(gpu string, count uint32) (eligiblePool, bool
 	return inv.pools[gpu][i], true
 }
 
-// spotWorker is the ready worker of a Spot pool that a replica would take:
-// the fullest one with room for all of it, as the scheduler packs them.
+// spotWorker is the machine of a Spot pool that a replica would take: one
+// with room for all of it, a ready one before one that is booting, and the
+// fullest of those, as the scheduler packs them.
 func (inv *clusterInventory) spotWorker(gpu, pool string, count uint32, res replicaResources) *inventoryWorker {
 	if inv == nil {
 		return nil
@@ -528,7 +547,7 @@ func (inv *clusterInventory) spotWorker(gpu, pool string, count uint32, res repl
 		if w.pool != pool || w.gpu != gpu || w.free < need || w.cpu < res.cpu || w.memory < res.memory {
 			continue
 		}
-		if best == nil || w.free < best.free || w.free == best.free && id < bestID {
+		if best == nil || cmp.Or(compareBool(!w.booting, !best.booting), cmp.Compare(w.free, best.free), strings.Compare(id, bestID)) < 0 {
 			best, bestID = w, id
 		}
 	}
@@ -536,9 +555,16 @@ func (inv *clusterInventory) spotWorker(gpu, pool string, count uint32, res repl
 }
 
 func (inv *clusterInventory) takeSpot(w *inventoryWorker, count uint32, res replicaResources) {
-	if w != nil {
-		w.free, w.cpu, w.memory = w.free-max(count, 1), w.cpu-res.cpu, w.memory-res.memory
+	w.free, w.cpu, w.memory = w.free-max(count, 1), w.cpu-res.cpu, w.memory-res.memory
+}
+
+// awaitMachine records that a replica in the pool waits for a machine that
+// has yet to be bought.
+func (inv *clusterInventory) awaitMachine(pool string) {
+	if inv.buying == nil {
+		inv.buying = map[string]bool{}
 	}
+	inv.buying[pool] = true
 }
 
 // spotRoom reports whether a Spot machine that is ready has room for a replica.
@@ -547,13 +573,14 @@ func (inv *clusterInventory) spotRoom(gpu string, count uint32, res replicaResou
 		return false
 	}
 	return slices.ContainsFunc(inv.spot[gpu], func(pool eligiblePool) bool {
-		return inv.spotWorker(gpu, pool.Name, count, res) != nil
+		w := inv.spotWorker(gpu, pool.Name, count, res)
+		return w != nil && !w.booting
 	})
 }
 
-// placeSpot picks the Spot pool for a replica, among those that have a ready
-// machine with room for it or can buy one. held is how many replicas of the
-// endpoint each pool has.
+// placeSpot picks the Spot pool for a replica, among those that have a
+// machine with room for it, ready or booting, or can buy one. held is how
+// many replicas of the endpoint each pool has.
 //
 // A minimum is there to survive the loss of a machine, and Spot machines are
 // lost a market at a time, so it is spread: its next copy goes to the pool
@@ -568,27 +595,32 @@ func (inv *clusterInventory) placeSpot(gpu string, count uint32, res replicaReso
 		pool   eligiblePool
 		worker *inventoryWorker
 	}
+	ready := func(c choice) bool { return c.worker != nil && !c.worker.booting }
 	before := func(a, b choice) bool {
-		fewer, ready := cmp.Compare(held[a.pool.Name], held[b.pool.Name]), compareBool(a.worker != nil, b.worker != nil)
+		fewer, sooner := cmp.Compare(held[a.pool.Name], held[b.pool.Name]), compareBool(ready(a), ready(b))
 		if spread {
-			return cmp.Or(fewer, ready) < 0
+			return cmp.Or(fewer, sooner) < 0
 		}
-		return cmp.Or(ready, fewer) < 0
+		return cmp.Or(sooner, fewer) < 0
 	}
 	var best *choice
 	for _, pool := range inv.spot[gpu] {
 		candidate := choice{pool, inv.spotWorker(gpu, pool.Name, count, res)}
-		if candidate.worker == nil && (inv.canGrow == nil || !inv.canGrow(pool.Name, max(count, 1), res)) {
+		if candidate.worker == nil && (inv.buying[pool.Name] || inv.canGrow == nil || !inv.canGrow(pool.Name, max(count, 1), res)) {
 			continue
 		}
 		if best == nil || before(candidate, *best) {
 			best = &candidate
 		}
 	}
-	if best == nil {
+	switch {
+	case best == nil:
 		return eligiblePool{}, false
+	case best.worker == nil:
+		inv.awaitMachine(best.pool.Name)
+	default:
+		inv.takeSpot(best.worker, count, res)
 	}
-	inv.takeSpot(best.worker, count, res)
 	return best.pool, true
 }
 
