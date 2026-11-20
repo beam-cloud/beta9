@@ -1,7 +1,9 @@
 import http
 import os
+import posixpath
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 
 import requests
 
@@ -89,12 +91,18 @@ class Client:
         path = Path(local_path)
         filename = f"{path.stem}_{uuid.uuid4()}{path.suffix}"
         volume_path = str(path.parent / filename) if path.parent != Path(".") else filename
+        volume_path = f"{VOLUME_UPLOAD_PATH}/{volume_path}"
+        if ".." in path.parts:
+            volume_path = posixpath.normpath(volume_path)
+        # Encode the prefix slash too: Echo retains RawPath for %2F, so the
+        # gateway's QueryUnescape decodes the entire volume path exactly once.
+        volume_path = quote(volume_path, safe="")
 
         try:
             response = get(
                 token=self.token,
                 url=self.base_url,
-                path=f"/volume/{self.workspace_id}/generate-upload-url/{VOLUME_UPLOAD_PATH}/{volume_path}",
+                path=f"/volume/{self.workspace_id}/generate-upload-url/{volume_path}",
             )
             response.raise_for_status()
         except BaseException as e:
@@ -111,7 +119,7 @@ class Client:
         response = get(
             token=self.token,
             url=self.base_url,
-            path=f"/volume/{self.workspace_id}/generate-download-url/{VOLUME_UPLOAD_PATH}/{volume_path}",
+            path=f"/volume/{self.workspace_id}/generate-download-url/{volume_path}",
         )
         response.raise_for_status()
         return response.json()
