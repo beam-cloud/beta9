@@ -102,6 +102,7 @@ type Worker struct {
 	RolloutPreviousStatus      WorkerStatus `json:"-" redis:"rollout_previous_status" go2proto:"ignore"`
 	CheckpointCompatibilityKey string       `json:"-" redis:"checkpoint_compatibility_key" go2proto:"ignore"`
 	CPUTierProtocol            uint32       `json:"-" redis:"cpu_tier_protocol" go2proto:"ignore"`
+	ProvisionedSpotBilling     bool         `json:"-" redis:"provisioned_spot_billing" go2proto:"ignore"`
 	// CreatedAt is when the worker's state was first written, in Unix
 	// seconds. The worker repository sets it. Zero means unknown: the state
 	// was written by a release that did not record it.
@@ -112,6 +113,7 @@ type WorkerKeepAlive struct {
 	MachineId                  string `json:"machine_id"`
 	CheckpointCompatibilityKey string `json:"checkpoint_compatibility_key"`
 	CPUTierProtocol            uint32 `json:"cpu_tier_protocol"`
+	ProvisionedSpotBilling     bool   `json:"provisioned_spot_billing"`
 	// RequestStreamOpen is set by the gateway that received the keepalive when
 	// it also holds this worker's container request stream. A worker opens
 	// that stream only after it has started.
@@ -504,6 +506,17 @@ type ContainerRequest struct {
 	// wire fields below it, ignored by go2proto or not.
 	WaitlistPool string    `json:"waitlist_pool,omitempty" go2proto:"ignore"`
 	WaitlistedAt time.Time `json:"waitlisted_at,omitzero" go2proto:"ignore"`
+	// Set by the scheduler after selecting the machine. Internal worker
+	// delivery carries this separately from the public ContainerRequest proto.
+	ProvisionedSpot *ProvisionedSpotPricing `json:"provisioned_spot,omitempty" go2proto:"ignore"`
+}
+
+// ProvisionedSpotPricing is the full machine's marked-up purchase price,
+// stamped onto a placement so it remains available after machine reclamation.
+type ProvisionedSpotPricing struct {
+	MachineID        string `json:"machine_id"`
+	GPUCount         uint32 `json:"gpu_count"`
+	HourlyCostMicros int64  `json:"hourly_cost_micros"`
 }
 
 // CapacityCpu is the CPU the request takes from its worker's capacity.
@@ -709,6 +722,7 @@ func (c *ContainerRequest) AssignMachine(machineID string) {
 // ReleaseMachine undoes AssignMachine: the request may be placed again
 // wherever its caller allows. A pin the caller set is kept.
 func (c *ContainerRequest) ReleaseMachine() {
+	c.ProvisionedSpot = nil
 	if c.MachineAssigned {
 		c.MachineId = ""
 		c.MachineAssigned = false

@@ -99,6 +99,15 @@ func (wm *WorkerUsageMetrics) EmitContainerUsage(ctx context.Context, request *t
 
 	requestSnapshot := *request
 	requestSnapshot.Gpu = billedGpu(request, wm.gpuType)
+	if spot := requestSnapshot.ProvisionedSpot; spot != nil {
+		if wm.poolMode != types.PoolModeExternal || !wm.openMeterMetadata ||
+			wm.gpuType == "" || spot.MachineID == "" || spot.MachineID != request.MachineId ||
+			spot.HourlyCostMicros <= 0 || request.GpuCount == 0 || request.GpuCount > spot.GPUCount {
+			log.Error().Str("container_id", request.ContainerId).Msg("invalid provisioned Spot usage attribution")
+			return
+		}
+		requestSnapshot.Gpu = wm.gpuType
+	}
 	requestSnapshot.CostPerMs = 0
 	start := wm.currentTime()
 	ticker, stopTicker := wm.usageTicker(types.ContainerDurationEmissionInterval)
@@ -316,11 +325,11 @@ func nextUTCMidnight(at time.Time) time.Time {
 }
 
 func (wm *WorkerUsageMetrics) metricsContainerDuration(interval containerUsageInterval) {
-	wm.emitUsage(
-		types.UsageMetricsWorkerContainerDuration,
-		wm.containerMetricLabels(interval),
-		float64(interval.duration.Milliseconds()),
-	)
+	metric := types.UsageMetricsWorkerContainerDuration
+	if interval.request.ProvisionedSpot != nil {
+		metric = types.UsageMetricsWorkerSpotDuration
+	}
+	wm.emitUsage(metric, wm.containerMetricLabels(interval), float64(interval.duration.Milliseconds()))
 }
 
 func (wm *WorkerUsageMetrics) metricsContainerCost(interval containerUsageInterval) {
@@ -442,6 +451,11 @@ func (wm *WorkerUsageMetrics) containerMetricLabels(interval containerUsageInter
 		"duration_ms":     interval.duration.Milliseconds(),
 		"pricing_version": interval.quote.PricingVersion,
 	}
+	if spot := interval.request.ProvisionedSpot; spot != nil {
+		labels["machine_id"] = spot.MachineID
+		labels["machine_gpu_count"] = spot.GPUCount
+		labels["hourly_cost_micros"] = spot.HourlyCostMicros
+	}
 	if wm.openMeterMetadata {
 		labels["interval_start"] = interval.start.Format(time.RFC3339Nano)
 		labels["interval_end"] = interval.end.Format(time.RFC3339Nano)
@@ -475,6 +489,16 @@ func usageTicker(interval time.Duration) (<-chan time.Time, func()) {
 }
 
 func (wm *WorkerUsageMetrics) getContainerCostQuote(request *types.ContainerRequest) clients.ContainerCostQuote {
+	if spot := request.ProvisionedSpot; spot != nil {
+		// The machine rate includes CPU and RAM. Prorate its micro-USD per
+		// hour by the container's GPU allocation and convert to cents per ms.
+		return clients.ContainerCostQuote{
+			CostPerMs: float64(spot.HourlyCostMicros) * float64(request.GpuCount) /
+				(10_000 * float64(time.Hour.Milliseconds()) * float64(spot.GPUCount)),
+			PricingVersion: "provisioned-spot-v1",
+			Valid:          true,
+		}
+	}
 	if wm.containerCostClient == nil && wm.quoteProvider == nil {
 		return clients.ContainerCostQuote{}
 	}

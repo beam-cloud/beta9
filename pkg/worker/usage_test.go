@@ -1097,3 +1097,53 @@ func TestEmitContainerUsageSkipsPlatformWorkloads(t *testing.T) {
 		}
 	}
 }
+
+func TestEmitProvisionedSpotUsageUsesPurchaseRateOnly(t *testing.T) {
+	repository := &usageMetricsRecorder{}
+	start := time.Date(2026, time.November, 20, 19, 0, 0, 0, time.UTC)
+	var clockCalls atomic.Int32
+	metrics := &WorkerUsageMetrics{
+		workerId:          "worker",
+		metricsRepo:       repository,
+		poolMode:          types.PoolModeExternal,
+		gpuType:           "RTXPro6000",
+		openMeterMetadata: true,
+		now: func() time.Time {
+			if clockCalls.Add(1) == 1 {
+				return start
+			}
+			return start.Add(30 * time.Minute)
+		},
+		quoteProvider: func(context.Context, *types.ContainerRequest) (clients.ContainerCostQuote, error) {
+			t.Fatal("a provisioned Spot workload must not request a Stripe quote")
+			return clients.ContainerCostQuote{}, nil
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	metrics.EmitContainerUsage(ctx, &types.ContainerRequest{
+		ContainerId: "container", WorkspaceId: "workspace", StubId: "stub", MachineId: "machine",
+		GpuRequest: []string{"L40S"}, GpuCount: 1,
+		ProvisionedSpot: &types.ProvisionedSpotPricing{MachineID: "machine", GPUCount: 4, HourlyCostMicros: 1_990_398},
+	})
+
+	if len(repository.events) != 2 {
+		t.Fatalf("got %d events, want one Spot duration and one realtime cost", len(repository.events))
+	}
+	duration, cost := repository.events[0], repository.events[1]
+	if duration.name != types.UsageMetricsWorkerSpotDuration || duration.value != 1_800_000 {
+		t.Fatalf("duration event = %+v, want 1,800,000 ms of provisioned Spot usage", duration)
+	}
+	if cost.name != types.UsageMetricsWorkerContainerCost || math.Abs(cost.value-24.879975) > 1e-10 {
+		t.Fatalf("cost event = %+v, want 24.879975 cents", cost)
+	}
+	for _, event := range repository.events {
+		labels := event.labels
+		if labels["workspace_id"] != "workspace" || labels["stub_id"] != "stub" ||
+			labels["gpu"] != "RTXPro6000" || labels["gpu_count"] != uint32(1) ||
+			labels["machine_id"] != "machine" || labels["machine_gpu_count"] != uint32(4) ||
+			labels["hourly_cost_micros"] != int64(1_990_398) {
+			t.Fatalf("missing purchase attribution in %s: %+v", event.name, labels)
+		}
+	}
+}

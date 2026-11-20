@@ -774,11 +774,12 @@ func usableMemoryMB(nominal int64) int64 {
 // provisioned is the machine as the scheduler is told about it.
 func (m Machine) provisioned() scheduler.ProvisionedMachine {
 	return scheduler.ProvisionedMachine{
-		MachineID: m.ID,
-		CPU:       m.CPUMillicores,
-		Memory:    usableMemoryMB(m.MemoryMB),
-		GPUCount:  m.GPUCount,
-		Spot:      m.Spot,
+		MachineID:    m.ID,
+		CPU:          m.CPUMillicores,
+		Memory:       usableMemoryMB(m.MemoryMB),
+		GPUCount:     m.GPUCount,
+		Spot:         m.Spot,
+		HourlyMicros: m.HourlyMicros,
 	}
 }
 

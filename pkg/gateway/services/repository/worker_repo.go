@@ -150,16 +150,31 @@ func (s *WorkerRepositoryService) GetNextContainerRequest(req *pb.GetNextContain
 				if request.Checkpoint != nil {
 					compatibilityKey = request.Checkpoint.CompatibilityKey
 				}
-				if err := stream.Send(&pb.GetNextContainerRequestResponse{
-					Ok:                         true,
-					ContainerRequest:           request.ToProto(),
-					DeliveryToken:              request.DeliveryToken,
-					CheckpointCompatibilityKey: compatibilityKey,
-				}); err != nil {
+				var spot *pb.ProvisionedSpotPricing
+				if pricing := request.ProvisionedSpot; pricing != nil {
+					spot = &pb.ProvisionedSpotPricing{
+						MachineId:        pricing.MachineID,
+						GpuCount:         pricing.GPUCount,
+						HourlyCostMicros: pricing.HourlyCostMicros,
+					}
+				}
+				var sendErr error
+				if spot != nil && !req.ProvisionedSpotBilling {
+					sendErr = status.Error(codes.FailedPrecondition, "worker cannot record provisioned Spot usage")
+				} else {
+					sendErr = stream.Send(&pb.GetNextContainerRequestResponse{
+						Ok:                         true,
+						ContainerRequest:           request.ToProto(),
+						DeliveryToken:              request.DeliveryToken,
+						CheckpointCompatibilityKey: compatibilityKey,
+						ProvisionedSpot:            spot,
+					})
+				}
+				if sendErr != nil {
 					if requeueErr := s.workerRepo.RequeueContainerRequests(req.WorkerId, requests[i:]); requeueErr != nil {
 						log.Error().Err(requeueErr).Str("worker_id", req.WorkerId).Msg("failed to requeue undelivered container requests")
 					}
-					return err
+					return sendErr
 				}
 			}
 
@@ -429,6 +444,7 @@ func (s *WorkerRepositoryService) SetWorkerKeepAlive(ctx context.Context, req *p
 		MachineId:                  req.MachineId,
 		CheckpointCompatibilityKey: req.CheckpointCompatibilityKey,
 		CPUTierProtocol:            req.CpuTierProtocol,
+		ProvisionedSpotBilling:     req.ProvisionedSpotBilling,
 		RequestStreamOpen:          s.workerEvents != nil && s.workerEvents.hasRequestStream(req.WorkerId),
 	})
 	if err != nil {

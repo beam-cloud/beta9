@@ -2863,3 +2863,33 @@ func TestProviderOwnerIsChosenOnceAndSharedByEveryGateway(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, owner, other, "a deployment with its own records has its own name")
 }
+
+func TestProvisionedSpotDispatchRequiresSelectedMachineAndCapableWorker(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{
+		Id: "spot-worker", MachineId: "spot-machine", Status: types.WorkerStatusAvailable,
+		Gpu: "RTXPro6000", FreeCpu: 100, FreeMemory: 125, FreeGpuCount: 1, TotalGpuCount: 1,
+	}
+	require.NoError(t, repo.AddWorker(worker))
+	request := &types.ContainerRequest{
+		ContainerId: "spot-container", Cpu: 100, Memory: 100, Gpu: worker.Gpu, GpuCount: 1,
+		ProvisionedSpot: &types.ProvisionedSpotPricing{MachineID: "spot-machine", GPUCount: 1, HourlyCostMicros: 1_990_398},
+	}
+	setPendingContainerRequests(t, rdb, request)
+	require.ErrorIs(t, repo.ScheduleContainerRequest(worker, request), ErrWorkerCapacityChanged)
+
+	require.NoError(t, repo.SetWorkerKeepAlive(worker.Id, types.WorkerKeepAlive{ProvisionedSpotBilling: true}))
+	require.NoError(t, repo.AddWorker(worker), "a controller refresh must preserve worker-reported capability")
+	request.ProvisionedSpot.MachineID = "stale-machine"
+	require.ErrorIs(t, repo.ScheduleContainerRequest(worker, request), ErrWorkerCapacityChanged)
+
+	request.ProvisionedSpot.MachineID = "spot-machine"
+	require.NoError(t, repo.ScheduleContainerRequest(worker, request))
+	queued, err := repo.GetNextContainerRequests(worker.Id, 1)
+	require.NoError(t, err)
+	require.Len(t, queued, 1)
+	require.Equal(t, request.ProvisionedSpot, queued[0].ProvisionedSpot)
+	require.Equal(t, "spot-machine", queued[0].MachineId)
+}

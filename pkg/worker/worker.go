@@ -884,7 +884,8 @@ func (s *Worker) Run() error {
 containerRequestStream:
 	for {
 		stream, err := s.workerRepoClient.GetNextContainerRequest(s.ctx, &pb.GetNextContainerRequestRequest{
-			WorkerId: s.workerId,
+			WorkerId:               s.workerId,
+			ProvisionedSpotBilling: s.config.Monitoring.MetricsCollector == string(types.MetricsCollectorOpenMeter),
 		})
 		if err != nil {
 			if s.ctx.Err() != nil {
@@ -918,6 +919,13 @@ containerRequestStream:
 				lastContainerRequest = time.Now()
 				request := types.NewContainerRequestFromProto(response.ContainerRequest)
 				request.DeliveryToken = response.DeliveryToken
+				if pricing := response.ProvisionedSpot; pricing != nil {
+					request.ProvisionedSpot = &types.ProvisionedSpotPricing{
+						MachineID:        pricing.MachineId,
+						GPUCount:         pricing.GpuCount,
+						HourlyCostMicros: pricing.HourlyCostMicros,
+					}
+				}
 				if request.Checkpoint != nil {
 					request.Checkpoint.CompatibilityKey = response.CheckpointCompatibilityKey
 				}
@@ -1703,6 +1711,7 @@ func (s *Worker) setWorkerKeepAlive() error {
 		CheckpointCompatibilityKey: s.checkpointCompatibilityKey,
 		Idle:                       idle,
 		CpuTierProtocol:            types.CPUTierProtocolVersion,
+		ProvisionedSpotBilling:     s.config.Monitoring.MetricsCollector == string(types.MetricsCollectorOpenMeter),
 	}))
 	if err != nil {
 		return err

@@ -601,6 +601,7 @@ func (r *WorkerRedisRepository) addWorker(ctx context.Context, worker *types.Wor
 		if oldWorker.CheckpointCompatibilityKey != "" {
 			worker.CheckpointCompatibilityKey = oldWorker.CheckpointCompatibilityKey
 		}
+		worker.ProvisionedSpotBilling = oldWorker.ProvisionedSpotBilling
 		worker.CordonRequested = oldWorker.CordonRequested
 		worker.RolloutGeneration = oldWorker.RolloutGeneration
 		worker.RolloutPreviousStatus = oldWorker.RolloutPreviousStatus
@@ -1086,7 +1087,8 @@ func (r *WorkerRedisRepository) SetWorkerKeepAlive(workerId string, keepAlive ty
 		worker.MachineId = machineID
 	}
 	pipe := r.rdb.TxPipeline()
-	pipe.HSet(ctx, stateKey, "cpu_tier_protocol", keepAlive.CPUTierProtocol)
+	pipe.HSet(ctx, stateKey, "cpu_tier_protocol", keepAlive.CPUTierProtocol,
+		"provisioned_spot_billing", keepAlive.ProvisionedSpotBilling)
 	if recovered {
 		pipe.HSet(ctx, stateKey,
 			"status", string(worker.Status),
@@ -1673,6 +1675,8 @@ func workerFromHash(key string, res map[string]string) *types.Worker {
 			worker.ControlPlaneManaged = boolean(v)
 		case "cpu_tier_protocol":
 			worker.CPUTierProtocol = u32(v)
+		case "provisioned_spot_billing":
+			worker.ProvisionedSpotBilling = boolean(v)
 		case "created_at":
 			worker.CreatedAt = i64(v)
 		}
@@ -2040,6 +2044,10 @@ func (r *WorkerRedisRepository) ScheduleContainerRequests(worker *types.Worker, 
 		for index := range queued {
 			queuedRequest := *queued[index].request
 			queuedRequest.Timestamp = scheduledAt
+			if pricing := queuedRequest.ProvisionedSpot; pricing != nil &&
+				(pricing.MachineID != current.MachineId || !current.ProvisionedSpotBilling) {
+				return ErrWorkerCapacityChanged
+			}
 			queuedRequest.AssignMachine(current.MachineId)
 			queuedRequest.EvictContainerIds = dependencies[queuedRequest.ContainerId]
 			queuedRequest.EvictDrainSeconds = drains[queuedRequest.ContainerId]

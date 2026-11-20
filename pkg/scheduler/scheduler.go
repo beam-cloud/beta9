@@ -67,7 +67,9 @@ type Scheduler struct {
 	// provisioner buys machines for pools with a provisioning block. Nil
 	// means no pool can buy. waitlist is the requests they buy for.
 	provisioner Provisioner
-	waitlist    *Waitlist
+	// spotBillableMicros is the managed compute markup applied to the purchase price.
+	spotBillableMicros func(int64) int64
+	waitlist           *Waitlist
 	// chains is scheduling.failover.chains converted to alsoServes, for
 	// pools that are loaded after startup. It goes with the old key.
 	chains chainMigration
@@ -221,6 +223,12 @@ func (s *Scheduler) SetProvisioner(p Provisioner) {
 	s.agentPoolMu.Lock()
 	defer s.agentPoolMu.Unlock()
 	s.provisioner = p
+}
+
+// SetSpotBillableMicros shares managed compute's tenant pricing with the
+// scheduler. The gateway sets it before the provisioner starts buying.
+func (s *Scheduler) SetSpotBillableMicros(price func(int64) int64) {
+	s.spotBillableMicros = price
 }
 
 func (s *Scheduler) EnsureAgentPool(workspaceID string, state *compute.PoolState) error {
@@ -757,6 +765,7 @@ func (s *Scheduler) ProcessBacklog() int {
 
 func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.ContainerRequest) *types.ContainerRequest {
 	workerRequest := request.Clone()
+	workerRequest.ProvisionedSpot = nil
 	s.attachLatestCheckpoint(workerRequest)
 	if canSkipCheckpoint(workerRequest) {
 		compatible := runtimeMatchesCheckpoint(workerRequest, workerRuntime(worker)) &&
@@ -785,7 +794,10 @@ func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.Co
 
 func (s *Scheduler) pushWorkerRequests(worker *types.Worker, requests []*types.ContainerRequest) error {
 	start := s.now()
-	err := s.workerRepo.ScheduleContainerRequests(worker, requests)
+	err := s.priceProvisionedSpot(worker, requests)
+	if err == nil {
+		err = s.workerRepo.ScheduleContainerRequests(worker, requests)
+	}
 	end := s.now()
 	for _, request := range requests {
 		s.recordContainerLifecycle(request, types.ContainerLifecycleSchedulerWorkerQueuePush, start, end, err == nil, map[string]string{

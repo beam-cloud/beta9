@@ -91,7 +91,10 @@ service WorkerRepositoryService {
       returns (RemoveContainerIpResponse) {}
 }
 
-message GetNextContainerRequestRequest { string worker_id = 1; }
+message GetNextContainerRequestRequest {
+  string worker_id = 1;
+  bool provisioned_spot_billing = 2;
+}
 
 message GetNextContainerRequestResponse {
   bool ok = 1;
@@ -99,6 +102,7 @@ message GetNextContainerRequestResponse {
   string error_msg = 3;
   string delivery_token = 4;
   string checkpoint_compatibility_key = 5;
+  ProvisionedSpotPricing provisioned_spot = 6;
 }
 
 message StreamWorkerEventsRequest {
@@ -254,6 +258,7 @@ message SetWorkerKeepAliveRequest {
   bool idle = 3;
   string checkpoint_compatibility_key = 4;
   uint32 cpu_tier_protocol = 5;
+  bool provisioned_spot_billing = 6;
 }
 
 message SetWorkerKeepAliveResponse {
@@ -707,4 +712,10 @@ message GetWorkerServiceProxyConfigResponse {
   int32 external_port = 4;
   // Whether its certificate is publicly trusted, so workers verify it.
   bool verify_tls = 5;
+}
+
+message ProvisionedSpotPricing {
+  string machine_id = 1;
+  uint32 gpu_count = 2;
+  int64 hourly_cost_micros = 3;
 }

@@ -447,8 +447,8 @@ func TestProvisionBuysTheCheapestMachineThatFits(t *testing.T) {
 	require.NoError(t, err)
 
 	// What the scheduler is told: the machine's ID, known before it boots,
-	// and the capacity that can be counted on.
-	require.Equal(t, scheduler.ProvisionedMachine{MachineID: got.MachineID, CPU: 20_000, Memory: 54_000, GPUCount: 1, Spot: true}, *got)
+	// the capacity that can be counted on, and the purchase rate.
+	require.Equal(t, scheduler.ProvisionedMachine{MachineID: got.MachineID, CPU: 20_000, Memory: 54_000, GPUCount: 1, Spot: true, HourlyMicros: 90 * microsPerCent}, *got)
 
 	// What the provider was asked for.
 	creates := w.verda.Creates()
@@ -1006,7 +1006,7 @@ func TestAMachineWhoseInstanceCouldNotBeRecordedIsBoughtAllTheSame(t *testing.T)
 	provider.beforeCreate = func(providers.CreateRequest) { resume = w.failWrites() }
 	bought, err := w.Provision(w.ctx, "spot-l40s", anyMachine)
 	require.NoError(t, err)
-	require.Equal(t, scheduler.ProvisionedMachine{MachineID: "machine-1", CPU: 20_000, Memory: 54_000, GPUCount: 1, Spot: true}, *bought)
+	require.Equal(t, scheduler.ProvisionedMachine{MachineID: "machine-1", CPU: 20_000, Memory: 54_000, GPUCount: 1, Spot: true, HourlyMicros: 100 * microsPerCent}, *bought)
 	require.Empty(t, w.record("machine-1").InstanceID)
 	require.True(t, w.control.mayJoin("machine-1"))
 

@@ -8,6 +8,7 @@ var (
 	// Worker keys
 	UsageMetricsWorkerContainerDuration = "container_duration_milliseconds"
 	UsageMetricsWorkerContainerCost     = "container_cost_cents"
+	UsageMetricsWorkerSpotDuration      = "spot_container_duration_milliseconds"
 
 	// Gateway keys
 	UsageMetricsManagedComputeReservationSeconds = "managed_compute_reservation_seconds"

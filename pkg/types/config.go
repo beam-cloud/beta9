@@ -53,6 +53,8 @@ func (c AppConfig) Validate() error {
 		}
 	}
 	switch {
+	case c.Monitoring.ProvisionedSpotBilling && c.Monitoring.MetricsCollector != string(MetricsCollectorOpenMeter):
+		return fmt.Errorf("monitoring.provisionedSpotBilling requires the OpenMeter metrics collector")
 	case c.Providers.MaxHourlyCents < 0:
 		return fmt.Errorf("providers.maxHourlyCents cannot be negative: leave it out for no cap")
 	case c.Providers.MaxDailyCents < 0:
@@ -1346,6 +1348,9 @@ var (
 )
 
 type MonitoringConfig struct {
+	// ProvisionedSpotBilling enables the Spot duration meter for new placements
+	// after the billing API can read it and workers report support.
+	ProvisionedSpotBilling   bool                    `key:"provisionedSpotBilling" json:"provisioned_spot_billing"`
 	MetricsCollector         string                  `key:"metricsCollector" json:"metrics_collector"`
 	Prometheus               PrometheusConfig        `key:"prometheus" json:"prometheus"`
 	OpenMeter                OpenMeterConfig         `key:"openmeter" json:"openmeter"`

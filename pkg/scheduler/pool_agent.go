@@ -760,4 +760,6 @@ type ProvisionedMachine struct {
 	GPUCount  uint32
 	// Spot is whether its provider may take it back.
 	Spot bool
+	// HourlyMicros is the full machine's provider price at purchase.
+	HourlyMicros int64
 }

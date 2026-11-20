@@ -239,6 +239,9 @@ func NewGateway() (*Gateway, error) {
 		},
 		Outcomes: gateway.market.outcomes,
 	})
+	scheduler.SetSpotBillableMicros(func(providerMicros int64) int64 {
+		return computesvc.BillableMicros(config.ManagedCompute, providerMicros)
+	})
 	scheduler.SetProvisioner(machineProvisioner)
 
 	gateway.ComputeService.Start(ctx)
