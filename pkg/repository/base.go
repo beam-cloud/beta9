@@ -72,9 +72,12 @@ type ContainerRepository interface {
 	UpdateContainerStatus(string, types.ContainerStatus, int64) error
 	RenewContainerLeases(ctx context.Context, workerId, workspaceId string, renewals []types.ContainerLeaseRenewal) []types.ContainerLease
 	MarkPendingContainerStoppingIfUnassigned(containerId string, expirySeconds int64, exitCode int) (bool, error)
+	SetContainerPending(containerId string, phase types.ContainerPendingPhase, reason types.ContainerPendingReason, since time.Time) (bool, error)
 	DeleteContainerState(containerId string) error
 	SetContainerRequestStatus(containerId string, status types.ContainerRequestStatus) error
 	GetContainerRequestStatus(containerId string) (types.ContainerRequestStatus, error)
+	SetContainerRequestFailure(containerId string, failure types.ContainerRequestFailure) error
+	GetContainerRequestFailure(containerId string) (*types.ContainerRequestFailure, error)
 	SetWorkerAddress(containerId string, addr string) error
 	GetWorkerAddress(ctx context.Context, containerId string) (string, error)
 	SetContainerAddressMap(containerId string, addressMap map[int32]string) error

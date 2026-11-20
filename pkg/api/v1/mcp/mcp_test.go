@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -118,6 +119,34 @@ func TestMCPReadinessCheck(t *testing.T) {
 
 // A request the deadline cut off before the app answered has no status: the
 // default 200 would read as a crash-looping app serving.
+func TestMCPNotReadySaysWhatAnAppWithNoContainerWaitsFor(t *testing.T) {
+	pending := &types.Pending{
+		Phase:         types.ContainerPendingWaitingForCapacity,
+		Reason:        types.ContainerPendingNoCapacity,
+		WaitedSeconds: 95,
+		Message:       types.ContainerPendingWaitingForCapacity.Message(types.ContainerPendingNoCapacity),
+	}
+
+	result := notReady("dep-1", "/health", 20*time.Second, nil, pending)
+	require.Equal(t, "NOT_READY", result["code"])
+	require.Equal(t, pending, result["pending"])
+	require.Equal(t, "/health gave no answer within 20s; no container runs yet. No capacity is available right now. Waiting for some.", result["error"])
+	encoded, err := json.Marshal(result["pending"])
+	require.NoError(t, err)
+	require.JSONEq(t, `{"phase":"waiting_for_capacity","reason":"no_capacity","waited_seconds":95,"message":"No capacity is available right now. Waiting for some."}`, string(encoded))
+
+	// An app that answered is explained by its answer.
+	result = notReady("dep-1", "/health", 20*time.Second, map[string]any{"status": 503, "body": "loading"}, nil)
+	require.NotContains(t, result, "pending")
+	require.NotContains(t, result, "error")
+	require.Equal(t, map[string]any{"status": 503, "body": "loading"}, result["health"])
+
+	// One that neither answered nor waits for a machine has logs to read.
+	result = notReady("dep-1", "/health", 20*time.Second, nil, nil)
+	require.NotContains(t, result, "pending")
+	require.Contains(t, result["error"], "read its logs")
+}
+
 func TestMCPCancelledResult(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

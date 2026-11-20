@@ -13,6 +13,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/scheduler"
 	taskdispatcher "github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -337,6 +338,56 @@ func TestStopTaskPersistsCancellationBeforeReleasingClaim(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, types.TaskStatusCancelled, backend.task.Status)
 			}
+		})
+	}
+}
+
+// A function's task that is stopped while its container still waits for a
+// worker takes the container's request with it: nothing goes on waiting for
+// a machine, and whoever waits with the container sees that it is gone. A
+// container that a worker has is left to its runner, which hears the
+// cancellation.
+func TestStopTaskWithdrawsAFunctionContainerThatNoWorkerHas(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		stubType  string
+		state     types.ContainerState
+		withdrawn bool
+	}{
+		{name: "waiting for a worker", stubType: types.StubTypeFunction, state: types.ContainerState{Status: types.ContainerStatusPending}, withdrawn: true},
+		{name: "a worker has it", stubType: types.StubTypeFunction, state: types.ContainerState{Status: types.ContainerStatusPending, WorkerId: "worker"}},
+		{name: "running", stubType: types.StubTypeFunction, state: types.ContainerState{Status: types.ContainerStatusRunning, WorkerId: "worker"}},
+		{name: "not a function's", stubType: types.StubTypeEndpointServe, state: types.ContainerState{Status: types.ContainerStatusPending}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			gws, _ := newTaskLifecycleGateway(t, "workspace-id")
+			ctx := restrictedTaskLifecycleContext("workspace-id")
+			backend := gws.backendRepo.(*taskLifecycleBackendRepo)
+			backend.task.Stub.Type = types.StubType(test.stubType)
+
+			var err error
+			gws.containerRepo = repository.NewContainerRedisRepository(gws.redisClient)
+			gws.scheduler, err = scheduler.NewScheduler(ctx, types.AppConfig{}, gws.redisClient, nil, nil, nil,
+				scheduler.WithComputeEvents(func(types.EventComputeSchema) {}))
+			require.NoError(t, err)
+
+			state := test.state
+			state.ContainerId, state.StubId, state.WorkspaceId = "container-id", "stub-id", "workspace-id"
+			require.NoError(t, gws.containerRepo.SetContainerState("container-id", &state))
+
+			authInfo, _ := auth.AuthInfoFromContext(ctx)
+			current := *backend.task
+			require.NoError(t, gws.stopTask(ctx, authInfo, &current))
+			require.Equal(t, types.TaskStatusCancelled, backend.task.Status)
+
+			stored, err := gws.containerRepo.GetContainerState("container-id")
+			if test.withdrawn {
+				notFound := &types.ErrContainerStateNotFound{}
+				require.True(t, notFound.From(err), "the container's state should be gone, got %+v, %v", stored, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.state.Status, stored.Status)
 		})
 	}
 }

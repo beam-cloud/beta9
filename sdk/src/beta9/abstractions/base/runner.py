@@ -170,6 +170,9 @@ class RunnerAbstraction(BaseAbstraction):
         self.image_available: bool = False
         self.files_synced: bool = False
         self.stub_created: bool = False
+        # What the stub was created from, kept so that it can be created
+        # again on a machine that is reserved for it later.
+        self.stub_request: Optional[GetOrCreateStubRequest] = None
         self.runtime_ready: bool = False
         self._runtime_prepare_lock = threading.Lock()
         self.object_id: str = ""
@@ -620,6 +623,7 @@ class RunnerAbstraction(BaseAbstraction):
                     )
                     if stub_response is None or not self._apply_stub_response(stub_response):
                         return False
+                    self.stub_request = stub_request
 
                 self.runtime_ready = True
                 return True

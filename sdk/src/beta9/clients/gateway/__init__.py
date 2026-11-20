@@ -273,6 +273,28 @@ class AttachToContainerResponse(betterproto.Message):
     output: str = betterproto.string_field(1)
     done: bool = betterproto.bool_field(2)
     exit_code: int = betterproto.int32_field(3)
+    pending: "ContainerPending" = betterproto.message_field(4)
+    """
+    Set on a response that says what the container waits for before it
+     runs. Such a response carries no output.
+    """
+
+
+@dataclass(eq=False, repr=False)
+class ContainerPending(betterproto.Message):
+    """What a container that has not started is waiting for."""
+
+    phase: str = betterproto.string_field(1)
+    """queued, provisioning, waiting_for_capacity or starting."""
+
+    reason: str = betterproto.string_field(2)
+    """
+    Why, when there is more to say: worker_starting, backup_worker_starting,
+     no_capacity, machine_busy or no_spare_capacity.
+    """
+
+    waited_seconds: int = betterproto.uint32_field(3)
+    """How long the container has been in this phase."""
 
 
 @dataclass(eq=False, repr=False)

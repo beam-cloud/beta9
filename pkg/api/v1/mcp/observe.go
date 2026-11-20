@@ -381,22 +381,36 @@ func (g *Group) waitDeployment(ctx context.Context, a *auth.AuthInfo, args toolA
 		}
 		select {
 		case <-ctx.Done():
-			result := map[string]any{
-				"deployment_id": d.ExternalId,
-				"ready":         false,
-				"path":          path,
-				"is_error":      true,
-				"code":          "NOT_READY",
-			}
-			if last != nil {
-				result["health"] = clipAnswer(last)
-			} else {
-				result["error"] = fmt.Sprintf("%s gave no answer within %s; the app may still be starting, so read its logs", path, wait)
-			}
-			return result, nil
+			return notReady(d.ExternalId, path, wait, last, g.gws.StubPending(d.Stub.ExternalId)), nil
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+// notReady is what wait_deployment says of an app that did not become ready
+// in time: its last answer, if it gave one, and what its containers wait
+// for, if none of them runs yet. An app with no container has no logs to
+// read, so that is what explains it.
+func notReady(deploymentID, path string, wait time.Duration, last map[string]any, pending *types.Pending) map[string]any {
+	result := map[string]any{
+		"deployment_id": deploymentID,
+		"ready":         false,
+		"path":          path,
+		"is_error":      true,
+		"code":          "NOT_READY",
+	}
+	if pending != nil {
+		result["pending"] = pending
+	}
+	switch {
+	case last != nil:
+		result["health"] = clipAnswer(last)
+	case pending != nil:
+		result["error"] = fmt.Sprintf("%s gave no answer within %s; no container runs yet. %s", path, wait, pending.Message)
+	default:
+		result["error"] = fmt.Sprintf("%s gave no answer within %s; the app may still be starting, so read its logs", path, wait)
+	}
+	return result
 }
 
 // healthAnswerMax bounds the body of a readiness answer that wait_deployment returns.

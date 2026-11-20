@@ -922,6 +922,102 @@ func TestMarkPendingContainerStoppingIfUnassigned(t *testing.T) {
 	}
 }
 
+func TestSetContainerPending(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	require.NoError(t, err)
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	since := time.Unix(1_700_000_000, 0)
+
+	for _, test := range []struct {
+		name   string
+		state  *types.ContainerState
+		stored bool
+		// phase is what the container says it waits for afterwards.
+		phase types.ContainerPendingPhase
+	}{
+		{
+			name:   "pending with no worker",
+			state:  &types.ContainerState{ContainerId: "waiting", Status: types.ContainerStatusPending, ScheduledAt: 5},
+			stored: true,
+			phase:  types.ContainerPendingProvisioning,
+		},
+		{
+			name:  "pending on a worker",
+			state: &types.ContainerState{ContainerId: "placed", Status: types.ContainerStatusPending, WorkerId: "worker-1"},
+			phase: types.ContainerPendingStarting,
+		},
+		{
+			name:  "running",
+			state: &types.ContainerState{ContainerId: "running", Status: types.ContainerStatusRunning, WorkerId: "worker-1"},
+		},
+		{
+			name:  "stopping",
+			state: &types.ContainerState{ContainerId: "stopping", Status: types.ContainerStatusStopping},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.NoError(t, repo.SetContainerState(test.state.ContainerId, test.state))
+			key := common.RedisKeys.SchedulerContainerState(test.state.ContainerId)
+			ttl := rdb.TTL(context.Background(), key).Val()
+
+			stored, err := repo.SetContainerPending(test.state.ContainerId, types.ContainerPendingProvisioning, types.ContainerPendingBackupWorkerStarting, since)
+			require.NoError(t, err)
+			require.Equal(t, test.stored, stored)
+
+			state, err := repo.GetContainerState(test.state.ContainerId)
+			require.NoError(t, err)
+			require.Equal(t, test.phase, state.PendingPhase)
+			if test.stored {
+				require.Equal(t, types.ContainerPendingBackupWorkerStarting, state.PendingReason)
+				require.Equal(t, since.Unix(), state.PendingSince)
+			} else {
+				require.Empty(t, state.PendingReason)
+				require.Empty(t, rdb.HGet(context.Background(), key, "pending_phase").Val(), "nothing is stored on a container that is not waiting for a worker")
+			}
+			require.Equal(t, ttl, rdb.TTL(context.Background(), key).Val(), "the state keeps the expiry it had")
+		})
+	}
+
+	t.Run("a container that is gone", func(t *testing.T) {
+		stored, err := repo.SetContainerPending("gone", types.ContainerPendingProvisioning, types.ContainerPendingWorkerStarting, since)
+		require.NoError(t, err)
+		require.False(t, stored)
+		require.Zero(t, rdb.Exists(context.Background(), common.RedisKeys.SchedulerContainerState("gone")).Val(), "no state is made for it")
+	})
+
+	t.Run("lists say the same as a single read", func(t *testing.T) {
+		require.NoError(t, repo.SetContainerState("listed", &types.ContainerState{
+			ContainerId: "listed", StubId: "stub-1", WorkspaceId: "workspace-1", Status: types.ContainerStatusPending, ScheduledAt: 7,
+		}))
+		states, err := repo.GetActiveContainersByWorkspaceId("workspace-1")
+		require.NoError(t, err)
+		require.Len(t, states, 1)
+		require.Equal(t, types.ContainerPendingQueued, states[0].PendingPhase)
+		require.EqualValues(t, 7, states[0].PendingSince)
+
+		_, err = repo.SetContainerPending("listed", types.ContainerPendingWaitingForCapacity, types.ContainerPendingNoCapacity, since)
+		require.NoError(t, err)
+		states, _, err = repo.GetContainersByStubId("stub-1")
+		require.NoError(t, err)
+		require.Len(t, states, 1)
+		require.Equal(t, types.ContainerPendingWaitingForCapacity, states[0].PendingPhase)
+		require.Equal(t, types.ContainerPendingNoCapacity, states[0].PendingReason)
+	})
+
+	t.Run("a container that is admitted again waits anew", func(t *testing.T) {
+		state := &types.ContainerState{ContainerId: "again", Status: types.ContainerStatusPending, ScheduledAt: 9}
+		require.NoError(t, repo.SetContainerState("again", state))
+		_, err := repo.SetContainerPending("again", types.ContainerPendingWaitingForCapacity, types.ContainerPendingNoCapacity, since)
+		require.NoError(t, err)
+
+		require.NoError(t, repo.SetContainerState("again", state))
+		read, err := repo.GetContainerState("again")
+		require.NoError(t, err)
+		require.Equal(t, types.ContainerPendingQueued, read.PendingPhase)
+		require.EqualValues(t, 9, read.PendingSince)
+	})
+}
+
 func TestBackendRoutesAreIndexedByMachine(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {

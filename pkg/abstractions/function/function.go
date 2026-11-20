@@ -151,6 +151,15 @@ func (fs *ContainerFunctionService) resumeInvocation(stubID, taskID string, stre
 	task := &FunctionTask{fs: fs, containerId: current.ContainerId, msg: &types.TaskMessage{
 		TaskId: taskID, StubId: stubID, WorkspaceName: authInfo.Workspace.Name,
 	}}
+	if current.Status == types.TaskStatusError {
+		// A task that ended because the scheduler gave up on its container
+		// never ran. Its caller is told why, for as long as that is kept.
+		if failure, err := fs.containerRepo.GetContainerRequestFailure(current.ContainerId); err == nil && failure != nil {
+			notScheduled := &abstractions.ContainerNotScheduledError{Failure: *failure}
+			abstractions.NotScheduled(stream, notScheduled)
+			return notScheduled
+		}
+	}
 	if current.Status.IsCompleted() {
 		count, err := fs.rdb.Exists(stream.Context(), common.RedisKeys.SchedulerWorkerAddress(current.ContainerId)).Result()
 		if err != nil {
@@ -249,6 +258,17 @@ func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.Functi
 		return stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Output: o.Msg})
 	}
 
+	// Until the container runs there is no output. The caller is told what
+	// the invocation waits for instead: a machine that is starting, or
+	// capacity that is not there yet.
+	pendingCallback := func(pending abstractions.ContainerPending) error {
+		return stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Pending: &pb.FunctionInvokePending{
+			Phase:         string(pending.Phase),
+			Reason:        string(pending.Reason),
+			WaitedSeconds: pending.WaitedSeconds(),
+		}})
+	}
+
 	exitCallback := func(exitCode int32) error {
 		current, err := fs.backendRepo.GetTask(stream.Context(), taskId)
 		if err != nil {
@@ -275,6 +295,7 @@ func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.Functi
 	containerStream, err := abstractions.NewContainerStream(abstractions.ContainerStreamOpts{
 		SendCallback:    sendCallback,
 		ExitCallback:    exitCallback,
+		PendingCallback: pendingCallback,
 		ContainerRepo:   fs.containerRepo,
 		Config:          fs.config,
 		Tailscale:       fs.tailscale,
@@ -294,7 +315,19 @@ func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.Functi
 	}
 	if err != nil && ctx.Err() == nil {
 		current, lookupErr := fs.backendRepo.GetTask(ctx, taskId)
-		if lookupErr == nil && (!current.Status.IsCompleted() || current.ContainerId != containerId) {
+		switch {
+		case lookupErr == nil && current.ContainerId != containerId:
+			return status.Error(codes.Unavailable, "function attempt is recovering")
+		case abstractions.NotScheduled(stream, err):
+			// The scheduler gave up on the task's container, and the task
+			// ends with it, whether or not it is marked so yet. The caller
+			// is told why instead of being sent to wait for a recovery.
+		case lookupErr == nil && current.Status == types.TaskStatusCancelled:
+			// The task was stopped, which is why its container is gone: for
+			// one that waited for a machine, before any had it. Nothing
+			// failed, and the caller is told so.
+			return status.Error(codes.Canceled, "the task was stopped")
+		case lookupErr == nil && !current.Status.IsCompleted():
 			return status.Error(codes.Unavailable, "function attempt is recovering")
 		}
 	}

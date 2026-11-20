@@ -324,7 +324,28 @@ func (g *TaskGroup) addStatsToTask(ctx context.Context, workspaceName string, ta
 		return err
 	}
 	task.Stats.ActiveContainers = uint32(len(activeContainers))
+	task.Pending = taskPending(task, activeContainers, time.Now())
 
+	return nil
+}
+
+// taskPending is what a task that has not started waits for, given its
+// stub's containers: what its own container waits for, if it was made with
+// one (a function call), and otherwise what the containers that could take
+// it wait for (an endpoint or a task queue). It is nil for a task that
+// started, and for one that waits for a container that runs.
+func taskPending(task *types.TaskWithRelated, containers []types.ContainerState, now time.Time) *types.Pending {
+	if task.Status != types.TaskStatusPending && task.Status != types.TaskStatusRetry {
+		return nil
+	}
+	if task.ContainerId == "" {
+		return types.PendingOf(containers, now)
+	}
+	for i := range containers {
+		if containers[i].ContainerId == task.ContainerId {
+			return containers[i].Pending(now)
+		}
+	}
 	return nil
 }
 

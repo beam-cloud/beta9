@@ -780,6 +780,9 @@ func (s *Scheduler) prepareWorkerRequest(worker *types.Worker, request *types.Co
 	}
 	workerRequest.ReservedCpu = s.cpuReservation(worker, workerRequest)
 	workerRequest.Timestamp = s.now()
+	// A request that comes back from this worker to wait again says what it
+	// waits for anew, and since when.
+	workerRequest.PendingReported = ""
 	return workerRequest
 }
 

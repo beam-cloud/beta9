@@ -28,6 +28,7 @@ _EXPORTS = {
     "Output": (".abstractions.output", "Output"),
     "RemoteExecutionError": (".exceptions", "RemoteExecutionError"),
     "ImageBuildError": (".exceptions", "ImageBuildError"),
+    "NoCapacityError": (".exceptions", "NoCapacityError"),
     "QueueDepthAutoscaler": (".type", "QueueDepthAutoscaler"),
     "ServingConfig": (".type", "ServingConfig"),
     "experimental": (".abstractions.experimental", None),

@@ -139,12 +139,16 @@ func (a *schedulingAttempt) grow() {
 		a.fail(types.ContainerSchedulingFailureProvisioningLimit)
 		return
 	case choice.pool == nil:
+		// No worker has room, none is on its way, and no pool can add one:
+		// the request waits for capacity that is not there to be had now.
+		a.waitsFor(types.ContainerPendingWaitingForCapacity, types.ContainerPendingNoCapacity)
 		a.askAgainLater("worker_provisioning_backoff")
 		return
 	case buyer(choice.pool.Controller) != nil:
 		// Such a pool buys for all the requests that wait for it together
 		// (see pool_buying.go).
 		s.joinWaitlist(a.request, choice.pool)
+		a.waitsForWorker(choice.pool, true)
 		a.askAgainLater("worker_provisioning_in_progress")
 		return
 	}
@@ -158,6 +162,8 @@ func (a *schedulingAttempt) grow() {
 		if !errors.Is(err, redislock.ErrNotObtained) {
 			requestLog(log.Error(), a.request).Err(err).Msg("unable to acquire worker provisioning lock")
 		}
+		// The lock is held for a worker that was asked for this container.
+		a.waitsForWorker(choice.pool, true)
 		a.askAgainLater("worker_provisioning_in_progress")
 		return
 	}
@@ -170,6 +176,7 @@ func (a *schedulingAttempt) grow() {
 	a.request.GrowAttempts[choice.pool.Name]++
 	reservationID := s.provisioning.addReservation(s, a.request, choice.pool, choice.size)
 	s.background(func() { s.addWorker(a.request, choice.pool, choice.size, reservationID) })
+	a.waitsForWorker(choice.pool, true)
 	a.requeueForWorkerWait()
 }
 

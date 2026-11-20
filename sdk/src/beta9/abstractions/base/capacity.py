@@ -5,13 +5,19 @@ When stub creation reports that no serverless pool supports the requested GPU
 (a guaranteed scheduling blackhole), this module lets the user launch
 on-demand hardware from a cloud provider offer and routes the workload onto
 it — or fails fast with an actionable error in headless environments.
+
+A call can also find, once it is made, that there is no machine for it now.
+What it does then is at the end of this module: it keeps waiting, gives up
+after as long as its caller allows, or has its caller reserve a machine.
 """
 
+import math
+import os
 import time
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Callable, List, Optional
 
 from ... import terminal
-from ...terminal import cli_name
+from ...channel import rpc_timeout
 from ...clients.gateway import (
     GetOrCreateStubRequest,
     GetOrCreateStubResponse,
@@ -20,6 +26,9 @@ from ...clients.gateway import (
     PoolConfig,
     PoolOffer,
 )
+from ...exceptions import NoCapacityError
+from ...pending import PROVISIONING, WAITING_FOR_CAPACITY, Wait, clock
+from ...terminal import cli_name
 
 if TYPE_CHECKING:
     from .runner import RunnerAbstraction
@@ -116,9 +125,11 @@ def offer_hardware_label(offer: PoolOffer, nodes: int = 1) -> str:
     return hardware
 
 
-def no_offers_error(gpu_label: str) -> None:
+def no_offers_error(gpu_label: str, pricing: str = "on_demand") -> None:
+    """Report that nothing is offered for a GPU; pricing is what was asked for (on_demand, spot, any)."""
+    kind = {"spot": "spot ", "any": ""}.get(pricing, "on-demand ")
     terminal.error(
-        f"No on-demand offers currently available for {gpu_label}.",
+        f"No {kind}offers currently available for {gpu_label}.",
         exit=False,
         hint=no_offers_hint(),
     )
@@ -294,12 +305,27 @@ def _run_interactive_capacity_flow(
     return response
 
 
+# How the machines of an offer are sold, as PoolConfig.pricing names it. On
+# demand is the default and is sent as nothing.
+PRICING_ON_DEMAND = ""
+PRICING_SPOT = "spot"
+PRICING_ANY = "any"
+
+
 def fetch_offers(
-    gateway_stub, gpus: List[str], limit: int = MAX_OFFER_CHOICES
+    gateway_stub,
+    gpus: List[str],
+    limit: int = MAX_OFFER_CHOICES,
+    pricing: str = PRICING_ON_DEMAND,
 ) -> Optional[List[PoolOffer]]:
-    """Fetch on-demand offers sorted by price; None indicates a fetch error."""
+    """
+    Fetch offers sorted by price; None indicates a fetch error. Offers are
+    on-demand unless pricing asks for spot machines, or for both ("any").
+    """
     with terminal.progress("Finding available hardware..."):
-        res = gateway_stub.list_pool_offers(ListPoolOffersRequest(pool=PoolConfig(gpu=gpus)))
+        res = gateway_stub.list_pool_offers(
+            ListPoolOffersRequest(pool=PoolConfig(gpu=gpus, pricing=pricing))
+        )
     if not res.ok:
         terminal.error(f"Failed to list hardware offers: {res.err_msg}", exit=False)
         return None
@@ -316,6 +342,8 @@ def _offer_columns(offer: PoolOffer) -> tuple:
     region = offer.region_display_name or offer.region or "any region"
     hardware = offer_hardware_label(offer)
     details = []
+    if offer.spot:
+        details.append("spot, can be taken back")
     if offer.cpu_millicores:
         details.append(f"{offer.cpu_millicores // 1000} vCPU")
     if offer.memory_mb:
@@ -368,6 +396,8 @@ def pool_config_for_offer(
         max_spend=max_spend,
         providers=[offer.provider] if offer.provider else [],
         offer_id=offer.id,
+        # A machine that is sold both ways is two offers with one ID.
+        pricing=PRICING_SPOT if offer.spot else PRICING_ON_DEMAND,
     )
 
 
@@ -497,3 +527,254 @@ def _find_pool(gateway_stub, pool_name: str):
         if pool.name == pool_name or pool.selector == pool_name:
             return pool
     return None
+
+
+# A call that waits for a machine
+#
+# Most calls that wait get a machine: one starts, and the call says so while
+# it does (see pending.py). The rest wait for capacity that is not there, for
+# as long as the scheduler keeps trying, which is many minutes. A caller who
+# would rather not wait that long can say so, and one at a terminal is asked.
+
+# How long a call goes without capacity before its caller is asked what to
+# do about it, or, where nobody can be asked, told what can be done.
+ASK_AFTER_S = 60.0
+
+_UNITS = {"s": 1, "m": 60, "h": 3600}
+
+
+def wait_limit_name() -> str:
+    """The environment variable that limits how long a call waits for a machine."""
+    from ...config import get_settings
+
+    return f"{get_settings().name.upper()}_CAPACITY_WAIT"
+
+
+def wait_limit() -> float:
+    """
+    The longest a call may go without a machine, in seconds, as the
+    environment sets it: a number of seconds, or a number with a unit (90s,
+    5m, 1h). Nothing, or 0, is no limit.
+    """
+    name = wait_limit_name()
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return 0.0
+    number, unit = (raw[:-1], _UNITS[raw[-1]]) if raw[-1] in _UNITS else (raw, 1)
+    try:
+        seconds = float(number) * unit
+    except ValueError:
+        seconds = math.nan
+    if not math.isfinite(seconds) or seconds < 0:
+        terminal.error(
+            f"{name}={raw} is not a length of time.",
+            hint="Use a number of seconds, or a number with a unit: 90, 90s, 5m.",
+            code="INVALID_CONFIG",
+        )
+    return seconds
+
+
+def runner_gpus(runner: "RunnerAbstraction") -> List[str]:
+    """The GPU types a workload asks for, in its order of preference."""
+    gpu = getattr(runner, "gpu", "") or ""
+    values = gpu if isinstance(gpu, (list, tuple)) else str(gpu).split(",")
+    names = [str(getattr(value, "value", value)).strip() for value in values]
+    return [name for name in names if name and name != "NO_GPU"]
+
+
+def capacity_label(gpus: List[str]) -> str:
+    """The capacity that was asked for: "A10G capacity", "A10G or T4 capacity", "capacity"."""
+    if not gpus:
+        return "capacity"
+    if len(gpus) == 1:
+        return f"{gpus[0]} capacity"
+    return f"{', '.join(gpus[:-1])} or {gpus[-1]} capacity"
+
+
+def _took(seconds: float) -> str:
+    if seconds < 120:
+        return f"{int(seconds)} seconds"
+    return f"{round(seconds / 60)} minutes"
+
+
+def _reserve_command(gateway_stub, gpus: List[str]) -> str:
+    """The command that reserves a machine with the first of these GPUs, and what it costs if that can be found out."""
+    command = f"`{cli_name()} machine reserve --gpu {gpus[0]}`"
+    try:
+        with rpc_timeout(5):
+            res = gateway_stub.list_pool_offers(
+                ListPoolOffersRequest(pool=PoolConfig(gpu=gpus[:1]))
+            )
+        cheapest = min((o.hourly_cost_micros for o in res.offers if res.ok), default=0)
+    except Exception:
+        # What a machine costs is a help, not something to fail for.
+        cheapest = 0
+    if cheapest > 0:
+        command += f" (from ${cheapest / 1_000_000:.2f}/hr)"
+    return command
+
+
+def _what_else(runner: "RunnerAbstraction", wait: Wait, gpus: List[str], price: bool = True) -> str:
+    """What a caller can do other than wait. With price, what a machine costs is looked up."""
+    cli = cli_name()
+    if wait.reason == "no_spare_capacity":
+        return (
+            "The Spot tier runs on capacity the other tiers leave spare. "
+            'cpu_tier="shared" or "performance" does not wait for it.'
+        )
+    if wait.reason == "machine_busy" or not gpus:
+        return ""
+    reserve = (
+        _reserve_command(runner.gateway_stub, gpus)
+        if price
+        else f"`{cli} machine reserve --gpu {gpus[0]}`"
+    )
+    if len(gpus) > 1:
+        more = "Add GPU types to the list"
+    else:
+        other = "A10G" if gpus[0] == "T4" else "T4"
+        more = f'List more than one GPU type (gpu=["{gpus[0]}", "{other}"])'
+    return f"{more} so that whichever has capacity is used, or reserve a machine: {reserve}."
+
+
+def gave_up(runner: "RunnerAbstraction", wait: Wait, price: bool = True) -> NoCapacityError:
+    """A call has gone without a machine for as long as it is allowed to: why, and what else there is."""
+    gpus = runner_gpus(runner)
+    took = _took(wait.seconds())
+    if wait.phase == WAITING_FOR_CAPACITY and wait.reason == "no_spare_capacity":
+        what = f"The Spot tier had no spare capacity for this call in {took}."
+    elif wait.phase == WAITING_FOR_CAPACITY and wait.reason == "machine_busy":
+        what = f"The machine this call is pinned to had no room for it in {took}."
+    elif wait.phase == WAITING_FOR_CAPACITY:
+        what = f"No {capacity_label(gpus)} became available in {took}."
+    elif wait.phase == PROVISIONING:
+        what = f"A machine for this call was still starting after {took}."
+    else:
+        what = f"This call was not placed on a machine in {took}."
+
+    hint = (
+        _what_else(runner, wait, gpus, price),
+        f"`{cli_name()} machine list` shows what can be reserved."
+        if wait.reason not in ("no_spare_capacity", "machine_busy")
+        else "",
+        f"{wait_limit_name()} limits the wait to {_took(wait.limit)}.",
+    )
+    return NoCapacityError(
+        f"{what} The call was cancelled.", hint=" ".join(part for part in hint if part)
+    )
+
+
+def still_waiting(runner: "RunnerAbstraction", wait: Wait) -> str:
+    """
+    One line for a call that has gone a while without capacity and keeps
+    waiting, where nobody can be asked: how long it will wait, and what can
+    be done instead.
+    """
+    gpus = runner_gpus(runner)
+    waited = clock(wait.without_capacity())
+    if wait.reason == "no_spare_capacity":
+        what = f"Still no spare capacity for the Spot tier after {waited}."
+    elif wait.reason == "machine_busy":
+        what = f"The machine this is pinned to has been full for {waited}."
+    else:
+        what = f"Still no {capacity_label(gpus)} after {waited}."
+
+    if wait.limit > 0:
+        keeps = f"The call waits until {clock(wait.limit)} ({wait_limit_name()})."
+    else:
+        keeps = f"The call keeps waiting; {wait_limit_name()}=<seconds> gives up sooner."
+    return "\n".join(
+        part for part in (f"{what} {keeps}", _what_else(runner, wait, gpus, False)) if part
+    )
+
+
+WAIT, RESERVE, CANCEL = "wait", "reserve", "cancel"
+
+
+def can_reserve(runner: "RunnerAbstraction", wait: Wait) -> bool:
+    """
+    Whether reserving a machine would get this call one: it asked for a GPU,
+    left it to the platform where to run, and there is no capacity for it.
+    """
+    return (
+        wait.reason == "no_capacity"
+        and bool(runner_gpus(runner))
+        and getattr(runner, "pool_config", None) is None
+        and getattr(runner, "stub_request", None) is not None
+    )
+
+
+def ask_while_waiting(runner: "RunnerAbstraction", wait: Wait) -> str:
+    """Ask a caller at a terminal what to do about a call there is no capacity for: WAIT, RESERVE or CANCEL."""
+    gpus = runner_gpus(runner)
+    waited = clock(wait.without_capacity())
+    if wait.reason == "no_spare_capacity":
+        terminal.warn(f"The Spot tier has had no spare capacity for {waited}.")
+    elif wait.reason == "machine_busy":
+        terminal.warn(f"The machine this is pinned to has been full for {waited}.")
+    else:
+        terminal.warn(
+            f"No {capacity_label(gpus)} has been available for {waited}. "
+            "This is a platform limit, not your code."
+        )
+    if advice := _what_else(runner, wait, gpus) if not can_reserve(runner, wait) else "":
+        terminal.detail(f"  {advice}")
+
+    options = [
+        terminal.SelectOption(
+            label="Keep waiting",
+            value=WAIT,
+            description="runs as soon as there is capacity",
+        )
+    ]
+    if can_reserve(runner, wait):
+        options.append(
+            terminal.SelectOption(
+                label="Reserve a machine",
+                value=RESERVE,
+                description="on demand, billed by the hour; runs this call on it",
+            )
+        )
+    options.append(
+        terminal.SelectOption(label="Cancel", value=CANCEL, description="the function does not run")
+    )
+    try:
+        return terminal.select("How do you want to proceed?", options)
+    except KeyboardInterrupt:
+        return CANCEL
+
+
+def reserve_while_waiting(
+    runner: "RunnerAbstraction", stop_call: Callable[[], None]
+) -> Optional[bool]:
+    """
+    Have the caller reserve a machine for a call that waits, and point the
+    workload at it. stop_call gives up the call that waits; it is called
+    once a machine is reserved, so that the call cannot run twice.
+
+    True when the machine is ready and the call can be made again, None when
+    nothing was reserved and the call still waits, False when a machine was
+    reserved and is not ready (which has been reported).
+    """
+    gpus = runner_gpus(runner)
+    response = _run_interactive_capacity_flow(
+        runner,
+        runner.stub_request,
+        gpus,
+        ", ".join(gpus),
+        announce=False,
+        wait_for_ready=False,
+    )
+    if response is None:
+        return None
+    if not response.ok:
+        # No machine was reserved, and why is reported. The call that waits
+        # is still the way to run.
+        runner._apply_stub_response(response)
+        runner.stub_request.pool = None
+        return None
+
+    stop_call()
+    if not runner._apply_stub_response(response):
+        return False
+    return wait_for_pool_ready(runner.gateway_stub, runner.pool_config.name)

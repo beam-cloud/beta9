@@ -296,6 +296,9 @@ def list_containers(
         for col in ordered_columns:
             if col == "uptime":
                 value = _format_uptime(container.started_at, now)
+            elif col == "status" and container.pending_phase:
+                # A container that has not started says what it waits for.
+                value = f"{container.status} ({container.pending_phase.replace('_', ' ')})"
             else:
                 value = getattr(container, col)
                 if isinstance(value, datetime.datetime):

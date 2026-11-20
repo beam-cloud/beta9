@@ -405,9 +405,35 @@ func (gws *GatewayService) stopTask(ctx context.Context, authInfo *auth.AuthInfo
 		}
 	}
 
+	// A function's container that no worker has yet has no runner to hear
+	// the cancellation either. Its request would go on waiting for a machine,
+	// and have one started, for a task that is over, and whoever waits with
+	// it would not hear that it will never run. So the request is withdrawn.
+	// A container that a worker has is left to its runner.
+	if task.Stub.Type.Kind() == types.StubTypeFunction && gws.containerUnassigned(task.ContainerId) {
+		err = gws.scheduler.Stop(&types.StopContainerArgs{
+			ContainerId: task.ContainerId,
+			Reason:      types.StopContainerReasonUser,
+			Force:       true,
+		})
+		if err != nil {
+			log.Error().Str("container_id", task.ContainerId).Err(err).Msg("failed to withdraw the container request of a stopped task")
+		}
+	}
+
 	if gws.eventRepo != nil {
 		gws.eventRepo.PushTaskCancelApplied(task, types.EventSourceGatewayStopTask, types.EventMessageGatewayTaskCancellationApplied)
 	}
 
 	return nil
+}
+
+// containerUnassigned reports whether the container is still waiting for a
+// worker: it has been asked for, and no worker has it.
+func (gws *GatewayService) containerUnassigned(containerId string) bool {
+	if containerId == "" || gws.containerRepo == nil || gws.scheduler == nil {
+		return false
+	}
+	state, err := gws.containerRepo.GetContainerState(containerId)
+	return err == nil && state != nil && state.Status == types.ContainerStatusPending && state.WorkerId == ""
 }

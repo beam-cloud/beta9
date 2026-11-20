@@ -81,10 +81,53 @@ letters and digits) for services to share as `${{secret.NAME}}`.
   `create_database` and the CLI refuse with the same message. Stop, show
   the user the link in the message (or `{{dashboard_url}}/settings/credits`),
   and continue when they confirm. Never loop on retries.
-- Capacity errors name the GPU that is not available now: offer another
-  type or a priority list.
 - Prefer scale-to-zero for anything not user-facing; say what a change
   costs in resources when you make it.
+
+## Waiting for a machine
+
+A workload is pending until its container runs. Its phase says what it
+waits for:
+
+| Phase | What it means | What to do |
+| --- | --- | --- |
+| `queued` | It is about to be placed on a machine. | Wait. |
+| `provisioning` | No warm machine had room, so one is starting. With reason `backup_worker_starting`, the preferred capacity was unavailable and a machine is starting on other capacity. | Wait: this takes minutes. |
+| `waiting_for_capacity` | No machine can be had right now. Reason `no_capacity`: none of the kind it asked for. `no_spare_capacity`: the Spot CPU tier runs only on capacity nothing else is using, and there is none. `machine_busy`: it is pinned to one machine, which is full. | Tell the user what it waits for and what else they can do (below). |
+| `starting` | A machine has it and is loading the image. | Wait. |
+
+Where to read it:
+
+- `get_task` returns `pending` for a task that has not started: `phase`,
+  `reason`, `waited_seconds` (in that phase) and `message`.
+- A `wait_deployment` that ends `NOT_READY` returns `pending` when no
+  container of the app runs yet. There are no logs to read until one does.
+- `{{cli}} container list` shows the phase beside the status, and a script
+  that calls a function prints it as it changes.
+
+When there is no capacity:
+
+- Nothing is wrong with the user's code. Do not edit it, and do not retry
+  in a loop: a workload keeps waiting on its own, and the scheduler gives
+  up on it after about 20 minutes. It then fails with code `CAPACITY`, and
+  the task's `failure_reason` says what there was none of.
+- Offer the user, in this order: a list of GPU types
+  (`gpu: ["A10G", "A100-40"]`: the first with capacity is used); for the
+  Spot CPU tier, the shared or performance tier; a reserved machine; or
+  trying later.
+- `{{cli}} machine list` shows what can be reserved, with the lowest
+  hourly price on demand and as spot. A spot machine costs less, and its
+  provider may take it back at any time.
+  `{{cli}} machine reserve --gpu A10G --ttl 2h --yes` reserves the cheapest
+  on-demand one (`--pricing spot` for a spot one) and prints the `pool` to
+  run on it. A reserved machine is billed by the hour whether or not
+  anything runs on it: ask first, and release it when done
+  (`{{cli}} machine release`).
+- To limit how long a function call in a script waits, set
+  `{{env}}_CAPACITY_WAIT` (`120`, `90s`, `5m`). A call that has no machine
+  after that long is cancelled and fails with code `CAPACITY`. In Python it
+  raises `NoCapacityError`, which a script can catch to run the call some
+  other way. Without it a call keeps waiting.
 
 ## Anything else
 
