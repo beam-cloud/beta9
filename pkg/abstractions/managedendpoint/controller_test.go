@@ -22,7 +22,6 @@ import (
 
 func TestInventoryPlacesInEligiblePoolsOnly(t *testing.T) {
 	s := newServiceForTest(t)
-	s.workers = repository.NewWorkerRedisRepositoryForTest(s.rdb)
 	s.appConfig.Worker.Pools = map[string]types.WorkerPoolConfig{
 		"gpu-a":   {GPUType: "H100", Locality: "us-east", ManagedEndpoints: types.WorkerPoolManagedEndpointsConfig{Enabled: true}},
 		"gpu-b":   {GPUType: "H100", ManagedEndpoints: types.WorkerPoolManagedEndpointsConfig{Enabled: true}},
@@ -82,7 +81,6 @@ func spotInventory(gpu string, grows []string, workers map[string]*inventoryWork
 func TestSpotInventoryIsTheReadyMachinesOfSpotPools(t *testing.T) {
 	const gpu, cpu, memory = "B200", 16_000, 640 * 1024
 	s := newServiceForTest(t)
-	s.workers = repository.NewWorkerRedisRepositoryForTest(s.rdb)
 	optIn := types.WorkerPoolManagedEndpointsConfig{Enabled: true}
 	s.appConfig.Worker.Pools = map[string]types.WorkerPoolConfig{
 		"spot-a":  {GPUType: gpu, Preemptable: true, ManagedEndpoints: optIn},
@@ -347,7 +345,6 @@ func TestFillReclaimsForHigherPriority(t *testing.T) {
 
 func TestInventoryCountsSchedulingReplicasAsTaken(t *testing.T) {
 	s := newServiceForTest(t)
-	s.workers = repository.NewWorkerRedisRepositoryForTest(s.rdb)
 	s.appConfig.Worker.Pools = map[string]types.WorkerPoolConfig{"gpu-a": {GPUType: "H100", ManagedEndpoints: types.WorkerPoolManagedEndpointsConfig{Enabled: true}}}
 	require.NoError(t, s.workers.AddWorker(&types.Worker{Id: "w1", PoolName: "gpu-a", Gpu: "H100", TotalGpuCount: 4, FreeGpuCount: 4, Status: types.WorkerStatusAvailable}))
 
@@ -738,28 +735,49 @@ func TestReplicaIsReplacedWhenItsPlacementMovesOnOrOffSpot(t *testing.T) {
 // A replica whose worker is gone is lost, though its container's record says
 // it runs. One that had served is replaced at once; one that had not backs
 // its endpoint off.
+// A machine that vanishes leaves its container's record behind; one taken
+// back with notice stops the container first. Either way the replica went
+// with its worker, which says nothing about the next one, even when this one
+// had yet to serve. A container that exits on a healthy worker is the
+// replica's own failure.
 func TestReplicaIsLostWithItsWorker(t *testing.T) {
-	for name, served := range map[string]bool{"after it served": true, "before it served": false} {
+	const gone, leaving, healthy = "", types.WorkerStatusDisabled, types.WorkerStatusAvailable
+	cases := map[string]struct {
+		worker  types.WorkerStatus
+		running bool
+		reason  string
+		backoff bool
+	}{
+		"its machine vanished":            {gone, true, reasonWorkerLost, false},
+		"its machine was taken back":      {leaving, false, reasonWorkerLost, false},
+		"its machine went as it exited":   {gone, false, reasonWorkerLost, false},
+		"it exited on a healthy machine":  {healthy, false, "container exited", true},
+		"it runs on a machine being left": {leaving, true, "", false},
+	}
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 			s := newFillService(t)
-			s.workers = repository.NewWorkerRedisRepositoryForTest(s.rdb)
 			endpoint := seedEndpoint(t, s)
 			replica := versionReplica(t, s, "lost", endpoint.Version, types.ReplicaStatusLoading)
-			replica.WorkerID = "absent-worker"
-			if served {
-				replica.Status, replica.ReadyAt = types.ReplicaStatusReady, time.Now()
-			}
+			replica.WorkerID, replica.StartedAt = "worker", time.Now().Add(-containerLostGrace-time.Second)
 			require.NoError(t, s.repo.SaveReplica(ctx, replica))
-			require.NoError(t, s.containers.SetContainerState(replica.ContainerID, &types.ContainerState{
-				ContainerId: replica.ContainerID, WorkerId: replica.WorkerID, Status: types.ContainerStatusRunning, Evictable: true,
-			}))
+			s.controller.startedAt = replica.StartedAt
+			if tc.worker != gone {
+				require.NoError(t, s.workers.AddWorker(&types.Worker{Id: replica.WorkerID, Status: tc.worker}))
+				require.NoError(t, s.workers.UpdateWorkerStatus(replica.WorkerID, tc.worker))
+			}
+			if tc.running {
+				require.NoError(t, s.containers.SetContainerState(replica.ContainerID, &types.ContainerState{
+					ContainerId: replica.ContainerID, WorkerId: replica.WorkerID, Status: types.ContainerStatusRunning, Evictable: true,
+				}))
+			}
 			updated, err := s.controller.observeReplica(ctx, replica)
 			require.NoError(t, err)
 			require.NotNil(t, updated)
-			assert.Equal(t, types.ReplicaStatusFailed, updated.Status)
-			assert.Equal(t, reasonWorkerLost, updated.StatusReason)
-			assert.Equal(t, !served, s.controller.inBackoff(ctx, endpoint.Spec.ID, replica.GPU))
+			assert.Equal(t, tc.reason, updated.StatusReason)
+			assert.Equal(t, tc.reason != "", updated.Status == types.ReplicaStatusFailed)
+			assert.Equal(t, tc.backoff, s.controller.inBackoff(ctx, endpoint.Spec.ID, replica.GPU))
 		})
 	}
 }
@@ -1033,7 +1051,6 @@ func TestFillLowersCapWhileAnotherMinimumWaits(t *testing.T) {
 
 func TestInventoryRejectsFragmentedGPUs(t *testing.T) {
 	s := newServiceForTest(t)
-	s.workers = repository.NewWorkerRedisRepositoryForTest(s.rdb)
 	s.appConfig.Worker.Pools = map[string]types.WorkerPoolConfig{"gpu-a": {GPUType: "H100", ManagedEndpoints: types.WorkerPoolManagedEndpointsConfig{Enabled: true}}}
 	for _, id := range []string{"w1", "w2"} {
 		require.NoError(t, s.workers.AddWorker(&types.Worker{Id: id, PoolName: "gpu-a", Gpu: "H100", TotalGpuCount: 1, FreeGpuCount: 1, Status: types.WorkerStatusAvailable}))

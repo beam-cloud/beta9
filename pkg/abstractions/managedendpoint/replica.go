@@ -96,6 +96,11 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 				return nil
 			}
 		}
+		// A machine that is taken back with notice stops its containers
+		// before it goes.
+		if left, err := c.workerLeft(replica.WorkerID); err == nil && left && replica.Alive() {
+			return c.finishReplica(ctx, replica, types.ReplicaStatusFailed, reasonWorkerLost)
+		}
 		return c.finishReplica(ctx, replica, c.exitStatus(replica), "container exited")
 	}
 	// A container's record outlives the machine it ran on by many minutes,
@@ -283,9 +288,24 @@ func probeFor(spec *types.ManagedEndpointSpec) types.ReplicaProbe {
 	return probe
 }
 
+// workerLeft reports whether a replica's worker is gone or on its way out:
+// its machine was taken back.
+func (c *controller) workerLeft(workerID string) (bool, error) {
+	if workerID == "" {
+		return false, nil
+	}
+	worker, err := c.s.workers.GetWorkerById(workerID)
+	var notFound *types.ErrWorkerNotFound
+	if errors.As(err, &notFound) {
+		return true, nil
+	}
+	return err == nil && worker != nil && worker.Status != types.WorkerStatusAvailable, err
+}
+
 // finishReplica records a terminal status. A replica that failed before it
 // ever served backs its endpoint off, as the next would likely fail the same
-// way. One that served and was then lost is replaced at once.
+// way. One that served and then failed, or that went with its machine, is
+// replaced at once.
 func (c *controller) finishReplica(ctx context.Context, replica *types.EndpointReplica, status types.ReplicaStatus, reason string) error {
 	replica.Status = status
 	replica.StatusReason = reason
@@ -294,7 +314,7 @@ func (c *controller) finishReplica(ctx context.Context, replica *types.EndpointR
 	c.metricsMu.Lock()
 	delete(c.lastMetrics, replica.ID)
 	c.metricsMu.Unlock()
-	if status == types.ReplicaStatusFailed && replica.ReadyAt.IsZero() {
+	if status == types.ReplicaStatusFailed && replica.ReadyAt.IsZero() && reason != reasonWorkerLost {
 		_ = c.s.repo.SetScheduleBackoff(ctx, replica.EndpointID, replica.GPU, c.s.config.Reconcile.FailureBackoff)
 	}
 	c.s.replicaEvent(replica, "replica."+string(status), reason, nil)
