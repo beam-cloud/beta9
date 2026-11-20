@@ -348,38 +348,45 @@ func TestRetireWaitsForCurrentReady(t *testing.T) {
 
 // Moving an endpoint to another GPU type is a replacement like any other: the
 // serving replica on the old type stays until the new type has one ready.
+// A placement that moves to another GPU type keeps serving on the old one
+// until the new one does, on Spot as on idle GPUs.
 func TestRetireKeepsServingReplicaAcrossGPUMove(t *testing.T) {
-	s := newServiceForTest(t)
-	endpoint := seedEndpoint(t, s)
-	ctx := context.Background()
-	onH100 := versionReplica(t, s, "h100", 1, types.ReplicaStatusReady)
-	onA100 := versionReplica(t, s, "a100", 1, types.ReplicaStatusLoading)
-	onA100.GPU = "A100-80"
-	require.NoError(t, s.repo.SaveReplica(ctx, onA100))
-	live := []*types.EndpointReplica{onH100, onA100}
-	fleet := seedFleet(t, s, map[string]types.FleetEndpoint{"acme/model": {Enabled: true, GPUs: map[string]types.FleetPlacement{"A100-80": {Priority: 1}}}})
+	for name, spot := range map[string]bool{"idle GPUs": false, "Spot": true} {
+		t.Run(name, func(t *testing.T) {
+			s := newServiceForTest(t)
+			endpoint := seedEndpoint(t, s)
+			ctx := context.Background()
+			onH100 := versionReplica(t, s, "h100", 1, types.ReplicaStatusReady)
+			onA100 := versionReplica(t, s, "a100", 1, types.ReplicaStatusLoading)
+			onH100.Spot, onA100.Spot, onA100.GPU = spot, spot, "A100-80"
+			require.NoError(t, s.repo.SaveReplica(ctx, onH100))
+			require.NoError(t, s.repo.SaveReplica(ctx, onA100))
+			live := []*types.EndpointReplica{onH100, onA100}
+			fleet := seedFleet(t, s, map[string]types.FleetEndpoint{"acme/model": {Enabled: true, GPUs: map[string]types.FleetPlacement{"A100-80": {Priority: 1, Spot: spot}}}})
 
-	s.controller.retire(ctx, endpoint, fleet, live, nil)
-	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, onH100.ID), "no A100 replica is ready yet")
+			s.controller.retire(ctx, endpoint, fleet, live, nil)
+			assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, onH100.ID), "no A100 replica is ready yet")
 
-	onA100.Status = types.ReplicaStatusReady
-	require.NoError(t, s.repo.SaveReplica(ctx, onA100))
-	s.controller.retire(ctx, endpoint, fleet, live, nil)
-	drained, err := s.repo.GetReplica(ctx, onH100.ID)
-	require.NoError(t, err)
-	assert.Equal(t, types.ReplicaStatusDraining, drained.Status)
-	assert.Equal(t, "removed from config.yaml", drained.StatusReason)
+			onA100.Status = types.ReplicaStatusReady
+			require.NoError(t, s.repo.SaveReplica(ctx, onA100))
+			s.controller.retire(ctx, endpoint, fleet, live, nil)
+			drained, err := s.repo.GetReplica(ctx, onH100.ID)
+			require.NoError(t, err)
+			assert.Equal(t, types.ReplicaStatusDraining, drained.Status)
+			assert.Equal(t, "removed from config.yaml", drained.StatusReason)
 
-	// An endpoint listed nowhere is drained outright.
-	gone := versionReplica(t, s, "gone", 1, types.ReplicaStatusReady)
-	s.controller.retire(ctx, endpoint, &types.Fleet{}, []*types.EndpointReplica{gone}, nil)
-	assert.Equal(t, types.ReplicaStatusDraining, statusOf(t, s, gone.ID))
+			// An endpoint listed nowhere is drained outright.
+			gone := versionReplica(t, s, "gone", 1, types.ReplicaStatusReady)
+			s.controller.retire(ctx, endpoint, &types.Fleet{}, []*types.EndpointReplica{gone}, nil)
+			assert.Equal(t, types.ReplicaStatusDraining, statusOf(t, s, gone.ID))
 
-	// A retired endpoint drains everything it still has.
-	endpoint.Status = types.EndpointStatusRetired
-	survivor := versionReplica(t, s, "survivor", 1, types.ReplicaStatusLoading)
-	s.controller.retire(ctx, endpoint, fleet, []*types.EndpointReplica{survivor}, nil)
-	assert.Equal(t, types.ReplicaStatusStopped, statusOf(t, s, survivor.ID))
+			// A retired endpoint drains everything it still has.
+			endpoint.Status = types.EndpointStatusRetired
+			survivor := versionReplica(t, s, "survivor", 1, types.ReplicaStatusLoading)
+			s.controller.retire(ctx, endpoint, fleet, []*types.EndpointReplica{survivor}, nil)
+			assert.Equal(t, types.ReplicaStatusStopped, statusOf(t, s, survivor.ID))
+		})
+	}
 }
 
 // noRoomInventory has an eligible H100 pool with nothing idle, so growth
