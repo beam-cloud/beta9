@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"net/http"
 	"slices"
 	"strconv"
@@ -274,7 +275,7 @@ func (r *githubRunners) setLimit(c echo.Context) error {
 			return err
 		}
 
-		if req.Limit == nil || *req.Limit < 0 {
+		if req.Limit == nil || *req.Limit < 0 || *req.Limit > math.MaxInt32 {
 			return echo.NewHTTPError(http.StatusBadRequest, "limit must be a number of runners, or 0 for any number")
 		}
 	}

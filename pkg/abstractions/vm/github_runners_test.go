@@ -2089,7 +2089,7 @@ func TestGitHubRunnerLimitOfAWorkspace(t *testing.T) {
 			require.Equal(t, http.StatusUnauthorized, code, body)
 		}
 	}
-	for _, body := range []string{``, `{}`, `{"limit":-1}`, `{"limit":"4"}`, `{"limit":4.5}`, `{"limit":4,"workspace":7}`} {
+	for _, body := range []string{``, `{}`, `{"limit":-1}`, `{"limit":2147483648}`, `{"limit":"4"}`, `{"limit":4.5}`, `{"limit":4,"workspace":7}`} {
 		code, answer := set(admin, http.MethodPut, body)
 		require.Equal(t, http.StatusBadRequest, code, "%s: %s", body, answer)
 	}
@@ -2546,8 +2546,16 @@ func TestGitHubRunnerWaitsForRoomInTheWorkspaceLimit(t *testing.T) {
 	require.Equal(t, runtime.requests[0], v.ContainerID)
 	require.Equal(t, types.VMStateStarting, v.Status)
 	require.Empty(t, v.Waiting)
+
+	// A gateway that stopped before it could say so left it queued with its
+	// runtime, which the next pass, of any gateway, finds starting.
+	v.Status, v.Waiting = types.VMStateQueued, "Workspace CPU limit reached"
+	require.NoError(t, store.SaveVM(ctx, v))
 	runtime.containers.states[v.ContainerID] = &types.ContainerState{ContainerId: v.ContainerID, Status: types.ContainerStatusPending, WorkerId: "worker"}
 	require.NoError(t, r.s.reconcileVM(ctx, v))
+	require.Equal(t, types.VMStateStarting, store.rows[v.ID].Status)
+	require.Empty(t, store.rows[v.ID].Waiting)
+	require.Len(t, runtime.requests, 1, "it is not started again")
 	require.Equal(t, "Starting a runner", runnerWaiting(*job, false, false))
 	require.Equal(t, types.VMStateRunning, v.DesiredState)
 

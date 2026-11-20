@@ -737,6 +737,15 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 	}
 
 	info.Token = token
+	// A queued VM that has a runtime was let in by a gateway that did not
+	// get to say so. It is starting, and waits for nothing.
+	if v.Status == types.VMStateQueued && v.ContainerID != "" {
+		v.Status, v.Waiting = types.VMStateStarting, ""
+		if err := s.repo.SaveVM(ctx, v); err != nil {
+			return err
+		}
+	}
+
 	pause := 30 * time.Second
 	if runner && queued(v) && v.Waiting != waitingCredits {
 		// Room in the workspace's limit comes at any moment, and to be
