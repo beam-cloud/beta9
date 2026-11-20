@@ -348,6 +348,13 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, app *types.Managed
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set(headerRequestID, rq.requestID)
 	req.Header.Set(headerEndpointID, app.Spec.ID)
+	// An engine closes connections that sit idle (uvicorn after 5s), and a
+	// request written to one as it closes fails without reaching the engine.
+	// An idempotency key lets the transport send it again on a new connection
+	// instead of reporting a failed replica; with no value it is not sent.
+	if _, ok := req.Header["Idempotency-Key"]; !ok {
+		req.Header["Idempotency-Key"] = nil
+	}
 	req.ContentLength = int64(len(rq.body))
 
 	sentAt := time.Now()

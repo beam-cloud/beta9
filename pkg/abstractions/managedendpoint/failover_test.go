@@ -168,6 +168,41 @@ func TestFailedReplicaIsReplacedAndSitsOut(t *testing.T) {
 	}
 }
 
+// closesIdle answers the first request on a connection and hangs up on the
+// next: an engine whose keep-alive ran out as the request was written.
+func closesIdle(body string) http.HandlerFunc {
+	var used sync.Map
+	return func(w http.ResponseWriter, req *http.Request) {
+		if _, reused := used.LoadOrStore(req.RemoteAddr, true); reused {
+			conn, _, _ := w.(http.Hijacker).Hijack()
+			_ = conn.Close()
+			return
+		}
+		respond("application/json", body)(w, req)
+	}
+}
+
+func TestClosedIdleConnectionIsNotAFailedReplica(t *testing.T) {
+	e := newEngines(t)
+	e.add("a", closesIdle(engineJSON))
+	e.add("b", closesIdle(engineJSON))
+	r := newRouter(e.s)
+	for i := range 4 {
+		name := fmt.Sprint("conversation-", i)
+		_, home := e.send(r, conversation(name, 1))
+		for turn := 2; turn <= 4; turn++ {
+			rec, replica := e.send(r, conversation(name, turn))
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			assert.Equal(t, home, replica, "turn %d stays with the conversation's cache", turn)
+		}
+	}
+	assert.Greater(t, e.hit("a")+e.hit("b"), int64(16), "some requests met a connection their engine had closed")
+	for _, id := range []string{"a", "b"} {
+		_, ejected := r.ejected.Load(id)
+		assert.False(t, ejected, "replica %s answers on a new connection", id)
+	}
+}
+
 // hangUp sends the stream's headers and, optionally, some events, then drops
 // the connection the way a lost machine's proxy does.
 func hangUp(events string) http.HandlerFunc {
