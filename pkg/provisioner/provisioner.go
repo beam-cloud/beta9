@@ -959,9 +959,7 @@ func (p purchase) candidates() []*candidate {
 }
 
 // running is what the machines that run have to say so far: what each was
-// bought as, and how long it has been had. What past purchases say to expect
-// of the next is learned from machines that ended. These have not, and the
-// longer one runs the more it says for what it was bought as.
+// bought as, and how long it has been had (see watch.Estimates.Having).
 func running(held []Machine, now time.Time) []watch.Outcome {
 	var outcomes []watch.Outcome
 	for _, machine := range held {
