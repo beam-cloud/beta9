@@ -57,11 +57,11 @@ type runnerStore struct {
 	limits map[uint]int
 }
 
-func (r *runnerStore) GetGitHubRunnerLimit(_ context.Context, ws uint) (*int, error) {
-	if limit, set := r.limits[ws]; set {
-		return &limit, nil
+func (r *runnerStore) GetGitHubRunnerLimit(_ context.Context, ws uint, limit int) (int, error) {
+	if set, ok := r.limits[ws]; ok {
+		limit = set
 	}
-	return nil, nil
+	return limit, nil
 }
 
 func (r *runnerStore) SetGitHubRunnerLimit(_ context.Context, ws uint, limit *int) error {
@@ -74,15 +74,6 @@ func (r *runnerStore) SetGitHubRunnerLimit(_ context.Context, ws uint, limit *in
 	}
 	r.limits[ws] = *limit
 	return nil
-}
-
-// most is how many runners a workspace may have, where allowed is how many
-// every workspace may.
-func (r *runnerStore) most(ws uint, allowed int) int {
-	if limit, set := r.limits[ws]; set {
-		return limit
-	}
-	return allowed
 }
 
 func (r *runnerStore) connected(id int64) bool {
@@ -386,7 +377,7 @@ func (r *runnerStore) ListDueGitHubRunnerJobs(ctx context.Context, limit int) ([
 	due := []types.GitHubRunnerJob{}
 	for _, job := range r.jobs {
 		running, _ := r.CountGitHubRunners(ctx, job.WorkspaceID)
-		limit := r.most(job.WorkspaceID, limit)
+		limit, _ := r.GetGitHubRunnerLimit(ctx, job.WorkspaceID, limit)
 		if r.due(job) && r.connected(job.InstallationID) && !r.installation.Paused && (limit <= 0 || running < limit) {
 			due = append(due, *job)
 		}
@@ -408,7 +399,7 @@ func (r *runnerStore) ClaimGitHubRunnerJob(ctx context.Context, job *types.GitHu
 			places++
 		}
 	}
-	if limit := r.most(stored.WorkspaceID, limit); limit > 0 && places >= limit {
+	if limit, _ := r.GetGitHubRunnerLimit(ctx, stored.WorkspaceID, limit); limit > 0 && places >= limit {
 		return false, nil
 	}
 
@@ -1886,22 +1877,15 @@ func TestGitHubRunnerCancelAll(t *testing.T) {
 // of them is taken for an action on a VM.
 func TestGitHubRunnerStopRoutes(t *testing.T) {
 	r, store, info, _ := runnerFixture(t)
-	s, caller := r.s, info
-	e := echo.New()
-	api := e.Group("/vm", func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error { return next(&auth.HttpAuthContext{Context: c, AuthInfo: caller}) }
-	})
-	registerVMRoutes(api, s)
-	require.NoError(t, s.initGitHubRunners(api))
-	s.runners.github = r.github
-	fakeGitHub(t, s.runners, map[string]string{"POST /repos/acme/repo/actions/runs/77/cancel": `202 {}`})
+	r, request := runnerRoutes(t, r)
+	fakeGitHub(t, r, map[string]string{"POST /repos/acme/repo/actions/runs/77/cancel": `202 {}`})
 	store.jobs[1] = queuedJob(1)
 	store.jobs[1].RunID = 77
 
 	other, restricted := *info, *info
 	other.Workspace = &types.Workspace{Id: 9, ExternalId: "another"}
 	restricted.Token = &types.Token{ExternalId: info.Token.ExternalId, TokenType: types.TokenTypeWorkspaceRestricted}
-	workspace := "/vm/github-runners/" + info.Workspace.ExternalId
+	workspace := info.Workspace.ExternalId
 	for _, route := range []struct {
 		method, path, body string
 		code               int
@@ -1910,22 +1894,41 @@ func TestGitHubRunnerStopRoutes(t *testing.T) {
 		{http.MethodPost, workspace + "/jobs/1/cancel", ``, 202},
 		{http.MethodPost, workspace + "/jobs/1/stop", ``, 409},
 		{http.MethodPost, workspace + "/cancel", `{}`, 200},
-		{http.MethodPost, "/vm/github-runners/self/cancel", `{}`, 200},
+		{http.MethodPost, "self/cancel", `{}`, 200},
 	} {
 		for _, as := range []struct {
 			info *auth.AuthInfo
 			code int
 		}{{info, route.code}, {&other, 401}, {&restricted, 401}} {
-			if as.info == &other && strings.Contains(route.path, "/self") {
+			if as.info == &other && strings.HasPrefix(route.path, "self") {
 				continue
 			}
-			caller = as.info
-			rec := httptest.NewRecorder()
-			e.ServeHTTP(rec, httptest.NewRequest(route.method, route.path, strings.NewReader(route.body)))
-			require.Equal(t, as.code, rec.Code, "%s %s: %s", route.method, route.path, rec.Body.String())
+			code, body := request(as.info, route.method, route.path, route.body)
+			require.Equal(t, as.code, code, "%s %s: %s", route.method, route.path, body)
 		}
 	}
 	require.True(t, store.installation.Paused)
+}
+
+// runnerRoutes serves the routes of a fixture's runners as the gateway does.
+// It returns the runners that answer them, and what they answer a caller.
+func runnerRoutes(t *testing.T, r *githubRunners) (*githubRunners, func(as *auth.AuthInfo, method, path, body string) (int, string)) {
+	t.Helper()
+	var caller *auth.AuthInfo
+	e := echo.New()
+	api := e.Group("/vm", func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error { return next(&auth.HttpAuthContext{Context: c, AuthInfo: caller}) }
+	})
+	registerVMRoutes(api, r.s)
+	require.NoError(t, r.s.initGitHubRunners(api))
+	r.s.runners.github, r.s.runners.config = r.github, r.config
+	return r.s.runners, func(as *auth.AuthInfo, method, path, body string) (int, string) {
+		t.Helper()
+		caller = as
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, httptest.NewRequest(method, "/vm/github-runners/"+path, strings.NewReader(body)))
+		return rec.Code, strings.TrimSpace(rec.Body.String())
+	}
 }
 
 // listedJobs returns what the jobs API says of each job, by its ID.
@@ -2039,26 +2042,8 @@ func TestGitHubRunnerLimit(t *testing.T) {
 func TestGitHubRunnerLimitOfAWorkspace(t *testing.T) {
 	r, store, info, runtime := runnerFixture(t)
 	ctx := context.Background()
-
-	// The routes as the gateway serves them, for whoever caller is.
-	caller := info
-	e := echo.New()
-	api := e.Group("/vm", func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error { return next(&auth.HttpAuthContext{Context: c, AuthInfo: caller}) }
-	})
-	registerVMRoutes(api, r.s)
-	require.NoError(t, r.s.initGitHubRunners(api))
-	r.s.runners.github, r.s.runners.config = r.github, r.config
-	r = r.s.runners
+	r, request := runnerRoutes(t, r)
 	r.config.RunnerLimit = 2
-	request := func(as *auth.AuthInfo, method, path, body string) (int, string) {
-		t.Helper()
-		caller = as
-		rec := httptest.NewRecorder()
-		e.ServeHTTP(rec, httptest.NewRequest(method, "/vm/github-runners/"+path, strings.NewReader(body)))
-		return rec.Code, strings.TrimSpace(rec.Body.String())
-	}
-
 	fakeGitHub(t, r, map[string]string{
 		"POST /repos/acme/repo/actions/runners/generate-jitconfig": `201 {"encoded_jit_config":"jit-secret"}`,
 	})
@@ -2120,11 +2105,7 @@ func TestGitHubRunnerLimitOfAWorkspace(t *testing.T) {
 	code, body = set(admin, http.MethodPut, `{"limit":4}`)
 	require.Equal(t, http.StatusOK, code)
 	require.Equal(t, `{"running":2,"limit":4}`, body)
-	select {
-	case <-r.wake:
-	default:
-		t.Fatal("the jobs that waited are not looked at until the next pass")
-	}
+	require.Len(t, r.wake, 1, "the jobs that waited are looked at now")
 	require.Equal(t, 4, provision())
 	require.Contains(t, status(), `"runners":{"running":4,"limit":4}`)
 	require.Zero(t, store.jobs[5].Attempts)
@@ -2754,6 +2735,11 @@ func TestGitHubRunnerWaitingForRoomGoesWithItsJob(t *testing.T) {
 			require.Empty(t, runtime.requests, "it never starts")
 			require.Nil(t, store.jobs[1].ProvisionAt, "no runner is started in its place")
 			require.Equal(t, []string{"GET /repos/acme/repo/actions/runners", "DELETE /repos/acme/repo/actions/runners/9"}, calls())
+
+			// It is gone at the next pass, and waits for nothing.
+			require.NoError(t, r.s.reconcileVM(ctx, v))
+			require.Equal(t, types.VMStateDeleted, v.Status)
+			require.Empty(t, v.Waiting)
 		})
 	}
 }

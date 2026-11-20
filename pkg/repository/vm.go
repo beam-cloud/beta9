@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
-	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -58,7 +57,7 @@ type VMRepository interface {
 	WaitGitHubRunnerJob(context.Context, int64, string, time.Time) error
 	MarkGitHubRunnerRegistered(context.Context, int64) error
 	CountGitHubRunners(context.Context, uint) (int, error)
-	GetGitHubRunnerLimit(context.Context, uint) (*int, error)
+	GetGitHubRunnerLimit(context.Context, uint, int) (int, error)
 	SetGitHubRunnerLimit(context.Context, uint, *int) error
 	GetGitHubRunner(context.Context, uint, string) (*types.GitHubRunner, error)
 	ObserveGitHubRunner(context.Context, uint, string, string, *time.Time) error
@@ -1060,61 +1059,26 @@ func (r *PostgresBackendRepository) RearmGitHubRunnerJobs(ctx context.Context, r
 // ListDueGitHubRunnerJobs returns the jobs of connected accounts that are due
 // for a runner, longest due first. The jobs of a paused account stay as they
 // are, so that they are due, in the same order, once it resumes. So do those
-// of a workspace that has as many runners as it may, until one of its
-// runners is gone. That is limit, or what is set for the workspace
-// (SetGitHubRunnerLimit), and zero or less allows any number.
+// of a workspace that has as many runners as it may (GetGitHubRunnerLimit),
+// until one of its runners is gone.
 //
-// The workspaces that have a limit of their own are asked for apart from the
-// others, each limit as a number. A limit that the statement looked up for
-// each workspace would be unknown to the planner, which then expects to
-// count a tenth of the VMs a workspace ever had, and where that is many,
-// compiles the statement each time it runs, for longer than it takes to run.
+// The workspaces of each limit are asked for together, with the limit as a
+// number. One that the statement looked up for each workspace would be
+// unknown to the planner, which then expects to count a tenth of the VMs a
+// workspace ever had, and where that is many, compiles the statement each
+// time it runs, for longer than it takes to run.
 func (r *PostgresBackendRepository) ListDueGitHubRunnerJobs(ctx context.Context, limit int) ([]types.GitHubRunnerJob, error) {
-	var set []struct {
-		WorkspaceID int64 `db:"workspace_id"`
-		Limit       int   `db:"runner_limit"`
-	}
-	if err := r.client.SelectContext(ctx, &set, `SELECT workspace_id, runner_limit FROM github_runner_limit;`); err != nil {
+	limits := []int{}
+	if err := r.client.SelectContext(ctx, &limits, `SELECT $1::int UNION SELECT runner_limit FROM github_runner_limit ORDER BY 1;`, limit); err != nil {
 		return nil, err
 	}
 
-	own, limits := pq.Int64Array{}, map[int]pq.Int64Array{}
-	for _, s := range set {
-		own = append(own, s.WorkspaceID)
-		limits[s.Limit] = append(limits[s.Limit], s.WorkspaceID)
-	}
-
-	jobs, err := r.listDueGitHubRunnerJobs(ctx, limit, own, false)
-	if err != nil || len(limits) == 0 {
-		return jobs, err
-	}
-
-	for _, most := range slices.Sorted(maps.Keys(limits)) {
-		more, err := r.listDueGitHubRunnerJobs(ctx, most, limits[most], true)
-		if err != nil {
-			return nil, err
-		}
-
-		jobs = append(jobs, more...)
-	}
-
-	slices.SortFunc(jobs, func(a, b types.GitHubRunnerJob) int {
-		return cmp.Or(a.ProvisionAt.Compare(*b.ProvisionAt), cmp.Compare(a.ID, b.ID))
-	})
-
-	return jobs[:min(len(jobs), 100)], nil
-}
-
-// listDueGitHubRunnerJobs returns the first hundred jobs that are due for a
-// runner in the workspaces that are among those given, or in all the others,
-// where each of them may have limit runners.
-func (r *PostgresBackendRepository) listDueGitHubRunnerJobs(ctx context.Context, limit int, workspaces pq.Int64Array, among bool) ([]types.GitHubRunnerJob, error) {
 	query := `
 	WITH due AS (
 		SELECT ` + githubRunnerJobColumns + `
 		FROM github_runner_job j
 		WHERE provision_at <= NOW()
-			AND (j.workspace_id = ANY($2::bigint[])) = $3
+			AND COALESCE((SELECT l.runner_limit FROM github_runner_limit l WHERE l.workspace_id = j.workspace_id), $2) = $1
 			AND EXISTS (
 				SELECT 1 FROM github_runner_installation i
 				WHERE i.id = j.installation_id AND i.workspace_id = j.workspace_id AND NOT i.paused
@@ -1129,11 +1093,19 @@ func (r *PostgresBackendRepository) listDueGitHubRunnerJobs(ctx context.Context,
 	`
 
 	jobs := []types.GitHubRunnerJob{}
-	if err := r.client.SelectContext(ctx, &jobs, query, limit, workspaces, among); err != nil {
-		return nil, err
+	for _, most := range limits {
+		page := []types.GitHubRunnerJob{}
+		if err := r.client.SelectContext(ctx, &page, query, most, limit); err != nil {
+			return nil, err
+		}
+
+		jobs = append(jobs, page...)
 	}
 
-	return jobs, nil
+	slices.SortFunc(jobs, func(a, b types.GitHubRunnerJob) int {
+		return cmp.Or(a.ProvisionAt.Compare(*b.ProvisionAt), cmp.Compare(a.ID, b.ID))
+	})
+	return jobs[:min(len(jobs), 100)], nil
 }
 
 // ClaimGitHubRunnerJob gives a due job to one caller, to start its runner.
@@ -1144,22 +1116,16 @@ func (r *PostgresBackendRepository) listDueGitHubRunnerJobs(ctx context.Context,
 // A job must still be on a connected and unpaused account at claim time.
 // Its previous runner must be gone before its VM name may be replaced.
 //
-// Nor is a job claimed that would be one runner too many for its workspace,
-// which may have limit of them, or what is set for it (SetGitHubRunnerLimit),
-// and any number if that is zero or less. The jobs of its account that have
-// been due longer count as runners too: however many gateways claim at once,
-// the jobs that have waited longest get the runners there is room for, and
-// no other job gets one. A job that is not claimed stays as it is, so it has
-// spent no attempt.
-//
-// What is set for the workspace is read first, and the claim is given it as
-// a number, for the planner's sake (see ListDueGitHubRunnerJobs).
+// Nor is a job claimed that would be one runner too many for its workspace
+// (GetGitHubRunnerLimit), which is read first, so that the claim has it as a
+// number, as the planner needs (see ListDueGitHubRunnerJobs). The jobs of
+// its account that have been due longer count as runners too: however many
+// gateways claim at once, the jobs that have waited longest get the runners
+// there is room for, and no other job gets one. A job that is not claimed
+// stays as it is, so it has spent no attempt.
 func (r *PostgresBackendRepository) ClaimGitHubRunnerJob(ctx context.Context, job *types.GitHubRunnerJob, vmName string, limit int) (bool, error) {
-	var set int
-	err := r.client.GetContext(ctx, &set, `SELECT runner_limit FROM github_runner_limit WHERE workspace_id = (SELECT workspace_id FROM github_runner_job WHERE id = $1);`, job.ID)
-	if err == nil {
-		limit = set
-	} else if !errors.Is(err, sql.ErrNoRows) {
+	limit, err := r.GetGitHubRunnerLimit(ctx, job.WorkspaceID, limit)
+	if err != nil {
 		return false, err
 	}
 
@@ -1246,26 +1212,19 @@ func (r *PostgresBackendRepository) CountGitHubRunners(ctx context.Context, work
 	return count, err
 }
 
-// GetGitHubRunnerLimit returns the most runners that is set for a workspace
-// to have at once, zero for any number, or nil if nothing is set for it,
-// which leaves it what the gateway allows every workspace.
-func (r *PostgresBackendRepository) GetGitHubRunnerLimit(ctx context.Context, workspaceId uint) (*int, error) {
-	var limit int
-	err := r.client.GetContext(ctx, &limit, `SELECT runner_limit FROM github_runner_limit WHERE workspace_id = $1;`, workspaceId)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	return &limit, nil
+// GetGitHubRunnerLimit returns the most runners a workspace has at once:
+// what is set for it (SetGitHubRunnerLimit), and limit where nothing is.
+// Zero or less is any number.
+func (r *PostgresBackendRepository) GetGitHubRunnerLimit(ctx context.Context, workspaceId uint, limit int) (int, error) {
+	query := `SELECT COALESCE((SELECT runner_limit FROM github_runner_limit WHERE workspace_id = $1), $2);`
+	err := r.client.GetContext(ctx, &limit, query, workspaceId, limit)
+	return limit, err
 }
 
 // SetGitHubRunnerLimit sets the most runners a workspace has at once, zero
-// for any number. With nil, the workspace has again what the gateway allows
-// every workspace. The runners that a workspace has beyond a lower limit
-// stay, and it gets no other until enough of them are gone.
+// for any number, or with nil what every workspace is allowed again. The
+// runners that a workspace has beyond a lower limit stay, and it gets no
+// other until enough of them are gone.
 func (r *PostgresBackendRepository) SetGitHubRunnerLimit(ctx context.Context, workspaceId uint, limit *int) error {
 	if limit == nil {
 		_, err := r.client.ExecContext(ctx, `DELETE FROM github_runner_limit WHERE workspace_id = $1;`, workspaceId)

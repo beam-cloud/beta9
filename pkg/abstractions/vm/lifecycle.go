@@ -46,14 +46,27 @@ func (s *Service) failed(ctx context.Context, v *types.VM, err error) {
 	}
 }
 
+// The code billing gives a workspace that has run out of credit.
+const insufficientCredits = "insufficient_credits"
+
 // queue records that a VM was refused a start for a reason that passes on
 // its own, and reports whether it was: its workspace runs as much as its
-// concurrency limit allows, or has no credit. Such a VM has not failed, and
-// is queued until it is let in (VMStateQueued). One that showed an error
-// between the times it asks, which is every pass, would look like one that
-// keeps crashing.
+// concurrency limit allows, or has run out of credit. Such a VM has not
+// failed, and is queued until it is let in (VMStateQueued). One that showed
+// an error between the times it asks, which is every pass, would look like
+// one that keeps crashing. A workspace that billing has blocked, or whose
+// credit could not be read, is told so by the error instead.
 func (s *Service) queue(ctx context.Context, v *types.VM, err error) bool {
-	waits := queuedFor(err)
+	var limit *types.ThrottledByConcurrencyLimitError
+	var credit *types.InsufficientCreditsError
+	waits := ""
+	switch {
+	case errors.As(err, &limit):
+		waits = waitingQuota
+	case errors.As(err, &credit) && (credit.Code == "" || credit.Code == insufficientCredits):
+		waits = waitingCredits
+	}
+
 	if waits == "" || v.ContainerID != "" {
 		return false
 	}
@@ -67,26 +80,6 @@ func (s *Service) queue(ctx context.Context, v *types.VM, err error) bool {
 
 	return true
 }
-
-// queuedFor says what a VM that was refused a start with err waits for, in
-// words a user is shown, or nothing if it is not a refusal that passes on
-// its own. A workspace that billing has blocked, or whose credit could not
-// be read, is told so by the error instead.
-func queuedFor(err error) string {
-	var limit *types.ThrottledByConcurrencyLimitError
-	var credit *types.InsufficientCreditsError
-	switch {
-	case errors.As(err, &limit):
-		return waitingQuota
-	case errors.As(err, &credit) && (credit.Code == "" || credit.Code == insufficientCredits):
-		return waitingCredits
-	}
-
-	return ""
-}
-
-// The code billing gives a workspace that has run out of credit.
-const insufficientCredits = "insufficient_credits"
 
 func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 	if v.StubID != "" {
@@ -181,8 +174,8 @@ func (s *Service) prepare(ctx context.Context, v *types.VM) error {
 	if !resp.Ok {
 		// The gateway asks billing before it makes a stub, and answers with
 		// the words of the scheduler's refusal, which is what this then is.
-		if reason, found := strings.CutPrefix(resp.ErrMsg, insufficientCredits); found && (reason == "" || strings.HasPrefix(reason, ": ")) {
-			return &types.InsufficientCreditsError{WorkspaceId: v.WorkspaceExternalID, Code: insufficientCredits, Reason: strings.TrimPrefix(reason, ": ")}
+		if code, reason, _ := strings.Cut(resp.ErrMsg, ": "); code == insufficientCredits {
+			return &types.InsufficientCreditsError{WorkspaceId: v.WorkspaceExternalID, Code: code, Reason: reason}
 		}
 
 		return fmt.Errorf("%s", resp.ErrMsg)
@@ -259,8 +252,7 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 	}
 
 	// A queued VM is starting once it is let in, and not each time it asks.
-	queued := v.Status == types.VMStateQueued
-	if !queued {
+	if v.Status != types.VMStateQueued {
 		v.Status = types.VMStateStarting
 	}
 
@@ -277,16 +269,12 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 				return saveErr
 			}
 		}
-
-		return err
-	}
-
-	if queued {
+	} else if v.Status == types.VMStateQueued {
 		v.Status, v.Waiting = types.VMStateStarting, ""
 		return s.repo.SaveVM(ctx, v)
 	}
 
-	return nil
+	return err
 }
 
 // Redis outages and finalization failures must never look like absent compute.
@@ -551,7 +539,7 @@ func (s *Service) acknowledgeExitCode(containerID string, code int) {
 // Persist the final root before recording the optional artifact. A replacement
 // gateway retries the same artifact identity if it died between these writes.
 func (s *Service) finishStop(ctx context.Context, v *types.VM) error {
-	v.Status = types.VMStateStopped
+	v.Status, v.Waiting = types.VMStateStopped, ""
 	if v.DesiredState == types.VMStatePaused {
 		v.Status = types.VMStatePaused
 	}

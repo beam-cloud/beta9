@@ -1664,9 +1664,7 @@ type GitHubRunnerConfig struct {
 	ImageID string `key:"imageID" json:"image_id"`
 	// RunnerLimit is the most runners a workspace has at once. The jobs past
 	// it stay queued on GitHub, and get theirs as runners finish, the jobs
-	// that have waited longest first. Zero or less sets no limit. A cluster
-	// administrator sets another number for one workspace with
-	// PUT /api/v1/vm/github-runners/:workspaceId/limit.
+	// that have waited longest first. Zero or less sets no limit.
 	RunnerLimit int `key:"runnerLimit" json:"runner_limit"`
 }
 
