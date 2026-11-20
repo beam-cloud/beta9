@@ -89,3 +89,41 @@ func TestEstimatesTellTheOffersOfAProviderApart(t *testing.T) {
 	require.Less(t, lostEvery(never), 0.25)
 	require.Greater(t, lostEvery(kept), 50.0)
 }
+
+// A machine that is kept has not ended, and the best do not for days. The
+// hours it has run so far count for what it was bought as all the same.
+func TestMachinesThatStillRunCountForTheHoursTheyHaveRun(t *testing.T) {
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	kept := Outcome{At: now, Provider: "nebius", Region: "eu-north1", Offer: "1gpu-h200", Spot: true}
+	taken := kept
+	taken.Region = "eu-west1"
+	estimates := Estimates{}
+	for range 4 {
+		estimates.Learn(taken.CameUp(2 * time.Minute))
+		estimates.Learn(taken.Ended(ResultInterrupted, 15*time.Minute))
+	}
+	estimates.Learn(kept.CameUp(2 * time.Minute))
+	rate := func(e Estimates, o Outcome) float64 {
+		_, _, rate := e.Of(o, now)
+		return rate
+	}
+
+	// By what has ended, the region that keeps its machine is one nobody
+	// has had a machine in for any time: lost as often as the other.
+	all := 5.0 / 21
+	require.InDelta(t, all, rate(estimates, kept), 1e-9)
+
+	// Its machine has run for a day, which says otherwise.
+	running := kept
+	running.Took = 24 * time.Hour
+	having := estimates.Having(running)
+	require.InDelta(t, (2*5.0/45)/26, rate(having, kept), 1e-9)
+	require.Less(t, rate(having, kept)*100, rate(having, taken))
+	require.InDelta(t, (4+2*5.0/45)/3, rate(having, taken), 1e-9)
+
+	// Nothing is learned by it: the machine has yet to end.
+	require.InDelta(t, all, rate(estimates, kept), 1e-9)
+	require.Equal(t, estimates, estimates.Having())
+	require.Equal(t, Estimates{"nebius//true": {Hours: 1, At: now}, "nebius//true/eu-north1//1gpu-h200": {Hours: 1, At: now}},
+		Estimates(nil).Having(Outcome{At: now, Provider: "nebius", Region: "eu-north1", Offer: "1gpu-h200", Spot: true, Took: time.Hour}))
+}

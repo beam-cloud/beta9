@@ -4047,6 +4047,17 @@ func TestAPoolSaysWhatToExpectOfItsMachines(t *testing.T) {
 	require.False(t, full.CanBuy)
 	require.InDelta(t, outlook.Taken, full.Taken, 1e-9)
 	require.InDelta(t, outlook.ComeUp.Minutes(), full.ComeUp.Minutes(), 1e-9)
+
+	// A machine that is kept has not ended, and says nothing to the market's
+	// history yet. The hours it has run count for its pool all the same.
+	for _, machine := range []Machine{first, second} {
+		w.workers.join(machine)
+		w.workers.work(machine, true)
+	}
+	w.every(time.Minute, 6*time.Hour)
+	kept := w.Expect(w.ctx, "spot-l40s", anyMachine)
+	require.False(t, kept.CanBuy)
+	require.Less(t, kept.Taken, full.Taken/4, "three were lost in an hour, and two have now run for six")
 }
 
 // readLog is a history that does something more once it has been read.

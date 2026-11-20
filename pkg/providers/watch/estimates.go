@@ -3,6 +3,7 @@ package watch
 import (
 	"cmp"
 	"fmt"
+	"maps"
 	"math"
 	"time"
 )
@@ -83,6 +84,27 @@ func (e Estimates) Learn(o Outcome) {
 		}
 		e[key] = estimate
 	}
+}
+
+// Having is the estimates with the hours that machines which have not ended
+// have been had so far: each of running says what its machine was bought as,
+// and in Took how long it has been had. A machine that is kept says so when
+// it ends, and the best are kept for days. Until then the offer that keeps
+// them would be taken for one that nobody has bought.
+func (e Estimates) Having(running ...Outcome) Estimates {
+	if len(running) == 0 {
+		return e
+	}
+	having := make(Estimates, len(e)+2*len(running))
+	maps.Copy(having, e)
+	for _, o := range running {
+		for _, key := range estimateKeys(o) {
+			estimate := having[key].at(o.At)
+			estimate.Hours += o.Took.Hours()
+			having[key] = estimate
+		}
+	}
+	return having
 }
 
 // Of is what to expect of a machine bought as o says: how long it takes to

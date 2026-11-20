@@ -265,7 +265,7 @@ func (p *Provisioner) Expect(ctx context.Context, pool string, needs ...schedule
 	offer, held, can := p.wouldBuy(ctx, pool, needs)
 	now := p.clock.Now()
 	p.mu.Lock()
-	estimates := p.estimates
+	estimates := p.estimates.Having(running(held, now)...)
 	p.mu.Unlock()
 	if can {
 		comeUp, taken := expect(estimates, offer, now, unknownBoot)
@@ -481,7 +481,7 @@ func (p *Provisioner) choose(pool string, needs []scheduler.MachineNeed, held []
 		held:       held,
 		limits:     p.limits,
 		spentToday: p.spentToday,
-		estimates:  p.estimates,
+		estimates:  p.estimates.Having(running(held, now)...),
 		now:        now,
 	}
 	// What to buy is worked out with none of this held: it takes a while.
@@ -955,6 +955,22 @@ func (p purchase) candidates() []*candidate {
 		candidates[i] = &candidate{Offer: offer, comeUp: comeUp, taken: taken}
 	}
 	return candidates
+}
+
+// running is what the machines that run have to say so far: what each was
+// bought as, and how long it has been had. What past purchases say to expect
+// of the next is learned from machines that ended. These have not, and the
+// longer one runs the more it says for what it was bought as.
+func running(held []Machine, now time.Time) []watch.Outcome {
+	var outcomes []watch.Outcome
+	for _, machine := range held {
+		if !machine.ReadyAt.IsZero() {
+			outcome := machine.outcome(now)
+			outcome.Took = now.Sub(machine.CreatedAt)
+			outcomes = append(outcomes, outcome)
+		}
+	}
+	return outcomes
 }
 
 // expect is what the machines bought before say to expect of one bought as
