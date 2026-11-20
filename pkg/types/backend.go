@@ -406,6 +406,7 @@ type TaskWithRelated struct {
 	} `db:"deployment" json:"deployment" serializer:"deployment"`
 	Outputs   []TaskOutput    `json:"outputs" serializer:"outputs"`
 	Stats     TaskStats       `json:"stats" serializer:"stats"`
+	Pending   *Pending        `json:"pending,omitempty" serializer:"pending,omitempty"` // What a task that has not started waits for, where that is known.
 	Result    json.RawMessage `json:"result" serializer:"result"`
 	Workspace Workspace       `db:"workspace" json:"workspace" serializer:"workspace"`
 	Stub      Stub            `db:"stub" json:"stub" serializer:"stub"`

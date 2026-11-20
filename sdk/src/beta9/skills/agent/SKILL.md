@@ -128,8 +128,18 @@ See [references/deploy.md](references/deploy.md#docker-compose-projects).
   the workspace has no prepaid credit; deploys and database creation are
   refused up front. Do not retry in a loop. Tell the user, give them the
   credits link from the message, and continue once they confirm.
-- Capacity errors name the GPU; offer a fallback type or a list, e.g.
-  `gpu: ["A10G", "A100-40"]`.
+- A workload that has not started says what it waits for: `get_task` and a
+  `wait_deployment` that timed out carry `pending`, and
+  `{{cli}} container list` shows it beside the status. `provisioning` means
+  no warm machine had room and one is starting, which takes minutes: keep
+  waiting. `waiting_for_capacity` means no machine can be had right now.
+- Code `CAPACITY`, or a task whose `failure_reason` says that no capacity
+  became available, is a platform limit and not a bug in the user's code.
+  Do not edit the code and do not retry in a loop. Tell the user, and offer
+  a list of GPU types (`gpu: ["A10G", "A100-40"]`: the first with capacity
+  is used), a reserved machine (`{{cli}} machine list`; it is billed by the
+  hour, so ask first), or trying later. See
+  [references/operate.md](references/operate.md#waiting-for-a-machine).
 - Roll back with `redeploy` and an older `deployment_id`; stop a bad version
   with `stop_deployment`. See [references/operate.md](references/operate.md).
 

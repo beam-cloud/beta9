@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -276,4 +277,79 @@ func TestContainerStateSettlePending(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestContainerStateSaysWhatItWaitsFor(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+
+	waiting := ContainerState{
+		Status:        ContainerStatusPending,
+		PendingPhase:  ContainerPendingWaitingForCapacity,
+		PendingReason: ContainerPendingNoSpareCapacity,
+		PendingSince:  now.Unix() - 75,
+	}
+	require.Equal(t, &Pending{
+		Phase:         ContainerPendingWaitingForCapacity,
+		Reason:        ContainerPendingNoSpareCapacity,
+		WaitedSeconds: 75,
+		Message:       "The Spot tier has no spare capacity right now. Waiting for some.",
+	}, waiting.Pending(now))
+
+	// When a worker took a container is not kept, so how long it has been
+	// starting is not said.
+	starting := ContainerState{Status: ContainerStatusPending, PendingPhase: ContainerPendingStarting}
+	require.Equal(t, &Pending{Phase: ContainerPendingStarting, Message: "Placed on a machine. The container is starting."}, starting.Pending(now))
+
+	// A clock that is behind the scheduler's does not make a wait negative.
+	ahead := ContainerState{Status: ContainerStatusPending, PendingPhase: ContainerPendingQueued, PendingSince: now.Unix() + 5}
+	require.Zero(t, ahead.Pending(now).WaitedSeconds)
+
+	for _, status := range []ContainerStatus{ContainerStatusRunning, ContainerStatusStopping} {
+		running := ContainerState{Status: status, PendingPhase: ContainerPendingProvisioning}
+		require.Nil(t, running.Pending(now), status)
+	}
+}
+
+func TestEveryPendingPhaseAndReasonHasAMessage(t *testing.T) {
+	for phase, reasons := range map[ContainerPendingPhase][]ContainerPendingReason{
+		ContainerPendingQueued:             {""},
+		ContainerPendingProvisioning:       {"", ContainerPendingWorkerStarting, ContainerPendingBackupWorkerStarting},
+		ContainerPendingWaitingForCapacity: {"", ContainerPendingNoCapacity, ContainerPendingMachineBusy, ContainerPendingNoSpareCapacity},
+		ContainerPendingStarting:           {""},
+	} {
+		for _, reason := range reasons {
+			require.NotEmpty(t, phase.Message(reason), "%s/%s", phase, reason)
+		}
+	}
+	require.NotEqual(t,
+		ContainerPendingProvisioning.Message(ContainerPendingWorkerStarting),
+		ContainerPendingProvisioning.Message(ContainerPendingBackupWorkerStarting))
+	require.Empty(t, ContainerPendingPhase("later").Message(""), "a phase this build does not know")
+}
+
+func TestPendingOfIsWhatTheContainerClosestToRunningWaitsFor(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	pending := func(phase ContainerPendingPhase, reason ContainerPendingReason, waited int64) ContainerState {
+		return ContainerState{Status: ContainerStatusPending, PendingPhase: phase, PendingReason: reason, PendingSince: now.Unix() - waited}
+	}
+	noCapacity := pending(ContainerPendingWaitingForCapacity, ContainerPendingNoCapacity, 300)
+	queued := pending(ContainerPendingQueued, "", 2)
+	provisioning := pending(ContainerPendingProvisioning, ContainerPendingWorkerStarting, 40)
+	provisioningLonger := pending(ContainerPendingProvisioning, ContainerPendingBackupWorkerStarting, 90)
+	starting := ContainerState{Status: ContainerStatusPending, PendingPhase: ContainerPendingStarting}
+	running := ContainerState{Status: ContainerStatusRunning}
+	stopping := ContainerState{Status: ContainerStatusStopping}
+
+	require.Nil(t, PendingOf(nil, now))
+	require.Nil(t, PendingOf([]ContainerState{stopping}, now), "a container that is going away is not on its way")
+	require.Nil(t, PendingOf([]ContainerState{noCapacity, running}, now), "work waits its turn on the container that runs")
+
+	require.Equal(t, ContainerPendingWaitingForCapacity, PendingOf([]ContainerState{noCapacity, stopping}, now).Phase)
+	require.Equal(t, ContainerPendingQueued, PendingOf([]ContainerState{noCapacity, queued}, now).Phase)
+	require.Equal(t, ContainerPendingProvisioning, PendingOf([]ContainerState{noCapacity, provisioning, queued}, now).Phase)
+	require.Equal(t, ContainerPendingStarting, PendingOf([]ContainerState{provisioning, starting, noCapacity}, now).Phase)
+
+	longest := PendingOf([]ContainerState{provisioning, provisioningLonger}, now)
+	require.Equal(t, ContainerPendingBackupWorkerStarting, longest.Reason)
+	require.EqualValues(t, 90, longest.WaitedSeconds)
 }

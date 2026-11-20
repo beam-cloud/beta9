@@ -34,7 +34,9 @@ func (g *Group) catalog() []mcpTool {
 			Name: "wait_deployment",
 			Description: "Verify HTTP application readiness on the exact revision. A container is ready once / answers " +
 				"below 500 (a 404 still means its server is up); a path you name, and an endpoint's default " +
-				"/health, must answer 2xx. On timeout, health is the app's last answer. TCP and portless " +
+				"/health, must answer 2xx. On timeout, health is the app's last answer, and `pending` says what " +
+				"an app with no running container waits for: `phase` provisioning (a machine is starting, " +
+				"keep waiting) or waiting_for_capacity (none to be had now). TCP and portless " +
 				"workloads require their protocol-specific check.",
 			Schema: schema(props{
 				"name":          str("App name"),
@@ -335,10 +337,14 @@ func (g *Group) catalog() []mcpTool {
 			Run: g.listTasks,
 		},
 		{
-			Name:        "get_task",
-			Description: "Status, results, artifacts and failure details of a task. Optionally wait up to 55 seconds.",
-			Schema:      schema(props{"task_id": str(""), "wait_seconds": integer(0)}, "task_id"),
-			Run:         g.getTask,
+			Name: "get_task",
+			Description: "Status, results, artifacts and failure details of a task. Optionally wait up to 55 seconds. " +
+				"A task that has not started says what it waits for in `pending`: `phase` is queued, provisioning " +
+				"(a machine is starting), waiting_for_capacity (none to be had now) or starting, with " +
+				"`waited_seconds` and a `message`. One that no capacity was found for ends as error, with why " +
+				"in `failure_reason`.",
+			Schema: schema(props{"task_id": str(""), "wait_seconds": integer(0)}, "task_id"),
+			Run:    g.getTask,
 		},
 		{
 			Name:        "stop_task",

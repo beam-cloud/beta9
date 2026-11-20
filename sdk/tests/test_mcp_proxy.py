@@ -1121,6 +1121,7 @@ def test_cli_path_prefers_the_running_entry_point(settings, monkeypatch, tmp_pat
 
 
 def test_skill_installs_rendered_for_cli_name(settings, tmp_path):
+    from beta9.abstractions.base import capacity
     from beta9.skills import install_skill
 
     target = install_skill(tmp_path / "skills")
@@ -1130,6 +1131,7 @@ def test_skill_installs_rendered_for_cli_name(settings, tmp_path):
     for text in rendered.values():
         for placeholder in (
             "{{cli}}",
+            "{{env}}",
             "{{product}}",
             "{{skill}}",
             "{{login_hint}}",
@@ -1138,6 +1140,10 @@ def test_skill_installs_rendered_for_cli_name(settings, tmp_path):
         ):
             assert placeholder not in text
     assert "`beta9 login`" in rendered["SKILL.md"]
+    # The setting that limits a wait for capacity is named as the SDK reads it.
+    assert f"`{capacity.wait_limit_name()}`" in " ".join(rendered["operate.md"].split())
+    assert "references/operate.md#waiting-for-a-machine" in rendered["SKILL.md"]
+    assert "## Waiting for a machine" in rendered["operate.md"]
     # Platform reference syntax survives rendering untouched.
     assert "${{db.<name>.DATABASE_URL}}" in rendered["SKILL.md"]
     assert {"deploy.md", "databases.md", "operate.md", "setup.md"} <= set(rendered)

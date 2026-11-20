@@ -22,6 +22,8 @@ def placeholders() -> Dict[str, str]:
     dashboard = settings.app_url_template.split("/app/")[0] if settings.app_url_template else ""
     return {
         "{{cli}}": settings.name.lower(),
+        # The prefix of the CLI's environment variables.
+        "{{env}}": settings.name.upper(),
         "{{product}}": settings.name,
         "{{skill}}": skill_name(),
         "{{dashboard_url}}": dashboard,

@@ -38,6 +38,7 @@ type Gateway interface {
 	SecretValue(ctx context.Context, workspace *types.Workspace, name string) (string, error)
 	DeploymentURL(d *types.DeploymentWithRelated) (string, error)
 	WorkspaceCredit(ctx context.Context, workspace *types.Workspace) *types.CreditStatus
+	StubPending(stubId string) *types.Pending
 }
 
 type Group struct {

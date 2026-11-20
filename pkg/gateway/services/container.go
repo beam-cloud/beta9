@@ -69,6 +69,17 @@ func (gws GatewayService) ListContainers(ctx context.Context, in *pb.ListContain
 	}, nil
 }
 
+// StubPending is what a stub none of whose containers has started waits
+// for. It is nil for a stub with a container that runs, for one with no
+// container on its way, and when that cannot be read.
+func (gws *GatewayService) StubPending(stubId string) *types.Pending {
+	containers, err := gws.containerRepo.GetActiveContainersByStubId(stubId)
+	if err != nil {
+		return nil
+	}
+	return types.PendingOf(containers, time.Now())
+}
+
 func firstContainerDetail(values ...string) string {
 	for _, value := range values {
 		if value != "" {

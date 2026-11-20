@@ -389,6 +389,97 @@ func (s *ContainerState) SettlePending() {
 	}
 }
 
+// Pending is what something that has not started waits for, as the API says
+// it: a container, or a task or an app whose containers have not started.
+type Pending struct {
+	Phase  ContainerPendingPhase  `json:"phase" serializer:"phase"`
+	Reason ContainerPendingReason `json:"reason,omitempty" serializer:"reason,omitempty"`
+	// WaitedSeconds is how long it has waited in this phase, for this
+	// reason.
+	WaitedSeconds int64 `json:"waited_seconds" serializer:"waited_seconds"`
+	// Message says the phase and reason in words.
+	Message string `json:"message" serializer:"message"`
+}
+
+// Pending is what the container waits for at a given time, or nil for one
+// that runs or is stopping. The state is one that was read from the store
+// (see SettlePending).
+func (s *ContainerState) Pending(now time.Time) *Pending {
+	if s.Status != ContainerStatusPending || s.PendingPhase == "" {
+		return nil
+	}
+	pending := &Pending{
+		Phase:   s.PendingPhase,
+		Reason:  s.PendingReason,
+		Message: s.PendingPhase.Message(s.PendingReason),
+	}
+	if s.PendingSince > 0 {
+		pending.WaitedSeconds = max(now.Unix()-s.PendingSince, 0)
+	}
+	return pending
+}
+
+// Message says what a container in this phase, for this reason, waits for.
+func (p ContainerPendingPhase) Message(reason ContainerPendingReason) string {
+	switch p {
+	case ContainerPendingQueued:
+		return "Waiting to be placed on a machine."
+	case ContainerPendingProvisioning:
+		if reason == ContainerPendingBackupWorkerStarting {
+			return "The preferred capacity is unavailable. A machine is starting on backup capacity."
+		}
+		return "No warm machine has room. One is starting."
+	case ContainerPendingWaitingForCapacity:
+		switch reason {
+		case ContainerPendingMachineBusy:
+			return "The machine this is pinned to is full. Waiting for room."
+		case ContainerPendingNoSpareCapacity:
+			return "The Spot tier has no spare capacity right now. Waiting for some."
+		}
+		return "No capacity is available right now. Waiting for some."
+	case ContainerPendingStarting:
+		return "Placed on a machine. The container is starting."
+	}
+	return ""
+}
+
+// pendingProgress orders the phases by how close a container in them is to
+// running.
+func pendingProgress(phase ContainerPendingPhase) int {
+	switch phase {
+	case ContainerPendingStarting:
+		return 3
+	case ContainerPendingProvisioning:
+		return 2
+	case ContainerPendingQueued:
+		return 1
+	}
+	return 0
+}
+
+// PendingOf is what work that any of these containers can take waits for:
+// nothing, if one of them runs, and otherwise what the container that is
+// closest to running waits for. Of two that are as close, it is the one
+// that has waited longer.
+func PendingOf(containers []ContainerState, now time.Time) *Pending {
+	var closest *Pending
+	for i := range containers {
+		if containers[i].Status == ContainerStatusRunning {
+			return nil
+		}
+		pending := containers[i].Pending(now)
+		if pending == nil {
+			continue
+		}
+		if closest == nil ||
+			pendingProgress(pending.Phase) > pendingProgress(closest.Phase) ||
+			(pending.Phase == closest.Phase && pending.WaitedSeconds > closest.WaitedSeconds) {
+			closest = pending
+		}
+	}
+	return closest
+}
+
 // ContainerLeaseRenewal is one container in a worker's routine status
 // heartbeat. RuntimeStarted says the worker has seen the container's process
 // start, so a state that is still PENDING becomes RUNNING.
