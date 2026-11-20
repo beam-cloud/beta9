@@ -169,6 +169,13 @@ func openNVIDIADevices(proc, dev string) ([]io.Closer, error) {
 
 // nvidiaMajor is the character device number of the driver's GPUs.
 func nvidiaMajor(devices string) (uint32, error) {
+	// Older drivers register as nvidia-frontend.
+	return charMajor(devices, "nvidia", "nvidia-frontend")
+}
+
+// charMajor is the character device number registered under one of names in
+// /proc/devices.
+func charMajor(devices string, names ...string) (uint32, error) {
 	data, err := os.ReadFile(devices)
 	if err != nil {
 		return 0, err
@@ -177,13 +184,12 @@ func nvidiaMajor(devices string) (uint32, error) {
 		if strings.HasPrefix(line, "Block") {
 			break
 		}
-		// Older drivers register as nvidia-frontend.
-		if fields := strings.Fields(line); len(fields) == 2 && (fields[1] == "nvidia" || fields[1] == "nvidia-frontend") {
+		if fields := strings.Fields(line); len(fields) == 2 && slices.Contains(names, fields[1]) {
 			major, err := strconv.ParseUint(fields[0], 10, 32)
 			return uint32(major), err
 		}
 	}
-	return 0, errors.New("the NVIDIA driver has registered no device number")
+	return 0, fmt.Errorf("the NVIDIA driver has registered no device number as %s", names[0])
 }
 
 // nvidiaMinor reads a GPU's device number from the driver's description of

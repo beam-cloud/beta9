@@ -103,6 +103,12 @@ type Spec struct {
 	// them in memory instead of reading them from the canvas, so that a
 	// paused VM resumes under a worker that has none.
 	KernelModules map[string]map[string][]byte `json:"kernel_modules,omitempty"`
+	// GPUDriver says the host shares the NVIDIA driver it has for the kernel
+	// it boots at GPUDriverDir. A guest whose root has that driver's
+	// libraries and no modules for the kernel takes it and loads it for the
+	// GPU the host plugs in. Any other root is left to load a driver of its
+	// own, as it was before the host had one to share.
+	GPUDriver bool `json:"gpu_driver,omitempty"`
 	// RootMetacopy has a change to a file's attributes copy the attributes
 	// to the root disk and leave its data in the image. The copy refers to
 	// the file by the image's inodes, so this is for a root disk that is
@@ -209,6 +215,21 @@ const (
 // GPUCheckpointPath is where the host puts NVIDIA's cuda-checkpoint in the
 // canvas of a VM that is given a GPU.
 const GPUCheckpointPath = CanvasDir + "/cuda-checkpoint"
+
+const (
+	// GPUDriverDir is where the host binds the NVIDIA driver built for its
+	// guest kernel into the canvas of a VM that is given a GPU and boots
+	// that kernel. The files are the host's, read-only, and too large to
+	// keep in guest memory as the module indexes are: a checkpoint takes a
+	// copy, which is what a restored guest is given here instead.
+	GPUDriverDir = CanvasDir + "/nvidia"
+	// GPUDriverModules, in GPUDriverDir, holds /lib/modules/<release> for
+	// each kernel release the driver was built for.
+	GPUDriverModules = "modules"
+	// GPUDriverFirmware, in GPUDriverDir, holds the firmware those modules
+	// ask the kernel for, as /lib/firmware would: nvidia/<driver version>.
+	GPUDriverFirmware = "firmware"
+)
 
 // A GPU's memory is copied at about 1 GiB/s in either direction. A driver
 // lets go of an idle device in under a second.

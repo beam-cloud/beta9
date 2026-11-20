@@ -80,6 +80,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             MICROVM_IMAGE=${{ needs.microvm.outputs.image }}
+            MICROVM_GPU_IMAGE=${{ needs.microvm.outputs.gpu_guest_image }}
 
   publish_worker_manifest:
     if: startsWith(github.ref, 'refs/tags/worker-') || inputs.app_version != ''

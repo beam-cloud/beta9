@@ -998,6 +998,168 @@ func TestBootingGuestGetsKernelModuleIndexesInItsSpec(t *testing.T) {
 	require.Nil(t, spec.KernelModules, "a restored guest has what it booted with")
 }
 
+// writeGPUDriver lays out an NVIDIA driver as a worker image has it beside
+// the guest kernel.
+func writeGPUDriver(t *testing.T, driver, version string) {
+	t.Helper()
+	for name, content := range map[string]string{
+		"modules/6.18.64/modules.dep":                   "video/nvidia.ko:\n",
+		"modules/6.18.64/video/nvidia.ko":               "module " + version,
+		"firmware/nvidia/" + version + "/gsp_ga10x.bin": "firmware " + version,
+	} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(driver, name)), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(driver, name), []byte(content), 0o644))
+	}
+}
+
+func TestGPUGuestIsOfferedTheWorkersDriver(t *testing.T) {
+	share := t.TempDir()
+	kernel := filepath.Join(share, "vmlinux")
+	require.Empty(t, microVMGPUDriver(kernel), "a kernel that came without a driver")
+	driver := filepath.Join(share, microVMGPUDriverDir)
+	require.NoError(t, os.MkdirAll(filepath.Join(driver, microvm.GPUDriverModules), 0o755))
+	require.Empty(t, microVMGPUDriver(kernel), "modules without the firmware they ask for")
+	writeGPUDriver(t, driver, "580.126.18")
+	require.Equal(t, driver, microVMGPUDriver(kernel))
+
+	guestInit := filepath.Join(t.TempDir(), "init")
+	require.NoError(t, os.WriteFile(guestInit, []byte("agent"), 0o755))
+	gpu := func() *microVMVFIO { return &microVMVFIO{paths: []string{"/sys/bus/pci/devices/0000:01:00.0"}} }
+	prepare := func(driver string, vfio *microVMVFIO, image map[string]string) (*microVMInstance, microvm.Spec) {
+		rt := &MicroVM{cfg: Config{MicroVMInitPath: guestInit}, gpuDriver: driver}
+		inst := &microVMInstance{canvas: t.TempDir(), vfio: vfio}
+		for name, content := range image {
+			require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(inst.canvas, name)), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(inst.canvas, name), []byte(content), 0o644))
+		}
+		t.Cleanup(func() {
+			for _, target := range inst.submounts {
+				require.NoError(t, unix.Unmount(target, unix.MNT_DETACH))
+			}
+		})
+		err := rt.prepareCanvas(inst, &specs.Spec{}, microvm.Network{}, microVMDisk{}, nil, "")
+		if errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES) {
+			t.Skip("requires privileged bind mounts")
+		}
+		require.NoError(t, err)
+		data, err := os.ReadFile(filepath.Join(inst.canvas, microvm.SpecFile))
+		require.NoError(t, err)
+		var spec microvm.Spec
+		require.NoError(t, json.Unmarshal(data, &spec))
+		return inst, spec
+	}
+
+	inst, spec := prepare(driver, gpu(), nil)
+	require.True(t, spec.GPUDriver)
+	require.Equal(t, driver, inst.gpuDriver, "what a checkpoint of this guest keeps")
+	shared := filepath.Join(inst.canvas, microvm.GPUDriverDir)
+	data, err := os.ReadFile(filepath.Join(shared, microvm.GPUDriverFirmware, "nvidia/580.126.18/gsp_ga10x.bin"))
+	require.NoError(t, err)
+	require.Equal(t, "firmware 580.126.18", string(data))
+	// Every guest of the worker shares these files.
+	require.ErrorIs(t, os.WriteFile(filepath.Join(shared, microvm.GPUDriverModules, "6.18.64/video/nvidia.ko"), []byte("another guest's"), 0o644), unix.EROFS)
+	require.ErrorIs(t, os.WriteFile(filepath.Join(shared, "added"), nil, 0o644), unix.EROFS)
+
+	for name, test := range map[string]struct {
+		driver string
+		vfio   *microVMVFIO
+		image  map[string]string
+	}{
+		"a guest without a GPU":          {driver: driver},
+		"a guest without devices":        {driver: driver, vfio: &microVMVFIO{}},
+		"an image with a kernel":         {driver: driver, vfio: gpu(), image: map[string]string{MicroVMImageKernelPath: "kernel"}},
+		"a worker that came without one": {vfio: gpu()},
+	} {
+		inst, spec := prepare(test.driver, test.vfio, test.image)
+		require.False(t, spec.GPUDriver, name)
+		require.Empty(t, inst.gpuDriver, name)
+		require.NoDirExists(t, filepath.Join(inst.canvas, microvm.GPUDriverDir), name)
+	}
+}
+
+// A guest's kernel keeps the driver it loaded for as long as it lives, on
+// whichever worker that is, and asks for that driver's firmware whenever a
+// GPU returns.
+func TestCheckpointKeepsTheGPUDriverItsGuestWasOffered(t *testing.T) {
+	booted, upgraded := filepath.Join(t.TempDir(), "nvidia"), filepath.Join(t.TempDir(), "nvidia")
+	writeGPUDriver(t, booted, "580.126.18")
+	writeGPUDriver(t, upgraded, "595.99.02")
+	// A link is not what it names: whoever reads the copy would follow it.
+	require.NoError(t, os.Symlink("/etc", filepath.Join(booted, "firmware/nvidia/linked")))
+	guestInit := filepath.Join(t.TempDir(), "init")
+	require.NoError(t, os.WriteFile(guestInit, []byte("agent"), 0o755))
+	checkpoint := func() string {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, checkpointInitFile), []byte("agent"), 0o755))
+		return dir
+	}
+	firmware := func(driver string) string {
+		t.Helper()
+		versions, err := os.ReadDir(filepath.Join(driver, microvm.GPUDriverFirmware, "nvidia"))
+		require.NoError(t, err)
+		require.Len(t, versions, 1, "only the driver the guest loaded")
+		data, err := os.ReadFile(filepath.Join(driver, microvm.GPUDriverFirmware, "nvidia", versions[0].Name(), "gsp_ga10x.bin"))
+		require.NoError(t, err)
+		return string(data)
+	}
+
+	first := checkpoint()
+	kept := filepath.Join(first, checkpointGPUDriverDir)
+	require.NoError(t, os.MkdirAll(filepath.Join(kept, "left-by-an-earlier-checkpoint"), 0o755))
+	require.NoError(t, keepGPUDriver(booted, kept))
+	require.Equal(t, "firmware 580.126.18", firmware(kept))
+	require.NoDirExists(t, filepath.Join(kept, "left-by-an-earlier-checkpoint"))
+	data, err := os.ReadFile(filepath.Join(kept, microvm.GPUDriverModules, "6.18.64/video/nvidia.ko"))
+	require.NoError(t, err)
+	require.Equal(t, "module 580.126.18", string(data))
+
+	// The worker that resumes the guest has another driver, or none.
+	restore := func(from, workers string) (*microVMInstance, error) {
+		rt := &MicroVM{cfg: Config{MicroVMInitPath: guestInit}, gpuDriver: workers}
+		inst := &microVMInstance{canvas: t.TempDir(), vfio: &microVMVFIO{paths: []string{"/sys/bus/pci/devices/0000:01:00.0"}}}
+		t.Cleanup(func() {
+			for _, target := range inst.submounts {
+				require.NoError(t, unix.Unmount(target, unix.MNT_DETACH))
+			}
+		})
+		return inst, rt.prepareCanvas(inst, &specs.Spec{}, microvm.Network{}, microVMDisk{}, nil, from)
+	}
+	for _, workers := range []string{upgraded, ""} {
+		inst, err := restore(first, workers)
+		if errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES) {
+			t.Skip("requires privileged bind mounts")
+		}
+		require.NoError(t, err)
+		require.Equal(t, kept, inst.gpuDriver)
+		shared := filepath.Join(inst.canvas, microvm.GPUDriverDir)
+		require.Equal(t, "firmware 580.126.18", firmware(shared))
+		require.ErrorIs(t, os.WriteFile(filepath.Join(shared, "added"), nil, 0o644), unix.EROFS)
+
+		// Paused again, to the same place and to another.
+		require.NoError(t, keepGPUDriver(inst.gpuDriver, kept))
+		require.Equal(t, "firmware 580.126.18", firmware(kept))
+		second := filepath.Join(checkpoint(), checkpointGPUDriverDir)
+		require.NoError(t, keepGPUDriver(inst.gpuDriver, second))
+		require.Equal(t, "firmware 580.126.18", firmware(second))
+	}
+
+	// A guest that was offered no driver is not given one it never loaded.
+	without := checkpoint()
+	inst, err := restore(without, upgraded)
+	require.NoError(t, err)
+	require.Empty(t, inst.gpuDriver)
+	require.NoDirExists(t, filepath.Join(inst.canvas, microvm.GPUDriverDir))
+	stale := filepath.Join(without, checkpointGPUDriverDir)
+	writeGPUDriver(t, stale, "570.86.16")
+	require.NoError(t, keepGPUDriver(inst.gpuDriver, stale))
+	require.NoDirExists(t, stale)
+
+	// What is shared with a guest is a directory of the checkpoint's.
+	require.NoError(t, os.Symlink("/etc", stale))
+	_, err = restore(without, upgraded)
+	require.ErrorContains(t, err, "is not a directory")
+}
+
 func TestLinkLocalFromMAC(t *testing.T) {
 	mac, _ := net.ParseMAC("de:f0:d8:b8:88:fb")
 	require.Equal(t, "fe80::dcf0:d8ff:feb8:88fb", linkLocalFromMAC(mac).String())

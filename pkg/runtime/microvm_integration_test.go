@@ -606,26 +606,9 @@ func bridgeHTTPServer(t *testing.T) (port int) {
 
 // --- tests -------------------------------------------------------------------------------
 
-func TestMicroVMGPU(t *testing.T) {
-	devices := os.Getenv("MICROVM_TEST_VFIO_DEVICES")
-	if devices == "" {
-		t.Skip("set MICROVM_TEST_VFIO_DEVICES and export a GPU guest as gpu.tar")
-	}
-	rt := requireMicroVMEnv(t)
-	rt.cfg.MicroVMVFIODevices = strings.Split(devices, ",")
-	for boot := range 2 {
-		vm := newTestVM(t, rt, vmOptions{image: "gpu", goproc: true, memoryMiB: 8192, cpuCores: 4, annotations: map[string]string{MicroVMGPUCountAnnotation: "1"}})
-		vm.start()
-		client := vm.goprocClient(90 * time.Second)
-		code, output := vm.sh(client, `set -eux
-exec 2>&1
-mkdir -p /dev/char
-modprobe -v nvidia
-modprobe -v nvidia_uvm
-nvidia-modprobe -c 0 -c 255
-nvidia-modprobe -u -c 0
-nvidia-smi
-python3 - <<'PY'
+// testCUDAKernel has a kernel write to GPU memory and reads back what it
+// wrote, with nothing but the driver's own library.
+const testCUDAKernel = `python3 - <<'PY'
 import ctypes as c
 cuda = c.CDLL("libcuda.so.1")
 def call(name, types, *args):
@@ -664,7 +647,28 @@ call("cuMemFree_v2", [c.c_uint64], device)
 call("cuModuleUnload", [ptr], module)
 call("cuDevicePrimaryCtxRelease_v2", [c.c_int], 0)
 print("CUDA_KERNEL_OK")
-PY`)
+PY`
+
+func TestMicroVMGPU(t *testing.T) {
+	devices := os.Getenv("MICROVM_TEST_VFIO_DEVICES")
+	if devices == "" {
+		t.Skip("set MICROVM_TEST_VFIO_DEVICES and export a GPU guest as gpu.tar")
+	}
+	rt := requireMicroVMEnv(t)
+	rt.cfg.MicroVMVFIODevices = strings.Split(devices, ",")
+	for boot := range 2 {
+		vm := newTestVM(t, rt, vmOptions{image: "gpu", goproc: true, memoryMiB: 8192, cpuCores: 4, annotations: map[string]string{MicroVMGPUCountAnnotation: "1"}})
+		vm.start()
+		client := vm.goprocClient(90 * time.Second)
+		code, output := vm.sh(client, `set -eux
+exec 2>&1
+mkdir -p /dev/char
+modprobe -v nvidia
+modprobe -v nvidia_uvm
+nvidia-modprobe -c 0 -c 255
+nvidia-modprobe -u -c 0
+nvidia-smi
+`+testCUDAKernel)
 		require.Zero(t, code, "%s\n%s", output, vm.output.String())
 		require.Contains(t, output, "CUDA_KERNEL_OK", "a headless VM must execute GPU kernels")
 		code, output = vm.sh(client, `set -eu
@@ -717,6 +721,106 @@ echo GPU_SMOKE_OK`)
 		res := vm.wait(90 * time.Second)
 		require.NoError(t, res.err, vm.output.String())
 	}
+}
+
+// An image that brings the NVIDIA libraries and nothing of a kernel's is
+// given the worker's driver for the kernel the worker boots: init has loaded
+// it and named its devices before a command runs. A worker with another
+// driver, or none, resumes the guest with the driver it booted with.
+func TestMicroVMGPUHostDriver(t *testing.T) {
+	devices := os.Getenv("MICROVM_TEST_VFIO_DEVICES")
+	if devices == "" {
+		t.Skip("set MICROVM_TEST_VFIO_DEVICES and export a GPU guest as gpu.tar")
+	}
+	rt := requireMicroVMEnv(t)
+	rt.cfg.MicroVMVFIODevices = strings.Split(devices, ",")
+	require.NotEmpty(t, rt.gpuDriver, "the worker image has no NVIDIA driver beside %s", rt.cfg.MicroVMKernelPath)
+	versions, err := os.ReadDir(filepath.Join(rt.gpuDriver, microvm.GPUDriverFirmware, "nvidia"))
+	require.NoError(t, err)
+	require.Len(t, versions, 1)
+	version := versions[0].Name()
+
+	// The GPU guest image without its kernel, modules and firmware. Its
+	// libraries are of the driver the worker image took from it.
+	newVM := func(t *testing.T) *testVM {
+		vm := newTestVM(t, rt, vmOptions{image: "gpu", goproc: true, memoryMiB: 8192, cpuCores: 4, annotations: map[string]string{MicroVMGPUCountAnnotation: "1"}})
+		for _, path := range []string{"boot/beam", "usr/lib/modules", "usr/lib/firmware/nvidia"} {
+			require.NoError(t, os.RemoveAll(filepath.Join(vm.canvas, path)))
+		}
+		return vm
+	}
+	logDriver := func(t *testing.T, vm *testVM) {
+		for _, line := range strings.Split(vm.output.String(), "\n") {
+			if strings.Contains(line, "gpu") {
+				t.Log(line)
+			}
+		}
+	}
+	// What a guest has of the driver, on the worker that booted it and on
+	// one that resumed it.
+	const hasDriver = `set -eu
+exec 2>&1
+release=$(uname -r)
+test "$(cat /sys/module/nvidia/version)" = "$VERSION"
+grep -q '^nvidia_uvm ' /proc/modules
+for device in nvidiactl nvidia0 nvidia-uvm nvidia-uvm-tools; do test -c "/dev/$device"; done
+test ! -e /boot/beam/vmlinux
+test ! -e /lib/firmware/nvidia
+test -s "/lib/modules/$release/modules.dep"
+ls "/lib/firmware/$release/nvidia/$VERSION" | grep '^gsp_'
+for dir in "/lib/modules/$release" "/lib/firmware/$release"; do
+    if touch "$dir/written" 2>/dev/null; then echo "$dir can be changed"; exit 1; fi
+done
+# The image loads what else it wants of the driver as it would its own.
+modprobe -n -v nvidia_drm | grep 'nvidia-drm.ko'
+nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
+`
+	usesGPU := func(t *testing.T, vm *testVM, client *goproc.GoProcClient) {
+		code, output := vm.sh(client, "VERSION="+version+"\n"+hasDriver+testCUDAKernel)
+		logDriver(t, vm)
+		require.Zero(t, code, "%s\n%s", output, vm.output.String())
+		require.Contains(t, output, version, "nvidia-smi reports the worker's driver")
+		require.Contains(t, output, "CUDA_KERNEL_OK", output)
+	}
+
+	vm := newVM(t)
+	startedAt := time.Now()
+	vm.start()
+	client := vm.goprocClient(90 * time.Second)
+	ready := time.Since(startedAt)
+	usesGPU(t, vm, client)
+	t.Logf("NVIDIA %s: commands after %s, a GPU kernel finished after %s", version, ready.Round(time.Millisecond), time.Since(startedAt).Round(time.Millisecond))
+
+	t.Run("resumed by a worker with another driver", func(t *testing.T) {
+		checkpoint := filepath.Join(testWorkRoot, "checkpoint-"+vm.id)
+		require.NoError(t, os.RemoveAll(checkpoint))
+		t.Cleanup(func() { _ = os.RemoveAll(checkpoint) })
+		require.NoError(t, rt.Checkpoint(context.Background(), vm.id, &CheckpointOpts{ImagePath: checkpoint}), vm.output.String())
+		res := vm.wait(60 * time.Second)
+		require.NoError(t, res.err, vm.output.String())
+		kept := filepath.Join(checkpoint, checkpointGPUDriverDir)
+		require.DirExists(t, filepath.Join(kept, microvm.GPUDriverFirmware, "nvidia", version))
+		modules, err := filepath.Glob(filepath.Join(kept, microvm.GPUDriverModules, "*", "modules.dep"))
+		require.NoError(t, err)
+		require.NotEmpty(t, modules, "the checkpoint keeps the modules the guest has loaded")
+		require.NoError(t, rt.Delete(context.Background(), vm.id, &DeleteOpts{Force: true}))
+
+		workers := rt.gpuDriver
+		rt.gpuDriver = ""
+		defer func() { rt.gpuDriver = workers }()
+		restored := newVM(t)
+		restoredAt := time.Now()
+		restored.restore(checkpoint)
+		client := restored.goprocClient(90 * time.Second)
+		// The driver initialises the returned GPU with its firmware again.
+		usesGPU(t, restored, client)
+		t.Logf("a GPU kernel finished %s after the restore began", time.Since(restoredAt).Round(time.Millisecond))
+
+		require.NoError(t, rt.Kill(context.Background(), restored.id, syscall.SIGKILL, &KillOpts{All: true}))
+		res = restored.wait(30 * time.Second)
+		require.NoError(t, res.err)
+		require.NoError(t, rt.Delete(context.Background(), restored.id, &DeleteOpts{Force: true}))
+	})
 }
 
 func TestMicroVMBootAndExit(t *testing.T) {

@@ -2,6 +2,8 @@
 ARG BASE_STAGE=dev
 # Built from docker/Dockerfile.microvm; CI checks this matches hack/microvm-image-tag.sh.
 ARG MICROVM_IMAGE=public.ecr.aws/n4e0e1y0/beta9-microvm:bbcac5c19b31
+# Built from docker/Dockerfile.vm-gpu against that kernel; CI checks this matches hack/microvm-image-tag.sh nvidia.
+ARG MICROVM_GPU_IMAGE=public.ecr.aws/n4e0e1y0/beta9-microvm:69f97c98348b-nvidia
 
 FROM golang:1.25-bookworm AS golang
 
@@ -181,6 +183,22 @@ EOT
 # Cloud Hypervisor, virtiofsd and the guest kernel (microvm sandboxes)
 # ========================
 FROM ${MICROVM_IMAGE} AS microvm
+
+# NVIDIA modules and firmware for that kernel (GPU microvm sandboxes)
+# ========================
+# From the guest image that builds them against the kernel. A GPU microvm
+# whose image has the driver's libraries and no kernel of its own gets these.
+# amd64 only, as the guest image is.
+FROM ${MICROVM_GPU_IMAGE} AS microvm-gpu-guest
+
+FROM scratch AS microvm-gpu-amd64
+COPY --from=microvm-gpu-guest /usr/lib/modules/ /nvidia/modules/
+COPY --from=microvm-gpu-guest /usr/lib/firmware/nvidia/ /nvidia/firmware/nvidia/
+
+FROM scratch AS microvm-gpu-arm64
+WORKDIR /nvidia
+
+FROM microvm-gpu-${TARGETARCH} AS microvm-gpu
 
 # beta9 worker
 # ========================
@@ -421,6 +439,7 @@ COPY --from=worker /usr/local/bin/agent /usr/local/bin/beam-agent
 COPY --from=worker /usr/local/bin/beam-vminit /usr/local/bin/beam-vminit
 COPY --from=microvm /microvm/bin/ /usr/local/bin/
 COPY --from=microvm /microvm/share/ /usr/local/share/beam/microvm/
+COPY --from=microvm-gpu /nvidia/ /usr/local/share/beam/microvm/nvidia/
 COPY ./sdk/src/beta9 /workspace/sdk
 COPY --from=uv /root/.local/bin/uv /usr/local/bin/uv
 COPY --from=dropbear /usr/local/bin/dropbear /usr/local/bin/dropbear
