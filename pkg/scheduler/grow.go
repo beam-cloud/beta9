@@ -107,6 +107,21 @@ func (s *Scheduler) chooseGrowth(route route, request *types.ContainerRequest) g
 	return growth{exhausted: exhausted}
 }
 
+// PoolCanGrow reports whether the pool would add a worker with this much
+// room now: buy a machine, where it buys them. The managed endpoint
+// controller asks before it places a replica in a pool that has no room.
+func (s *Scheduler) PoolCanGrow(name string, cpu, memory int64, gpuCount uint32) bool {
+	if s == nil || s.workerPoolManager == nil {
+		return false
+	}
+	pool, ok := s.workerPoolManager.GetPool(name)
+	if !ok {
+		return false
+	}
+	can, err := pool.Controller.CanAddWorker(cpu, memory, gpuCount)
+	return err == nil && can
+}
+
 // canGrow reports whether some pool would add a worker for the request now.
 func (a *schedulingAttempt) canGrow() bool {
 	route, err := a.scheduler.growthRouteFor(a.request)
@@ -136,6 +151,11 @@ func (a *schedulingAttempt) grow() {
 	choice := s.chooseGrowth(route, a.request)
 	switch {
 	case choice.exhausted:
+		a.fail(types.ContainerSchedulingFailureProvisioningLimit)
+		return
+	case choice.pool == nil && isManagedRequest(a.request):
+		// Its pool has no machine coming and can buy none. The endpoint's
+		// controller places the replica again, in a pool that can.
 		a.fail(types.ContainerSchedulingFailureProvisioningLimit)
 		return
 	case choice.pool == nil:

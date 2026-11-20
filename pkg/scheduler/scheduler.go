@@ -796,7 +796,7 @@ func (s *Scheduler) pushWorkerRequests(worker *types.Worker, requests []*types.C
 }
 
 func (s *Scheduler) privateWorkerRequest(worker *types.Worker, request *types.ContainerRequest) bool {
-	if s == nil || worker == nil || s.workerPoolManager == nil || isManagedSpotRequest(request) {
+	if s == nil || worker == nil || s.workerPoolManager == nil {
 		return false
 	}
 
@@ -1344,18 +1344,10 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 
 	route := s.routeFor(request)
 
-	managedSpot := isManagedSpotRequest(request)
-	filteredWorkers := workers
-	if managedSpot {
-		// Only workers eligible for this Spot placement can supply its floor.
-		filteredWorkers = route.eligible(filteredWorkers)
-	}
-	filteredWorkers = s.filterWorkersByPoolHeadroom(filteredWorkers, request) // Opportunistic requests leave the pool's minFree* floor idle
-	filteredWorkers = filterWorkersByMachine(filteredWorkers, request)        // Machine-pinned requests only see their machine's worker
+	filteredWorkers := s.filterWorkersByPoolHeadroom(workers, request) // Opportunistic requests leave the pool's minFree* floor idle
+	filteredWorkers = filterWorkersByMachine(filteredWorkers, request) // Machine-pinned requests only see their machine's worker
 	filteredWorkers = s.filterWorkersByWorkspaceScope(filteredWorkers, request)
-	if !managedSpot {
-		filteredWorkers = route.eligible(filteredWorkers) // Only pools the request may run on, and GPUs it can use there
-	}
+	filteredWorkers = route.eligible(filteredWorkers) // Only pools the request may run on, and GPUs it can use there
 	filteredWorkers = s.filterAgentWorkersByStorage(filteredWorkers, request)
 	filteredWorkers = s.filterProviderWorkers(filteredWorkers, request)
 	filteredWorkers = s.filterLivePrivateAgentWorkers(filteredWorkers, request)
@@ -1479,7 +1471,7 @@ func (s *Scheduler) isProviderWorker(worker *types.Worker) bool {
 // that drops out leaves its worker on record for a while, and a request
 // placed there would wait for nothing.
 func (s *Scheduler) filterLivePrivateAgentWorkers(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
-	if len(workers) == 0 || isManagedSpotRequest(request) {
+	if len(workers) == 0 {
 		return workers
 	}
 	pool, ok := s.privateAgentPool(request.WorkspaceId, request.PoolSelector)
@@ -1584,11 +1576,6 @@ func (s *Scheduler) privateBacklogRequest(request *types.ContainerRequest) (bool
 func (s *Scheduler) ensureAgentPoolForRequest(request *types.ContainerRequest) (*WorkerPool, error) {
 	if s == nil || request == nil || request.PoolSelector == "" || s.workerPoolManager == nil {
 		return nil, nil
-	}
-	if isManagedSpotRequest(request) {
-		// Only use an existing shared controller for a warm Spot replica.
-		pool, _ := s.selectedPool(request)
-		return pool, nil
 	}
 	if pool, ok := s.privateAgentPool(request.WorkspaceId, request.PoolSelector); ok {
 		return pool, nil

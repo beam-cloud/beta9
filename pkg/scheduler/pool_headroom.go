@@ -44,7 +44,7 @@ func (s *Scheduler) WorkerHoldsPoolHeadroom(worker *types.Worker) bool {
 }
 
 func workerHoldsPoolHeadroom(workerRepo repository.WorkerRepository, pool types.WorkerPoolConfig, worker *types.Worker) bool {
-	floor := PoolHeadroom(pool)
+	floor := poolFloor(pool)
 	if floor == nil || worker == nil || worker.PoolName == "" || worker.Status != types.WorkerStatusAvailable {
 		return false
 	}
@@ -59,7 +59,7 @@ func workerHoldsPoolHeadroom(workerRepo repository.WorkerRepository, pool types.
 // the pool's config and its workers at hand: it reports whether worker is one
 // of the workers that keep the pool's free capacity at its floor.
 func HoldsHeadroom(pool types.WorkerPoolConfig, workers []*types.Worker, worker *types.Worker) bool {
-	return worker != nil && holdsFloor(PoolHeadroom(pool), workers, worker)
+	return worker != nil && holdsFloor(poolFloor(pool), workers, worker)
 }
 
 // holdsFloor reports whether the worker is ready and the ready workers ahead
@@ -71,11 +71,11 @@ func holdsFloor(floor *types.WorkerPoolSizingConfig, workers []*types.Worker, wo
 		freeCapacityAhead(workers, worker.Id).belowMinimum(floor)
 }
 
-// PoolHeadroom returns the free capacity the pool keeps (poolSizing.minFree*),
+// poolFloor returns the free capacity the pool keeps (poolSizing.minFree*),
 // or nil when it keeps none. It reads the config the pool runs with, so a
 // pool created through the pools API has a floor like one from the config
 // file.
-func PoolHeadroom(pool types.WorkerPoolConfig) *types.WorkerPoolSizingConfig {
+func poolFloor(pool types.WorkerPoolConfig) *types.WorkerPoolSizingConfig {
 	sizing, _ := readPoolSizing(pool)
 	if !hasFloor(sizing) {
 		return nil
@@ -149,12 +149,10 @@ func (s *Scheduler) filterWorkersByPoolHeadroom(workers []*types.Worker, request
 	floors := map[string]*types.WorkerPoolSizingConfig{}
 	for name, poolWorkers := range ready {
 		var pool types.WorkerPoolConfig
-		if isManagedSpotRequest(request) {
-			pool, _ = s.PoolConfig(name)
-		} else if loaded, ok := s.poolOf(poolWorkers[0]); ok {
+		if loaded, ok := s.poolOf(poolWorkers[0]); ok {
 			pool = loaded.Config
 		}
-		floor := PoolHeadroom(pool)
+		floor := poolFloor(pool)
 		floors[name] = floor
 		if floor == nil {
 			keep[name] = true
