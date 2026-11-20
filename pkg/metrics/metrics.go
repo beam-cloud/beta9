@@ -136,6 +136,9 @@ func InitializeMetricsRepository(config types.VictoriaMetricsConfig) {
 	workerPoolName := os.Getenv("WORKER_POOL_NAME")
 	gpuType := os.Getenv("GPU_TYPE")
 	podHostname := os.Getenv("POD_HOSTNAME")
+	if podHostname == "" {
+		podHostname, _ = os.Hostname()
+	}
 
 	creds := fmt.Sprintf("vmagent:%s", config.AuthToken)
 	encodedCreds := base64.StdEncoding.EncodeToString([]byte(creds))
@@ -145,13 +148,17 @@ func InitializeMetricsRepository(config types.VictoriaMetricsConfig) {
 		},
 	}
 
-	if workerPoolName != "" && podHostname != "" {
-		opts.ExtraLabels = fmt.Sprintf(`worker_pool_name="%s",pod_hostname="%s"`, workerPoolName, podHostname)
+	// Keep counters from different gateway/worker processes distinct without
+	// introducing a new series for every container or scheduling retry.
+	var extraLabels []string
+	for _, label := range []struct{ name, value string }{
+		{"pod_hostname", podHostname}, {"worker_pool_name", workerPoolName}, {"gpu_type", gpuType},
+	} {
+		if label.value != "" {
+			extraLabels = append(extraLabels, fmt.Sprintf(`%s="%s"`, label.name, escapeLabelValue(label.value)))
+		}
 	}
-
-	if gpuType != "" {
-		opts.ExtraLabels = fmt.Sprintf(`%s,gpu_type="%s"`, opts.ExtraLabels, gpuType)
-	}
+	opts.ExtraLabels = strings.Join(extraLabels, ",")
 
 	vmetrics.GetDefaultSet().InitPushWithOptions(
 		context.Background(),
@@ -187,15 +194,13 @@ func RecordRequestRetry(request *types.ContainerRequest) {
 		gpu = "none"
 	}
 	gpus := strings.Join(request.GpuRequest, ":")
-	metricName := fmt.Sprintf("%s{container_id=\"%s\",gpu=\"%s\",requested_gpus=\"%s\",gpu_count=\"%d\",cpu=\"%d\",memory=\"%d\",retry_count=\"%d\"}",
+	metricName := fmt.Sprintf("%s{gpu=\"%s\",requested_gpus=\"%s\",gpu_count=\"%d\",cpu=\"%d\",memory=\"%d\"}",
 		metricRequestRetries,
-		request.ContainerId,
 		gpu,
 		gpus,
 		request.GpuCount,
 		request.Cpu,
-		request.Memory,
-		request.RetryCount)
+		request.Memory)
 
 	vmetrics.GetDefaultSet().GetOrCreateCounter(metricName).Inc()
 }
@@ -206,15 +211,13 @@ func RecordRequestScheduleFailure(request *types.ContainerRequest) {
 		gpu = "none"
 	}
 	gpus := strings.Join(request.GpuRequest, ":")
-	metricName := fmt.Sprintf("%s{container_id=\"%s\",gpu=\"%s\",requested_gpus=\"%s\",gpu_count=\"%d\",cpu=\"%d\",memory=\"%d\",retry_count=\"%d\"}",
+	metricName := fmt.Sprintf("%s{gpu=\"%s\",requested_gpus=\"%s\",gpu_count=\"%d\",cpu=\"%d\",memory=\"%d\"}",
 		metricRequestScheduleFailure,
-		request.ContainerId,
 		gpu,
 		gpus,
 		request.GpuCount,
 		request.Cpu,
-		request.Memory,
-		request.RetryCount)
+		request.Memory)
 
 	vmetrics.GetDefaultSet().GetOrCreateCounter(metricName).Inc()
 }
