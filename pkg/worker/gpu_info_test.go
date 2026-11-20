@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -67,6 +68,48 @@ func TestQueryGPUHealthUnsupportedField(t *testing.T) {
 		assert.NoError(t, os.WriteFile(filepath.Join(dir, "nvidia-smi"), []byte(script), 0755))
 		_, err := queryGPUHealth("GPU-a,GPU-b")
 		assert.Equal(t, test.unsupported, err == nil, test.message)
+		if !test.unsupported {
+			assert.ErrorContains(t, err, test.message)
+			assert.NotErrorIs(t, err, errGPUUnhealthy)
+		}
+	}
+}
+
+func TestGPUHealthInternalDriverErrorCordonsWorker(t *testing.T) {
+	originalQueryDevices := queryDevices
+	t.Cleanup(func() { queryDevices = originalQueryDevices })
+	queryDevices = func() ([]byte, error) {
+		return []byte("0x0000, 00000000:01:00.0, 0, GPU-a\n0x0000, 00000000:24:00.0, 1, GPU-b"), nil
+	}
+
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	for _, stderr := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stderr=%t", stderr), func(t *testing.T) {
+			message := "Unable to determine the device handle for GPU0: 0000:01:00.0: Unknown Error"
+			redirect := ""
+			if stderr {
+				redirect = " >&2"
+			}
+			script := "#!/bin/sh\nprintf '%s\\n' '" + message + "'" + redirect + "\nprintf '%s\\n' 'GPU-b, Reboot'\nexit 255\n"
+			assert.NoError(t, os.WriteFile(filepath.Join(dir, "nvidia-smi"), []byte(script), 0755))
+
+			client := &NvidiaInfoClient{visibleDevices: "all"}
+			devices, err := client.AvailableGPUDevices()
+			assert.Empty(t, devices)
+			assert.ErrorIs(t, err, errGPUUnhealthy)
+			assert.ErrorContains(t, err, message)
+			assert.ErrorContains(t, err, "GPU-b, Reboot")
+			var exit *exec.ExitError
+			if assert.ErrorAs(t, err, &exit) {
+				assert.Equal(t, 255, exit.ExitCode())
+			}
+
+			repo := &fakeWorkerRepoClient{}
+			worker := &Worker{workerRepoClient: repo}
+			assert.True(t, worker.disableSchedulingForGPUError(err))
+			assert.Equal(t, 1, repo.cordons)
+		})
 	}
 }
 
