@@ -15,6 +15,12 @@ const (
 	// provider is taken to have behind it. A spot machine is taken to have
 	// been lost once in them.
 	priorHours = 20
+	// offerHours is how many hours of machines an offer is taken to have
+	// behind it that were lost as often as all its provider sells that way.
+	// They are few. A provider keeps its machines for days in one region
+	// and takes them back within minutes in another, so what became of an
+	// offer's own machines soon says more than what became of the others.
+	offerHours = 2
 )
 
 // Estimate is what the outcomes say to expect of machines bought one way.
@@ -82,6 +88,10 @@ func (e Estimates) Learn(o Outcome) {
 // Of is what to expect of a machine bought as o says: how long it takes to
 // come up, or zero when that is not known, the odds that it does, and how
 // often an hour it is lost.
+//
+// How often is what became of the offer's own machines, once it has had
+// them for a while. Until then it is lost as often as all its provider
+// sells that way, for the hours it is short of offerHours.
 func (e Estimates) Of(o Outcome, now time.Time) (boot time.Duration, odds, taken float64) {
 	keys := estimateKeys(o)
 	own, all := e[keys[0]].at(now), e[keys[1]].at(now)
@@ -89,5 +99,7 @@ func (e Estimates) Of(o Outcome, now time.Time) (boot time.Duration, odds, taken
 	if o.Spot {
 		prior = 1
 	}
-	return cmp.Or(own.Boot, all.Boot), (own.Up + 1) / (own.Up + own.Lost + 1), (all.Taken + prior) / (all.Hours + priorHours)
+	taken = (all.Taken + prior) / (all.Hours + priorHours)
+	taken = (own.Taken + taken*offerHours) / (own.Hours + offerHours)
+	return cmp.Or(own.Boot, all.Boot), (own.Up + 1) / (own.Up + own.Lost + 1), taken
 }
