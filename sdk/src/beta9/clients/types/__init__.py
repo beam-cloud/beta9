@@ -84,6 +84,9 @@ class Container(betterproto.Message):
     worker_id: str = betterproto.string_field(7)
     machine_id: str = betterproto.string_field(8)
     deployment_id: str = betterproto.string_field(9)
+    pending_phase: str = betterproto.string_field(10)
+    pending_reason: str = betterproto.string_field(11)
+    pending_since: int = betterproto.int64_field(12)
 
 
 @dataclass(eq=False, repr=False)
@@ -152,6 +155,9 @@ class ContainerState(betterproto.Message):
     evicting: bool = betterproto.bool_field(14)
     drain_seconds: int = betterproto.uint32_field(15)
     evict_order: int = betterproto.int32_field(16)
+    pending_phase: str = betterproto.string_field(18)
+    pending_reason: str = betterproto.string_field(19)
+    pending_since: int = betterproto.int64_field(20)
 
 
 @dataclass(eq=False, repr=False)

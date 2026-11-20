@@ -37,6 +37,7 @@ func (a *schedulingAttempt) runWaitingOrProvisioning() {
 		waited := a.scheduler.since(a.request.Timestamp)
 		if a.request.Borrowed() && waited < maxScheduleRetryDuration {
 			metrics.RecordSchedulerWorkerWait(waited, a.request, "spare_capacity_wait")
+			a.waitsFor(types.ContainerPendingWaitingForCapacity, types.ContainerPendingNoSpareCapacity)
 			a.requeueForWorkerWait()
 			return
 		}
@@ -53,6 +54,7 @@ func (a *schedulingAttempt) runWaitingOrProvisioning() {
 	// provisioning elsewhere can't help, so wait for capacity to free up.
 	if a.request.MachineId != "" {
 		metrics.RecordSchedulerWorkerWait(a.scheduler.since(a.request.Timestamp), a.request, "pinned_machine_busy")
+		a.waitsFor(types.ContainerPendingWaitingForCapacity, types.ContainerPendingMachineBusy)
 		a.requeueForWorkerWait()
 		return
 	}
@@ -85,10 +87,12 @@ func (a *schedulingAttempt) reservePendingWorkerCapacity() bool {
 	}
 
 	metrics.RecordSchedulerWorkerWait(a.scheduler.since(a.request.Timestamp), a.request, "waiting_for_worker")
+	pool, ok := a.scheduler.awaitedPool(a.request.ContainerId)
 	// The pool's plan counts the request against what is coming.
-	if pool, ok := a.scheduler.awaitedPool(a.request.ContainerId); ok {
+	if ok {
 		a.scheduler.joinWaitlist(a.request, pool)
 	}
+	a.waitsForWorker(pool, ok)
 	a.requeueForWorkerWait()
 	return true
 }

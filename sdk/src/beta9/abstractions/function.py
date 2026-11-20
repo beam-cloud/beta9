@@ -39,6 +39,7 @@ from ..clients.function import (
 from ..clients.gateway import ListTasksRequest, StopTasksRequest, StringList
 from ..env import called_on_import, is_local
 from ..exceptions import RemoteExecutionError
+from ..pending import PendingStatus, PendingTally
 from ..schema import Schema
 from ..sync import FileSyncer
 from ..type import CpuTier, DurableDisk, GpuType, GpuTypeAlias, Pool, TaskPolicy
@@ -253,10 +254,9 @@ class _CallableWrapper(DeployableMixin):
             terminal.error("Exiting shell. Your build was stopped.")
 
         try:
-            with terminal.StepTracker().step(
-                f"Running {self.parent.name or self.parent.handler}", "Function complete"
-            ):
-                return self._call_remote(*args, **kwargs)
+            title = f"Running {self.parent.name or self.parent.handler}"
+            with terminal.StepTracker().step(title, "Function complete"):
+                return self._invoke(args, kwargs, PendingStatus(title))
         except KeyboardInterrupt:
             if self.parent.headless:
                 terminal.error("Exiting shell. Your function will continue running remotely.")
@@ -273,7 +273,8 @@ class _CallableWrapper(DeployableMixin):
         # prepare_runtime already reported the reason; a traceback would bury it.
         raise SystemExit(1)
 
-    def _call_remote(self, *args, **kwargs) -> Any:
+    def _invoke(self, args: tuple, kwargs: dict, pending) -> Any:
+        """Run the function remotely. pending is told what the call waits for until it runs."""
         args = cloudpickle.dumps(
             {
                 "args": args,
@@ -295,7 +296,7 @@ class _CallableWrapper(DeployableMixin):
         with self._invocations_lock:
             self._invocations.add(invocation)
         try:
-            return self._consume_invocation(responses, output, output_size)
+            return self._consume_invocation(responses, output, output_size, pending)
         except KeyboardInterrupt:
             if invocation.task_id and not self.parent.headless:
                 with rpc_timeout(RECOVERY_TIMEOUT):
@@ -304,13 +305,18 @@ class _CallableWrapper(DeployableMixin):
                     )
             raise
         finally:
+            pending.clear()
             with self._invocations_lock:
                 self._invocations.discard(invocation)
 
-    def _consume_invocation(self, responses, output, output_size):
+    def _consume_invocation(self, responses, output, output_size, pending):
         last_response: Optional[FunctionInvokeResponse] = None
         for r in responses:
+            # Until its container runs, the gateway says what the call waits for.
+            pending.show(r.pending)
+
             if r.output != "":
+                pending.clear()
                 output.append(r.output[-65536:])
                 output_size += len(output[-1])
                 while output_size - len(output[0]) >= 65536:
@@ -368,9 +374,13 @@ class _CallableWrapper(DeployableMixin):
         failed = 0
         terminal.header(f"{self.parent.name or self.parent.handler}", f"{len(inputs)} calls")
         with terminal.progress(f"Completed 0/{len(inputs)} calls"):
+            # The spinner also counts the calls that wait for a machine.
+            waiting = PendingTally(f"Completed 0/{len(inputs)} calls")
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(32, len(inputs))) as pool:
                 futures = {
-                    pool.submit(self._call_remote, *self._format_args(args)): index
+                    pool.submit(
+                        self._invoke, tuple(self._format_args(args)), {}, waiting.status()
+                    ): index
                     for index, args in enumerate(inputs, 1)
                 }
                 try:
@@ -384,7 +394,7 @@ class _CallableWrapper(DeployableMixin):
                             )
                             terminal.error(f"Input {futures[future]} failed: {message}", exit=False)
                             result = None
-                        terminal.update_progress(f"Completed {completed}/{len(inputs)} calls")
+                        waiting.retitle(f"Completed {completed}/{len(inputs)} calls")
                         yield result
                 except KeyboardInterrupt:
                     pool.shutdown(wait=False, cancel_futures=True)

@@ -39,6 +39,28 @@ class FunctionInvokeResponse(betterproto.Message):
     exit_code: int = betterproto.int32_field(4)
     result: bytes = betterproto.bytes_field(5)
     container_id: str = betterproto.string_field(6)
+    pending: "FunctionInvokePending" = betterproto.message_field(7)
+    """
+    Set on a response that says what the invocation waits for before its
+     container runs. Such a response carries no output.
+    """
+
+
+@dataclass(eq=False, repr=False)
+class FunctionInvokePending(betterproto.Message):
+    """What an invocation whose container has not started is waiting for."""
+
+    phase: str = betterproto.string_field(1)
+    """queued, provisioning, waiting_for_capacity or starting."""
+
+    reason: str = betterproto.string_field(2)
+    """
+    Why, when there is more to say: worker_starting, backup_worker_starting,
+     no_capacity, machine_busy or no_spare_capacity.
+    """
+
+    waited_seconds: int = betterproto.uint32_field(3)
+    """How long the container has been in this phase."""
 
 
 @dataclass(eq=False, repr=False)

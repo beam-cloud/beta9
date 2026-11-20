@@ -224,3 +224,56 @@ func TestCPUShareMultiplier(t *testing.T) {
 	require.EqualValues(t, 24000, CPUShareMultiplier(1.5).Schedulable(16000))
 	require.EqualValues(t, 22050, CPUShareMultiplier(1.4).Schedulable(15750))
 }
+
+func TestContainerStateSettlePending(t *testing.T) {
+	stored := func(state ContainerState) ContainerState {
+		state.PendingPhase, state.PendingReason, state.PendingSince = ContainerPendingProvisioning, ContainerPendingWorkerStarting, 200
+		return state
+	}
+	for _, tc := range []struct {
+		name   string
+		state  ContainerState
+		phase  ContainerPendingPhase
+		reason ContainerPendingReason
+		since  int64
+	}{
+		{
+			name:  "nothing stored yet: queued since it was asked for",
+			state: ContainerState{Status: ContainerStatusPending, ScheduledAt: 100},
+			phase: ContainerPendingQueued, since: 100,
+		},
+		{
+			name:  "what the scheduler stored",
+			state: stored(ContainerState{Status: ContainerStatusPending, ScheduledAt: 100}),
+			phase: ContainerPendingProvisioning, reason: ContainerPendingWorkerStarting, since: 200,
+		},
+		{
+			name:  "a worker has it: starting, whatever it waited for",
+			state: stored(ContainerState{Status: ContainerStatusPending, ScheduledAt: 100, WorkerId: "worker-1"}),
+			phase: ContainerPendingStarting,
+		},
+		{
+			name:  "running",
+			state: stored(ContainerState{Status: ContainerStatusRunning, WorkerId: "worker-1"}),
+		},
+		{
+			name:  "stopping before a worker had it",
+			state: stored(ContainerState{Status: ContainerStatusStopping}),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := tc.state
+			state.SettlePending()
+			require.Equal(t, tc.phase, state.PendingPhase)
+			require.Equal(t, tc.reason, state.PendingReason)
+			require.Equal(t, tc.since, state.PendingSince)
+
+			// A running container says nothing about waiting in the API.
+			encoded, err := json.Marshal(state)
+			require.NoError(t, err)
+			if tc.phase == "" {
+				require.NotContains(t, string(encoded), "pending_")
+			}
+		})
+	}
+}

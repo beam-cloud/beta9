@@ -15,6 +15,7 @@ from ...clients.gateway import (
     SyncContainerWorkspaceOperation,
     SyncContainerWorkspaceRequest,
 )
+from ...pending import PendingStatus
 from ...sync import SyncEventHandler
 from .runner import BaseAbstraction
 
@@ -72,8 +73,13 @@ class Container(BaseAbstraction):
         stream = self.gateway_stub.attach_to_container(_container_stream_generator())
 
         r = None
+        # Until the container runs, the gateway says what it waits for.
+        pending = PendingStatus()
         try:
             for r in stream:
+                if not hide_logs:
+                    pending.show(r.pending)
+
                 if r.output and not hide_logs:
                     terminal.detail(r.output, end="")
 

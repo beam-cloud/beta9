@@ -249,6 +249,17 @@ func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.Functi
 		return stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Output: o.Msg})
 	}
 
+	// Until the container runs there is no output. The caller is told what
+	// the invocation waits for instead: a machine that is starting, or
+	// capacity that is not there yet.
+	pendingCallback := func(pending abstractions.ContainerPending) error {
+		return stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Pending: &pb.FunctionInvokePending{
+			Phase:         string(pending.Phase),
+			Reason:        string(pending.Reason),
+			WaitedSeconds: pending.WaitedSeconds(),
+		}})
+	}
+
 	exitCallback := func(exitCode int32) error {
 		current, err := fs.backendRepo.GetTask(stream.Context(), taskId)
 		if err != nil {
@@ -275,6 +286,7 @@ func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.Functi
 	containerStream, err := abstractions.NewContainerStream(abstractions.ContainerStreamOpts{
 		SendCallback:    sendCallback,
 		ExitCallback:    exitCallback,
+		PendingCallback: pendingCallback,
 		ContainerRepo:   fs.containerRepo,
 		Config:          fs.config,
 		Tailscale:       fs.tailscale,

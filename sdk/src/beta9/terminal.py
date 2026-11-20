@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from io import BytesIO
 from os import PathLike
-from typing import Any, Generator, List, Literal, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Generator, List, Literal, Optional, Sequence, Tuple, Union
 
 import rich
 import rich.columns
@@ -183,11 +183,40 @@ def progress(task_name: str) -> Generator[rich.status.Status, None, None]:
                 _current_status = None
 
 
-def update_progress(text: str) -> None:
-    """Update the text of the currently active progress spinner, if any."""
+class _LiveText:
+    """Spinner text that is worked out each time the spinner is drawn."""
+
+    def __init__(self, text: Callable[[], str]) -> None:
+        self._text = text
+
+    def __rich__(self) -> Text:
+        return Text(self._text(), style=f"bold {BRAND_COLOR}")
+
+
+def update_progress(text: Union[str, Callable[[], str]]) -> None:
+    """Update the text of the currently active progress spinner, if any.
+
+    Given a function, the spinner asks it for the text each time it is drawn,
+    so the text can count the time.
+    """
     with _status_lock:
         if _current_status is not None:
-            _current_status.update(Text(text, style=f"bold {BRAND_COLOR}"))
+            _current_status.update(
+                _LiveText(text) if callable(text) else Text(text, style=f"bold {BRAND_COLOR}")
+            )
+
+
+def spinner_visible() -> bool:
+    """True while a progress spinner is on screen, which it is only in a terminal."""
+    with _status_lock:
+        return (
+            _current_status is not None and _console.is_terminal and not _console.is_dumb_terminal
+        )
+
+
+def note(text: str) -> None:
+    """A dim line about the step that is running."""
+    _console.print(Text(f"  {text}", style="dim"))
 
 
 def progress_open(file: Union[str, PathLike, bytes], mode: str, **kwargs: Any) -> BytesIO:
@@ -564,7 +593,7 @@ class StepTracker:
         (_console if ok else _error_console).print(line)
 
     def note(self, text: str) -> None:
-        _console.print(Text(f"  {text}", style="dim"))
+        note(text)
 
     def elapsed(self) -> float:
         return time.monotonic() - self._started_at

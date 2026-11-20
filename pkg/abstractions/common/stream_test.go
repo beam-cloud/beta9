@@ -72,6 +72,207 @@ func TestContainerStreamWaitsForPendingContainerWorker(t *testing.T) {
 	require.Equal(t, "worker.internal", got.host)
 }
 
+// pendingStream is a stream that waits for a worker to take a container, on
+// the repository the gateway uses: asking it for a worker's address does not
+// return until there is one.
+type pendingStream struct {
+	t    *testing.T
+	repo repository.ContainerRepository
+	// told receives what the client is told.
+	told chan ContainerPending
+	// done receives how the wait ended.
+	done chan pendingStreamResult
+}
+
+type pendingStreamResult struct {
+	host string
+	err  error
+}
+
+const pendingStreamContainer = "container-1"
+
+// waitForPendingContainer starts the wait for a container that the scheduler
+// has not placed. callback, if given, stands in for the client.
+func waitForPendingContainer(t *testing.T, callback func(ContainerPending) error) *pendingStream {
+	t.Helper()
+	read, longest := pendingReadInterval, maxPendingReadInterval
+	pendingReadInterval, maxPendingReadInterval = 5*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { pendingReadInterval, maxPendingReadInterval = read, longest })
+
+	rdb, err := repository.NewRedisClientForTest()
+	require.NoError(t, err)
+	s := &pendingStream{
+		t:    t,
+		repo: repository.NewContainerRedisRepositoryForTest(rdb),
+		told: make(chan ContainerPending, 100),
+		done: make(chan pendingStreamResult, 1),
+	}
+	require.NoError(t, s.repo.SetContainerState(pendingStreamContainer, &types.ContainerState{
+		ContainerId: pendingStreamContainer,
+		StubId:      "stub-1",
+		Status:      types.ContainerStatusPending,
+		ScheduledAt: time.Now().Add(-90 * time.Second).Unix(),
+	}))
+
+	if callback == nil {
+		callback = func(pending ContainerPending) error {
+			s.told <- pending
+			return nil
+		}
+	}
+	stream := &ContainerStream{containerRepo: s.repo, pendingCallback: callback}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() {
+		host, err := stream.waitForWorkerAddress(ctx, pendingStreamContainer)
+		s.done <- pendingStreamResult{host: host, err: err}
+	}()
+	return s
+}
+
+// waitsFor has the scheduler store what the container waits for.
+func (s *pendingStream) waitsFor(phase types.ContainerPendingPhase, reason types.ContainerPendingReason, since time.Time) {
+	s.t.Helper()
+	stored, err := s.repo.SetContainerPending(pendingStreamContainer, phase, reason, since)
+	require.NoError(s.t, err)
+	require.True(s.t, stored)
+}
+
+// nextTold is the next thing the client is told.
+func (s *pendingStream) nextTold() ContainerPending {
+	s.t.Helper()
+	select {
+	case pending := <-s.told:
+		return pending
+	case result := <-s.done:
+		s.t.Fatalf("the wait ended before the client was told anything more: %+v", result)
+	case <-time.After(5 * time.Second):
+		s.t.Fatal("the client was not told what the container waits for")
+	}
+	return ContainerPending{}
+}
+
+// toldNothingMore checks that the client is told nothing over several reads
+// of the container's state.
+func (s *pendingStream) toldNothingMore() {
+	s.t.Helper()
+	select {
+	case pending := <-s.told:
+		s.t.Fatalf("the client was told %+v again", pending)
+	case <-time.After(10 * maxPendingReadInterval):
+	}
+}
+
+func (s *pendingStream) result() pendingStreamResult {
+	s.t.Helper()
+	select {
+	case result := <-s.done:
+		return result
+	case <-time.After(5 * time.Second):
+		s.t.Fatal("the wait for a worker did not end")
+	}
+	return pendingStreamResult{}
+}
+
+func TestContainerStreamTellsWhatAPendingContainerWaitsFor(t *testing.T) {
+	s := waitForPendingContainer(t, nil)
+
+	// The scheduler has said nothing yet.
+	queued := s.nextTold()
+	require.Equal(t, types.ContainerPendingQueued, queued.Phase)
+	require.InDelta(t, 90, queued.WaitedSeconds(), 2)
+
+	s.waitsFor(types.ContainerPendingWaitingForCapacity, types.ContainerPendingNoCapacity, time.Now().Add(-40*time.Second))
+	waiting := s.nextTold()
+	require.Equal(t, types.ContainerPendingWaitingForCapacity, waiting.Phase)
+	require.Equal(t, types.ContainerPendingNoCapacity, waiting.Reason)
+	require.InDelta(t, 40, waiting.WaitedSeconds(), 2)
+	// What has not changed is not told again.
+	s.toldNothingMore()
+
+	s.waitsFor(types.ContainerPendingProvisioning, types.ContainerPendingWorkerStarting, time.Now())
+	require.Equal(t, types.ContainerPendingWorkerStarting, s.nextTold().Reason)
+
+	s.waitsFor(types.ContainerPendingProvisioning, types.ContainerPendingBackupWorkerStarting, time.Now())
+	require.Equal(t, types.ContainerPendingBackupWorkerStarting, s.nextTold().Reason)
+
+	// A worker has it: whatever it waited for, it starts now.
+	require.NoError(t, s.repo.SetWorkerAddress(pendingStreamContainer, "worker.internal"))
+	require.Equal(t, ContainerPending{Phase: types.ContainerPendingStarting}, s.nextTold())
+	require.Equal(t, pendingStreamResult{host: "worker.internal"}, s.result())
+	s.toldNothingMore()
+}
+
+// A container that a worker takes at once had nothing said about it, and its
+// state is not read.
+func TestContainerStreamTellsNothingAboutAContainerThatAWorkerHas(t *testing.T) {
+	rdb, counts, err := repository.NewRedisClientForTestWithCounts()
+	require.NoError(t, err)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	require.NoError(t, repo.SetWorkerAddress(pendingStreamContainer, "worker.internal"))
+	stream := &ContainerStream{containerRepo: repo, pendingCallback: func(ContainerPending) error {
+		t.Fatal("told what a container waits for when a worker already has it")
+		return nil
+	}}
+
+	counts.Start()
+	host, err := stream.waitForWorkerAddress(context.Background(), pendingStreamContainer)
+	commands, _ := counts.Stop()
+	require.NoError(t, err)
+	require.Equal(t, "worker.internal", host)
+	require.NotZero(t, commands["GET"])
+	require.Zero(t, commands["HGETALL"])
+}
+
+// A client that has gone ends the wait, though no worker has the container.
+func TestContainerStreamStopsWaitingWhenItsClientCannotBeTold(t *testing.T) {
+	gone := errors.New("client went away")
+	s := waitForPendingContainer(t, func(ContainerPending) error { return gone })
+
+	require.ErrorIs(t, s.result().err, gone)
+}
+
+// A stream with nobody to tell does not read what its container waits for.
+func TestContainerStreamWithNobodyToTellDoesNotReadWhatItsContainerWaitsFor(t *testing.T) {
+	read, longest := pendingReadInterval, maxPendingReadInterval
+	pendingReadInterval, maxPendingReadInterval = 5*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { pendingReadInterval, maxPendingReadInterval = read, longest })
+
+	rdb, counts, err := repository.NewRedisClientForTestWithCounts()
+	require.NoError(t, err)
+	repo := repository.NewContainerRedisRepositoryForTest(rdb)
+	require.NoError(t, repo.SetContainerState(pendingStreamContainer, &types.ContainerState{
+		ContainerId: pendingStreamContainer, StubId: "stub-1", Status: types.ContainerStatusPending,
+	}))
+	stream := &ContainerStream{containerRepo: repo}
+	done := make(chan pendingStreamResult, 1)
+	counts.Start()
+	go func() {
+		host, err := stream.waitForWorkerAddress(context.Background(), pendingStreamContainer)
+		done <- pendingStreamResult{host: host, err: err}
+	}()
+
+	time.Sleep(20 * maxPendingReadInterval)
+	require.NoError(t, repo.SetWorkerAddress(pendingStreamContainer, "worker.internal"))
+	require.Equal(t, pendingStreamResult{host: "worker.internal"}, <-done)
+	commands, _ := counts.Stop()
+	require.NotZero(t, commands["GET"])
+	require.Zero(t, commands["HGETALL"])
+}
+
+// A request the scheduler gives up on ends the wait at once.
+func TestContainerStreamStopsWaitingWhenTheSchedulerGivesUp(t *testing.T) {
+	s := waitForPendingContainer(t, nil)
+	s.waitsFor(types.ContainerPendingWaitingForCapacity, types.ContainerPendingNoCapacity, time.Now())
+	for s.nextTold().Phase != types.ContainerPendingWaitingForCapacity {
+	}
+
+	require.NoError(t, s.repo.DeleteContainerState(pendingStreamContainer))
+	require.NoError(t, s.repo.SetContainerRequestStatus(pendingStreamContainer, types.ContainerRequestStatusFailed))
+
+	require.ErrorContains(t, s.result().err, "container stopped before it was assigned to a worker")
+}
+
 func (c *testContainerStreamClient) StreamLogsWithReady(_ context.Context, _ string, output chan common.OutputMsg, ready func()) error {
 	close(c.started)
 	<-c.attach

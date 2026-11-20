@@ -149,6 +149,9 @@ func TestSpotWaitsForSpareCapacity(t *testing.T) {
 	state, err := scheduler.containerRepo.GetContainerState(request.ContainerId)
 	require.NoError(t, err)
 	require.Equal(t, types.ContainerStatusPending, state.Status)
+	// It says that spare capacity is what it waits for.
+	require.Equal(t, types.ContainerPendingWaitingForCapacity, state.PendingPhase)
+	require.Equal(t, types.ContainerPendingNoSpareCapacity, state.PendingReason)
 
 	// It gives up when the scheduling window ends.
 	request.Timestamp = time.Now().Add(-maxScheduleRetryDuration)

@@ -243,6 +243,53 @@ const (
 	ContainerStatusStopping ContainerStatus = "STOPPING"
 )
 
+// ContainerPendingPhase is what a container that has not started is waiting
+// for. Its status is PENDING from the moment it is asked for until it runs:
+// a second on a worker that has room, minutes when a machine has to start,
+// and until the scheduling limit when there is no capacity to be had. The
+// phase tells those apart, for whoever waits with the container.
+type ContainerPendingPhase string
+
+const (
+	// ContainerPendingQueued is a container the scheduler has not yet found
+	// a place for, or said anything else about.
+	ContainerPendingQueued ContainerPendingPhase = "queued"
+	// ContainerPendingProvisioning is a container that waits for a worker
+	// that is on its way: no worker had room for it, and a pool is adding
+	// one that will.
+	ContainerPendingProvisioning ContainerPendingPhase = "provisioning"
+	// ContainerPendingWaitingForCapacity is a container that no worker has
+	// room for and that no worker is on its way for. It waits for room to
+	// come free, or for a pool to be able to add a worker again.
+	ContainerPendingWaitingForCapacity ContainerPendingPhase = "waiting_for_capacity"
+	// ContainerPendingStarting is a container that a worker has and is
+	// starting: it loads the image and runs it.
+	ContainerPendingStarting ContainerPendingPhase = "starting"
+)
+
+// ContainerPendingReason says why a container is in its pending phase.
+type ContainerPendingReason string
+
+const (
+	// ContainerPendingWorkerStarting: a worker is starting in the pool the
+	// request prefers.
+	ContainerPendingWorkerStarting ContainerPendingReason = "worker_starting"
+	// ContainerPendingBackupWorkerStarting: the pool the request prefers
+	// could not take it, and a worker is starting in a pool further down its
+	// route. A Spot pool with no capacity that is followed by an on-demand
+	// pool gives this.
+	ContainerPendingBackupWorkerStarting ContainerPendingReason = "backup_worker_starting"
+	// ContainerPendingNoCapacity: no pool that may run the request can add a
+	// worker now.
+	ContainerPendingNoCapacity ContainerPendingReason = "no_capacity"
+	// ContainerPendingMachineBusy: the one machine the request may run on
+	// has no room.
+	ContainerPendingMachineBusy ContainerPendingReason = "machine_busy"
+	// ContainerPendingNoSpareCapacity: the request runs only on capacity
+	// that nothing else is using (the Spot CPU tier), and there is none.
+	ContainerPendingNoSpareCapacity ContainerPendingReason = "no_spare_capacity"
+)
+
 type ContainerAlreadyScheduledError struct {
 	Msg string
 }
@@ -275,11 +322,40 @@ type ContainerState struct {
 	EvictOrder   int32  `redis:"evict_order" json:"evict_order,omitempty"`
 	// ReservedCpu mirrors ContainerRequest.ReservedCpu for the scheduled request.
 	ReservedCpu int64 `redis:"reserved_cpu" json:"reserved_cpu,omitempty" go2proto:"ignore"`
+	// PendingPhase and PendingReason say what a container that has not
+	// started is waiting for, and PendingSince since when, in Unix seconds
+	// (see ContainerPendingPhase). They are empty for a container that runs
+	// or is stopping.
+	//
+	// The scheduler stores them while the container waits for a worker, and
+	// nothing takes them away again. A state that is read from the store is
+	// settled before it is handed out (SettlePending), so that these say
+	// what the container waits for now.
+	PendingPhase  ContainerPendingPhase  `redis:"pending_phase" json:"pending_phase,omitempty"`
+	PendingReason ContainerPendingReason `redis:"pending_reason" json:"pending_reason,omitempty"`
+	PendingSince  int64                  `redis:"pending_since" json:"pending_since,omitempty"`
 }
 
 // CapacityCpu is the CPU the container takes from its worker's capacity.
 func (s *ContainerState) CapacityCpu() int64 {
 	return max(s.ReservedCpu, s.Cpu)
+}
+
+// SettlePending makes the pending fields say what the container waits for
+// now, from what the scheduler last stored in them. A container that runs or
+// is stopping waits for nothing. One that a worker has is starting, whatever
+// it waited for before. One the scheduler has said nothing about is queued,
+// since it was asked for.
+func (s *ContainerState) SettlePending() {
+	switch {
+	case s.Status != ContainerStatusPending:
+		s.PendingPhase, s.PendingReason, s.PendingSince = "", "", 0
+	case s.WorkerId != "":
+		// When the worker took it is not kept.
+		s.PendingPhase, s.PendingReason, s.PendingSince = ContainerPendingStarting, "", 0
+	case s.PendingPhase == "":
+		s.PendingPhase, s.PendingReason, s.PendingSince = ContainerPendingQueued, "", s.ScheduledAt
+	}
 }
 
 // ContainerLeaseRenewal is one container in a worker's routine status
@@ -316,32 +392,43 @@ type Container struct {
 	WorkerId     string          `redis:"worker_id" json:"worker_id"`
 	MachineId    string          `redis:"machine_id" json:"machine_id"`
 	DeploymentId string          `redis:"deployment_id" json:"deployment_id"`
+	// PendingPhase, PendingReason and PendingSince are those of the
+	// container's state (ContainerState.PendingPhase).
+	PendingPhase  string `redis:"pending_phase" json:"pending_phase,omitempty"`
+	PendingReason string `redis:"pending_reason" json:"pending_reason,omitempty"`
+	PendingSince  int64  `redis:"pending_since" json:"pending_since,omitempty"`
 }
 
 func (c *Container) ToProto() *pb.Container {
 	return &pb.Container{
-		ContainerId:  c.ContainerId,
-		StubId:       c.StubId,
-		Status:       string(c.Status),
-		ScheduledAt:  timestamppb.New(c.ScheduledAt),
-		StartedAt:    timestamppb.New(c.StartedAt),
-		WorkspaceId:  c.WorkspaceId,
-		WorkerId:     c.WorkerId,
-		MachineId:    c.MachineId,
-		DeploymentId: c.DeploymentId,
+		ContainerId:   c.ContainerId,
+		StubId:        c.StubId,
+		Status:        string(c.Status),
+		ScheduledAt:   timestamppb.New(c.ScheduledAt),
+		StartedAt:     timestamppb.New(c.StartedAt),
+		WorkspaceId:   c.WorkspaceId,
+		WorkerId:      c.WorkerId,
+		MachineId:     c.MachineId,
+		DeploymentId:  c.DeploymentId,
+		PendingPhase:  c.PendingPhase,
+		PendingReason: c.PendingReason,
+		PendingSince:  c.PendingSince,
 	}
 }
 
 func NewContainerFromProto(in *pb.Container) *Container {
 	return &Container{
-		ContainerId: in.ContainerId,
-		StubId:      in.StubId,
-		Status:      ContainerStatus(in.Status),
-		ScheduledAt: in.ScheduledAt.AsTime(),
-		StartedAt:   in.StartedAt.AsTime(),
-		WorkspaceId: in.WorkspaceId,
-		WorkerId:    in.WorkerId,
-		MachineId:   in.MachineId,
+		ContainerId:   in.ContainerId,
+		StubId:        in.StubId,
+		Status:        ContainerStatus(in.Status),
+		ScheduledAt:   in.ScheduledAt.AsTime(),
+		StartedAt:     in.StartedAt.AsTime(),
+		WorkspaceId:   in.WorkspaceId,
+		WorkerId:      in.WorkerId,
+		MachineId:     in.MachineId,
+		PendingPhase:  in.PendingPhase,
+		PendingReason: in.PendingReason,
+		PendingSince:  in.PendingSince,
 	}
 }
 
@@ -504,6 +591,11 @@ type ContainerRequest struct {
 	// wire fields below it, ignored by go2proto or not.
 	WaitlistPool string    `json:"waitlist_pool,omitempty" go2proto:"ignore"`
 	WaitlistedAt time.Time `json:"waitlisted_at,omitzero" go2proto:"ignore"`
+	// PendingReported is what the scheduler last stored on the container's
+	// state about what the request waits for (ContainerState.PendingPhase).
+	// The request passes several times a second while it waits, and stores
+	// only what has changed. Set by the scheduler, never by callers.
+	PendingReported string `json:"pending_reported,omitempty" go2proto:"ignore"`
 }
 
 // CapacityCpu is the CPU the request takes from its worker's capacity.

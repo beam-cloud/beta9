@@ -589,6 +589,20 @@ message AttachToContainerResponse {
   string output = 1;
   bool done = 2;
   int32 exit_code = 3;
+  // Set on a response that says what the container waits for before it
+  // runs. Such a response carries no output.
+  ContainerPending pending = 4;
+}
+
+// What a container that has not started is waiting for.
+message ContainerPending {
+  // queued, provisioning, waiting_for_capacity or starting.
+  string phase = 1;
+  // Why, when there is more to say: worker_starting, backup_worker_starting,
+  // no_capacity, machine_busy or no_spare_capacity.
+  string reason = 2;
+  // How long the container has been in this phase.
+  uint32 waited_seconds = 3;
 }
 
 // Task messages
