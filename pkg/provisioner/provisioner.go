@@ -1538,9 +1538,9 @@ func withoutWorker(m *Machine, s sighting) (reason, end string) {
 		}
 		m.DownSince = time.Time{}
 	case m.ReadyAt.IsZero():
-		// Twice as long as machines bought like it take is long enough:
-		// another is expected to be up sooner.
-		if s.usualBoot > 0 {
+		// Use market history to shorten the default. An explicitly configured
+		// timeout gives the machine the full time chosen for its pool.
+		if s.usualBoot > 0 && (s.pool == nil || s.pool.Provisioning.BootTimeout == 0) {
 			timeout = min(timeout, 2*s.usualBoot)
 		}
 		if s.now.Sub(m.CreatedAt) >= timeout {

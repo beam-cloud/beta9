@@ -3092,9 +3092,26 @@ func TestDecide(t *testing.T) {
 			want: released("it did not join its pool within 20m0s", watch.ResultNeverUp),
 		},
 		{
+			name: "not joined by the learned default boot timeout",
+			was:  machine(),
+			seen: seen(2*time.Minute, func(s *sighting) { s.usualBoot = time.Minute }),
+			want: released("it did not join its pool within 2m0s", watch.ResultNeverUp),
+		},
+		{
+			name: "still booting past the learned estimate within its configured timeout",
+			was:  machine(),
+			seen: seen(4*time.Minute, func(s *sighting) {
+				s.usualBoot = time.Minute
+				s.pool.Provisioning.BootTimeout = types.Duration(5 * time.Minute)
+			}),
+		},
+		{
 			name: "not joined by its pool's own boot timeout",
 			was:  machine(),
-			seen: seen(5*time.Minute, func(s *sighting) { s.pool.Provisioning.BootTimeout = types.Duration(5 * time.Minute) }),
+			seen: seen(5*time.Minute, func(s *sighting) {
+				s.usualBoot = time.Minute
+				s.pool.Provisioning.BootTimeout = types.Duration(5 * time.Minute)
+			}),
 			want: released("it did not join its pool within 5m0s", watch.ResultNeverUp),
 		},
 		{
