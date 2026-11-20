@@ -156,6 +156,32 @@ func TestInvocationWhoseContainerIsNotScheduledIsToldWhy(t *testing.T) {
 	requireNoA10G(t, <-done, invocation.stream)
 }
 
+// A caller whose task is stopped while its container waits for a machine is
+// told that the task was stopped, and at once: the container's request is
+// withdrawn with the task, and nothing has failed.
+func TestInvocationWhoseTaskIsStoppedWhileItWaitsIsToldSo(t *testing.T) {
+	invocation := newPendingInvocation(t)
+	_, err := invocation.containers.SetContainerPending(
+		pendingInvocationContainer, types.ContainerPendingWaitingForCapacity, types.ContainerPendingNoCapacity, time.Now(),
+	)
+	require.NoError(t, err)
+	done := invocation.follow(pendingInvocationContainer)
+	require.Eventually(t, func() bool {
+		return len(invocation.stream.phases()) > 0
+	}, 5*time.Second, 10*time.Millisecond, "the caller was not told what its invocation waits for")
+
+	invocation.task.Status = types.TaskStatusCancelled
+	require.NoError(t, invocation.containers.DeleteContainerState(pendingInvocationContainer))
+
+	select {
+	case err = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the caller still waits for a container that is gone")
+	}
+	require.Equal(t, codes.Canceled, status.Code(err))
+	require.Empty(t, invocation.stream.trailer)
+}
+
 // The scheduler giving up on a container the task has moved on from is not
 // the end of the task.
 func TestInvocationOfAnAttemptTheTaskMovedOnFromWaitsForRecovery(t *testing.T) {

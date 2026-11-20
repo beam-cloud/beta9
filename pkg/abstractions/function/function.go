@@ -322,6 +322,11 @@ func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.Functi
 			// The scheduler gave up on the task's container, and the task
 			// ends with it, whether or not it is marked so yet. The caller
 			// is told why instead of being sent to wait for a recovery.
+		case lookupErr == nil && current.Status == types.TaskStatusCancelled:
+			// The task was stopped, which is why its container is gone: for
+			// one that waited for a machine, before any had it. Nothing
+			// failed, and the caller is told so.
+			return status.Error(codes.Canceled, "the task was stopped")
 		case lookupErr == nil && !current.Status.IsCompleted():
 			return status.Error(codes.Unavailable, "function attempt is recovering")
 		}
