@@ -2,18 +2,20 @@
 
 import configparser
 import json
+import os
 import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from typing import Any, BinaryIO, Dict, Iterable, List, Optional, Tuple
+from uuid import uuid4
 
 import requests
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-from ..channel import ServiceClient
+from ..channel import ServiceClient, attribution_token, caller_metadata, detect_agent
 from ..config import DEFAULT_CONTEXT_NAME, ConfigContext, context_defaults, get_settings
 from .tools import LocalTools, error_result
 
@@ -83,6 +85,8 @@ class RemoteMCP:
         )
 
     def call(self, message: Any) -> Tuple[int, Any]:
+        # The client names itself in `initialize`, after this connection exists.
+        self.session.headers.update(dict(caller_metadata()))
         params = message.get("params", {}) if isinstance(message, dict) else {}
         name = params.get("name", "")
         timeout = TOOL_TIMEOUTS.get(name, REMOTE_TIMEOUT)
@@ -137,6 +141,8 @@ class StdioProxy:
         self._stdout: BinaryIO = sys.stdout.buffer
         self.version: str = _sdk_version()
         self._installed: Tuple[float, str] = (time.monotonic(), self.version)
+        self._caller_from_env = "BETA9_CALLER" in os.environ
+        self._attribute()
         self._follow_sign_in()
 
     def run(
@@ -204,6 +210,7 @@ class StdioProxy:
         self._refresh_sign_in()
 
         if method == "initialize":
+            self._attribute(message.get("params"))
             return self._initialize(msg_id)
         if method == "ping":
             return _result(msg_id, {})
@@ -218,6 +225,18 @@ class StdioProxy:
                 else _error(msg_id, METHOD_NOT_FOUND, f"{method}: not available before sign-in")
             )
         return self._forward(message)
+
+    def _attribute(self, params: Any = None) -> None:
+        """Attribute gateway requests, this server's and those of the CLI runs its tools start,
+        to the client that connected. BETA9_CALLER and BETA9_AGENT_SESSION set by the user win."""
+        client = params.get("clientInfo") if isinstance(params, dict) else None
+        client = client if isinstance(client, dict) else {}
+        if not self._caller_from_env:
+            name = attribution_token(client.get("name"))
+            version = attribution_token(client.get("version"))
+            agent = f"{name}/{version}" if name and version else name
+            os.environ["BETA9_CALLER"] = f"mcp/{self.version}" + (f" ({agent})" if agent else "")
+        os.environ.setdefault("BETA9_AGENT_SESSION", detect_agent()[1] or uuid4().hex)
 
     def _initialize(self, msg_id: Any) -> Dict[str, Any]:
         product = get_settings().name
