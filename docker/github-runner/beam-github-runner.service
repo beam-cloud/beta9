@@ -6,6 +6,10 @@ User=runner
 WorkingDirectory=/home/runner/actions-runner
 LimitNOFILE=65536
 LimitSTACK=16M:infinity
+# Keepalive for every connection the machine opens from here on, the runner's
+# and the job's (tcp-keepalive.c). As root, and the runner starts without it
+# where the kernel refuses.
+ExecStartPre=-+/usr/local/sbin/beam-tcp-keepalive
 # Beam starts Docker once the VM has booted. Jobs expect it in their first step.
 ExecStartPre=-/usr/bin/timeout 60 sh -c 'until docker info >/dev/null 2>&1; do sleep 1; done'
 # The VM's environment has the runner's registration from the gateway, among
