@@ -588,6 +588,12 @@ type spotChoice struct {
 	pool    eligiblePool
 	worker  *inventoryWorker
 	outlook scheduler.MachineOutlook
+	// load is what the pool counted as holding when it was chosen: its
+	// replicas of the endpoint, the machines it loses an hour, and the
+	// hours the replica waits for one. over are the pools that could have
+	// taken the replica and were passed over, with theirs.
+	load float64
+	over []spotChoice
 }
 
 func (c spotChoice) ready() bool { return c.worker != nil && !c.worker.booting }
@@ -622,19 +628,16 @@ func (inv *clusterInventory) placeSpot(gpu string, count uint32, res replicaReso
 	if inv == nil {
 		return spotChoice{}, false
 	}
-	load := func(c spotChoice) float64 {
-		return float64(held[c.pool.Name]) + c.outlook.Taken + c.wait().Hours()
-	}
-	before := func(a, b spotChoice) bool {
-		// Of two that are level, a machine that is bought comes before one
-		// that is yet to be.
-		level := cmp.Or(cmp.Compare(load(a), load(b)), compareBool(a.worker != nil, b.worker != nil))
+	// Of two that are level, a machine that is bought comes before one that
+	// is yet to be, and the pool that is listed first before the other.
+	compare := func(a, b spotChoice) int {
+		level := cmp.Or(cmp.Compare(a.load, b.load), compareBool(a.worker != nil, b.worker != nil))
 		if spread {
-			return level < 0
+			return level
 		}
-		return cmp.Or(compareBool(a.ready(), b.ready()), level) < 0
+		return cmp.Or(compareBool(a.ready(), b.ready()), level)
 	}
-	var best *spotChoice
+	var candidates []spotChoice
 	for _, pool := range inv.spot[gpu] {
 		candidate := spotChoice{pool: pool, worker: inv.spotWorker(gpu, pool.Name, count, res)}
 		if inv.outlook != nil {
@@ -643,19 +646,21 @@ func (inv *clusterInventory) placeSpot(gpu string, count uint32, res replicaReso
 		if candidate.worker == nil && (inv.buying[pool.Name] || !candidate.outlook.CanBuy) {
 			continue
 		}
-		if best == nil || before(candidate, *best) {
-			best = &candidate
-		}
+		candidate.load = float64(held[pool.Name]) + candidate.outlook.Taken + candidate.wait().Hours()
+		candidates = append(candidates, candidate)
 	}
-	switch {
-	case best == nil:
+	if len(candidates) == 0 {
 		return spotChoice{}, false
-	case best.worker == nil:
+	}
+	slices.SortStableFunc(candidates, compare)
+	best := candidates[0]
+	best.over = candidates[1:]
+	if best.worker == nil {
 		inv.awaitMachine(best.pool.Name)
-	default:
+	} else {
 		inv.takeSpot(best.worker, count, res)
 	}
-	return *best, true
+	return best, true
 }
 
 // compareBool orders true before false.

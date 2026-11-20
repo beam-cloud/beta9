@@ -260,6 +260,12 @@ func TestSpotPlacementGoesWhereMachinesAreKept(t *testing.T) {
 	assert.Equal(t, "a", place(inventory(nil, outlooks), map[string]int{"a": 1, "b": 1}, true))
 	assert.Equal(t, "b", place(inventory(nil, outlooks), map[string]int{"a": 2, "b": 1}, true))
 	assert.Equal(t, "c", place(inventory(nil, outlooks), map[string]int{"a": 4, "b": 4}, true))
+	// The choice says what it was made on, and what it passed over.
+	choice, _ := inventory(nil, outlooks).placeSpot(gpu, 2, res, map[string]int{"a": 2, "b": 1}, true)
+	assert.InDelta(t, 1+0.02+4.0/60, choice.load, 1e-9)
+	require.Len(t, choice.over, 2)
+	assert.Equal(t, []string{"a", "c"}, []string{choice.over[0].pool.Name, choice.over[1].pool.Name})
+	assert.InDelta(t, 3.5, choice.over[1].load, 1e-9, "three lost an hour, and half an hour to wait")
 
 	// A machine that is ready is no wait, which decides between pools that
 	// keep theirs as long. It does not make up for a pool that does not.
