@@ -34,6 +34,10 @@ func TestNormalizeGPUType(t *testing.T) {
 		"RTXPro6000x8_es":       GPU_RTX_PRO6000,
 		"V100_32Gx4":            GPU_V100_32,
 		"V100x8":                GPU_V100,
+		"Tesla V100-SXM2-16GB":  GPU_V100,
+		"Tesla V100-SXM2-32GB":  GPU_V100_32,
+		"Tesla V100-PCIE-32GB":  GPU_V100_32,
+		"Tesla V100S-PCIE-32GB": GPU_V100_32,
 		"RTX A4000":             GPU_A4000,
 		"NVIDIA RTX A4000":      GPU_A4000,
 		"NVIDIA A16-16Q":        GPU_A16,
@@ -64,5 +68,24 @@ func TestGPUTypesFromStringNormalizesAliases(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("gpu[%d] = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+func TestGPUTypesFromStringKeepsPlainV100CompatibleWith32GBVariants(t *testing.T) {
+	got := GPUTypesFromString("V100")
+	want := []GpuType{GPU_V100, GPU_V100_32}
+	if len(got) != len(want) {
+		t.Fatalf("GPUTypesFromString(\"V100\") = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("gpu[%d] = %q, want %q (all: %#v)", i, got[i], want[i], got)
+		}
+	}
+
+	got = GPUTypesFromString("V100-32")
+	want = []GpuType{GPU_V100_32}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("GPUTypesFromString(\"V100-32\") = %#v, want %#v", got, want)
 	}
 }

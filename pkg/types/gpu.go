@@ -49,7 +49,14 @@ func GPUTypesFromString(gpu string) []GpuType {
 		for _, g := range strings.Split(gpuString, ",") {
 			g = strings.TrimSpace(g)
 			if g != "" {
-				gpus = append(gpus, NormalizeGPUType(g))
+				normalized := NormalizeGPUType(g)
+				gpus = append(gpus, normalized)
+				// A generic V100 request predates the V100-32 distinction. Keep
+				// it eligible for 32GB workers while allowing explicit V100-32
+				// requests to remain specific.
+				if normalized == GPU_V100 {
+					gpus = append(gpus, GPU_V100_32)
+				}
 			}
 		}
 	}
@@ -168,6 +175,9 @@ func NormalizeGPUType(value string) GpuType {
 	}
 	if strings.Contains(key, "A100") && strings.Contains(key, "40G") {
 		return GPU_A100_40
+	}
+	if strings.Contains(key, "V100") && strings.Contains(key, "32G") {
+		return GPU_V100_32
 	}
 	for _, alias := range gpuAliases {
 		if strings.Contains(key, alias.match) {
