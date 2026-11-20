@@ -20,6 +20,9 @@ import (
 type Runtime interface {
 	pb.PodServiceServer
 	RunVM(context.Context, *auth.AuthInfo, string, string, types.VMSpec, string, map[string]string) error
+	// CheckVM is how RunVM would answer for a stub's workspace that is out
+	// of credit or at its concurrency limit, and launches nothing.
+	CheckVM(context.Context, *auth.AuthInfo, string) error
 	VMPortReady(context.Context, string, string, uint32) (bool, error)
 	ForwardVM(echo.Context, string, string) error
 	TunnelVM(echo.Context, string, uint32) error

@@ -246,6 +246,7 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 	}
 
 	// Persist before enqueue. A retry uses this exact runtime identity.
+	generation := v.Generation
 	if v.ContainerID == "" {
 		v.Generation++
 		v.ContainerID = types.StubTypeVM + "-" + v.StubID + "-" + randomHexID()[:8]
@@ -264,7 +265,10 @@ func (s *Service) start(ctx context.Context, info *auth.AuthInfo, v *types.VM) e
 	err = s.runtime.RunVM(ctx, info, v.StubID, v.ContainerID, v.Spec, v.MemoryCheckpointID, v.MemoryDiskSnapshots)
 	if err != nil {
 		if _, stateErr := s.containers.GetContainerState(v.ContainerID); (&types.ErrContainerStateNotFound{}).From(stateErr) {
-			v.ContainerID = ""
+			// No runtime came of the identity, so it was no generation of
+			// the VM: those count the runtimes it has had, not the times it
+			// asked for one.
+			v.ContainerID, v.Generation = "", generation
 			if saveErr := s.repo.SaveVM(ctx, v); saveErr != nil {
 				return saveErr
 			}
@@ -748,9 +752,10 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 
 	pause := 30 * time.Second
 	if runner && queued(v) && v.Waiting != waitingCredits {
-		// Room in the workspace's limit comes at any moment, and to be
-		// refused again costs nothing. Credit comes when someone adds it,
-		// and billing is asked no more often for a runner than for any VM.
+		// Room in the workspace's limit comes at any moment, so a runner
+		// asks for it at every pass (roomFor). Credit comes when someone
+		// adds it, and billing is asked no more often for a runner than for
+		// any VM.
 		pause = 0
 	}
 
@@ -829,10 +834,42 @@ func (s *Service) reconcileVM(ctx context.Context, v *types.VM) error {
 		return nil
 	}
 
+	if runner && !s.roomFor(ctx, info, v) {
+		return nil
+	}
+
 	err = s.start(ctx, info, v)
 	if runner && s.queue(ctx, v, err) {
 		return nil
 	}
 
 	return err
+}
+
+// How long a VM that waits for room in its workspace's concurrency limit
+// goes by what the scheduler says of it (roomFor) before it is launched to
+// find out.
+const queuedLaunchInterval = time.Minute
+
+// roomFor reports whether a VM is to be launched at this pass. One that
+// waits for room in its workspace's concurrency limit asks the scheduler
+// first whether there is any, and is launched only if there is.
+//
+// A launch that the limit refuses is not free: it gives the VM a runtime
+// identity, takes it back, and writes the VM four times, after the reads of
+// a container request. Every gateway does that at every pass for every VM
+// that waits, and the most wait when a workspace is at its busiest. To ask
+// is a few reads, and writes nothing.
+//
+// A VM is still launched once in queuedLaunchInterval whatever the answer,
+// which is counted from when it was last written, by any gateway. Whether
+// it starts then does not depend on the question and the launch agreeing
+// about what the limit covers.
+func (s *Service) roomFor(ctx context.Context, info *auth.AuthInfo, v *types.VM) bool {
+	if !queued(v) || v.Waiting != waitingQuota || time.Since(v.UpdatedAt) >= queuedLaunchInterval {
+		return true
+	}
+
+	var limit *types.ThrottledByConcurrencyLimitError
+	return !errors.As(s.runtime.CheckVM(ctx, info, v.StubID), &limit)
 }

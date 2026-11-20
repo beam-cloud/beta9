@@ -10,6 +10,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	computemodel "github.com/beam-cloud/beta9/pkg/compute"
 	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
@@ -110,4 +111,50 @@ func TestRunVMValidatesGPUBeforeLaunch(t *testing.T) {
 			}
 		})
 	}
+}
+
+// CheckVM answers for a workspace's concurrency limit as a launch would, and
+// takes none of it: a VM that asks any number of times has nothing reserved,
+// and is told of room as soon as what holds it is gone.
+func TestCheckVMAnswersForTheWorkspaceLimitAndReservesNothing(t *testing.T) {
+	ctx := context.Background()
+	rdb, err := repository.NewRedisClientForTest()
+	require.NoError(t, err)
+	config, err := json.Marshal(types.StubConfigV1{
+		UseVM:   true,
+		Env:     []string{"BEAM_VM_SYSTEMD=1"},
+		Runtime: types.Runtime{Cpu: 16000},
+	})
+	require.NoError(t, err)
+	backend := &sandboxBackendRepository{
+		stub: &types.StubWithRelated{Stub: types.Stub{ExternalId: "stub", Type: types.StubType(types.StubTypeVM), Config: string(config)}},
+	}
+	limit := &types.ConcurrencyLimit{CPUMillicoreLimit: 24000, GPULimit: 1}
+	workspaces := repository.NewWorkspaceRedisRepositoryForTest(rdb)
+	require.NoError(t, workspaces.SetConcurrencyLimitByWorkspaceId("workspace", limit))
+	admission, err := scheduler.NewScheduler(ctx, types.AppConfig{}, rdb, nil, backend, workspaces)
+	require.NoError(t, err)
+	service := &GenericPodService{backendRepo: backend, scheduler: admission}
+	info := &auth.AuthInfo{Workspace: &types.Workspace{ExternalId: "workspace"}}
+
+	// 16 of 24 CPUs fit as often as it is asked, so no answer took any.
+	for range 3 {
+		require.NoError(t, service.CheckVM(ctx, info, "stub"))
+	}
+
+	containers := repository.NewContainerRedisRepositoryForTest(rdb)
+	other := &types.ContainerRequest{ContainerId: "other", StubId: "other-stub", WorkspaceId: "workspace", Cpu: 16000}
+	require.NoError(t, containers.CreateContainerStateWithConcurrencyLimit(limit, other))
+	var refused *types.ThrottledByConcurrencyLimitError
+	for range 3 {
+		require.ErrorAs(t, service.CheckVM(ctx, info, "stub"), &refused)
+	}
+	require.Equal(t, "cpu quota exceeded", refused.Reason)
+
+	require.NoError(t, containers.DeleteContainerState(other.ContainerId))
+	require.NoError(t, service.CheckVM(ctx, info, "stub"))
+
+	// A stub that is no VM's is not asked about.
+	backend.stub.Config = `{}`
+	require.ErrorContains(t, service.CheckVM(ctx, info, "stub"), "microvm stub")
 }

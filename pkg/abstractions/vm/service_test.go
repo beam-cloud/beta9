@@ -489,6 +489,11 @@ type vmRuntime struct {
 	// What the scheduler refuses every launch with, and how many it has.
 	refuse   error
 	refusals int
+	// How often it was asked whether it would refuse one, and whether it
+	// then says that it would not, as it does of room that is gone by the
+	// time of the launch.
+	checks int
+	room   bool
 }
 
 func (r *vmRuntime) SetVMICEHandler(handler func(net.Conn)) { r.iceHandler = handler }
@@ -514,6 +519,16 @@ func (r *vmRuntime) RunVM(_ context.Context, info *auth.AuthInfo, stub, cid stri
 	r.containers.states[cid] = &types.ContainerState{ContainerId: cid, StubId: stub, Status: types.ContainerStatusRunning}
 	return nil
 }
+
+func (r *vmRuntime) CheckVM(context.Context, *auth.AuthInfo, string) error {
+	r.checks++
+	if r.room {
+		return nil
+	}
+
+	return r.refuse
+}
+
 func (r *vmRuntime) VMPortReady(context.Context, string, string, uint32) (bool, error) {
 	return true, nil
 }

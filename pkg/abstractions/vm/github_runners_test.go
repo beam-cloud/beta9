@@ -2520,12 +2520,33 @@ func TestGitHubRunnerWaitsForRoomInTheWorkspaceLimit(t *testing.T) {
 	require.Contains(t, string(response), `"waiting":"Workspace CPU limit reached"`)
 	require.NotContains(t, string(response), "concurrency_limit_reached")
 
-	// However often it is refused, it stays as it is and asks again at
-	// once, so that it starts as soon as there is room.
+	// While there is no room it asks at every pass whether there is, so
+	// that it starts as soon as there is, and is not launched to find out:
+	// nothing is written of it, and it has had no runtime.
 	for range 7 {
 		require.NoError(t, r.s.reconcileVM(ctx, v))
 	}
-	require.Equal(t, 8, runtime.refusals)
+	require.Equal(t, 7, runtime.checks)
+	require.Equal(t, 1, runtime.refusals, "the launch it was made with")
+	require.Empty(t, statuses(), "nothing is written of a runner that waits")
+	require.Zero(t, v.Generation, "a launch that is refused is no runtime")
+	require.Equal(t, types.VMStateQueued, v.Status)
+
+	// Room that the scheduler finds can be gone by the launch, and a runner
+	// is launched once in a while whatever the scheduler finds. Refused, it
+	// stays as it is.
+	runtime.room = true
+	require.NoError(t, r.s.reconcileVM(ctx, v))
+	require.Equal(t, 8, runtime.checks)
+	require.Equal(t, 2, runtime.refusals)
+	runtime.room = false
+	v.UpdatedAt = time.Now().Add(-queuedLaunchInterval)
+	require.NoError(t, r.s.reconcileVM(ctx, v))
+	require.Equal(t, 8, runtime.checks, "it is launched without asking")
+	require.Equal(t, 3, runtime.refusals)
+	v.UpdatedAt = time.Now()
+	require.Zero(t, v.Generation)
+	require.Empty(t, v.ContainerID)
 	require.Equal(t, types.VMStateQueued, v.Status)
 	require.Empty(t, v.Error)
 	require.NotEmpty(t, statuses())
@@ -2546,6 +2567,7 @@ func TestGitHubRunnerWaitsForRoomInTheWorkspaceLimit(t *testing.T) {
 	require.Equal(t, runtime.requests[0], v.ContainerID)
 	require.Equal(t, types.VMStateStarting, v.Status)
 	require.Empty(t, v.Waiting)
+	require.EqualValues(t, 1, v.Generation, "the runtime it starts in is its first")
 
 	// A gateway that stopped before it could say so left it queued with its
 	// runtime, which the next pass, of any gateway, finds starting.
