@@ -417,14 +417,19 @@ func endpointState(app *types.ManagedEndpoint, fleet *types.Fleet, gitops *types
 		return StateDisabled, "not enabled in config.yaml"
 	}
 	var want uint32
-	var gpus []string
+	var gpus, spot []string // the GPU types it borrows idle, and those bought for it
 	serverless := false
 	for gpu, p := range placements {
 		want += p.MinReplicas
-		gpus = append(gpus, gpu)
 		serverless = serverless || p.Serverless
+		if p.Spot {
+			spot = append(spot, gpu)
+		} else {
+			gpus = append(gpus, gpu)
+		}
 	}
 	slices.Sort(gpus)
+	slices.Sort(spot)
 	var ready, alive uint32
 	var lastFailure *types.EndpointReplica
 	for _, r := range replicas {
@@ -453,7 +458,14 @@ func endpointState(app *types.ManagedEndpoint, fleet *types.Fleet, gitops *types
 	case want == 0:
 		return StateWaitingForCapacity, "minReplicas is 0; fills spare " + strings.Join(gpus, ", ") + " capacity only"
 	}
-	return StateWaitingForCapacity, "no idle " + strings.Join(gpus, ", ") + " in an opted-in pool"
+	var waits []string
+	if len(gpus) > 0 {
+		waits = append(waits, "no idle "+strings.Join(gpus, ", ")+" in an opted-in pool")
+	}
+	if len(spot) > 0 {
+		waits = append(waits, "no Spot pool has or can buy "+strings.Join(spot, ", "))
+	}
+	return StateWaitingForCapacity, strings.Join(waits, "; ")
 }
 
 func capacityToProto(c types.ReplicaCapacity) *pb.ReplicaCapacity {

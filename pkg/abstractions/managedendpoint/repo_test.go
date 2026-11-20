@@ -315,4 +315,14 @@ func TestEndpointState(t *testing.T) {
 	state, reason := endpointState(endpoint, placed, nil, []*types.EndpointReplica{replica(types.ReplicaStatusFailed, "engine exited: CUDA out of memory")})
 	assert.Equal(t, StateFailed, state)
 	assert.Contains(t, reason, "CUDA out of memory")
+
+	// What it waits for depends on the placement: an idle GPU, or a machine
+	// a Spot pool buys.
+	_, reason = endpointState(endpoint, placed, nil, nil)
+	assert.Equal(t, "no idle H100 in an opted-in pool", reason)
+	both := &types.Fleet{Endpoints: map[string]types.FleetEndpoint{"acme/model": {Enabled: true, GPUs: map[string]types.FleetPlacement{
+		"H100": {Priority: 1, MinReplicas: 1}, "B200": {Priority: 1, MinReplicas: 2, Spot: true},
+	}}}}
+	_, reason = endpointState(endpoint, both, nil, nil)
+	assert.Equal(t, "no idle H100 in an opted-in pool; no Spot pool has or can buy B200", reason)
 }
