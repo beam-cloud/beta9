@@ -217,10 +217,12 @@ func (s *Service) reviewFleet(r *review) {
 		}
 		for _, gpu := range slices.Sorted(maps.Keys(entry.GPUs)) {
 			_, declared := app.Spec.Gpu[gpu]
-			switch {
+			switch spot := entry.GPUs[gpu].Spot; {
 			case !declared:
 				r.fail("config.yaml: %s does not declare gpu %q in its app", id, gpu)
-			case r.in.DryRun && entry.Enabled && len(s.controller.pools(gpu)) == 0:
+			case r.in.DryRun && entry.Enabled && spot && !s.controller.hosts(gpu, spot):
+				r.warn("config.yaml: %s: no Spot pool on this cluster hosts %s for managed endpoints", id, gpu)
+			case r.in.DryRun && entry.Enabled && !s.controller.hosts(gpu, spot):
 				r.warn("config.yaml: %s: no pool on this cluster hosts %s", id, gpu)
 			}
 		}

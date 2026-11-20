@@ -15,6 +15,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/common/llmroute"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 )
@@ -28,6 +29,7 @@ const (
 	controllerLockTTL  = 30 * time.Second
 	terminalRetention  = 30 * time.Minute
 	schedulingGrace    = 10 * time.Minute
+	machineGrace       = 30 * time.Minute // a Spot replica's machine is bought and boots before it is scheduled
 	loadingGrace       = 30 * time.Minute
 	containerLostGrace = 20 * time.Second
 	maxStartsPerTick   = 8
@@ -72,6 +74,13 @@ func (c *controller) silentFor(lastHeartbeat, now time.Time) time.Duration {
 	return now.Sub(lastHeartbeat)
 }
 
+// silent reports a harness replica whose heartbeats stopped: its engine or
+// its machine is gone, whatever its record still says.
+func (s *Service) silent(replica *types.EndpointReplica, now time.Time) bool {
+	return replica.HarnessEnabled && !replica.LastHeartbeat.IsZero() &&
+		s.controller.silentFor(replica.LastHeartbeat, now) > s.config.ReplicaStaleAfter
+}
+
 func (c *controller) reconcile(ctx context.Context) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -84,7 +93,7 @@ func (c *controller) reconcile(ctx context.Context) (err error) {
 		return err
 	}
 	live := c.observeReplicas(ctx, replicas)
-	inv, err := c.inventory(live)
+	inv, err := c.inventory(live, replicas)
 	if err != nil {
 		return err
 	}
@@ -123,9 +132,15 @@ type group struct{ endpointID, gpu string }
 // protectedReplicas selects the copies that cover each preemption:false
 // minimum: serving current first, then serving old (so a rollout keeps its
 // minimum until the replacement is ready), then existing roles to avoid churn.
-// With cluster preemption off, every hot replica is protected.
+// With cluster preemption off, every hot replica is protected. A Spot replica
+// always is: its machine was bought for it, and only its provider takes it.
 func protectedReplicas(fleet *types.Fleet, endpoints map[string]*types.ManagedEndpoint, live []*types.EndpointReplica, preemptionEnabled bool) map[string]bool {
 	desired := map[string]bool{}
+	for _, r := range live {
+		if r.Alive() && r.Spot {
+			desired[r.ID] = true
+		}
+	}
 	rank := func(endpoint *types.ManagedEndpoint, r *types.EndpointReplica) int {
 		n := 0
 		if r.Serving() {
@@ -144,7 +159,7 @@ func protectedReplicas(fleet *types.Fleet, endpoints map[string]*types.ManagedEn
 	}
 	if !preemptionEnabled {
 		for _, r := range live {
-			if r.Alive() && !fleet.Placements(r.EndpointID)[r.GPU].Serverless {
+			if r.Alive() && !r.Spot && !fleet.Placements(r.EndpointID)[r.GPU].Serverless {
 				desired[r.ID] = true
 			}
 		}
@@ -160,7 +175,7 @@ func protectedReplicas(fleet *types.Fleet, endpoints map[string]*types.ManagedEn
 			}
 			var candidates []*types.EndpointReplica
 			for _, r := range live {
-				if r.EndpointID == id && r.GPU == gpu && r.Alive() {
+				if r.EndpointID == id && r.GPU == gpu && r.Alive() && !r.Spot {
 					candidates = append(candidates, r)
 				}
 			}
@@ -269,21 +284,33 @@ func (c *controller) readDemand(ctx context.Context, fleet *types.Fleet, live []
 type eligiblePool struct {
 	Name     string
 	Locality string
+	Spot     bool
 }
 
 type inventoryWorker struct {
 	pool, gpu   string
 	free, total uint32
 	cpu, memory int64 // free, in scheduler units
+	// booting is a machine a Spot pool has bought that has yet to join.
+	booting bool
 }
 
-// clusterInventory is where replicas may run: opted-in pools per GPU key and
-// the idle GPUs of their ready workers. The scheduler enforces the same pool
-// floors at admission; a start it refuses backs the endpoint off.
+// clusterInventory is where replicas may run. A pool that opted in is one of
+// two kinds. Most lend replicas the GPUs their ready workers have idle
+// (pools): nothing is provisioned for a replica there, and the scheduler
+// enforces the same pool floors at admission. A Spot pool buys machines for
+// the replicas of Spot placements (spot), and runs no others.
 type clusterInventory struct {
-	pools   map[string][]eligiblePool
+	pools   map[string][]eligiblePool // by GPU key, sorted by name
+	spot    map[string][]eligiblePool // by GPU key, sorted by name
 	workers map[string]*inventoryWorker
 	floors  map[string]uint32 // pool -> minFreeGPU
+	// outlook is what to expect of a Spot pool for a replica; see
+	// scheduler.PoolOutlook.
+	outlook func(pool string, gpus uint32, res replicaResources) scheduler.MachineOutlook
+	// buying is the Spot pools with a replica that waits for a machine no
+	// worker stands for yet.
+	buying map[string]bool
 }
 
 type replicaResources struct{ cpu, memory int64 }
@@ -331,41 +358,94 @@ func (c *controller) pools(gpu string) []string {
 	return out
 }
 
+// hosts reports whether a pool on this cluster takes the replicas of a
+// placement on the GPU type: a Spot pool for a Spot placement, and a pool
+// that lends its idle GPUs for any other.
+func (c *controller) hosts(gpu string, spot bool) bool {
+	for _, cfg := range c.poolConfigs() {
+		if cfg.ManagedEndpoints.Enabled && types.GPUKey(cfg.GPUType) == gpu && cfg.AllowsManagedEndpointSpot() == spot {
+			return true
+		}
+	}
+	return false
+}
+
 func localityOf(name string, cfg types.WorkerPoolConfig) string {
 	return cmp.Or(strings.TrimSpace(cfg.Locality), name)
 }
 
-func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInventory, error) {
+func (c *controller) inventory(replicas, known []*types.EndpointReplica) (*clusterInventory, error) {
 	workers, err := c.s.workers.GetAllWorkers()
 	if err != nil {
 		return nil, err
 	}
-	inv := &clusterInventory{pools: map[string][]eligiblePool{}, workers: map[string]*inventoryWorker{}, floors: map[string]uint32{}}
-	for name, cfg := range c.poolConfigs() {
+	inv := &clusterInventory{
+		pools: map[string][]eligiblePool{}, spot: map[string][]eligiblePool{},
+		workers: map[string]*inventoryWorker{}, floors: map[string]uint32{}, buying: map[string]bool{},
+	}
+	if c.s.scheduler != nil {
+		inv.outlook = func(pool string, gpus uint32, res replicaResources) scheduler.MachineOutlook {
+			return c.s.scheduler.PoolOutlook(pool, res.cpu, res.memory, gpus)
+		}
+	}
+	configs := c.poolConfigs()
+	for name, cfg := range configs {
 		if !cfg.ManagedEndpoints.Enabled {
 			continue
 		}
 		key := types.GPUKey(cfg.GPUType)
-		inv.pools[key] = append(inv.pools[key], eligiblePool{Name: name, Locality: localityOf(name, cfg)})
+		pool := eligiblePool{Name: name, Locality: localityOf(name, cfg), Spot: cfg.AllowsManagedEndpointSpot()}
+		if pool.Spot {
+			inv.spot[key] = append(inv.spot[key], pool)
+			continue
+		}
+		inv.pools[key] = append(inv.pools[key], pool)
 		floor, _ := strconv.ParseUint(cfg.PoolSizing.MinFreeGPU, 10, 32)
 		inv.floors[name] = uint32(floor)
 	}
-	for _, pools := range inv.pools {
-		slices.SortFunc(pools, func(a, b eligiblePool) int { return strings.Compare(a.Name, b.Name) })
+	for _, pools := range []map[string][]eligiblePool{inv.pools, inv.spot} {
+		for _, pools := range pools {
+			slices.SortFunc(pools, func(a, b eligiblePool) int { return strings.Compare(a.Name, b.Name) })
+		}
+	}
+	// A worker that a replica was scheduled on has joined. When its machine
+	// is lost its pool makes it pending again, with all its room, until the
+	// pool lets go of the machine: that is not a machine on its way.
+	joined := map[string]bool{}
+	for _, r := range known {
+		joined[r.WorkerID] = true
 	}
 	for _, w := range workers {
-		// Match admission: hosted requests do not opt into Preemptable workers.
-		if w == nil || w.Status != types.WorkerStatusAvailable || w.Gpu == "" || w.Preemptable {
+		if w == nil || w.Gpu == "" {
 			continue
 		}
-		if cfg, ok := c.poolConfig(w.PoolName); !ok || !cfg.ManagedEndpoints.Enabled {
+		// A machine its provider may take back hosts the replicas of Spot
+		// placements, and no others: admission holds the same line.
+		cfg, ok := configs[w.PoolName]
+		if !ok || !cfg.ManagedEndpoints.Enabled || w.Preemptable != cfg.AllowsManagedEndpointSpot() {
 			continue
 		}
-		inv.workers[w.Id] = &inventoryWorker{pool: w.PoolName, gpu: types.GPUKey(w.Gpu), free: w.FreeGpuCount, total: w.TotalGpuCount, cpu: w.FreeCpu, memory: w.FreeMemory}
+		// The worker of a machine a Spot pool bought is pending until the
+		// machine joins, and the scheduler keeps its room for what waits.
+		booting := w.Status == types.WorkerStatusPending && w.Preemptable && cfg.Buys() && !joined[w.Id]
+		if w.Status != types.WorkerStatusAvailable && !booting {
+			continue
+		}
+		inv.workers[w.Id] = &inventoryWorker{pool: w.PoolName, gpu: types.GPUKey(w.Gpu), free: w.FreeGpuCount, total: w.TotalGpuCount, cpu: w.FreeCpu, memory: w.FreeMemory, booting: booting}
 	}
 	// Replicas still waiting for a worker hold GPUs no worker reports yet.
 	for _, r := range replicas {
 		if r.Status != types.ReplicaStatusScheduling || r.WorkerID != "" || r.GPU == types.CPUInventoryKey {
+			continue
+		}
+		if r.Spot {
+			// It takes a machine of its pool, or waits for one to be bought.
+			res := c.reserved(r)
+			if w := inv.spotWorker(r.GPU, r.PoolName, r.GPUCount, res); w != nil {
+				inv.takeSpot(w, r.GPUCount, res)
+			} else {
+				inv.buying[r.PoolName] = true
+			}
 			continue
 		}
 		for need := max(r.GPUCount, 1); need > 0; {
@@ -378,6 +458,20 @@ func (c *controller) inventory(replicas []*types.EndpointReplica) (*clusterInven
 		}
 	}
 	return inv, nil
+}
+
+// reserved is what the replica's container holds on its worker, and nothing
+// when that is not known.
+func (c *controller) reserved(r *types.EndpointReplica) replicaResources {
+	if c.s.containers == nil {
+		return replicaResources{}
+	}
+	state, err := c.s.containers.GetContainerState(r.ContainerID)
+	if err != nil || state == nil {
+		return replicaResources{}
+	}
+	res, _ := reservedReplicaResources(state.Cpu, state.Memory)
+	return res
 }
 
 func (inv *clusterInventory) idlest(gpu, pool string) *inventoryWorker {
@@ -446,4 +540,115 @@ func (inv *clusterInventory) place(gpu string, count uint32) (eligiblePool, bool
 	w.free -= max(count, 1)
 	i := slices.IndexFunc(inv.pools[gpu], func(p eligiblePool) bool { return p.Name == w.pool })
 	return inv.pools[gpu][i], true
+}
+
+// spotWorker is the machine of a Spot pool that a replica would take: one
+// with room for all of it, a ready one before one that is booting, and the
+// fullest of those, as the scheduler packs them.
+func (inv *clusterInventory) spotWorker(gpu, pool string, count uint32, res replicaResources) *inventoryWorker {
+	for _, booting := range []bool{false, true} {
+		var best *inventoryWorker
+		var bestID string
+		for id, w := range inv.workers {
+			fits := w.pool == pool && w.gpu == gpu && w.booting == booting && w.free >= max(count, 1) && w.cpu >= res.cpu && w.memory >= res.memory
+			if fits && (best == nil || w.free < best.free || w.free == best.free && id < bestID) {
+				best, bestID = w, id
+			}
+		}
+		if best != nil {
+			return best
+		}
+	}
+	return nil
+}
+
+func (inv *clusterInventory) takeSpot(w *inventoryWorker, count uint32, res replicaResources) {
+	w.free, w.cpu, w.memory = w.free-max(count, 1), w.cpu-res.cpu, w.memory-res.memory
+}
+
+// spotRoom reports whether a Spot machine that is ready has room for a replica.
+func (inv *clusterInventory) spotRoom(gpu string, count uint32, res replicaResources) bool {
+	return inv != nil && slices.ContainsFunc(inv.spot[gpu], func(pool eligiblePool) bool {
+		w := inv.spotWorker(gpu, pool.Name, count, res)
+		return w != nil && !w.booting
+	})
+}
+
+// spotChoice is a Spot pool a replica could go to.
+type spotChoice struct {
+	pool    eligiblePool
+	worker  *inventoryWorker // the machine there it would take; nil when the pool would buy one
+	outlook scheduler.MachineOutlook
+}
+
+func (c spotChoice) ready() bool { return c.worker != nil && !c.worker.booting }
+
+// wait is how long until the replica has a machine: no time on one that is
+// ready, and otherwise as long as the pool's machines take to come up.
+func (c spotChoice) wait() time.Duration {
+	if c.ready() {
+		return 0
+	}
+	return c.outlook.ComeUp
+}
+
+// load is what the pool counts as holding, where held is the endpoint's
+// replicas by pool: one more for each machine it loses an hour, and for each
+// hour the replica would wait for a machine there.
+func (c spotChoice) load(held map[string]int) float64 {
+	return float64(held[c.pool.Name]) + c.outlook.Taken + c.wait().Hours()
+}
+
+// placeSpot picks the Spot pool for a replica, among those that have a
+// machine with room for it, ready or booting, or can buy one.
+//
+// A minimum is there to survive the loss of a machine, and Spot machines are
+// lost a market at a time, so it is spread: its next copy goes to the pool
+// with the least load. So among pools that keep their machines a minimum is
+// spread evenly, and goes where it serves soonest among equals. A pool that
+// loses its machines as fast as it buys them is passed over until the others
+// hold several, and how long a machine takes to come up decides between
+// pools that keep theirs about as long.
+//
+// A copy started for requests that are waiting goes where a machine is
+// ready, as it serves minutes sooner there, and among such pools as a
+// minimum does.
+func (inv *clusterInventory) placeSpot(gpu string, count uint32, res replicaResources, held map[string]int, spread bool) (spotChoice, bool) {
+	if inv == nil {
+		return spotChoice{}, false
+	}
+	before := func(a, b spotChoice) bool {
+		switch {
+		case !spread && a.ready() != b.ready():
+			return a.ready()
+		case a.load(held) != b.load(held):
+			return a.load(held) < b.load(held)
+		}
+		// Of two that are level, a machine that is bought comes first.
+		return a.worker != nil && b.worker == nil
+	}
+	var best *spotChoice
+	for _, pool := range inv.spot[gpu] {
+		choice := spotChoice{pool: pool, worker: inv.spotWorker(gpu, pool.Name, count, res)}
+		if inv.outlook != nil {
+			choice.outlook = inv.outlook(pool.Name, max(count, 1), res)
+		}
+		// A pool is asked for one machine at a time: what it can still buy,
+		// and the room left on the machine it gets, is known once it has it.
+		if choice.worker == nil && (inv.buying[pool.Name] || !choice.outlook.CanBuy) {
+			continue
+		}
+		if best == nil || before(choice, *best) {
+			best = &choice
+		}
+	}
+	switch {
+	case best == nil:
+		return spotChoice{}, false
+	case best.worker == nil:
+		inv.buying[best.pool.Name] = true
+	default:
+		inv.takeSpot(best.worker, count, res)
+	}
+	return *best, true
 }

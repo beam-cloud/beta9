@@ -106,18 +106,18 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		in.Extra = "{}"
 	}
 
-	if errMsg := resourcePolicy.validateManagedLimits(gws, in, authInfo.Workspace); errMsg != "" {
-		return &pb.GetOrCreateStubResponse{
-			Ok:     false,
-			ErrMsg: errMsg,
-		}, nil
-	}
-
 	managedEndpoint, err := gws.managedEndpointStubConfig(ctx, authInfo, in)
 	if err != nil {
 		return &pb.GetOrCreateStubResponse{
 			Ok:     false,
 			ErrMsg: err.Error(),
+		}, nil
+	}
+
+	if errMsg := resourcePolicy.validateManagedLimits(gws, in, authInfo.Workspace, managedEndpoint); errMsg != "" {
+		return &pb.GetOrCreateStubResponse{
+			Ok:     false,
+			ErrMsg: errMsg,
 		}, nil
 	}
 	if managedGpus := managedGpuTypes(managedEndpoint); len(managedGpus) > 0 {
@@ -768,11 +768,11 @@ func (p stubResourcePolicy) maxReplicasLimit(defaultLimit uint64) uint64 {
 	return defaultLimit
 }
 
-func (p stubResourcePolicy) validateManagedLimits(gws *GatewayService, in *pb.GetOrCreateStubRequest, workspace *types.Workspace) string {
+func (p stubResourcePolicy) validateManagedLimits(gws *GatewayService, in *pb.GetOrCreateStubRequest, workspace *types.Workspace, managedEndpoint *types.ManagedEndpointStubConfig) string {
 	if p.privatePoolTargeted {
 		return ""
 	}
-	return gws.managedStubLimitError(in, workspace)
+	return gws.managedStubLimitError(in, workspace, managedEndpoint)
 }
 
 func privatePoolFallback(pool *types.PoolConfig) string {
@@ -842,8 +842,12 @@ func privatePoolStateFallback(state *compute.PoolState) string {
 	return ""
 }
 
-func (gws *GatewayService) managedStubLimitError(in *pb.GetOrCreateStubRequest, workspace *types.Workspace) string {
-	valid, errorMsg := types.ValidateCpuAndMemory(in.Cpu, in.Memory, gws.appConfig.GatewayService.StubLimits)
+func (gws *GatewayService) managedStubLimitError(in *pb.GetOrCreateStubRequest, workspace *types.Workspace, managedEndpoint *types.ManagedEndpointStubConfig) string {
+	limits := gws.appConfig.GatewayService.StubLimits
+	if managedEndpoint != nil {
+		limits.Memory = max(limits.Memory, uint64(gws.appConfig.ManagedEndpoints.MaxReplicaMemoryMiB))
+	}
+	valid, errorMsg := types.ValidateCpuAndMemory(in.Cpu, in.Memory, limits)
 	if !valid {
 		return errorMsg
 	}

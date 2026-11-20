@@ -71,6 +71,8 @@ type ManagedEndpointsConfig struct {
 	Preemption  ManagedEndpointsPreemption    `key:"preemption" json:"preemption"`
 	Reconcile   ManagedEndpointsReconcile     `key:"reconcile" json:"reconcile"`
 	Routing     ManagedEndpointsRoutingConfig `key:"routing" json:"routing"`
+	// MaxReplicaMemoryMiB can raise the stub memory limit for managed endpoints.
+	MaxReplicaMemoryMiB uint32 `key:"maxReplicaMemoryMiB" json:"max_replica_memory_mib"`
 	// HeartbeatInterval is what replicas are told to heartbeat at.
 	HeartbeatInterval time.Duration `key:"heartbeatInterval" json:"heartbeat_interval"`
 	// ReplicaStaleAfter marks replicas failed when no heartbeat/probe arrives.
@@ -91,7 +93,6 @@ type ManagedEndpointsReconcile struct {
 }
 
 type ManagedEndpointsRoutingConfig struct {
-	SlowStartSeconds uint32 `key:"slowStartSeconds" json:"slow_start_seconds"`
 	// Cluster-wide in-flight caps, leased in Redis per request across every
 	// gateway; the engines' own bound is the replicas' MaxConcurrency.
 	PerWorkspaceConcurrency uint32 `key:"perWorkspaceConcurrency" json:"per_workspace_concurrency"`
@@ -118,9 +119,6 @@ func (c *ManagedEndpointsConfig) ApplyDefaults() {
 		c.ReplicaStaleAfter = 3 * c.HeartbeatInterval
 	}
 	c.ReplicaStaleAfter = max(c.ReplicaStaleAfter, 2*c.HeartbeatInterval)
-	if c.Routing.SlowStartSeconds == 0 {
-		c.Routing.SlowStartSeconds = 30
-	}
 	for _, d := range []struct {
 		v   *time.Duration
 		def time.Duration
@@ -858,6 +856,17 @@ func (p WorkerPoolProvisioningConfig) written() bool {
 // Buys reports whether the pool buys its machines from a provider.
 func (c WorkerPoolConfig) Buys() bool {
 	return len(c.Provisioning.Providers) > 0
+}
+
+// AllowsManagedEndpointSpot checks the pool's explicit endpoint and Spot policies.
+func (c WorkerPoolConfig) AllowsManagedEndpointSpot() bool {
+	if !c.ManagedEndpoints.Enabled {
+		return false
+	}
+	if c.Buys() {
+		return c.Provisioning.Spot && !c.Provisioning.OnDemand
+	}
+	return c.Preemptable
 }
 
 // ApplyProvisioning fills in what a provisioning block implies. Machines that

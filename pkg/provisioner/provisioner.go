@@ -58,8 +58,8 @@ const (
 	recordsMaxAge = time.Second
 
 	// soldOutFor is how long an offer is passed over, whatever the provider
-	// lists, after the provider refused to sell it for lack of stock or
-	// failed to start a machine bought as it.
+	// lists, after the provider refused to sell it for lack of stock, failed
+	// to start a machine bought as it, or took one back before it ran.
 	soldOutFor = 5 * time.Minute
 	// quotaBackoff is how long a pool does not buy from a provider after it
 	// refused for quota.
@@ -233,22 +233,56 @@ var (
 // this replica has yet to read: the next tick reads it, and says so itself
 // when it cannot.
 func (p *Provisioner) CanProvision(ctx context.Context, pool string, needs ...scheduler.MachineNeed) bool {
+	_, _, can := p.wouldBuy(ctx, pool, needs)
+	return can
+}
+
+// wouldBuy is the offer the pool would buy for needs now, with the machines
+// there is a record of, and whether there is one.
+func (p *Provisioner) wouldBuy(ctx context.Context, pool string, needs []scheduler.MachineNeed) (providers.Offer, []Machine, bool) {
 	held, err := p.recentRecords(ctx)
 	if err != nil {
 		log.Warn().Err(err).Str("pool_name", pool).Msg("provisioner: cannot read the machines held")
-		return false
+		return providers.Offer{}, nil, false
 	}
 	// A machine the pool is still buying does not count against it: whoever
 	// waits for the pool stays while it is bought.
-	held = slices.DeleteFunc(slices.Clone(held), func(m Machine) bool {
+	counted := slices.DeleteFunc(slices.Clone(held), func(m Machine) bool {
 		return m.Pool == pool && m.InstanceID == "" && m.Release == nil && p.clock.Now().Sub(m.CreatedAt) < buyGrace
 	})
-	_, _, err = p.choose(pool, needs, held)
+	offer, _, err := p.choose(pool, needs, counted)
 	unread := errors.Is(err, errNotBuying) || errors.Is(err, errNotListed)
 	if err != nil && !unread && p.unsaid(pool, err) {
 		log.Warn().Err(err).Str("pool_name", pool).Msg("provisioner: the pool cannot buy a machine")
 	}
-	return err == nil
+	return offer, held, err == nil
+}
+
+// Expect says what the machines bought before say to expect of the pool's:
+// of the one it would buy for needs now and, when it can buy none, of those
+// it has. Like CanProvision, it asks no provider.
+func (p *Provisioner) Expect(ctx context.Context, pool string, needs ...scheduler.MachineNeed) scheduler.MachineOutlook {
+	offer, held, can := p.wouldBuy(ctx, pool, needs)
+	offers := []providers.Offer{offer}
+	if !can {
+		offers = nil
+		for _, machine := range held {
+			if machine.Pool == pool && machine.Release == nil {
+				offers = append(offers, machine.offer())
+			}
+		}
+	}
+	now := p.clock.Now()
+	p.mu.Lock()
+	estimates := p.estimates.Having(running(held, now)...)
+	p.mu.Unlock()
+	outlook := scheduler.MachineOutlook{CanBuy: can}
+	for _, offer := range offers {
+		comeUp, taken := expect(estimates, offer, now, unknownBoot)
+		outlook.ComeUp += time.Duration(comeUp * float64(time.Hour) / float64(len(offers)))
+		outlook.Taken += taken / float64(len(offers))
+	}
+	return outlook
 }
 
 // unsaid reports whether the pool has not yet said that this stands in the
@@ -448,7 +482,7 @@ func (p *Provisioner) choose(pool string, needs []scheduler.MachineNeed, held []
 		held:       held,
 		limits:     p.limits,
 		spentToday: p.spentToday,
-		estimates:  p.estimates,
+		estimates:  p.estimates.Having(running(held, now)...),
 		now:        now,
 	}
 	// What to buy is worked out with none of this held: it takes a while.
@@ -682,9 +716,9 @@ type Release struct {
 	// DrainUntil is how long the machine's work is waited for before it is
 	// given back anyway. Zero means it is given back at once.
 	DrainUntil time.Time `json:"drain_until,omitzero"`
-	// SoldOut is set when the provider could not start what it sold. What
-	// the machine was bought as is then passed over for a while, like an
-	// offer the provider refused to sell.
+	// SoldOut is set when the provider could not start what it sold, or
+	// took it back before it ran. What the machine was bought as is then
+	// passed over for a while, like an offer the provider refused to sell.
 	SoldOut bool `json:"sold_out,omitempty"`
 }
 
@@ -704,10 +738,10 @@ func newMachine(id, pool string, offer providers.Offer, now time.Time) Machine {
 	}
 }
 
-// outcome is what the market's history is told became of the machine at
-// now: what it was bought as, where, and for how much.
-func (m Machine) outcome(now time.Time) watch.Outcome {
-	outcome := watch.OutcomeOf(providers.Offer{
+// offer is what the machine was bought as, as far as the market's history
+// tells offers apart.
+func (m Machine) offer() providers.Offer {
+	return providers.Offer{
 		ID:               m.OfferID,
 		Provider:         m.Provider,
 		Cloud:            m.Cloud,
@@ -717,7 +751,13 @@ func (m Machine) outcome(now time.Time) watch.Outcome {
 		GPUCount:         m.GPUCount,
 		HourlyCostMicros: m.HourlyMicros,
 		Spot:             m.Spot,
-	})
+	}
+}
+
+// outcome is what the market's history is told became of the machine at
+// now: what it was bought as, where, and for how much.
+func (m Machine) outcome(now time.Time) watch.Outcome {
+	outcome := watch.OutcomeOf(m.offer())
 	outcome.Source = watch.SourcePool
 	outcome.At = now
 	return outcome
@@ -912,10 +952,33 @@ func (p purchase) candidates() []*candidate {
 	}
 	candidates := make([]*candidate, len(offers))
 	for i, offer := range offers {
-		boot, odds, taken := p.estimates.Of(watch.OutcomeOf(offer), p.now)
-		candidates[i] = &candidate{Offer: offer, comeUp: cmp.Or(boot, fastest).Hours() / odds, taken: taken}
+		comeUp, taken := expect(p.estimates, offer, p.now, fastest)
+		candidates[i] = &candidate{Offer: offer, comeUp: comeUp, taken: taken}
 	}
 	return candidates
+}
+
+// running is what the machines that run have to say so far: what each was
+// bought as, and how long it has been had (see watch.Estimates.Having).
+func running(held []Machine, now time.Time) []watch.Outcome {
+	var outcomes []watch.Outcome
+	for _, machine := range held {
+		if !machine.ReadyAt.IsZero() {
+			outcome := machine.outcome(now)
+			outcome.Took = now.Sub(machine.CreatedAt)
+			outcomes = append(outcomes, outcome)
+		}
+	}
+	return outcomes
+}
+
+// expect is what the machines bought before say to expect of one bought as
+// the offer: how many hours it takes to come up, which is its boot time over
+// the odds that it boots at all, and how often an hour it is lost. unknown
+// is how long it is taken to boot in when none has.
+func expect(estimates watch.Estimates, offer providers.Offer, now time.Time, unknown time.Duration) (comeUp, taken float64) {
+	boot, odds, taken := estimates.Of(watch.OutcomeOf(offer), now)
+	return cmp.Or(boot, unknown).Hours() / odds, taken
 }
 
 // byPrice orders offers by what they cost. Those at one price are always in
@@ -1447,7 +1510,7 @@ func decide(m Machine, s sighting) (next Machine, releaseIfIdle bool) {
 		return m, false // its provider may yet come to know of it
 	}
 	if reason, end := atProvider(&m, s); reason != "" {
-		m.Release = &Release{Reason: reason, End: end, SoldOut: reason == failedToStart}
+		m.Release = &Release{Reason: reason, End: end, SoldOut: reason == failedToStart || reason == takenBeforeItRan}
 		return m, false
 	}
 	if m.InstanceID == "" {
@@ -1470,6 +1533,12 @@ func decide(m Machine, s sighting) (next Machine, releaseIfIdle bool) {
 // before it ever ran a worker. What it was bought as is then passed over for
 // a while.
 const failedToStart = "its provider failed to start it"
+
+// takenBeforeItRan is why a spot machine is given back that its provider
+// took back before it ever ran a worker. The provider has none to spare, and
+// the next one bought as the same would go the same way: it is passed over
+// for a while too.
+const takenBeforeItRan = "its provider took it back before it ran"
 
 // lostStatus is why a machine is given back whose provider reports it in
 // this status: the provider no longer runs it.
@@ -1517,8 +1586,13 @@ func atProvider(m *Machine, s sighting) (reason, end string) {
 		}
 		// A machine that failed after it had run was started: what it was
 		// bought as can be run.
-		if s.instance.Status == providers.StatusFailed && m.ReadyAt.IsZero() {
-			return failedToStart, watch.ResultFailed
+		if m.ReadyAt.IsZero() {
+			switch s.instance.Status {
+			case providers.StatusFailed:
+				return failedToStart, watch.ResultFailed
+			case providers.StatusInterrupted:
+				return takenBeforeItRan, watch.ResultInterrupted
+			}
 		}
 		return lostStatus[s.instance.Status], lostEnd[s.instance.Status]
 	}
@@ -1538,9 +1612,9 @@ func withoutWorker(m *Machine, s sighting) (reason, end string) {
 		}
 		m.DownSince = time.Time{}
 	case m.ReadyAt.IsZero():
-		// Twice as long as machines bought like it take is long enough:
-		// another is expected to be up sooner.
-		if s.usualBoot > 0 {
+		// Use market history to shorten the default. An explicitly configured
+		// timeout gives the machine the full time chosen for its pool.
+		if s.usualBoot > 0 && (s.pool == nil || s.pool.Provisioning.BootTimeout == 0) {
 			timeout = min(timeout, 2*s.usualBoot)
 		}
 		if s.now.Sub(m.CreatedAt) >= timeout {

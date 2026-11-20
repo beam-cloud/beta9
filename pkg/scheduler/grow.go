@@ -107,6 +107,24 @@ func (s *Scheduler) chooseGrowth(route route, request *types.ContainerRequest) g
 	return growth{exhausted: exhausted}
 }
 
+// PoolOutlook is what the managed endpoint controller weighs before it
+// places a replica that needs this much room in the pool: whether the pool
+// would add a worker for it now and, where it buys machines, how long one
+// takes to come up and how often an hour they are taken back.
+func (s *Scheduler) PoolOutlook(name string, cpu, memory int64, gpuCount uint32) MachineOutlook {
+	pool, ok := s.workerPoolManager.GetPool(name)
+	if !ok {
+		return MachineOutlook{}
+	}
+	if buying := buyer(pool.Controller); buying != nil {
+		need := buying.machineNeed(cpu, memory, gpuCount)
+		need.HoursLost = replicaHoursLost
+		return buying.provisioner.Expect(buying.ctx, buying.poolName(), need)
+	}
+	can, err := pool.Controller.CanAddWorker(cpu, memory, gpuCount)
+	return MachineOutlook{CanBuy: err == nil && can}
+}
+
 // canGrow reports whether some pool would add a worker for the request now.
 func (a *schedulingAttempt) canGrow() bool {
 	route, err := a.scheduler.growthRouteFor(a.request)
@@ -135,7 +153,10 @@ func (a *schedulingAttempt) grow() {
 
 	choice := s.chooseGrowth(route, a.request)
 	switch {
-	case choice.exhausted:
+	case choice.exhausted, choice.pool == nil && isManagedRequest(a.request) && !s.machineComing(route):
+		// A managed endpoint's replica does not wait for a pool that has no
+		// machine coming and can buy none: its controller places it again,
+		// in a pool that can.
 		a.fail(types.ContainerSchedulingFailureProvisioningLimit)
 		return
 	case choice.pool == nil:
@@ -171,6 +192,21 @@ func (a *schedulingAttempt) grow() {
 	reservationID := s.provisioning.addReservation(s, a.request, choice.pool, choice.size)
 	s.background(func() { s.addWorker(a.request, choice.pool, choice.size, reservationID) })
 	a.requeueForWorkerWait()
+}
+
+// machineComing reports whether a pool of the route has bought a machine
+// that has yet to run a worker. Between its purchase and its Pending worker
+// a request finds neither a worker to wait for nor a pool that can buy. A
+// pool that cannot be asked is taken to have one coming.
+func (s *Scheduler) machineComing(route route) bool {
+	return slices.ContainsFunc(route.pools, func(pool routedPool) bool {
+		buying := buyer(pool.Controller)
+		if buying == nil {
+			return false
+		}
+		booting, err := buying.provisioner.Booting(buying.ctx, buying.poolName())
+		return err != nil || len(booting) > 0
+	})
 }
 
 // askAgainLater requeues a request that no pool could be asked for a worker

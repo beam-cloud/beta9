@@ -524,6 +524,7 @@ func newServiceForTest(t *testing.T) *Service {
 		ctx:            ctx,
 		config:         config,
 		repo:           repository.NewManagedEndpointRedisRepository(rdb),
+		workers:        repository.NewWorkerRedisRepositoryForTest(rdb),
 		rdb:            rdb,
 		lock:           common.NewRedisLock(rdb),
 		usage:          &recordingMeter{},

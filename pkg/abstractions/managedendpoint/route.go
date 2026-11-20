@@ -32,6 +32,7 @@ import (
 
 const (
 	headerReplicaPin    = "X-Beam-Endpoint-Replica"
+	headerSession       = "X-Session-Id" // names a conversation so its requests share a replica
 	headerRequestID     = "X-Request-ID"
 	headerEndpointID    = "X-Beam-Endpoint-ID"
 	headerReplicaServed = "X-Beam-Replica"
@@ -72,12 +73,13 @@ func serves(app *types.ManagedEndpoint, route types.EndpointRoute) bool {
 }
 
 type router struct {
-	s        *Service
-	prefix   string
-	selector llmroute.Selector
+	s      *Service
+	prefix string
 
-	states   sync.Map // endpoint id -> *llmroute.State (shared affinity and pressure)
+	tables   sync.Map // endpoint id -> *llmroute.Table, which replica holds which prompt
 	inflight sync.Map // replica id -> *atomic.Int64, this gateway's share of the replica's slots
+	ejected  sync.Map // replica id -> time.Time until which it sits out after failing a request
+	running  sync.Map // *routeRequest -> flight, ended when its replica is lost
 }
 
 func newRouter(s *Service) *router {
@@ -103,9 +105,12 @@ func (r *router) mount(group *echo.Group, authMiddleware echo.MiddlewareFunc) {
 	}
 }
 
-func (r *router) state(endpointID string) *llmroute.State {
-	st, _ := r.states.LoadOrStore(endpointID, llmroute.NewState(r.s.rdb, "managed_endpoint:route:"+endpointID))
-	return st.(*llmroute.State)
+func (r *router) table(endpointID string) *llmroute.Table {
+	if table, ok := r.tables.Load(endpointID); ok {
+		return table.(*llmroute.Table)
+	}
+	table, _ := r.tables.LoadOrStore(endpointID, llmroute.NewTable())
+	return table.(*llmroute.Table)
 }
 
 func counter(m *sync.Map, key string) *atomic.Int64 {
@@ -336,7 +341,7 @@ type routeRequest struct {
 	body       []byte
 	payload    map[string]any // decoded JSON body; nil for multipart or empty bodies
 	stream     bool
-	info       *llmroute.RequestInfo
+	prompt     llmroute.Prompt // what replica selection keeps together
 	pinReplica string
 
 	// What admission decided

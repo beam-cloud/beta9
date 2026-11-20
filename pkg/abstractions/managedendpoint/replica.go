@@ -21,7 +21,11 @@ import (
 // and probes it each tick; the harness inside it registers, heartbeats and
 // acknowledges live config over EndpointHarnessService.
 
-const probeTimeout = 3 * time.Second
+const (
+	probeTimeout     = 3 * time.Second
+	reasonWorkerLost = "worker lost"
+	reasonNoMachine  = "scheduler failed the request"
+)
 
 // observeReplicas syncs each replica with its container and returns the ones still alive.
 func (c *controller) observeReplicas(ctx context.Context, replicas []*types.EndpointReplica) []*types.EndpointReplica {
@@ -81,7 +85,7 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 		}
 		if replica.Status == types.ReplicaStatusScheduling {
 			if status, err := c.s.containers.GetContainerRequestStatus(replica.ContainerID); err == nil && status == types.ContainerRequestStatusFailed {
-				return c.finishReplica(ctx, replica, types.ReplicaStatusFailed, "scheduler failed the request")
+				return c.finishReplica(ctx, replica, types.ReplicaStatusFailed, reasonNoMachine)
 			}
 		}
 		// A new gateway has not observed worker/harness reconnection yet. Give
@@ -93,7 +97,22 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 				return nil
 			}
 		}
+		// A machine that is taken back with notice stops its containers
+		// before it goes.
+		if left, err := c.workerLeft(replica.WorkerID, true); err == nil && left && replica.Alive() {
+			return c.finishReplica(ctx, replica, types.ReplicaStatusFailed, reasonWorkerLost)
+		}
 		return c.finishReplica(ctx, replica, c.exitStatus(replica), "container exited")
+	}
+	// A container's record outlives the machine it ran on by many minutes,
+	// and its worker's by none: a replica whose worker is gone is lost.
+	if state.Status == types.ContainerStatusRunning {
+		switch gone, err := c.workerLeft(state.WorkerId, false); {
+		case err != nil:
+			return err
+		case gone:
+			return c.stopAndFinish(ctx, replica, types.ReplicaStatusFailed, reasonWorkerLost)
+		}
 	}
 	if replica.WorkerID != state.WorkerId || replica.MachineID != state.MachineId {
 		// Pending delivery can move to another worker. Protection and ownership
@@ -120,7 +139,11 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 		if replica.Alive() {
 			replica.Status, replica.EngineReady = types.ReplicaStatusScheduling, false
 		}
-		if now.Sub(replica.StartedAt) > schedulingGrace {
+		grace := schedulingGrace
+		if replica.Spot {
+			grace = machineGrace
+		}
+		if now.Sub(replica.StartedAt) > grace {
 			return c.stopAndFinish(ctx, replica, types.ReplicaStatusFailed, "not scheduled within grace period")
 		}
 		return nil
@@ -174,10 +197,8 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 		replica.EnterLoading(now, "")
 	}
 
-	if replica.HarnessEnabled {
-		if !replica.LastHeartbeat.IsZero() && c.silentFor(replica.LastHeartbeat, now) > c.s.config.ReplicaStaleAfter {
-			return c.stopAndFinish(ctx, replica, types.ReplicaStatusFailed, "harness heartbeat stale")
-		}
+	if c.s.silent(replica, now) {
+		return c.stopAndFinish(ctx, replica, types.ReplicaStatusFailed, "harness heartbeat stale")
 	}
 	if replica.Address != "" && (!replica.HarnessEnabled || replica.EngineReady) {
 		c.probeReplica(ctx, replica)
@@ -215,11 +236,7 @@ func (c *controller) exitStatus(replica *types.EndpointReplica) types.ReplicaSta
 func (c *controller) probeReplica(ctx context.Context, replica *types.EndpointReplica) {
 	client := c.s.probeClient(replica.Address)
 	baseURL := "http://replica"
-	paths := llmroute.ReadinessPaths("")
-	if strings.TrimSpace(replica.Probe.Health) != "" {
-		paths = []string{replica.Probe.Health}
-	}
-	ready := llmroute.CheckReady(ctx, client, baseURL, paths, probeTimeout)
+	ready := llmroute.Ready(ctx, client, baseURL, replica.Probe.Health)
 	now := time.Now()
 	if !replica.HarnessEnabled {
 		replica.LastHeartbeat = now
@@ -266,7 +283,24 @@ func probeFor(spec *types.ManagedEndpointSpec) types.ReplicaProbe {
 	return probe
 }
 
-// finishReplica records a terminal status.
+// workerLeft reports whether a replica's worker is gone, its machine taken
+// back, or with leaving, on its way out: it no longer takes work.
+func (c *controller) workerLeft(workerID string, leaving bool) (bool, error) {
+	if workerID == "" {
+		return false, nil
+	}
+	worker, err := c.s.workers.GetWorkerById(workerID)
+	var notFound *types.ErrWorkerNotFound
+	if errors.As(err, &notFound) {
+		return true, nil
+	}
+	return leaving && err == nil && worker != nil && worker.Status != types.WorkerStatusAvailable, err
+}
+
+// finishReplica records a terminal status. A replica that failed before it
+// ever served backs its endpoint off, as the next would likely fail the same
+// way. One that served and then failed, or that went with its machine, is
+// replaced at once.
 func (c *controller) finishReplica(ctx context.Context, replica *types.EndpointReplica, status types.ReplicaStatus, reason string) error {
 	replica.Status = status
 	replica.StatusReason = reason
@@ -275,7 +309,7 @@ func (c *controller) finishReplica(ctx context.Context, replica *types.EndpointR
 	c.metricsMu.Lock()
 	delete(c.lastMetrics, replica.ID)
 	c.metricsMu.Unlock()
-	if status == types.ReplicaStatusFailed {
+	if status == types.ReplicaStatusFailed && replica.ReadyAt.IsZero() && reason != reasonWorkerLost {
 		_ = c.s.repo.SetScheduleBackoff(ctx, replica.EndpointID, replica.GPU, c.s.config.Reconcile.FailureBackoff)
 	}
 	c.s.replicaEvent(replica, "replica."+string(status), reason, nil)
@@ -387,24 +421,27 @@ func (c *controller) startReplica(ctx context.Context, endpoint *types.ManagedEn
 		requestGpu, gpuRequest, gpuCount = gpu, []string{gpu}, max(gpuSpec.Count, 1)
 	}
 	request := &types.ContainerRequest{
-		ContainerId:       containerID,
-		EntryPoint:        appendEngineArgs(entrypoint, gpuSpec.EngineArgs),
-		Env:               env,
-		Cpu:               stubConfig.Runtime.Cpu,
-		Memory:            stubConfig.Runtime.Memory,
-		Gpu:               requestGpu,
-		GpuRequest:        gpuRequest,
-		GpuCount:          gpuCount,
-		ImageId:           stubConfig.Runtime.ImageId,
-		StubId:            stub.ExternalId,
-		AppId:             stub.App.ExternalId,
-		WorkspaceId:       workspace.ExternalId,
-		Workspace:         *workspace,
-		Stub:              *stub,
-		Mounts:            mounts,
-		Ports:             []uint32{endpoint.Spec.Port},
-		PoolSelector:      pool.Name,
-		OpportunisticOnly: true,
+		ContainerId:  containerID,
+		EntryPoint:   appendEngineArgs(entrypoint, gpuSpec.EngineArgs),
+		Env:          env,
+		Cpu:          stubConfig.Runtime.Cpu,
+		Memory:       stubConfig.Runtime.Memory,
+		Gpu:          requestGpu,
+		GpuRequest:   gpuRequest,
+		GpuCount:     gpuCount,
+		ImageId:      stubConfig.Runtime.ImageId,
+		StubId:       stub.ExternalId,
+		AppId:        stub.App.ExternalId,
+		WorkspaceId:  workspace.ExternalId,
+		Workspace:    *workspace,
+		Stub:         *stub,
+		Mounts:       mounts,
+		Ports:        []uint32{endpoint.Spec.Port},
+		PoolSelector: pool.Name,
+		// A replica fills GPUs that are idle and gives them back when asked.
+		// On Spot its pool buys the machine, and only the provider takes it.
+		Preemptable:       pool.Spot,
+		OpportunisticOnly: !pool.Spot,
 		Evictable:         !protected,
 		DrainSeconds:      drainSeconds,
 		Timestamp:         time.Now(),
@@ -422,6 +459,7 @@ func (c *controller) startReplica(ctx context.Context, endpoint *types.ManagedEn
 		Protected:   !request.Evictable,
 		Locality:    pool.Locality,
 		PoolName:    pool.Name,
+		Spot:        pool.Spot,
 		ContainerID: containerID,
 		Status:      types.ReplicaStatusScheduling,
 		SecretHash:  secretHash,

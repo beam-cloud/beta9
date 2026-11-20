@@ -245,12 +245,19 @@ type FleetEndpoint struct {
 // order, then spare capacity fills up to MaxReplicas (0 is uncapped).
 // Disabling preemption protects only the minimum; extras stay evictable.
 // Serverless placements start replicas only while work waits for them.
+//
+// A Spot placement runs on machines bought for it instead of on GPUs that
+// happen to be idle: its replicas go to the Spot pools of the GPU type that
+// take managed endpoints, spread across them, and those pools buy the
+// machines. It runs its minimum, or what its requests need when it is
+// serverless, and never a surplus.
 type FleetPlacement struct {
 	Priority    uint32 `json:"priority" yaml:"priority"`
 	MinReplicas uint32 `json:"min_replicas,omitempty" yaml:"minReplicas"`
 	MaxReplicas uint32 `json:"max_replicas,omitempty" yaml:"maxReplicas"`
 	Preemption  *bool  `json:"preemption,omitempty" yaml:"preemption"`
 	Serverless  bool   `json:"serverless,omitempty" yaml:"serverless"`
+	Spot        bool   `json:"spot,omitempty" yaml:"spot"`
 }
 
 // ProtectsMinimum: a hot minimum that ordinary serverless workloads may not preempt.
@@ -273,7 +280,7 @@ func (p *FleetPlacement) UnmarshalYAML(unmarshal func(any) error) error {
 			}
 		}
 	}
-	for _, name := range []string{"preemption", "serverless"} {
+	for _, name := range []string{"preemption", "serverless", "spot"} {
 		if value, exists := fields[name]; exists {
 			if _, ok := value.(bool); !ok {
 				return fmt.Errorf("%s must be a boolean", name)
@@ -292,6 +299,7 @@ type FleetEntry struct {
 	MaxReplicas    uint32
 	ProtectMinimum bool
 	Serverless     bool
+	Spot           bool
 }
 
 const maxFleetReplicas = 64
@@ -339,6 +347,12 @@ func (f *Fleet) Validate() error {
 				fail(id, "%s: serverless requires minReplicas: 0", gpu)
 			case p.Serverless && p.Preemption != nil && !*p.Preemption:
 				fail(id, "%s: serverless replicas must allow preemption", gpu)
+			case p.Spot && gpu == CPUInventoryKey:
+				fail(id, "spot requires a GPU placement")
+			case p.Spot && !p.Serverless && p.MinReplicas == 0:
+				fail(id, "%s: spot runs minReplicas, or what its requests need with serverless: true; set one", gpu)
+			case p.Spot && p.Preemption != nil:
+				fail(id, "%s: preemption does not apply to spot, whose machines only their provider takes back", gpu)
 			case p.MaxReplicas > maxFleetReplicas || p.MinReplicas > maxFleetReplicas:
 				fail(id, "%s: replica counts exceed %d", gpu, maxFleetReplicas)
 			case p.MaxReplicas > 0 && p.MinReplicas > p.MaxReplicas:
@@ -391,7 +405,7 @@ func (f *Fleet) Entries(gpu string) []FleetEntry {
 	var out []FleetEntry
 	for id, e := range f.Endpoints {
 		if p, ok := e.GPUs[gpu]; ok && e.Enabled {
-			out = append(out, FleetEntry{EndpointID: id, Priority: p.Priority, MinReplicas: p.MinReplicas, MaxReplicas: p.MaxReplicas, ProtectMinimum: p.ProtectsMinimum(), Serverless: p.Serverless})
+			out = append(out, FleetEntry{EndpointID: id, Priority: p.Priority, MinReplicas: p.MinReplicas, MaxReplicas: p.MaxReplicas, ProtectMinimum: p.ProtectsMinimum(), Serverless: p.Serverless, Spot: p.Spot})
 		}
 	}
 	slices.SortFunc(out, func(a, b FleetEntry) int {
@@ -489,6 +503,7 @@ type EndpointReplica struct {
 	Protected           bool            `json:"protected"` // this replica belongs to the protected minimum
 	Locality            string          `json:"locality,omitempty"`
 	PoolName            string          `json:"pool_name,omitempty"`
+	Spot                bool            `json:"spot,omitempty"`
 	ContainerID         string          `json:"container_id"`
 	WorkerID            string          `json:"worker_id,omitempty"`
 	MachineID           string          `json:"machine_id,omitempty"`

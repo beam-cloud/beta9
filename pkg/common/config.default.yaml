@@ -515,6 +515,8 @@ managedCompute:
     creditGracePeriod: 30m
 managedEndpoints:
   enabled: false
+  # Zero inherits gateway.stubLimits.memory.
+  maxReplicaMemoryMiB: 0
   preemption:
     enabled: true
   reconcile:

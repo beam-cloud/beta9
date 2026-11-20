@@ -1851,9 +1851,9 @@ func TestAnOfferWhoseMachineFailedToStartIsPassedOverForAWhile(t *testing.T) {
 	require.Equal(t, "hyperstack", w.buy("spot-l40s").Cloud)
 }
 
-// A machine its provider took back is replaced at once, by the same offer
-// if the provider still lists it: a provider that has no more says so when
-// it is asked.
+// A machine that ran and was then taken back is replaced at once, by the
+// same offer if the provider still lists it: a provider that has no more
+// says so when it is asked.
 func TestAnOfferWhoseMachineWasTakenBackIsBoughtAgain(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1869,6 +1869,7 @@ func TestAnOfferWhoseMachineWasTakenBackIsBoughtAgain(t *testing.T) {
 			w.verda.SetOffers(l40s(), l40s(in("FIN-02"), costing(140)))
 			w.Tick(w.ctx)
 			machine := w.buy("spot-l40s")
+			w.workers.join(machine)
 			w.after(launchGrace)
 
 			test.take(w, machine)
@@ -1878,6 +1879,36 @@ func TestAnOfferWhoseMachineWasTakenBackIsBoughtAgain(t *testing.T) {
 			require.Equal(t, "FIN-01", w.buy("spot-l40s").Region)
 		})
 	}
+}
+
+// A provider that has no spot machine to spare does not always say so when
+// it is asked: it sells one, and takes it back before it has come up. What
+// that machine was bought as is passed over for a while, like an offer the
+// provider refused to sell, so that the pool does not buy it over and over
+// while what waits for it waits.
+func TestAnOfferWhoseMachineWasTakenBackBeforeItRanIsPassedOverForAWhile(t *testing.T) {
+	taken := func(offers ...providers.Offer) *world {
+		w := newWorld(t)
+		w.verda.SetOffers(offers...)
+		w.Tick(w.ctx)
+		machine := w.buy("spot-l40s")
+		w.after(launchGrace)
+		w.verda.SetStatus(machine.InstanceID, providers.StatusInterrupted, "preempted")
+		w.after(tickInterval)
+		w.gone(machine)
+		return w
+	}
+
+	// The next machine is bought as something else.
+	w := taken(l40s(), l40s(in("FIN-02"), costing(140)))
+	require.Equal(t, "FIN-02", w.buy("spot-l40s").Region)
+
+	// A pool that buys nothing else has nothing to buy meanwhile, and says
+	// so to what would wait for it.
+	w = taken(l40s())
+	require.False(t, w.CanProvision(w.ctx, "spot-l40s", anyMachine))
+	w.every(tickInterval, soldOutFor)
+	require.True(t, w.CanProvision(w.ctx, "spot-l40s", anyMachine))
 }
 
 // A machine that is given back for a reason of the pool's own says nothing
@@ -3018,6 +3049,16 @@ func TestDecide(t *testing.T) {
 			want: released("its provider took it back", watch.ResultInterrupted),
 		},
 		{
+			// A spot machine its provider could not spare: one bought as the
+			// same would go the same way.
+			name: "its provider took it back before it ran",
+			was:  machine(),
+			seen: seen(5*time.Minute, providerHas(providers.StatusInterrupted)),
+			want: func(m *Machine) {
+				m.Release = &Release{Reason: "its provider took it back before it ran", End: watch.ResultInterrupted, SoldOut: true}
+			},
+		},
+		{
 			name: "its provider failed to start it",
 			was:  machine(),
 			seen: seen(time.Minute, providerHas(providers.StatusFailed)),
@@ -3092,9 +3133,26 @@ func TestDecide(t *testing.T) {
 			want: released("it did not join its pool within 20m0s", watch.ResultNeverUp),
 		},
 		{
+			name: "not joined by the learned default boot timeout",
+			was:  machine(),
+			seen: seen(2*time.Minute, func(s *sighting) { s.usualBoot = time.Minute }),
+			want: released("it did not join its pool within 2m0s", watch.ResultNeverUp),
+		},
+		{
+			name: "still booting past the learned estimate within its configured timeout",
+			was:  machine(),
+			seen: seen(4*time.Minute, func(s *sighting) {
+				s.usualBoot = time.Minute
+				s.pool.Provisioning.BootTimeout = types.Duration(5 * time.Minute)
+			}),
+		},
+		{
 			name: "not joined by its pool's own boot timeout",
 			was:  machine(),
-			seen: seen(5*time.Minute, func(s *sighting) { s.pool.Provisioning.BootTimeout = types.Duration(5 * time.Minute) }),
+			seen: seen(5*time.Minute, func(s *sighting) {
+				s.usualBoot = time.Minute
+				s.pool.Provisioning.BootTimeout = types.Duration(5 * time.Minute)
+			}),
 			want: released("it did not join its pool within 5m0s", watch.ResultNeverUp),
 		},
 		{
@@ -3943,6 +4001,63 @@ func TestWhatWasLearnedIsReadFromTheMarketsHistory(t *testing.T) {
 	bought, err := other.Provision(w.ctx, "spot-l40s", anyMachine)
 	require.NoError(t, err)
 	require.Equal(t, "FIN-02", w.record(bought.MachineID).Region, "the offer whose machine never came up is passed over")
+}
+
+// What a pool is asked to expect of its machines is what became of those
+// bought before as the one it would buy now: how long they took to come up,
+// and how often they were taken back. A pool that can buy no more is known
+// by the machines it has.
+func TestAPoolSaysWhatToExpectOfItsMachines(t *testing.T) {
+	w := newWorld(t, func(opts *Options) { opts.Outcomes = nil })
+	w.control.pools["spot-l40s"] = spotL40S(func(pool *types.WorkerPoolConfig) { pool.Provisioning.MaxNodes = 2 })
+	w.verda.SetOffers(l40s(), l40s(in("FIN-02"), costing(300)))
+	w.Tick(w.ctx)
+
+	// Nothing has been bought yet: a spot machine is taken to come up in
+	// five minutes and to be lost once in twenty hours.
+	require.Equal(t, scheduler.MachineOutlook{CanBuy: true, ComeUp: unknownBoot, Taken: 1.0 / 20}, w.Expect(w.ctx, "spot-l40s", anyMachine))
+	require.Zero(t, w.Expect(w.ctx, "no-such-pool", anyMachine))
+
+	// Three machines were seen up after three minutes, and each was taken
+	// back within the half hour.
+	for range 3 {
+		machine := w.buy("spot-l40s")
+		w.after(2 * time.Minute)
+		w.workers.join(machine)
+		w.workers.work(machine, true)
+		w.every(time.Minute, 20*time.Minute)
+		w.verda.SetStatus(machine.InstanceID, providers.StatusInterrupted, "preempted")
+		w.after(tickInterval)
+		w.gone(machine)
+	}
+	outlook := w.Expect(w.ctx, "spot-l40s", anyMachine)
+	require.True(t, outlook.CanBuy)
+	require.InDelta(t, 3, outlook.ComeUp.Minutes(), 0.1)
+	require.InDelta(t, 1, outlook.Taken, 0.1, "lost three times in an hour and a bit of its own, and two hours of its provider's")
+
+	// The region where none was lost is expected to keep its machines.
+	elsewhere := w.Expect(w.ctx, "spot-l40s", scheduler.MachineNeed{HoursLost: 8})
+	require.True(t, elsewhere.CanBuy)
+	require.Less(t, elsewhere.Taken, outlook.Taken/2, "work that loses a day is bought the dearer machine that is kept")
+
+	// At maxNodes the pool buys nothing, and is known by what it has.
+	first, second := w.buy("spot-l40s"), w.buy("spot-l40s")
+	require.Equal(t, []string{"FIN-01", "FIN-01"}, []string{first.Region, second.Region})
+	full := w.Expect(w.ctx, "spot-l40s", anyMachine)
+	require.False(t, full.CanBuy)
+	require.InDelta(t, outlook.Taken, full.Taken, 1e-9)
+	require.InDelta(t, outlook.ComeUp.Minutes(), full.ComeUp.Minutes(), 1e-9)
+
+	// A machine that is kept has not ended, and says nothing to the market's
+	// history yet. The hours it has run count for its pool all the same.
+	for _, machine := range []Machine{first, second} {
+		w.workers.join(machine)
+		w.workers.work(machine, true)
+	}
+	w.every(time.Minute, 6*time.Hour)
+	kept := w.Expect(w.ctx, "spot-l40s", anyMachine)
+	require.False(t, kept.CanBuy)
+	require.Less(t, kept.Taken, full.Taken/4, "three were lost in an hour, and two have now run for six")
 }
 
 // readLog is a history that does something more once it has been read.

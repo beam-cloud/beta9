@@ -154,6 +154,7 @@ func New(ctx context.Context, opts Opts) (*Service, error) {
 	}
 
 	go s.controller.run(ctx)
+	go s.router.watch(ctx)
 	go s.billing.run(ctx)
 	return s, nil
 }

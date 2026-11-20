@@ -176,6 +176,9 @@ func poolCanRun(pool *WorkerPool, query routeQuery) bool {
 	case config.Mode == types.PoolModeProvider && !isManagedRequest(request):
 		// Machines a workspace contributes run only managed endpoint replicas.
 		return false
+	case isManagedRequest(request) && request.Preemptable && !config.AllowsManagedEndpointSpot():
+		// A replica placed on Spot runs only in a Spot pool that takes them.
+		return false
 	case !request.Preemptable && config.Preemptable:
 		return false
 	case query.buildPool != "" && pool.Name == query.buildPool && !request.IsBuildRequest():

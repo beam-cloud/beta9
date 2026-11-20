@@ -147,6 +147,192 @@ func TestExplicitNonPreemptableRequestStillRejectsSpot(t *testing.T) {
 	require.Empty(t, provider.asked, "the scheduler never weakens an explicit false request")
 }
 
+// spotReplica is the request the managed endpoint controller submits for a
+// replica of a Spot placement.
+func spotReplica(pool string) *types.ContainerRequest {
+	return &types.ContainerRequest{
+		ContainerId: uuid.NewString(), Cpu: 16_000, Memory: 512 * 1024,
+		GpuRequest: []string{"B200"}, GpuCount: 2, PoolSelector: pool,
+		WorkspaceId: buyingWorkspace, Workspace: testWorkspaceWithStorage(),
+		Stub:        types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeManagedEndpointDeployment)}},
+		Preemptable: true,
+	}
+}
+
+// spotPoolFor adds a pool that buys B200 Spot machines to the scheduler.
+func spotPoolFor(t *testing.T, s *Scheduler, name string, provider Provisioner, change ...func(*types.WorkerPoolConfig)) *AgentWorkerPoolController {
+	t.Helper()
+	config := types.WorkerPoolConfig{
+		GPUType:          "B200",
+		ManagedEndpoints: types.WorkerPoolManagedEndpointsConfig{Enabled: true},
+		Provisioning:     types.WorkerPoolProvisioningConfig{Providers: []string{"nebius"}, Spot: true, MaxNodes: 1},
+	}
+	for _, apply := range change {
+		apply(&config)
+	}
+	config.ApplyProvisioning()
+	controller, err := NewAgentWorkerPoolController(AgentWorkerPoolControllerOptions{
+		Context: s.ctx, Name: name, WorkspaceID: buyingWorkspace, Config: s.config, WorkerPool: config,
+		PoolState:  &compute.PoolState{Name: name, Selector: name, Mode: string(types.PoolModeExternal)},
+		WorkerRepo: s.workerRepo, ComputeRepo: s.computeRepo, WorkerPoolRepo: s.workerPoolRepo,
+		Provisioner: provider, Waitlist: s.waitlist, Clock: s.clock,
+	})
+	require.NoError(t, err)
+	t.Cleanup(controller.close)
+	s.workerPoolManager.SetPool(name, config, controller)
+	return controller
+}
+
+// A replica of a Spot placement names its pool, and the pool buys the
+// machine it runs on. Replicas that fit one machine share it.
+func TestManagedEndpointSpotReplicaHasItsPoolBuyAMachine(t *testing.T) {
+	s, err := NewSchedulerForTest()
+	require.NoError(t, err)
+	clock := common.NewFakeClock(time.Now().Add(-3 * poolMonitoringInterval))
+	s.clock, s.spawn, s.workerPoolManager = clock, inline, NewWorkerPoolManager()
+	const pool = "spot-b200"
+	provider := &fakeProvisioner{inStock: true, sells: ProvisionedMachine{CPU: 64_000, Memory: 2_097_152, GPUCount: 8, Spot: true}, comesUpIn: 4 * time.Minute, taken: 0.25}
+	controller := spotPoolFor(t, s, pool, provider)
+	s.SetProvisioner(provider)
+	// The controller is told what to expect of the machine the pool would
+	// buy for the replica, which is asked for as the replica's request is.
+	require.Equal(t, MachineOutlook{CanBuy: true, ComeUp: 4 * time.Minute, Taken: 0.25}, s.PoolOutlook(pool, 16_000, 640*1024, 2))
+	require.EqualValues(t, replicaHoursLost, provider.asked[0].HoursLost)
+	provider.asked = nil
+	require.Zero(t, s.PoolOutlook("no-such-pool", 16_000, 640*1024, 2))
+
+	var queued []*types.ContainerRequest
+	for range 2 {
+		request := spotReplica(pool)
+		require.NoError(t, s.Run(request))
+		next, err := s.requestBacklog.Pop()
+		require.NoError(t, err)
+		require.Equal(t, request.ContainerId, next.ContainerId)
+		queued = append(queued, next)
+	}
+	for _, request := range queued {
+		newSchedulingAttempt(s, request, nil).run()
+	}
+	clock.Advance(poolMonitoringInterval)
+	require.Len(t, provider.sold, 1, "one machine holds both replicas")
+	workers, err := s.workerRepo.GetAllWorkers()
+	require.NoError(t, err)
+	require.Len(t, workers, 1)
+	require.Equal(t, types.WorkerStatusPending, workers[0].Status)
+	require.True(t, workers[0].Preemptable)
+
+	// The replicas wait for the machine that is coming, and no other is bought.
+	for _, request := range queued {
+		newSchedulingAttempt(s, request, workers).run()
+		status, _ := s.containerRepo.GetContainerRequestStatus(request.ContainerId)
+		require.NotEqual(t, types.ContainerRequestStatusFailed, status)
+	}
+	clock.Advance(poolMonitoringInterval)
+	require.Len(t, provider.sold, 1)
+
+	machineID := provider.sold[0].MachineID
+	require.NoError(t, s.computeRepo.SaveAgentTokenState(s.ctx, &compute.AgentTokenState{
+		TokenHash: "test-token", WorkspaceID: buyingWorkspace, PoolName: pool, MachineID: machineID,
+		CPUMillicores: 64_000, MemoryMB: 2_097_152, GPUs: []string{"B200"}, GPUCount: 8,
+		Executor: types.DefaultAgentWorkerContainerMode, Schedulable: true, LastHeartbeatAt: time.Now(),
+		Mode: string(types.PoolModeExternal), ManagedPoolInstanceID: "instance",
+	}, time.Hour))
+	require.NoError(t, controller.ensureMachine(machineID))
+	require.NoError(t, s.workerRepo.SetWorkerKeepAlive(workers[0].Id, types.WorkerKeepAlive{MachineId: machineID, RequestStreamOpen: true}))
+	workers, err = s.workerRepo.GetAllWorkers()
+	require.NoError(t, err)
+	require.Equal(t, types.WorkerStatusAvailable, workers[0].Status)
+	s.config.ImageService.BuildRegistry = "localhost:5000"
+	for _, request := range queued {
+		workers, err = s.workerRepo.GetAllWorkers()
+		require.NoError(t, err)
+		newSchedulingAttempt(s, request, workers).run()
+		scheduled, err := nextContainerRequest(s.workerRepo, workers[0].Id)
+		require.NoError(t, err)
+		require.NotNil(t, scheduled)
+		require.Equal(t, request.ContainerId, scheduled.ContainerId)
+		require.Equal(t, machineID, scheduled.MachineId)
+	}
+	waiting, err := s.waitlist.For(s.ctx, pool)
+	require.NoError(t, err)
+	require.Empty(t, waiting)
+}
+
+// A replica does not wait on a pool that has no machine coming and can buy
+// none: its controller is told at once, and places it in a pool that can.
+func TestManagedEndpointSpotReplicaFailsAtOnceWhenItsPoolCannotBuy(t *testing.T) {
+	s, err := NewSchedulerForTest()
+	require.NoError(t, err)
+	s.spawn, s.workerPoolManager = inline, NewWorkerPoolManager()
+	const pool = "spot-b200"
+	provider := &fakeProvisioner{inStock: false}
+	spotPoolFor(t, s, pool, provider)
+	s.SetProvisioner(provider)
+	require.False(t, s.PoolOutlook(pool, 16_000, 640*1024, 2).CanBuy)
+
+	request := spotReplica(pool)
+	require.NoError(t, s.Run(request))
+	queued, err := s.requestBacklog.Pop()
+	require.NoError(t, err)
+	newSchedulingAttempt(s, queued, nil).run()
+	status, err := s.containerRepo.GetContainerRequestStatus(request.ContainerId)
+	require.NoError(t, err)
+	require.Equal(t, types.ContainerRequestStatusFailed, status)
+	require.Empty(t, provider.sold)
+	left, _ := s.requestBacklog.Pop()
+	require.Nil(t, left, "the request is not left to wait")
+}
+
+// A machine counts against what its pool may buy from the moment it is
+// bought, and has its Pending worker a moment later. A replica that passes
+// in between waits for the machine: a pool of one machine would otherwise
+// fail the replica it had just bought for.
+func TestManagedEndpointSpotReplicaWaitsForAMachineThatWasJustBought(t *testing.T) {
+	s, err := NewSchedulerForTest()
+	require.NoError(t, err)
+	s.spawn, s.workerPoolManager = inline, NewWorkerPoolManager()
+	const pool = "spot-b200"
+	provider := &fakeProvisioner{inStock: false, sold: []ProvisionedMachine{{MachineID: "machine-a", CPU: 64_000, Memory: 2_097_152, GPUCount: 8, Spot: true}}}
+	spotPoolFor(t, s, pool, provider)
+	s.SetProvisioner(provider)
+
+	request := spotReplica(pool)
+	require.NoError(t, s.Run(request))
+	queued, err := s.requestBacklog.Pop()
+	require.NoError(t, err)
+	newSchedulingAttempt(s, queued, nil).run()
+	status, _ := s.containerRepo.GetContainerRequestStatus(request.ContainerId)
+	require.NotEqual(t, types.ContainerRequestStatusFailed, status, "the request waits")
+	require.Len(t, provider.sold, 1)
+}
+
+// A replica placed on Spot runs only in a Spot pool that takes managed
+// endpoints: not in one that also buys on demand, nor in one that did not
+// opt in, whatever its request names.
+func TestManagedEndpointSpotReplicaRunsOnlyInASpotPoolThatTakesIt(t *testing.T) {
+	for name, change := range map[string]func(*types.WorkerPoolConfig){
+		"did not opt in":      func(c *types.WorkerPoolConfig) { c.ManagedEndpoints.Enabled = false },
+		"also buys on demand": func(c *types.WorkerPoolConfig) { c.Provisioning.OnDemand = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, err := NewSchedulerForTest()
+			require.NoError(t, err)
+			s.workerPoolManager = NewWorkerPoolManager()
+			const pool = "b200"
+			provider := &fakeProvisioner{inStock: true}
+			spotPoolFor(t, s, pool, provider, change)
+			request := spotReplica(pool)
+			_, err = s.growthRouteFor(request)
+			require.ErrorIs(t, err, errNoPoolForRequest)
+			ready := &types.Worker{Id: "ready", PoolName: pool, Gpu: "B200", TotalGpuCount: 8, FreeGpuCount: 8,
+				FreeCpu: 64_000, FreeMemory: 2_097_152, Preemptable: true, Status: types.WorkerStatusAvailable}
+			_, err = s.selectWorkerFromWorkers([]*types.Worker{ready}, request)
+			require.Error(t, err)
+			require.Empty(t, provider.asked)
+		})
+	}
+}
+
 // Every replica has the same waitlist: nothing of it is kept in memory.
 func TestTheWaitlistIsTheSameForEveryReplica(t *testing.T) {
 	rdb, counts, err := repo.NewRedisClientForTestWithCounts()

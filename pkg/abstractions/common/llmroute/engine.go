@@ -9,23 +9,7 @@ import (
 	"time"
 )
 
-const (
-	metricsBodyLimit int64 = 512 * 1024
-
-	engineRunningWeight       = 1200
-	engineWaitingWeight       = 2500
-	engineTTFTWeight          = 2
-	engineTPOTWeight          = 2
-	engineCachePressureWeight = 4
-	engineDecodeBonusCap      = 500
-	engineCacheHitBonusCap    = 250
-)
-
-// Pressure is the router-observed load on a replica (or the whole deployment).
-type Pressure struct {
-	ActiveStreams int64
-	TokenPressure int64
-}
+const metricsBodyLimit int64 = 512 * 1024
 
 // EngineMetrics is a normalized snapshot of an inference engine's own metrics.
 // Raw counters are kept so the next snapshot can derive rates from deltas.
@@ -70,20 +54,6 @@ var engineMetricNames = struct {
 	ttftCount:        []string{"time_to_first_token_seconds_count"},
 	tpotSum:          []string{"time_per_output_token_seconds_sum", "inter_token_latency_seconds_sum"},
 	tpotCount:        []string{"time_per_output_token_seconds_count", "inter_token_latency_seconds_count"},
-}
-
-// score converts engine metrics into a load penalty; lower is better.
-func (m EngineMetrics) score() int64 {
-	score := m.RunningRequests*engineRunningWeight +
-		m.WaitingRequests*engineWaitingWeight +
-		m.TTFTMs*engineTTFTWeight +
-		m.TPOTMs*engineTPOTWeight
-	if m.GPUCacheUsageMilli > 850 {
-		score += (m.GPUCacheUsageMilli - 850) * engineCachePressureWeight
-	}
-	score -= min(max(m.DecodeTokensPerSecond, 0), engineDecodeBonusCap)
-	score -= min(max(m.PrefixCacheHitMilli, 0)/4, engineCacheHitBonusCap)
-	return score
 }
 
 // engineMetricsFromPrometheus parses a vLLM/SGLang exposition, deriving rates

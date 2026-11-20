@@ -16,6 +16,11 @@ import (
 // give their GPU back, and which retire. config.yaml is the source of truth:
 // minimums first in priority order, then requested serverless copies, then
 // hot surplus up to each cap.
+//
+// Those rules share out GPUs that are idle. A Spot placement takes none of
+// them: a Spot pool buys the machine its replica runs on. So it starts what
+// it wants whatever the others hold, takes no GPU back from them, gives none
+// up, and has no surplus.
 
 const (
 	passMinimum    = iota // configured minimums, priority order
@@ -28,6 +33,7 @@ const (
 	reasonOverCap     = "over config.yaml cap"
 	reasonRetired     = "endpoint retired"
 	reasonUnlisted    = "removed from config.yaml"
+	reasonMoved       = "placement moved on or off Spot"
 	reasonReclaimedBy = "gpu reclaimed for "
 	rolloutReplace    = "replace"
 )
@@ -36,10 +42,11 @@ const (
 type slot struct {
 	entry     types.FleetEntry
 	endpoint  *types.ManagedEndpoint
-	replicas  []*types.EndpointReplica // current version on this GPU
+	replicas  []*types.EndpointReplica // current on this GPU
 	demand    *endpointDemand          // serverless placements only
 	started   uint32
-	replacing bool // an older version is still alive on this GPU
+	replacing bool           // a replica that is not current is still alive on this GPU
+	held      map[string]int // Spot placements: alive replicas by pool
 	res       *replicaResources
 	resRead   bool
 }
@@ -101,6 +108,8 @@ func (s *slot) want(pass int) uint32 {
 		return 0
 	case s.entry.Serverless:
 		return s.serverlessWant()
+	case s.entry.Spot:
+		return 0 // a surplus fills GPUs that are idle; on Spot it would buy them
 	}
 	return s.limit()
 }
@@ -150,6 +159,14 @@ func scaleDownOrder(replicas []*types.EndpointReplica) {
 func (c *controller) fill(ctx context.Context, gpu string, entries []types.FleetEntry, endpoints map[string]*types.ManagedEndpoint, live []*types.EndpointReplica, inv *clusterInventory, demand map[string]*endpointDemand) {
 	slots := c.slots(ctx, gpu, entries, endpoints, live, demand)
 	protected := protectedCounts(gpu, live)
+	// Spot placements hold none of the GPUs the others share out.
+	spot := slices.DeleteFunc(slices.Clone(slots), func(s *slot) bool { return !s.entry.Spot })
+	slots = slices.DeleteFunc(slots, func(s *slot) bool { return s.entry.Spot })
+	for _, s := range spot {
+		for pass := passMinimum; pass <= passSurplus; pass++ {
+			c.grow(ctx, gpu, s, pass, protected, inv)
+		}
+	}
 	reclaimed := false
 	for pass := passMinimum; pass <= passSurplus; pass++ {
 		for i, s := range slots {
@@ -175,15 +192,16 @@ func (c *controller) slots(ctx context.Context, gpu string, entries []types.Flee
 		if endpoint == nil || !endpoint.Enabled() {
 			continue
 		}
-		s := &slot{entry: entry, endpoint: endpoint, demand: demand[entry.EndpointID]}
+		s := &slot{entry: entry, endpoint: endpoint, demand: demand[entry.EndpointID], held: map[string]int{}}
 		var all []*types.EndpointReplica
 		for _, r := range live {
 			if r.EndpointID != entry.EndpointID || r.GPU != gpu || !r.Alive() {
 				continue
 			}
 			all = append(all, r)
-			if r.Version == endpoint.Version {
+			if isCurrent(endpoint, entry.Spot, r) {
 				s.replicas = append(s.replicas, r)
+				s.held[r.PoolName]++
 			} else {
 				s.replacing = true
 			}
@@ -247,7 +265,7 @@ func (c *controller) grow(ctx context.Context, gpu string, s *slot, pass int, pr
 		return false
 	}
 	for s.count() < want && s.started < maxStartsPerTick {
-		pool, ok := inv.place(gpu, s.gpuCount(gpu))
+		pool, ok := c.room(ctx, gpu, s, pass, inv)
 		if !ok {
 			return true
 		}
@@ -258,12 +276,30 @@ func (c *controller) grow(ctx context.Context, gpu string, s *slot, pass int, pr
 			return false
 		}
 		s.started++
+		s.held[pool.Name]++
 		s.requested()
 		if protect {
 			protected[s.id()]++
 		}
 	}
 	return false
+}
+
+// room finds the pool the slot's next replica goes to, and takes its place there.
+func (c *controller) room(ctx context.Context, gpu string, s *slot, pass int, inv *clusterInventory) (eligiblePool, bool) {
+	if !s.entry.Spot {
+		return inv.place(gpu, s.gpuCount(gpu))
+	}
+	res := c.resources(ctx, s)
+	if res == nil {
+		return eligiblePool{}, false // never buy a machine for an unknown request shape
+	}
+	choice, ok := inv.placeSpot(gpu, s.gpuCount(gpu), *res, s.held, pass == passMinimum)
+	if ok {
+		log.Info().Str("endpoint_id", s.id()).Str("gpu", gpu).Str("pool", choice.pool.Name).Float64("load", choice.load(s.held)).
+			Float64("taken_per_hour", choice.outlook.Taken).Dur("wait", choice.wait()).Msg("managed endpoints: chose a Spot pool")
+	}
+	return choice.pool, ok
 }
 
 func (c *controller) inBackoff(ctx context.Context, endpointID, gpu string) bool {
@@ -276,6 +312,9 @@ func (c *controller) inBackoff(ctx context.Context, endpointID, gpu string) bool
 // a preemption:false minimum. An old version keeps its protected slot while a
 // replacement loads; protect() transfers it once the new copy is ready.
 func (c *controller) protectNext(s *slot, pass int, protected map[string]uint32) bool {
+	if s.entry.Spot {
+		return true // see protectedReplicas
+	}
 	if s.entry.Serverless {
 		return false
 	}
@@ -370,7 +409,11 @@ func (c *controller) idleAlternative(ctx context.Context, gpu string, s *slot, l
 		if placement.MaxReplicas > 0 && aliveOn(live, s.id(), other) >= placement.MaxReplicas {
 			continue
 		}
-		if !inv.canPlace(other, s.gpuCount(other)) {
+		if placement.Spot {
+			if res := c.resources(ctx, s); res == nil || !inv.spotRoom(other, s.gpuCount(other), *res) {
+				continue
+			}
+		} else if !inv.canPlace(other, s.gpuCount(other)) {
 			continue
 		}
 		if !c.inBackoff(ctx, s.id(), other) {
@@ -508,6 +551,12 @@ func (g *rollout) covered(minimum uint32) bool {
 	return g.currentServing > 0 && g.serving-1 >= max(minimum, 1)
 }
 
+// isCurrent reports whether a replica is what its placement asks for: the
+// endpoint's version, on Spot or off it. Any other is replaced as a rollout.
+func isCurrent(endpoint *types.ManagedEndpoint, spot bool, r *types.EndpointReplica) bool {
+	return r.Version == endpoint.Version && r.Spot == spot
+}
+
 // retire drains what config.yaml no longer wants: every replica of a disabled
 // endpoint or an unlisted GPU type, and stale versions once the GPU is
 // covered. One serving replica per endpoint per tick keeps rollouts rolling.
@@ -527,8 +576,8 @@ func (c *controller) retire(ctx context.Context, endpoint *types.ManagedEndpoint
 			g = &rollout{}
 			rollouts[r.GPU] = g
 		}
-		_, placed := placements[r.GPU]
-		current := placed && r.Version == endpoint.Version
+		placement, placed := placements[r.GPU]
+		current := placed && isCurrent(endpoint, placement.Spot, r)
 		switch {
 		case settling(r):
 			g.settling = true
@@ -572,6 +621,9 @@ func retirement(endpoint *types.ManagedEndpoint, placements map[string]types.Fle
 		}
 		return reasonUnlisted, true
 	case !r.Serving() || g.covered(placement.MinReplicas):
+		if r.Version == endpoint.Version {
+			return reasonMoved, true
+		}
 		return fmt.Sprintf("version %d retired", r.Version), true
 	case endpoint.Spec.Rollout == rolloutReplace && !g.currentStarting && !g.settling:
 		// The app accepts downtime to free the GPU for its replacement.

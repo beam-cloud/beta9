@@ -140,7 +140,7 @@ func TestChooseReservesInflightAtomically(t *testing.T) {
 
 	// Saturated until a slot is released; releasing frees exactly that replica.
 	assert.Nil(t, chooseForTest(t, r, ctx, rq, endpoint, replicas))
-	r.releaseReplica(owners[replicas[0].ID], r.state(endpoint.Spec.ID), replicas[0])
+	r.releaseReplica(owners[replicas[0].ID], replicas[0])
 	got := chooseForTest(t, r, ctx, rq, endpoint, replicas)
 	require.NotNil(t, got)
 	assert.Equal(t, "replica-a", got.ID)
@@ -172,14 +172,10 @@ func TestReplicaConcurrencyIsSharedAcrossGateways(t *testing.T) {
 	require.NotNil(t, chooseForTest(t, a, ctx, rq, endpoint, replicas))
 	assert.Nil(t, chooseForTest(t, b, ctx, rqB, endpoint, replicas), "gateway B sees gateway A's reservation")
 	assert.Equal(t, int64(0), counter(&b.inflight, "replica-a").Load(), "a refused reservation leaves B's counter untouched")
-	pressure, err := a.state(endpoint.Spec.ID).Pressure(ctx, "replica-a")
-	require.NoError(t, err)
-	assert.EqualValues(t, 1, pressure.ActiveStreams)
 
-	a.releaseReplica(rq, a.state(endpoint.Spec.ID), replicas[0])
+	a.releaseReplica(rq, replicas[0])
 	require.NotNil(t, chooseForTest(t, b, ctx, rqB, endpoint, replicas))
-	pressure, _ = a.state(endpoint.Spec.ID).Pressure(ctx, "replica-a")
-	assert.EqualValues(t, 1, pressure.ActiveStreams)
+	assert.Equal(t, []string{"gateway-b-request"}, s.rdb.ZRange(ctx, slotKey("replica-a"), 0, -1).Val())
 }
 
 // TTFT is the time to the first generated output, not to the engine's first
@@ -501,7 +497,7 @@ func TestHostedSlotCrashExpiryIsIndependentOfOtherTraffic(t *testing.T) {
 		router *router
 		id     string
 	}{{a, "crashed"}, {b, "running"}} {
-		ok, err := request.router.reserve(ctx, &routeRequest{requestID: request.id}, request.router.state("model"), replica)
+		ok, err := request.router.reserve(ctx, &routeRequest{requestID: request.id}, replica)
 		require.NoError(t, err)
 		require.True(t, ok)
 	}
@@ -511,12 +507,9 @@ func TestHostedSlotCrashExpiryIsIndependentOfOtherTraffic(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, ok)
 	}
-	pressure, err := b.state("model").Pressure(ctx, replica.ID)
-	require.NoError(t, err)
-	assert.EqualValues(t, 2, pressure.ActiveStreams, "old soft pressure still contains the crashed request")
 	selected, err := b.choose(ctx, &routeRequest{requestID: "new"}, endpoint, []*types.EndpointReplica{replica})
 	require.NoError(t, err)
-	require.NotNil(t, selected, "stale soft pressure cannot block an expired hard slot")
+	require.NotNil(t, selected, "a crashed gateway's request frees its slot by expiring")
 	assert.ElementsMatch(t, []string{"running", "new"}, s.rdb.ZRange(ctx, slotKey(replica.ID), 0, -1).Val())
 }
 
@@ -528,7 +521,7 @@ func TestHostedSlotLongGenerationRenewsAcrossGateways(t *testing.T) {
 	server.SetTime(now)
 	replica := &types.EndpointReplica{ID: "replica", Capacity: types.ReplicaCapacity{MaxConcurrency: 1}}
 	requestA := &routeRequest{requestID: "long-generation"}
-	ok, err := a.reserve(ctx, requestA, a.state("model"), replica)
+	ok, err := a.reserve(ctx, requestA, replica)
 	require.NoError(t, err)
 	require.True(t, ok)
 	for i := 1; i <= 40; i++ {
@@ -537,15 +530,12 @@ func TestHostedSlotLongGenerationRenewsAcrossGateways(t *testing.T) {
 		ok, err = s.lease(ctx, slotKey(replica.ID), leaseRenew, requestA.requestID, 0)
 		require.NoError(t, err)
 		require.True(t, ok)
-		ok, err = b.reserve(ctx, &routeRequest{requestID: fmt.Sprint("retry-", i)}, b.state("model"), replica)
+		ok, err = b.reserve(ctx, &routeRequest{requestID: fmt.Sprint("retry-", i)}, replica)
 		require.NoError(t, err)
 		assert.False(t, ok, "a second gateway must not overlap a long active generation")
 	}
-	pressure, err := a.state("model").Pressure(ctx, replica.ID)
-	require.NoError(t, err)
-	assert.Zero(t, pressure.ActiveStreams, "generation outlived the old ten-minute soft counter")
-	a.releaseReplica(requestA, a.state("model"), replica)
-	ok, err = b.reserve(ctx, &routeRequest{requestID: "after-completion"}, b.state("model"), replica)
+	a.releaseReplica(requestA, replica)
+	ok, err = b.reserve(ctx, &routeRequest{requestID: "after-completion"}, replica)
 	require.NoError(t, err)
 	assert.True(t, ok)
 }

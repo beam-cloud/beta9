@@ -9,7 +9,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
@@ -18,70 +17,85 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// One admitted request against one replica: pick a replica with a free
+// One admitted request against one replica: reserve a replica with a free
 // inflight slot, relay the request, settle its charge from the response.
 
-// serve runs select -> proxy -> settle, retrying once on another replica
-// when the first attempt fails before any byte reached the client.
+const (
+	// maxAttempts is how many replicas one request may try.
+	maxAttempts = 3
+	// ejectFor keeps a replica that just failed a request out of this
+	// gateway's rotation while the controller's probes judge it.
+	ejectFor = 15 * time.Second
+	// lostCheckInterval is how often running requests are checked against
+	// the replicas that can still answer them.
+	lostCheckInterval = 2 * time.Second
+)
+
+// errReplicaLost ends a request whose replica can no longer answer it.
+var errReplicaLost = errors.New("replica lost")
+
+// serve runs pick -> proxy -> settle. While the caller has received nothing
+// (no response yet, or a stream that has not produced its first event) a
+// failed replica is replaced by another.
 func (r *router) serve(rq *routeRequest, app *types.ManagedEndpoint) error {
 	ctx := rq.ctx.Request().Context()
 	if rq.proto.llm {
-		req := rq.ctx.Request()
-		req.Body = io.NopCloser(bytes.NewReader(rq.body))
-		if info, err := llmroute.Inspect(req, r.prefix+"/"+string(rq.route), llmroute.InspectOptions{DefaultModel: app.Spec.ID}); err == nil {
-			info.RequestID = rq.requestID
-			rq.info, rq.stream = info, info.Stream
-		}
+		rq.prompt = llmroute.Read(rq.payload, rq.cacheKey())
 	}
-	exclude := map[string]bool{}
-	for attempt := 0; attempt < 2; attempt++ {
-		replica, rerr := r.pick(ctx, rq, app, exclude)
+	tried := map[string]bool{}
+	for range maxAttempts {
+		replica, rerr := r.pick(ctx, rq, app, tried)
 		if rerr != nil {
 			return r.reject(rq, app, nil, rerr)
 		}
-		var leaseLost bool
-		retry, err := func() (bool, error) {
-			ticker := time.NewTicker(leaseRenewInterval)
-			defer ticker.Stop()
-			attemptCtx, stopRenewal := r.renewSlot(ctx, replica.ID, rq.requestID, ticker.C)
-			defer func() {
-				stopRenewal()
-				r.releaseReplica(rq, r.state(app.Spec.ID), replica)
-			}()
-			retry, err := r.proxy(attemptCtx, rq, app, replica)
-			leaseLost = errors.Is(context.Cause(attemptCtx), errLeaseLost)
-			return retry, err
-		}()
-		if leaseLost && err != nil {
-			if !rq.ctx.Response().Committed {
-				r.finish(rq, app, replica, http.StatusServiceUnavailable, nil, 0, errLeaseLost.Error())
-				return errRegistry.write(rq.ctx)
-			}
-			if rq.stream && ctx.Err() == nil {
-				writeStreamError(rq.ctx.Response(), rq.requestID, app.Spec.ID, &streamFailure{http.StatusServiceUnavailable, "Request lease lost", "registry_unavailable"})
-			}
-			return nil
-		}
-		if err == nil {
-			return nil
-		}
+		tried[replica.ID] = true
+		retry, err := r.attempt(ctx, rq, app, replica)
 		logger := log.Warn().Err(err).Str("endpoint_id", app.Spec.ID).Str("replica_id", replica.ID)
 		if !retry {
-			logger.Msg("managed endpoints: proxy failed after response started")
+			if err != nil {
+				logger.Msg("managed endpoints: request failed after its response started")
+			}
 			return nil
 		}
-		exclude[replica.ID] = true
-		logger.Msg("managed endpoints: upstream failed before response; retrying")
+		if errors.Is(err, errLeaseLost) {
+			return r.reject(rq, app, replica, errRegistry)
+		}
+		if rerr := r.s.stopped(ctx); rerr != nil {
+			return r.reject(rq, app, replica, rerr)
+		}
+		r.ejected.Store(replica.ID, time.Now().Add(ejectFor))
+		logger.Msg("managed endpoints: replica failed before any output; trying another")
 	}
 	return r.reject(rq, app, nil, errUpstreamUnavailable)
 }
 
+// attempt runs the request on a reserved replica and releases it. It reports
+// whether another replica may take over: the caller received nothing here.
+func (r *router) attempt(ctx context.Context, rq *routeRequest, app *types.ManagedEndpoint, replica *types.EndpointReplica) (retry bool, err error) {
+	ticker := time.NewTicker(leaseRenewInterval)
+	defer ticker.Stop()
+	leased, stopRenewal := r.renewSlot(ctx, replica.ID, rq.requestID, ticker.C)
+	defer func() {
+		stopRenewal()
+		r.releaseReplica(rq, replica)
+	}()
+	running, lose := context.WithCancelCause(leased)
+	defer lose(nil)
+	r.running.Store(rq, flight{replica.ID, lose})
+	defer r.running.Delete(rq)
+	retry, err = r.proxy(running, rq, app, replica)
+	if cause := context.Cause(running); retry && cause != nil {
+		err = cause // why the gateway gave up on the replica, not how the transport reported it
+	}
+	return retry, err
+}
+
 // pick reserves available capacity immediately. Providers must reject overload
 // before opening a stream; a rejected on-demand request still triggers startup.
-func (r *router) pick(ctx context.Context, rq *routeRequest, app *types.ManagedEndpoint, exclude map[string]bool) (*types.EndpointReplica, *routeError) {
-	candidates, err := r.servingReplicas(ctx, app, rq.pinReplica, exclude)
+func (r *router) pick(ctx context.Context, rq *routeRequest, app *types.ManagedEndpoint, tried map[string]bool) (*types.EndpointReplica, *routeError) {
+	candidates, err := r.servingReplicas(ctx, app, rq.pinReplica, tried)
 	var replica *types.EndpointReplica
-	if err == nil && (len(candidates) > 0 || len(exclude) == 0) {
+	if err == nil && (len(candidates) > 0 || len(tried) == 0) {
 		replica, err = r.choose(ctx, rq, app, candidates)
 	}
 	if replica != nil {
@@ -94,7 +108,7 @@ func (r *router) pick(ctx context.Context, rq *routeRequest, app *types.ManagedE
 	switch {
 	case err != nil:
 		return nil, errRegistry
-	case len(candidates) == 0 && len(exclude) > 0:
+	case len(candidates) == 0 && len(tried) > 0:
 		return nil, errUpstreamUnavailable
 	}
 	if rerr := r.wake(ctx, rq); rerr != nil {
@@ -104,77 +118,67 @@ func (r *router) pick(ctx context.Context, rq *routeRequest, app *types.ManagedE
 }
 
 // servingReplicas lists replicas that may take this request; a pinned replica
-// (X-Beam-Endpoint-Replica) bypasses the pool.
-func (r *router) servingReplicas(ctx context.Context, app *types.ManagedEndpoint, pin string, exclude map[string]bool) ([]*types.EndpointReplica, error) {
+// (X-Beam-Endpoint-Replica) bypasses the pool. A replica that just failed a
+// request here sits out, unless it is the only one left.
+func (r *router) servingReplicas(ctx context.Context, app *types.ManagedEndpoint, pin string, tried map[string]bool) ([]*types.EndpointReplica, error) {
 	replicas, err := r.s.repo.ListReplicas(ctx, app.Spec.ID)
 	if err != nil {
 		return nil, err
 	}
-	var out []*types.EndpointReplica
+	now := time.Now()
+	var serving, ejected []*types.EndpointReplica
 	for _, replica := range replicas {
-		if exclude[replica.ID] || replica.Address == "" {
-			continue
-		}
-		if pin != "" {
-			if replica.ID == pin && replica.Status == types.ReplicaStatusReady {
+		switch {
+		case tried[replica.ID] || replica.Address == "" || !replica.Serving() || r.s.silent(replica, now):
+		case pin != "":
+			if replica.ID == pin {
 				return []*types.EndpointReplica{replica}, nil
 			}
-			continue
-		}
-		if replica.Serving() {
-			out = append(out, replica)
+		case r.isEjected(replica.ID, now):
+			ejected = append(ejected, replica)
+		default:
+			serving = append(serving, replica)
 		}
 	}
-	return out, nil
+	if len(serving) == 0 {
+		return ejected, nil
+	}
+	return serving, nil
 }
 
-// choose picks a replica (llmroute for LLMs, least loaded otherwise) with one
-// inflight slot reserved; the caller must releaseReplica it exactly once. Nil
-// means every candidate is saturated.
-func (r *router) choose(ctx context.Context, rq *routeRequest, app *types.ManagedEndpoint, candidates []*types.EndpointReplica) (*types.EndpointReplica, error) {
-	now := time.Now()
-	slowStart := time.Duration(r.s.config.Routing.SlowStartSeconds) * time.Second
-	state := r.state(app.Spec.ID)
-	var eligible []llmroute.Candidate
-	for _, replica := range candidates {
-		local := counter(&r.inflight, replica.ID).Load()
-		pressure, err := state.Pressure(ctx, replica.ID)
-		if err != nil {
-			return nil, err
-		}
-		if replica.Capacity.MaxConcurrency > 0 && local >= replica.Capacity.MaxConcurrency {
-			continue
-		}
-		penalty := int64(0)
-		if age := now.Sub(replica.ReadyAt); !replica.ReadyAt.IsZero() && age < slowStart {
-			penalty = int64((1 - float64(age)/float64(slowStart)) * 8)
-		}
-		eligible = append(eligible, llmroute.Candidate{
-			ID: replica.ID, Connections: local + penalty, Pressure: pressure, Engine: engineMetrics(replica.Capacity),
-			ContextLen: int64(app.Catalog.ContextLength), Payload: replica,
-		})
+func (r *router) isEjected(replicaID string, now time.Time) bool {
+	until, ok := r.ejected.Load(replicaID)
+	if ok && now.After(until.(time.Time)) {
+		r.ejected.Delete(replicaID)
+		return false
 	}
-	if len(eligible) == 0 {
-		return nil, nil
-	}
-	var affinity llmroute.Affinity
-	if rq.proto.llm && rq.info != nil {
-		affinity = state.Affinity(ctx, rq.info)
-	}
-	for len(eligible) > 0 { // losers of the reservation race move on to the next candidate
-		selection, ok := r.selector.Select(eligible, affinity, rq.info)
-		if !ok {
-			return nil, nil
+	return ok
+}
+
+// choose reserves one inflight slot on the best replica for the request; the
+// caller must releaseReplica it exactly once. An LLM prompt goes where its
+// prefix is cached, anything else to the least loaded replica. Nil means
+// every candidate is full.
+func (r *router) choose(ctx context.Context, rq *routeRequest, app *types.ManagedEndpoint, replicas []*types.EndpointReplica) (*types.EndpointReplica, error) {
+	candidates := make([]llmroute.Replica, len(replicas))
+	for i, replica := range replicas {
+		c := replica.Capacity
+		candidates[i] = llmroute.Replica{
+			ID: replica.ID, Max: c.MaxConcurrency, Queued: c.Waiting,
+			// This gateway's requests are exact; the engine's last report covers the other gateways'.
+			Load: max(counter(&r.inflight, replica.ID).Load(), c.InFlight, c.Running+c.Waiting),
 		}
-		replica := selection.Candidate.Payload.(*types.EndpointReplica)
-		reserved, err := r.reserve(ctx, rq, state, replica)
+	}
+	table := r.table(app.Spec.ID)
+	for _, i := range table.Rank(rq.prompt, candidates) { // losers of the reservation race move on to the next replica
+		reserved, err := r.reserve(ctx, rq, replicas[i])
 		if err != nil {
 			return nil, err
 		}
 		if reserved {
-			return replica, nil
+			table.Served(rq.prompt, replicas[i].ID)
+			return replicas[i], nil
 		}
-		eligible = slices.DeleteFunc(eligible, func(c llmroute.Candidate) bool { return c.ID == replica.ID })
 	}
 	return nil, nil
 }
@@ -182,7 +186,7 @@ func (r *router) choose(ctx context.Context, rq *routeRequest, app *types.Manage
 // reserve takes one inflight slot: the local counter and the shared Redis
 // reservation that bounds MaxConcurrency across gateways. Uncertain shared
 // capacity fails closed rather than overloading the engine.
-func (r *router) reserve(ctx context.Context, rq *routeRequest, state *llmroute.State, replica *types.EndpointReplica) (bool, error) {
+func (r *router) reserve(ctx context.Context, rq *routeRequest, replica *types.EndpointReplica) (bool, error) {
 	inflight := counter(&r.inflight, replica.ID)
 	if n := inflight.Add(1); replica.Capacity.MaxConcurrency > 0 && n > replica.Capacity.MaxConcurrency {
 		inflight.Add(-1)
@@ -190,30 +194,19 @@ func (r *router) reserve(ctx context.Context, rq *routeRequest, state *llmroute.
 	}
 	ok, err := r.s.lease(ctx, slotKey(replica.ID), leaseAcquire, rq.requestID, replica.Capacity.MaxConcurrency)
 	if err != nil {
-		inflight.Add(-1)
 		// The server may have acquired the slot before its reply was lost.
 		_, _ = r.s.lease(context.Background(), slotKey(replica.ID), leaseRelease, rq.requestID, 0)
-		return false, err
 	}
-	if !ok {
+	if err != nil || !ok {
 		inflight.Add(-1)
-	} else {
-		hintCtx, cancel := context.WithTimeout(ctx, leaseOpTimeout)
-		_ = state.AddPressure(hintCtx, replica.ID, 1, rq.tokenPressure())
-		cancel()
 	}
-	return ok, nil
+	return ok, err
 }
 
 // releaseReplica returns the slot taken by reserve.
-func (r *router) releaseReplica(rq *routeRequest, state *llmroute.State, replica *types.EndpointReplica) {
+func (r *router) releaseReplica(rq *routeRequest, replica *types.EndpointReplica) {
 	counter(&r.inflight, replica.ID).Add(-1)
-	released, _ := r.s.lease(context.Background(), slotKey(replica.ID), leaseRelease, rq.requestID, 0)
-	if released {
-		hintCtx, cancel := context.WithTimeout(context.Background(), leaseOpTimeout)
-		defer cancel()
-		_ = state.AddPressure(hintCtx, replica.ID, -1, -rq.tokenPressure())
-	}
+	_, _ = r.s.lease(context.Background(), slotKey(replica.ID), leaseRelease, rq.requestID, 0)
 }
 
 // renewSlot keeps one attempt's slot alive; losing it cancels the attempt
@@ -226,18 +219,59 @@ func (r *router) renewSlot(parent context.Context, replicaID, requestID string, 
 	}, errLeaseLost)
 }
 
-func (rq *routeRequest) tokenPressure() int64 {
-	if rq.info == nil {
-		return 0
+// cacheKey is the name the caller gave the conversation, OpenAI's
+// prompt_cache_key or a session header, so its requests share a replica.
+func (rq *routeRequest) cacheKey() string {
+	if key, _ := rq.payload["prompt_cache_key"].(string); key != "" {
+		return key
 	}
-	return rq.info.TokenPressure
+	return strings.TrimSpace(rq.ctx.Request().Header.Get(headerSession))
 }
 
-func engineMetrics(c types.ReplicaCapacity) llmroute.EngineMetrics {
-	return llmroute.EngineMetrics{
-		RunningRequests: c.Running, WaitingRequests: c.Waiting, TTFTMs: c.TTFTMs, TPOTMs: c.TPOTMs,
-		DecodeTokensPerSecond: c.DecodeTokensPerSec, PromptTokensPerSecond: c.PromptTokensPerSec,
-		GPUCacheUsageMilli: 1000 - c.KVCacheFreeMilli, PrefixCacheHitMilli: c.PrefixCacheHitMilli, UpdatedAtUnixMs: time.Now().UnixMilli(),
+// flight is a request in flight on a replica, and how to end it.
+type flight struct {
+	replicaID string
+	lose      context.CancelCauseFunc
+}
+
+// watch ends the requests of replicas that were lost: finished by the
+// controller, or silent past the heartbeat bound. A dead machine sends
+// nothing, not even a reset: its requests would hang until the caller gave up.
+func (r *router) watch(ctx context.Context) {
+	ticker := time.NewTicker(lostCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			r.dropLost(ctx)
+		}
+	}
+}
+
+func (r *router) dropLost(ctx context.Context) {
+	var flights []flight
+	r.running.Range(func(_, f any) bool {
+		flights = append(flights, f.(flight))
+		return true
+	})
+	if len(flights) == 0 {
+		return
+	}
+	replicas, err := r.s.repo.ListAllReplicas(ctx)
+	if err != nil {
+		return // unknown is not lost
+	}
+	now := time.Now()
+	live := map[string]bool{}
+	for _, replica := range replicas {
+		live[replica.ID] = !replica.Status.Terminal() && !r.s.silent(replica, now)
+	}
+	for _, f := range flights {
+		if !live[f.replicaID] {
+			f.lose(errReplicaLost)
+		}
 	}
 }
 
@@ -280,6 +314,13 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, app *types.Managed
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set(headerRequestID, rq.requestID)
 	req.Header.Set(headerEndpointID, app.Spec.ID)
+	// An engine closes connections that sit idle (uvicorn after 5s), and a
+	// request written to one as it closes fails without reaching the engine.
+	// An idempotency key lets the transport send it again on a new connection
+	// instead of reporting a failed replica; with no value it is not sent.
+	if _, ok := req.Header["Idempotency-Key"]; !ok {
+		req.Header["Idempotency-Key"] = nil
+	}
 	req.ContentLength = int64(len(rq.body))
 
 	sentAt := time.Now()
@@ -293,26 +334,28 @@ func (r *router) proxy(ctx context.Context, rq *routeRequest, app *types.Managed
 		io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 		return true, fmt.Errorf("upstream returned %d", resp.StatusCode)
 	}
-	if rq.info != nil {
-		r.state(app.Spec.ID).RecordAffinity(ctx, rq.info, replica.ID)
-	}
+	contentType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	stream := contentType == "text/event-stream"
 	w := rq.ctx.Response()
-	for name, values := range resp.Header {
-		if !hopHeaders[http.CanonicalHeaderKey(name)] {
-			w.Header()[name] = values
+	if !w.Committed {
+		for name, values := range resp.Header {
+			if !hopHeaders[http.CanonicalHeaderKey(name)] {
+				w.Header()[name] = values
+			}
 		}
+		w.Header().Set(headerRequestID, rq.requestID)
+		w.Header().Set(headerReplicaServed, replica.ID)
 	}
-	w.Header().Set(headerRequestID, rq.requestID)
-	w.Header().Set(headerReplicaServed, replica.ID)
-	if resp.StatusCode == http.StatusTooManyRequests {
+	switch {
+	case resp.StatusCode == http.StatusTooManyRequests:
 		// Overload stays a JSON 429 even for streaming requests: never relay a
 		// backend-specific error body or open an SSE response.
 		return false, r.reject(rq, app, replica, capacityError("model is temporarily at capacity; retry shortly"))
-	}
-	contentType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
-	switch {
-	case contentType == "text/event-stream":
-		return false, r.proxyStream(ctx, rq, app, replica, resp, sentAt)
+	case w.Committed && !stream:
+		// A stream that an earlier replica opened can only continue as one.
+		return false, r.reject(rq, app, replica, errUpstreamUnavailable)
+	case stream:
+		return r.proxyStream(ctx, rq, app, replica, resp, sentAt)
 	case strings.Contains(contentType, "json") || resp.StatusCode >= 300:
 		return false, r.proxyJSON(ctx, rq, app, replica, resp, contentType, sentAt)
 	}
@@ -337,12 +380,16 @@ func (r *router) proxyBinary(rq *routeRequest, app *types.ManagedEndpoint, repli
 
 // proxyStream relays SSE as it arrives. Headers are committed, so a failure
 // becomes an SSE error event; the request settles exactly once: on the
-// terminal marker when the stream completes, here otherwise.
-func (r *router) proxyStream(ctx context.Context, rq *routeRequest, app *types.ManagedEndpoint, replica *types.EndpointReplica, resp *http.Response, sentAt time.Time) error {
+// terminal marker when the stream completes, here otherwise. An upstream
+// that breaks before its first event has given the caller nothing, and the
+// stream may continue from another replica.
+func (r *router) proxyStream(ctx context.Context, rq *routeRequest, app *types.ManagedEndpoint, replica *types.EndpointReplica, resp *http.Response, sentAt time.Time) (retry bool, err error) {
 	w := rq.ctx.Response()
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(resp.StatusCode)
+	if !w.Committed {
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("X-Accel-Buffering", "no")
+		w.WriteHeader(resp.StatusCode)
+	}
 	settled := false
 	finalize := func(work *types.Work, ttft time.Duration) error {
 		settled = true
@@ -352,8 +399,11 @@ func (r *router) proxyStream(ctx context.Context, rq *routeRequest, app *types.M
 		return nil
 	}
 	work, ttft, err := relayStream(w, resp.Body, rq.requestID, sentAt, finalize)
-	if settled {
-		return err
+	switch {
+	case settled:
+		return false, err
+	case errors.Is(err, errStreamUnopened) && resp.StatusCode < 300:
+		return true, err
 	}
 	status, errMsg := resp.StatusCode, ""
 	if err != nil {
@@ -363,18 +413,18 @@ func (r *router) proxyStream(ctx context.Context, rq *routeRequest, app *types.M
 		}
 	}
 	r.finish(rq, app, replica, status, work, ttft, errMsg)
-	return err
+	return false, err
 }
 
 // streamBroke tells a still-connected client why its stream ended and returns
 // the status to settle: a broken stream is not a success and is not billed.
 func (r *router) streamBroke(ctx context.Context, rq *routeRequest, app *types.ManagedEndpoint, err error) int {
 	failure := streamFailureFor(err)
-	if ctx.Err() == nil {
-		writeStreamError(rq.ctx.Response(), rq.requestID, app.Spec.ID, failure)
-	}
 	if errors.Is(context.Cause(ctx), errLeaseLost) {
-		return http.StatusServiceUnavailable
+		failure = streamFailureFor(errRegistry)
+	}
+	if rq.ctx.Request().Context().Err() == nil {
+		writeStreamError(rq.ctx.Response(), rq.requestID, app.Spec.ID, failure)
 	}
 	return failure.status
 }
@@ -427,10 +477,17 @@ func addResponseTiming(rq *routeRequest, sentAt, receivedAt time.Time) {
 	})
 }
 
-// reject voids the charge of a request that got no response and answers with the error.
+// reject voids the charge of a request that got no response and answers with
+// the error: as the response, or as the last event of a stream already open.
 func (r *router) reject(rq *routeRequest, app *types.ManagedEndpoint, replica *types.EndpointReplica, rerr *routeError) error {
 	r.finish(rq, app, replica, rerr.Status, nil, 0, rerr.Message)
-	return rerr.write(rq.ctx)
+	if !rq.ctx.Response().Committed {
+		return rerr.write(rq.ctx)
+	}
+	if rq.ctx.Request().Context().Err() == nil {
+		writeStreamError(rq.ctx.Response(), rq.requestID, app.Spec.ID, streamFailureFor(rerr))
+	}
+	return nil
 }
 
 // finish settles or voids the request's charge from its outcome and hands it

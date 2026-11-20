@@ -1,53 +1,42 @@
 package llmroute
 
 import (
+	"cmp"
 	"context"
 	"io"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 )
 
 const (
-	readinessTimeout   = 5 * time.Second
-	readinessBodyLimit = 4 * 1024
-	metricsTimeout     = 750 * time.Millisecond
-	defaultMetricsPath = "/metrics"
+	readyTimeout   = 5 * time.Second
+	readyBodyLimit = 4 * 1024
+	metricsTimeout = 750 * time.Millisecond
 )
 
-// ReadinessPaths returns the ordered HTTP paths that indicate an
-// OpenAI-compatible engine is serving, plus the metrics path if given.
-func ReadinessPaths(metricsPath string) []string {
-	paths := []string{"/v1/models", "/health", "/server_info", "/get_model_info"}
-	if p := NormalizeMetricsPath(metricsPath); strings.TrimSpace(metricsPath) != "" && p != "/" && !slices.Contains(paths, p) {
-		return append(paths, p)
-	}
-	return paths
-}
+// readyPaths are where an OpenAI-compatible engine answers once it serves.
+var readyPaths = []string{"/v1/models", "/health", "/server_info", "/get_model_info"}
 
-// NormalizeMetricsPath returns metricsPath with a leading slash or the default.
-func NormalizeMetricsPath(metricsPath string) string {
-	metricsPath = strings.TrimSpace(metricsPath)
-	if metricsPath == "" {
-		return defaultMetricsPath
+// Ready reports whether the engine at baseURL serves: its health path
+// answers 2xx or, when it names none, one of the paths engines answer on.
+func Ready(ctx context.Context, client *http.Client, baseURL, health string) bool {
+	paths := readyPaths
+	if health = strings.TrimSpace(health); health != "" {
+		paths = []string{health}
 	}
-	return "/" + strings.TrimPrefix(metricsPath, "/")
-}
-
-// CheckReady probes each path on baseURL until one returns 2xx.
-func CheckReady(ctx context.Context, client *http.Client, baseURL string, paths []string, timeout time.Duration) bool {
-	if baseURL == "" {
-		return false
-	}
-	baseURL = strings.TrimRight(baseURL, "/")
-	timeout = max(timeout, readinessTimeout)
 	for _, path := range paths {
-		if status, _, _ := get(ctx, client, baseURL+path, "application/json", timeout, readinessBodyLimit); status/100 == 2 {
+		if status, _, _ := get(ctx, client, baseURL+path, "application/json", readyTimeout, readyBodyLimit); status/100 == 2 {
 			return true
 		}
 	}
 	return false
+}
+
+// NormalizeMetricsPath returns metricsPath with a leading slash, or /metrics
+// when there is none.
+func NormalizeMetricsPath(metricsPath string) string {
+	return "/" + strings.TrimPrefix(cmp.Or(strings.TrimSpace(metricsPath), "metrics"), "/")
 }
 
 // FetchEngineMetrics scrapes the engine's Prometheus endpoint into a snapshot

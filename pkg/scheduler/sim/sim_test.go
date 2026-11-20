@@ -3715,7 +3715,8 @@ func TestPoolBuysSomethingElseAfterAMachineFailsToStart(t *testing.T) {
 }
 
 // A request that waits for a machine to boot stops waiting when the machine
-// is taken back, and has the pool buy another at once.
+// is taken back. Its provider has none to spare, so the pool, which buys
+// nothing else, buys the same again after five minutes and not at once.
 func TestRequestWaitingForAMachineThatIsReclaimedWhileBootingGetsAnother(t *testing.T) {
 	sim := New(t, spotPool)
 	verda := sim.Provider("verda").BootAfter(2 * time.Minute)
@@ -3725,9 +3726,12 @@ func TestRequestWaitingForAMachineThatIsReclaimedWhileBootingGetsAnother(t *test
 	require.Equal(t, 1, verda.Bought())
 	verda.Reclaim(1)
 
-	// The next check of the machines finds it gone, and the request asks
-	// for another without waiting out the time a machine has to boot.
-	sim.Advance(30 * time.Second)
+	// The next check of the machines finds it gone, and the request waits
+	// for the pool to buy again, not for the time a machine has to boot.
+	sim.Advance(4 * time.Minute)
+	require.Equal(t, 1, verda.Bought())
+	require.Zero(t, machines(sim, "verda"))
+	sim.Advance(2 * time.Minute)
 	require.Equal(t, 2, verda.Bought())
 	require.Equal(t, 1, machines(sim, "verda"))
 

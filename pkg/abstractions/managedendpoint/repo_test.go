@@ -2,6 +2,7 @@ package managedendpoint
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -26,6 +27,91 @@ const publishedModel = `acme/model:
       priority: 1
       minReplicas: 1
 `
+
+func TestApplyRepoChecksSpotPlacements(t *testing.T) {
+	s := newServiceForTest(t)
+	app := seedEndpoint(t, s)
+	app.Spec.Gpu[types.CPUInventoryKey] = types.GpuSpec{}
+	require.NoError(t, s.repo.SaveEndpoint(context.Background(), app))
+	optedIn := types.WorkerPoolManagedEndpointsConfig{Enabled: true}
+	s.appConfig.Worker.Pools = map[string]types.WorkerPoolConfig{
+		"spot":    {GPUType: "H100", ManagedEndpoints: optedIn, Preemptable: true},
+		"durable": {GPUType: "H100", ManagedEndpoints: optedIn},
+		"cpu":     {ManagedEndpoints: optedIn},
+	}
+	apply := func(t *testing.T, gpu, placement string) *pb.ApplyRepoResponse {
+		t.Helper()
+		out, err := s.ApplyRepo(adminCtx(), &pb.ApplyRepoRequest{DryRun: true,
+			ConfigYaml: fmt.Sprintf("acme/model:\n  enabled: true\n  pricing: {request: \"0\"}\n  gpus:\n    %s: {priority: 1, %s}\n", gpu, placement),
+			Endpoints:  []*pb.RepoEndpoint{repoEndpoint(app.Spec.ID, app)},
+		})
+		require.NoError(t, err)
+		return out
+	}
+	for _, placement := range []string{
+		"spot: true, minReplicas: 3",
+		"spot: true, minReplicas: 2, maxReplicas: 2",
+		"spot: true, serverless: true, maxReplicas: 4",
+		"spot: false, maxReplicas: 1",
+	} {
+		t.Run(placement, func(t *testing.T) {
+			out := apply(t, "H100", placement)
+			assert.True(t, out.Ok, out.Errors)
+			assert.Empty(t, out.Warnings)
+		})
+	}
+	for placement, problem := range map[string]string{
+		"spot: true, maxReplicas: 2":                    "spot runs minReplicas, or what its requests need with serverless: true; set one",
+		"spot: true, minReplicas: 1, preemption: false": "preemption does not apply to spot",
+		"spot: true, minReplicas: 1, preemption: true":  "preemption does not apply to spot",
+		"spot: H100, minReplicas: 1":                    "spot must be a boolean",
+	} {
+		t.Run(placement, func(t *testing.T) {
+			out := apply(t, "H100", placement)
+			assert.False(t, out.Ok)
+			require.Len(t, out.Errors, 1)
+			assert.Contains(t, out.Errors[0], problem)
+		})
+	}
+	out := apply(t, "cpu", "spot: true, minReplicas: 1, maxReplicas: 1")
+	require.Len(t, out.Errors, 1)
+	assert.Contains(t, out.Errors[0], "spot requires a GPU placement")
+}
+
+// A placement warns when no pool of its kind hosts its GPU type: a Spot pool
+// for a Spot placement, and a pool that lends idle GPUs for any other.
+func TestApplyRepoWarnsWhenNoPoolHostsThePlacement(t *testing.T) {
+	optedIn := types.WorkerPoolManagedEndpointsConfig{Enabled: true}
+	spot := types.WorkerPoolConfig{GPUType: "H100", Preemptable: true, ManagedEndpoints: optedIn}
+	durable := types.WorkerPoolConfig{GPUType: "H100", ManagedEndpoints: optedIn}
+	spotModel := "acme/model:\n  enabled: true\n  pricing: {request: \"0\"}\n  gpus:\n    H100: {priority: 1, minReplicas: 2, spot: true}\n"
+	for name, tc := range map[string]struct {
+		pool    types.WorkerPoolConfig
+		config  string
+		warning string
+	}{
+		"Spot placement, Spot pool":       {spot, spotModel, ""},
+		"Spot placement, no Spot pool":    {durable, spotModel, "config.yaml: acme/model: no Spot pool on this cluster hosts H100 for managed endpoints"},
+		"other placement, only Spot pool": {spot, publishedModel, "config.yaml: acme/model: no pool on this cluster hosts H100"},
+		"other placement, its pool":       {durable, publishedModel, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newServiceForTest(t)
+			app := seedEndpoint(t, s)
+			s.appConfig.Worker.Pools = map[string]types.WorkerPoolConfig{"pool": tc.pool}
+			out, err := s.ApplyRepo(adminCtx(), &pb.ApplyRepoRequest{
+				DryRun: true, ConfigYaml: tc.config, Endpoints: []*pb.RepoEndpoint{repoEndpoint(app.Spec.ID, app)},
+			})
+			require.NoError(t, err)
+			require.True(t, out.Ok, out.Errors)
+			if tc.warning == "" {
+				assert.Empty(t, out.Warnings)
+			} else {
+				assert.Equal(t, []string{tc.warning}, out.Warnings)
+			}
+		})
+	}
+}
 
 func TestApplyRepoDryRunValidatesWithoutApplying(t *testing.T) {
 	s := newServiceForTest(t)
@@ -229,4 +315,14 @@ func TestEndpointState(t *testing.T) {
 	state, reason := endpointState(endpoint, placed, nil, []*types.EndpointReplica{replica(types.ReplicaStatusFailed, "engine exited: CUDA out of memory")})
 	assert.Equal(t, StateFailed, state)
 	assert.Contains(t, reason, "CUDA out of memory")
+
+	// What it waits for depends on the placement: an idle GPU, or a machine
+	// a Spot pool buys.
+	_, reason = endpointState(endpoint, placed, nil, nil)
+	assert.Equal(t, "no idle H100 in an opted-in pool", reason)
+	both := &types.Fleet{Endpoints: map[string]types.FleetEndpoint{"acme/model": {Enabled: true, GPUs: map[string]types.FleetPlacement{
+		"H100": {Priority: 1, MinReplicas: 1}, "B200": {Priority: 1, MinReplicas: 2, Spot: true},
+	}}}}
+	_, reason = endpointState(endpoint, both, nil, nil)
+	assert.Equal(t, "no idle H100 in an opted-in pool; no Spot pool has or can buy B200", reason)
 }

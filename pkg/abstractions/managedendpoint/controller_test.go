@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"testing"
 	"time"
 
@@ -21,7 +22,6 @@ import (
 
 func TestInventoryPlacesInEligiblePoolsOnly(t *testing.T) {
 	s := newServiceForTest(t)
-	s.workers = repository.NewWorkerRedisRepositoryForTest(s.rdb)
 	s.appConfig.Worker.Pools = map[string]types.WorkerPoolConfig{
 		"gpu-a":   {GPUType: "H100", Locality: "us-east", ManagedEndpoints: types.WorkerPoolManagedEndpointsConfig{Enabled: true}},
 		"gpu-b":   {GPUType: "H100", ManagedEndpoints: types.WorkerPoolManagedEndpointsConfig{Enabled: true}},
@@ -32,7 +32,7 @@ func TestInventoryPlacesInEligiblePoolsOnly(t *testing.T) {
 	require.NoError(t, s.workers.AddWorker(&types.Worker{Id: "w2", PoolName: "opt-out", Gpu: "H100", TotalGpuCount: 8, FreeGpuCount: 8, Status: types.WorkerStatusAvailable}))
 	require.NoError(t, s.workers.AddWorker(&types.Worker{Id: "spot", PoolName: "gpu-b", Gpu: "H100", TotalGpuCount: 8, FreeGpuCount: 8, Status: types.WorkerStatusAvailable, Preemptable: true}))
 
-	inv, err := s.controller.inventory(nil)
+	inv, err := s.controller.inventory(nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []eligiblePool{{Name: "gpu-a", Locality: "us-east"}, {Name: "gpu-b", Locality: "gpu-b"}}, inv.pools["H100"])
 	assert.Equal(t, []eligiblePool{{Name: "cpu-a", Locality: "cpu-a"}}, inv.pools[types.CPUInventoryKey])
@@ -67,7 +67,229 @@ func TestInventoryPlacesInEligiblePoolsOnly(t *testing.T) {
 	assert.Empty(t, pool.Name)
 }
 
-// versionReplica is a live replica of acme/model on H100 at the given version.
+// spotInventory is the Spot pools of a GPU type and what each can do for a
+// replica: grows lists the pools that can buy a machine.
+func spotInventory(gpu string, grows []string, workers map[string]*inventoryWorker, pools ...string) *clusterInventory {
+	inv := &clusterInventory{spot: map[string][]eligiblePool{}, workers: workers, buying: map[string]bool{}}
+	for _, name := range pools {
+		inv.spot[gpu] = append(inv.spot[gpu], eligiblePool{Name: name, Locality: name, Spot: true})
+	}
+	inv.outlook = func(pool string, _ uint32, _ replicaResources) scheduler.MachineOutlook {
+		return scheduler.MachineOutlook{CanBuy: slices.Contains(grows, pool)}
+	}
+	return inv
+}
+
+func TestSpotInventoryIsTheMachinesOfSpotPools(t *testing.T) {
+	const gpu, cpu, memory = "B200", 16_000, 640 * 1024
+	s := newServiceForTest(t)
+	optIn := types.WorkerPoolManagedEndpointsConfig{Enabled: true}
+	s.appConfig.Worker.Pools = map[string]types.WorkerPoolConfig{
+		"spot-a":  {GPUType: gpu, Preemptable: true, ManagedEndpoints: optIn},
+		"spot-b":  {GPUType: gpu, ManagedEndpoints: optIn, Provisioning: types.WorkerPoolProvisioningConfig{Providers: []string{"test"}, Spot: true}},
+		"mixed":   {GPUType: gpu, ManagedEndpoints: optIn, Provisioning: types.WorkerPoolProvisioningConfig{Providers: []string{"test"}, Spot: true, OnDemand: true}},
+		"stable":  {GPUType: gpu, ManagedEndpoints: optIn},
+		"opt-out": {GPUType: gpu, Preemptable: true},
+	}
+	worker := func(id, pool string, gpus uint32, freeCPU, freeMemory int64, spot bool) {
+		require.NoError(t, s.workers.AddWorker(&types.Worker{Id: id, PoolName: pool, Gpu: gpu, Status: types.WorkerStatusAvailable,
+			Preemptable: spot, TotalGpuCount: gpus, FreeGpuCount: gpus, FreeCpu: freeCPU, FreeMemory: freeMemory}))
+	}
+	worker("a-small", "spot-a", 1, cpu, memory, true)
+	worker("a-short-of-cpu", "spot-a", 8, cpu-1, memory, true)
+	worker("a-short-of-memory", "spot-a", 8, cpu, memory-1, true)
+	worker("a-on-demand", "spot-a", 8, cpu, memory, false)
+	worker("b-big", "spot-b", 8, 4*cpu, 4*memory, true)
+	worker("b-exact", "spot-b", 2, cpu, memory, true)
+	worker("mixed-spot", "mixed", 8, cpu, memory, true)
+	worker("stable", "stable", 8, cpu, memory, false)
+	worker("opt-out", "opt-out", 8, cpu, memory, true)
+	for id, pool := range map[string]string{"a-pending": "spot-a", "b-bought": "spot-b"} {
+		require.NoError(t, s.workers.AddWorker(&types.Worker{Id: id, PoolName: pool, Gpu: gpu, Status: types.WorkerStatusPending,
+			Preemptable: true, TotalGpuCount: 8, FreeGpuCount: 8, FreeCpu: cpu, FreeMemory: memory}))
+	}
+
+	inv, err := s.controller.inventory(nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []eligiblePool{{Name: "spot-a", Locality: "spot-a", Spot: true}, {Name: "spot-b", Locality: "spot-b", Spot: true}}, inv.spot[gpu])
+	assert.Equal(t, []eligiblePool{{Name: "mixed", Locality: "mixed"}, {Name: "stable", Locality: "stable"}}, inv.pools[gpu])
+	res, ok := reservedReplicaResources(cpu, 512*1024)
+	require.True(t, ok)
+	require.EqualValues(t, memory, res.memory)
+
+	// A replica needs all of its GPUs, CPU and memory on one ready Spot
+	// machine: spot-a has none, and nothing here can buy one.
+	assert.Nil(t, inv.spotWorker(gpu, "spot-a", 2, res))
+	choice, placed := inv.placeSpot(gpu, 2, res, nil, true)
+	require.True(t, placed)
+	assert.Equal(t, "spot-b", choice.pool.Name)
+	assert.EqualValues(t, 0, inv.workers["b-exact"].free, "the fullest machine that fits takes it, as the scheduler packs them")
+	for range 3 {
+		_, placed = inv.placeSpot(gpu, 2, res, nil, true)
+		require.True(t, placed)
+	}
+	assert.EqualValues(t, 2, inv.workers["b-big"].free)
+	assert.EqualValues(t, cpu, inv.workers["b-big"].cpu)
+	_, placed = inv.placeSpot(gpu, 2, res, nil, true)
+	require.True(t, placed)
+
+	// A machine the pool bought has room before it joins, and is taken once
+	// the ready ones are full. A pending worker of a pool that buys none is
+	// not such a machine.
+	assert.NotContains(t, inv.workers, "a-pending")
+	assert.EqualValues(t, 8, inv.workers["b-bought"].free)
+	assert.False(t, inv.spotRoom(gpu, 2, res), "it does not serve as soon as a ready one")
+	_, placed = inv.placeSpot(gpu, 2, res, nil, true)
+	require.True(t, placed)
+	assert.EqualValues(t, 6, inv.workers["b-bought"].free)
+	_, placed = inv.placeSpot(gpu, 2, res, nil, true)
+	assert.False(t, placed, "room that is taken is not offered again this tick")
+
+	// A replica that waits in a pool with no machine for it has one coming.
+	waiting := versionReplica(t, s, "waiting", 1, types.ReplicaStatusScheduling)
+	waiting.Spot, waiting.GPU, waiting.GPUCount, waiting.PoolName = true, gpu, 2, "spot-a"
+	s.containers = repository.NewContainerRedisRepositoryForTest(s.rdb)
+	require.NoError(t, s.containers.SetContainerState(waiting.ContainerID, &types.ContainerState{
+		ContainerId: waiting.ContainerID, Status: types.ContainerStatusPending, Cpu: cpu, Memory: 512 * 1024,
+	}))
+	inv, err = s.controller.inventory([]*types.EndpointReplica{waiting}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]bool{"spot-a": true}, inv.buying)
+
+	// A machine that is lost has its worker made pending again, with all its
+	// room, until its pool lets go of it. A replica ran there: it is not a
+	// machine that is coming, and the replica's replacement goes elsewhere.
+	lost := versionReplica(t, s, "lost", 1, types.ReplicaStatusFailed)
+	lost.WorkerID = "b-bought"
+	inv, err = s.controller.inventory(nil, []*types.EndpointReplica{lost})
+	require.NoError(t, err)
+	assert.NotContains(t, inv.workers, "b-bought")
+	assert.Contains(t, inv.workers, "b-big")
+
+	// The idle GPUs of the other pools are not a Spot placement's to take,
+	// and a machine its provider may take back is no one else's.
+	pool, placed := inv.place(gpu, 2)
+	require.True(t, placed)
+	assert.Equal(t, "stable", pool.Name)
+	assert.NotContains(t, inv.workers, "mixed-spot")
+}
+
+func TestSpotPlacementSpreadsAMinimumAndPacksDemand(t *testing.T) {
+	const gpu = "B200"
+	res := replicaResources{cpu: 16_000, memory: 640 * 1024}
+	ready := func() map[string]*inventoryWorker {
+		return map[string]*inventoryWorker{"b": {pool: "b", gpu: gpu, free: 8, total: 8, cpu: 64_000, memory: 4 * 640 * 1024}}
+	}
+	place := func(inv *clusterInventory, held map[string]int, spread bool) string {
+		choice, _ := inv.placeSpot(gpu, 2, res, held, spread)
+		return choice.pool.Name
+	}
+
+	// A minimum goes to the pool with the fewest of the endpoint's replicas,
+	// though a machine has to be bought there, and to a ready one among equals.
+	inv := spotInventory(gpu, []string{"a", "c"}, ready(), "a", "b", "c")
+	assert.Equal(t, "b", place(inv, nil, true))
+	assert.Equal(t, "a", place(inv, map[string]int{"b": 1}, true))
+	assert.Equal(t, "c", place(inv, map[string]int{"a": 1, "b": 1}, true))
+	assert.Equal(t, "b", place(inv, map[string]int{"a": 1, "b": 1, "c": 1}, true))
+
+	// A copy for waiting requests goes where a machine is ready, and is
+	// bought a machine only when none has room.
+	inv = spotInventory(gpu, []string{"a", "c"}, ready(), "a", "b", "c")
+	for range 4 {
+		assert.Equal(t, "b", place(inv, map[string]int{"b": 3}, false))
+	}
+	assert.Equal(t, "a", place(inv, map[string]int{"b": 7}, false))
+	assert.Equal(t, "c", place(inv, map[string]int{"a": 1, "b": 7}, false))
+
+	// A pool is asked for one machine at a time. The next replica waits for
+	// that machine to stand in the pool, where it may have room for both.
+	inv = spotInventory(gpu, []string{"a"}, nil, "a")
+	assert.Equal(t, "a", place(inv, nil, true))
+	assert.Empty(t, place(inv, map[string]int{"a": 1}, true))
+	bought := map[string]*inventoryWorker{"bought": {pool: "a", gpu: gpu, free: 4, total: 8, cpu: 64_000, memory: 4 * 640 * 1024, booting: true}}
+	inv = spotInventory(gpu, []string{"a"}, bought, "a")
+	assert.Equal(t, "a", place(inv, map[string]int{"a": 1}, true))
+	assert.Equal(t, "a", place(inv, map[string]int{"a": 2}, true))
+	assert.EqualValues(t, 0, bought["bought"].free)
+	assert.Empty(t, inv.buying, "neither was bought a machine")
+	assert.Equal(t, "a", place(inv, map[string]int{"a": 3}, true))
+	assert.Empty(t, place(inv, map[string]int{"a": 4}, true))
+
+	// A copy for waiting requests goes to a machine that is ready before
+	// one that is booting, and to either before one is bought.
+	workers := ready()
+	workers["bought"] = &inventoryWorker{pool: "a", gpu: gpu, free: 8, total: 8, cpu: 64_000, memory: 4 * 640 * 1024, booting: true}
+	inv = spotInventory(gpu, []string{"c"}, workers, "a", "b", "c")
+	assert.Equal(t, "b", place(inv, map[string]int{"b": 1}, false))
+	assert.Equal(t, "a", place(inv, map[string]int{"b": 2}, true))
+	assert.Empty(t, inv.buying)
+
+	// A pool that has no room and can buy no machine is passed over, so a
+	// market that is sold out does not hold a replica back.
+	inv = spotInventory(gpu, []string{"c"}, nil, "a", "b", "c")
+	assert.Equal(t, "c", place(inv, map[string]int{"c": 5}, true))
+	inv = spotInventory(gpu, nil, nil, "a", "b", "c")
+	assert.Empty(t, place(inv, nil, true))
+}
+
+// A replica goes where machines are kept, and among such pools where one
+// comes up sooner. The market's history says which those are.
+func TestSpotPlacementGoesWhereMachinesAreKept(t *testing.T) {
+	const gpu = "B200"
+	res := replicaResources{cpu: 16_000, memory: 640 * 1024}
+	hourly := func(taken float64, comeUp time.Duration) scheduler.MachineOutlook {
+		return scheduler.MachineOutlook{CanBuy: true, Taken: taken, ComeUp: comeUp}
+	}
+	inventory := func(workers map[string]*inventoryWorker, outlooks map[string]scheduler.MachineOutlook) *clusterInventory {
+		inv := spotInventory(gpu, nil, workers, "a", "b", "c")
+		inv.outlook = func(pool string, _ uint32, _ replicaResources) scheduler.MachineOutlook { return outlooks[pool] }
+		return inv
+	}
+	place := func(inv *clusterInventory, held map[string]int, spread bool) string {
+		choice, _ := inv.placeSpot(gpu, 2, res, held, spread)
+		return choice.pool.Name
+	}
+
+	// Three pools that keep their machines for a day or more: a minimum is
+	// spread over them, whichever is kept longest or comes up soonest.
+	kept := map[string]scheduler.MachineOutlook{"a": hourly(0.04, 9*time.Minute), "b": hourly(0.01, 6*time.Minute), "c": hourly(0.02, 3*time.Minute)}
+	assert.Equal(t, "c", place(inventory(nil, kept), nil, true), "lost twice as often as b, and up three minutes sooner")
+	assert.Equal(t, "b", place(inventory(nil, kept), map[string]int{"c": 1}, true))
+	assert.Equal(t, "a", place(inventory(nil, kept), map[string]int{"b": 1, "c": 1}, true))
+
+	// How long a machine is kept counts for more than how soon it is up:
+	// one that is up in a minute and lost every two hours comes after one
+	// that takes ten and is kept for a day.
+	outlooks := map[string]scheduler.MachineOutlook{"a": hourly(0.5, time.Minute), "b": hourly(0.04, 10*time.Minute)}
+	assert.Equal(t, "b", place(inventory(nil, outlooks), nil, true))
+
+	// A pool whose machines are taken back within minutes is passed over
+	// while the others hold fewer replicas than it loses machines an hour.
+	outlooks = map[string]scheduler.MachineOutlook{"a": hourly(0.02, 4*time.Minute), "b": hourly(0.02, 4*time.Minute), "c": hourly(3, 30*time.Minute)}
+	assert.Equal(t, "a", place(inventory(nil, outlooks), map[string]int{"a": 1, "b": 1}, true))
+	assert.Equal(t, "b", place(inventory(nil, outlooks), map[string]int{"a": 2, "b": 1}, true))
+	assert.Equal(t, "c", place(inventory(nil, outlooks), map[string]int{"a": 4, "b": 4}, true))
+	choice, _ := inventory(nil, outlooks).placeSpot(gpu, 2, res, nil, true)
+	assert.InDelta(t, 0.02+4.0/60, choice.load(nil), 1e-9, "what it loses an hour, and the hours to wait")
+
+	// A machine that is ready is no wait, which decides between pools that
+	// keep theirs as long. It does not make up for a pool that does not.
+	ready := func() map[string]*inventoryWorker {
+		return map[string]*inventoryWorker{"c": {pool: "c", gpu: gpu, free: 8, total: 8, cpu: 64_000, memory: 4 * 640 * 1024}}
+	}
+	outlooks = map[string]scheduler.MachineOutlook{"a": hourly(0.02, 4*time.Minute), "c": hourly(0.03, 4*time.Minute)}
+	assert.Equal(t, "c", place(inventory(ready(), outlooks), nil, true))
+	outlooks["c"] = hourly(1, 4*time.Minute)
+	assert.Equal(t, "a", place(inventory(ready(), outlooks), nil, true))
+	// Requests that are waiting take it all the same: it serves them now.
+	assert.Equal(t, "c", place(inventory(ready(), outlooks), nil, false))
+
+	// A pool that can buy no more is still known by the machines it has.
+	outlooks = map[string]scheduler.MachineOutlook{"a": hourly(0.02, 4*time.Minute), "c": {Taken: 2}}
+	assert.Equal(t, "a", place(inventory(ready(), outlooks), nil, true))
+}
+
 func versionReplica(t *testing.T, s *Service, id string, version uint, status types.ReplicaStatus) *types.EndpointReplica {
 	t.Helper()
 	replica := &types.EndpointReplica{
@@ -126,38 +348,45 @@ func TestRetireWaitsForCurrentReady(t *testing.T) {
 
 // Moving an endpoint to another GPU type is a replacement like any other: the
 // serving replica on the old type stays until the new type has one ready.
+// A placement that moves to another GPU type keeps serving on the old one
+// until the new one does, on Spot as on idle GPUs.
 func TestRetireKeepsServingReplicaAcrossGPUMove(t *testing.T) {
-	s := newServiceForTest(t)
-	endpoint := seedEndpoint(t, s)
-	ctx := context.Background()
-	onH100 := versionReplica(t, s, "h100", 1, types.ReplicaStatusReady)
-	onA100 := versionReplica(t, s, "a100", 1, types.ReplicaStatusLoading)
-	onA100.GPU = "A100-80"
-	require.NoError(t, s.repo.SaveReplica(ctx, onA100))
-	live := []*types.EndpointReplica{onH100, onA100}
-	fleet := seedFleet(t, s, map[string]types.FleetEndpoint{"acme/model": {Enabled: true, GPUs: map[string]types.FleetPlacement{"A100-80": {Priority: 1}}}})
+	for name, spot := range map[string]bool{"idle GPUs": false, "Spot": true} {
+		t.Run(name, func(t *testing.T) {
+			s := newServiceForTest(t)
+			endpoint := seedEndpoint(t, s)
+			ctx := context.Background()
+			onH100 := versionReplica(t, s, "h100", 1, types.ReplicaStatusReady)
+			onA100 := versionReplica(t, s, "a100", 1, types.ReplicaStatusLoading)
+			onH100.Spot, onA100.Spot, onA100.GPU = spot, spot, "A100-80"
+			require.NoError(t, s.repo.SaveReplica(ctx, onH100))
+			require.NoError(t, s.repo.SaveReplica(ctx, onA100))
+			live := []*types.EndpointReplica{onH100, onA100}
+			fleet := seedFleet(t, s, map[string]types.FleetEndpoint{"acme/model": {Enabled: true, GPUs: map[string]types.FleetPlacement{"A100-80": {Priority: 1, Spot: spot}}}})
 
-	s.controller.retire(ctx, endpoint, fleet, live, nil)
-	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, onH100.ID), "no A100 replica is ready yet")
+			s.controller.retire(ctx, endpoint, fleet, live, nil)
+			assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, onH100.ID), "no A100 replica is ready yet")
 
-	onA100.Status = types.ReplicaStatusReady
-	require.NoError(t, s.repo.SaveReplica(ctx, onA100))
-	s.controller.retire(ctx, endpoint, fleet, live, nil)
-	drained, err := s.repo.GetReplica(ctx, onH100.ID)
-	require.NoError(t, err)
-	assert.Equal(t, types.ReplicaStatusDraining, drained.Status)
-	assert.Equal(t, "removed from config.yaml", drained.StatusReason)
+			onA100.Status = types.ReplicaStatusReady
+			require.NoError(t, s.repo.SaveReplica(ctx, onA100))
+			s.controller.retire(ctx, endpoint, fleet, live, nil)
+			drained, err := s.repo.GetReplica(ctx, onH100.ID)
+			require.NoError(t, err)
+			assert.Equal(t, types.ReplicaStatusDraining, drained.Status)
+			assert.Equal(t, "removed from config.yaml", drained.StatusReason)
 
-	// An endpoint listed nowhere is drained outright.
-	gone := versionReplica(t, s, "gone", 1, types.ReplicaStatusReady)
-	s.controller.retire(ctx, endpoint, &types.Fleet{}, []*types.EndpointReplica{gone}, nil)
-	assert.Equal(t, types.ReplicaStatusDraining, statusOf(t, s, gone.ID))
+			// An endpoint listed nowhere is drained outright.
+			gone := versionReplica(t, s, "gone", 1, types.ReplicaStatusReady)
+			s.controller.retire(ctx, endpoint, &types.Fleet{}, []*types.EndpointReplica{gone}, nil)
+			assert.Equal(t, types.ReplicaStatusDraining, statusOf(t, s, gone.ID))
 
-	// A retired endpoint drains everything it still has.
-	endpoint.Status = types.EndpointStatusRetired
-	survivor := versionReplica(t, s, "survivor", 1, types.ReplicaStatusLoading)
-	s.controller.retire(ctx, endpoint, fleet, []*types.EndpointReplica{survivor}, nil)
-	assert.Equal(t, types.ReplicaStatusStopped, statusOf(t, s, survivor.ID))
+			// A retired endpoint drains everything it still has.
+			endpoint.Status = types.EndpointStatusRetired
+			survivor := versionReplica(t, s, "survivor", 1, types.ReplicaStatusLoading)
+			s.controller.retire(ctx, endpoint, fleet, []*types.EndpointReplica{survivor}, nil)
+			assert.Equal(t, types.ReplicaStatusStopped, statusOf(t, s, survivor.ID))
+		})
+	}
 }
 
 // noRoomInventory has an eligible H100 pool with nothing idle, so growth
@@ -238,7 +467,6 @@ func TestFillReclaimsForHigherPriority(t *testing.T) {
 
 func TestInventoryCountsSchedulingReplicasAsTaken(t *testing.T) {
 	s := newServiceForTest(t)
-	s.workers = repository.NewWorkerRedisRepositoryForTest(s.rdb)
 	s.appConfig.Worker.Pools = map[string]types.WorkerPoolConfig{"gpu-a": {GPUType: "H100", ManagedEndpoints: types.WorkerPoolManagedEndpointsConfig{Enabled: true}}}
 	require.NoError(t, s.workers.AddWorker(&types.Worker{Id: "w1", PoolName: "gpu-a", Gpu: "H100", TotalGpuCount: 4, FreeGpuCount: 4, Status: types.WorkerStatusAvailable}))
 
@@ -246,7 +474,7 @@ func TestInventoryCountsSchedulingReplicasAsTaken(t *testing.T) {
 		{ID: "pending", GPU: "H100", GPUCount: 2, PoolName: "gpu-a", Status: types.ReplicaStatusScheduling},
 		{ID: "placed", GPU: "H100", GPUCount: 1, PoolName: "gpu-a", Status: types.ReplicaStatusLoading},
 		{ID: "elsewhere", GPU: "H100", GPUCount: 1, PoolName: "other", Status: types.ReplicaStatusScheduling},
-	})
+	}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, uint32(2), inv.idle("H100", "gpu-a"), "a replica the scheduler has not placed yet still holds its GPUs; a placed one is already in the worker's count")
 }
@@ -499,6 +727,219 @@ func newFillService(t *testing.T) *Service {
 	return s
 }
 
+func TestFillStartsASpotReplicaForDemandOnAMachineItsPoolBuys(t *testing.T) {
+	s := newFillService(t)
+	s.backend = fillBackend{config: `{"runtime":{"cpu":16000,"memory":524288}}`}
+	endpoint := seedEndpoint(t, s)
+	endpoint.Spec.Gpu["B200"] = types.GpuSpec{Count: 2}
+	ctx := context.Background()
+	entries := []types.FleetEntry{{EndpointID: endpoint.Spec.ID, Serverless: true, MaxReplicas: 1, Spot: true}}
+	endpoints := map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}
+	inv := spotInventory("B200", []string{"b200-spot"}, nil, "b200-spot")
+	demand := map[string]*endpointDemand{endpoint.Spec.ID: {}}
+	s.controller.fill(ctx, "B200", entries, endpoints, nil, inv, demand)
+	replicas, err := s.repo.ListReplicas(ctx, endpoint.Spec.ID)
+	require.NoError(t, err)
+	require.Empty(t, replicas, "nothing is bought before a request waits")
+
+	demand[endpoint.Spec.ID].pending = true
+	s.controller.fill(ctx, "B200", entries, endpoints, nil, inv, demand)
+	requests, err := scheduler.NewRequestBacklog(s.rdb).PopN(10)
+	require.NoError(t, err)
+	require.Len(t, requests, 1)
+	assert.Equal(t, "b200-spot", requests[0].PoolSelector)
+	assert.EqualValues(t, 2, requests[0].GpuCount)
+	assert.True(t, requests[0].Preemptable)
+	assert.False(t, requests[0].OpportunisticOnly, "its pool buys the machine it runs on")
+	assert.False(t, requests[0].Evictable, "and only the provider takes it back")
+	replicas, err = s.repo.ListReplicas(ctx, endpoint.Spec.ID)
+	require.NoError(t, err)
+	require.Len(t, replicas, 1)
+	assert.True(t, replicas[0].Spot)
+	assert.True(t, replicas[0].Protected)
+}
+
+func TestFillSpreadsASpotMinimumAcrossPoolsAndStartsNoSurplus(t *testing.T) {
+	s := newFillService(t)
+	endpoint := seedEndpoint(t, s)
+	ctx := context.Background()
+	entries := []types.FleetEntry{{EndpointID: endpoint.Spec.ID, MinReplicas: 3, MaxReplicas: 8, Spot: true}}
+	endpoints := map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}
+	held := versionReplica(t, s, "held", endpoint.Version, types.ReplicaStatusReady)
+	held.Spot, held.PoolName, held.Protected = true, "nebius", true
+	require.NoError(t, s.repo.SaveReplica(ctx, held))
+	inv := spotInventory("H100", []string{"nebius", "shadeform", "verda"}, nil, "nebius", "shadeform", "verda")
+	s.controller.fill(ctx, "H100", entries, endpoints, []*types.EndpointReplica{held}, inv, nil)
+	requests, err := scheduler.NewRequestBacklog(s.rdb).PopN(10)
+	require.NoError(t, err)
+	var pools []string
+	for _, request := range requests {
+		pools = append(pools, request.PoolSelector)
+	}
+	assert.ElementsMatch(t, []string{"shadeform", "verda"}, pools, "the minimum, one to a pool, and no more than it")
+}
+
+func TestSpotDemandLeavesOtherReplicasAloneWhenNoPoolHasRoom(t *testing.T) {
+	s := newFillService(t)
+	high, low, endpoints := fillEndpoints(t, s)
+	other := reclaimableReplica(t, s, low, "hot-surplus", "w1")
+	entries := []types.FleetEntry{{EndpointID: high.Spec.ID, Serverless: true, MaxReplicas: 1, Spot: true}, {EndpointID: low.Spec.ID, MaxReplicas: 1}}
+	inv := noRoomInventory()
+	inv.spot = map[string][]eligiblePool{"H100": {{Name: "spot", Spot: true}}}
+	s.controller.fill(context.Background(), "H100", entries, endpoints, []*types.EndpointReplica{other}, inv, map[string]*endpointDemand{high.Spec.ID: {pending: true, warm: true}})
+	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, other.ID))
+	requests, _ := scheduler.NewRequestBacklog(s.rdb).PopN(10)
+	assert.Empty(t, requests)
+}
+
+func TestSpotAndOtherPlacementsDoNotHoldEachOtherBack(t *testing.T) {
+	s := newFillService(t)
+	first, second, endpoints := fillEndpoints(t, s)
+	demand := map[string]*endpointDemand{second.Spec.ID: {pending: true, warm: true}}
+	for name, tc := range map[string]struct {
+		entries []types.FleetEntry
+		inv     *clusterInventory
+		starts  string
+	}{
+		"an unmet minimum does not stop Spot": {
+			entries: []types.FleetEntry{{EndpointID: first.Spec.ID, MinReplicas: 1, MaxReplicas: 1}, {EndpointID: second.Spec.ID, Serverless: true, MaxReplicas: 1, Spot: true}},
+			inv:     spotInventory("H100", []string{"spot"}, nil, "spot"), starts: second.StubID,
+		},
+		"an unmet Spot minimum does not stop the others": {
+			entries: []types.FleetEntry{{EndpointID: first.Spec.ID, MinReplicas: 1, Spot: true}, {EndpointID: second.Spec.ID, Serverless: true, MaxReplicas: 1}},
+			inv:     idleInventory(1), starts: second.StubID,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s.controller.fill(context.Background(), "H100", tc.entries, endpoints, nil, tc.inv, demand)
+			requests, err := scheduler.NewRequestBacklog(s.rdb).PopN(10)
+			require.NoError(t, err)
+			require.Len(t, requests, 1)
+			assert.Equal(t, tc.starts, requests[0].StubId)
+			demand[second.Spec.ID].starting = false
+			replicas, err := s.repo.ListReplicas(context.Background(), second.Spec.ID)
+			require.NoError(t, err)
+			for _, r := range replicas {
+				require.NoError(t, s.repo.DeleteReplica(context.Background(), r.ID))
+			}
+		})
+	}
+}
+
+// A placement that moves on or off Spot is rolled out like a new version:
+// the replicas where it was serve until one where it is now does.
+func TestReplicaIsReplacedWhenItsPlacementMovesOnOrOffSpot(t *testing.T) {
+	ctx := context.Background()
+	s := newFillService(t)
+	endpoint := seedEndpoint(t, s)
+	old := versionReplica(t, s, "on-idle-gpus", endpoint.Version, types.ReplicaStatusReady)
+	fleet := seedFleet(t, s, map[string]types.FleetEndpoint{endpoint.Spec.ID: {
+		Enabled: true, GPUs: map[string]types.FleetPlacement{"H100": {Priority: 1, MinReplicas: 1, Spot: true}},
+	}})
+	endpoints := map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}
+	live := []*types.EndpointReplica{old}
+	s.controller.fill(ctx, "H100", fleet.Entries("H100"), endpoints, live, spotInventory("H100", []string{"spot"}, nil, "spot"), nil)
+	requests, err := scheduler.NewRequestBacklog(s.rdb).PopN(10)
+	require.NoError(t, err)
+	require.Len(t, requests, 1, "the replica that is not on Spot does not count toward the Spot minimum")
+	s.controller.retire(ctx, endpoint, fleet, live, nil)
+	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, old.ID))
+
+	moved := versionReplica(t, s, "on-spot", endpoint.Version, types.ReplicaStatusReady)
+	moved.Spot = true
+	require.NoError(t, s.repo.SaveReplica(ctx, moved))
+	s.controller.retire(ctx, endpoint, fleet, []*types.EndpointReplica{old, moved}, nil)
+	assert.Equal(t, types.ReplicaStatusDraining, statusOf(t, s, old.ID))
+	assert.Equal(t, reasonMoved, old.StatusReason)
+	assert.Equal(t, types.ReplicaStatusReady, statusOf(t, s, moved.ID))
+}
+
+// A replica whose worker is gone is lost, though its container's record says
+// it runs. One that had served is replaced at once; one that had not backs
+// its endpoint off.
+// A machine that vanishes leaves its container's record behind; one taken
+// back with notice stops the container first. Either way the replica went
+// with its worker, which says nothing about the next one, even when this one
+// had yet to serve. A container that exits on a healthy worker is the
+// replica's own failure.
+func TestReplicaIsLostWithItsWorker(t *testing.T) {
+	const gone, leaving, healthy = "", types.WorkerStatusDisabled, types.WorkerStatusAvailable
+	cases := map[string]struct {
+		worker  types.WorkerStatus
+		running bool
+		reason  string
+		backoff bool
+	}{
+		"its machine vanished":            {gone, true, reasonWorkerLost, false},
+		"its machine was taken back":      {leaving, false, reasonWorkerLost, false},
+		"its machine went as it exited":   {gone, false, reasonWorkerLost, false},
+		"it exited on a healthy machine":  {healthy, false, "container exited", true},
+		"it runs on a machine being left": {leaving, true, "", false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := newFillService(t)
+			endpoint := seedEndpoint(t, s)
+			replica := versionReplica(t, s, "lost", endpoint.Version, types.ReplicaStatusLoading)
+			replica.WorkerID, replica.StartedAt = "worker", time.Now().Add(-containerLostGrace-time.Second)
+			require.NoError(t, s.repo.SaveReplica(ctx, replica))
+			s.controller.startedAt = replica.StartedAt
+			if tc.worker != gone {
+				require.NoError(t, s.workers.AddWorker(&types.Worker{Id: replica.WorkerID, Status: tc.worker}))
+				require.NoError(t, s.workers.UpdateWorkerStatus(replica.WorkerID, tc.worker))
+			}
+			if tc.running {
+				require.NoError(t, s.containers.SetContainerState(replica.ContainerID, &types.ContainerState{
+					ContainerId: replica.ContainerID, WorkerId: replica.WorkerID, Status: types.ContainerStatusRunning, Evictable: true,
+				}))
+			}
+			updated, err := s.controller.observeReplica(ctx, replica)
+			require.NoError(t, err)
+			require.NotNil(t, updated)
+			assert.Equal(t, tc.reason, updated.StatusReason)
+			assert.Equal(t, tc.reason != "", updated.Status == types.ReplicaStatusFailed)
+			assert.Equal(t, tc.backoff, s.controller.inBackoff(ctx, endpoint.Spec.ID, replica.GPU))
+		})
+	}
+}
+
+// A Spot replica waits for a machine to be bought and to boot, which takes
+// longer than any other replica is given to be scheduled.
+func TestSpotReplicaIsGivenTimeForItsMachine(t *testing.T) {
+	for name, spot := range map[string]bool{"Spot": true, "not Spot": false} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s := newFillService(t)
+			endpoint := seedEndpoint(t, s)
+			replica := versionReplica(t, s, "waiting", endpoint.Version, types.ReplicaStatusScheduling)
+			replica.Spot, replica.StartedAt = spot, time.Now().Add(-schedulingGrace-time.Minute)
+			require.NoError(t, s.repo.SaveReplica(ctx, replica))
+			require.NoError(t, s.containers.SetContainerState(replica.ContainerID, &types.ContainerState{
+				ContainerId: replica.ContainerID, Status: types.ContainerStatusPending, Evictable: !spot,
+			}))
+			updated, err := s.controller.observeReplica(ctx, replica)
+			require.NoError(t, err)
+			require.NotNil(t, updated)
+			assert.Equal(t, spot, updated.Status == types.ReplicaStatusScheduling)
+		})
+	}
+}
+
+// Only its provider takes a Spot replica's machine: the controller keeps it
+// from the scheduler's evictions whatever its placement says of the rest.
+func TestSpotReplicasStayProtected(t *testing.T) {
+	s := newServiceForTest(t)
+	endpoint := seedEndpoint(t, s)
+	fleet, err := s.repo.GetFleet(context.Background())
+	require.NoError(t, err)
+	spot := versionReplica(t, s, "spot", endpoint.Version, types.ReplicaStatusReady)
+	spot.Spot = true
+	filler := versionReplica(t, s, "filler", endpoint.Version, types.ReplicaStatusReady)
+	endpoints := map[string]*types.ManagedEndpoint{endpoint.Spec.ID: endpoint}
+	assert.Equal(t, map[string]bool{spot.ID: true}, protectedReplicas(fleet, endpoints, []*types.EndpointReplica{spot, filler}, true))
+}
+
 func fillEndpoints(t *testing.T, s *Service) (*types.ManagedEndpoint, *types.ManagedEndpoint, map[string]*types.ManagedEndpoint) {
 	t.Helper()
 	high := seedEndpoint(t, s)
@@ -732,12 +1173,11 @@ func TestFillLowersCapWhileAnotherMinimumWaits(t *testing.T) {
 
 func TestInventoryRejectsFragmentedGPUs(t *testing.T) {
 	s := newServiceForTest(t)
-	s.workers = repository.NewWorkerRedisRepositoryForTest(s.rdb)
 	s.appConfig.Worker.Pools = map[string]types.WorkerPoolConfig{"gpu-a": {GPUType: "H100", ManagedEndpoints: types.WorkerPoolManagedEndpointsConfig{Enabled: true}}}
 	for _, id := range []string{"w1", "w2"} {
 		require.NoError(t, s.workers.AddWorker(&types.Worker{Id: id, PoolName: "gpu-a", Gpu: "H100", TotalGpuCount: 1, FreeGpuCount: 1, Status: types.WorkerStatusAvailable}))
 	}
-	inv, err := s.controller.inventory(nil)
+	inv, err := s.controller.inventory(nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, uint32(2), inv.idle("H100", "gpu-a"))
 	assert.False(t, inv.canPlace("H100", 2))

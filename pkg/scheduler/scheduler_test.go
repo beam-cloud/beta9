@@ -6648,11 +6648,18 @@ type fakeProvisioner struct {
 	asked []MachineNeed
 	// sold are the machines it sold. They are booting until removed.
 	sold []ProvisionedMachine
+	// comesUpIn and taken are what it says to expect of its machines.
+	comesUpIn time.Duration
+	taken     float64
 }
 
 func (p *fakeProvisioner) CanProvision(ctx context.Context, pool string, needs ...MachineNeed) bool {
 	p.asked = append(p.asked, needs...)
 	return p.inStock
+}
+
+func (p *fakeProvisioner) Expect(ctx context.Context, pool string, needs ...MachineNeed) MachineOutlook {
+	return MachineOutlook{CanBuy: p.CanProvision(ctx, pool, needs...), ComeUp: p.comesUpIn, Taken: p.taken}
 }
 
 func (p *fakeProvisioner) Provision(ctx context.Context, pool string, needs ...MachineNeed) (*ProvisionedMachine, error) {
