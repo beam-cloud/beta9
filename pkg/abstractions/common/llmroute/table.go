@@ -25,9 +25,17 @@ const minSlack = 4
 
 // Replica is one place a request could run.
 type Replica struct {
-	ID   string
-	Load int64 // requests in flight on it
-	Max  int64 // requests its engine runs at once; 0 is unbounded
+	ID     string
+	Load   int64 // requests in flight on it
+	Max    int64 // requests its engine runs at once; 0 is not known
+	Queued int64 // requests its engine last said it had waiting for a slot
+}
+
+// full reports whether the replica's engine runs all it can at once: it has
+// as many requests as it has slots, or it says that some wait for one. An
+// engine whose slots are not known is known to be full only by its queue.
+func (r Replica) full() bool {
+	return (r.Max > 0 && r.Load >= r.Max) || r.Queued > 0
 }
 
 // Table remembers which replicas served which prompt prefixes, most recent
@@ -69,7 +77,7 @@ func (t *Table) Rank(p Prompt, replicas []Replica) []int {
 		}
 		choices[i] = choice{
 			index:  i,
-			spill:  r.Load > least+slack || (r.Max > 0 && r.Load >= r.Max),
+			spill:  r.Load > least+slack || r.full(),
 			load:   r.Load,
 			depth:  t.depth(p, id),
 			weight: mix(key ^ id),

@@ -164,7 +164,7 @@ func (r *router) choose(ctx context.Context, rq *routeRequest, app *types.Manage
 	for i, replica := range replicas {
 		c := replica.Capacity
 		candidates[i] = llmroute.Replica{
-			ID: replica.ID, Max: c.MaxConcurrency,
+			ID: replica.ID, Max: c.MaxConcurrency, Queued: c.Waiting,
 			// This gateway's requests are exact; the engine's last report covers the other gateways'.
 			Load: max(counter(&r.inflight, replica.ID).Load(), c.InFlight, c.Running+c.Waiting),
 		}

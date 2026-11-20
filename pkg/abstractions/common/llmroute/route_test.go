@@ -182,6 +182,13 @@ func TestRankBoundsLoad(t *testing.T) {
 	assert.Equal(t, "a", first(table, p, unbounded), "an engine that says nothing of its slots is taken to batch a few requests")
 	unbounded[0].Load = 5
 	assert.Equal(t, "b", first(table, p, unbounded))
+	// Such an engine is full once it says that requests wait for a slot.
+	queued := []Replica{{ID: "a", Load: 3, Queued: 1}, {ID: "b", Load: 2}}
+	assert.Equal(t, "b", first(table, p, queued))
+	queued[1].Queued = 2
+	assert.Equal(t, "b", first(table, p, queued), "among full replicas the least loaded")
+	queued[1].Load = 3
+	assert.Equal(t, "a", first(table, p, queued), "and among those the one that holds the prompt")
 
 	// A request with nothing to keep together goes to the least loaded replica.
 	for range 20 {
