@@ -171,5 +171,12 @@ RUN useradd --uid 1001 --create-home --shell /bin/bash --groups adm,users,docker
     && chown -R runner:runner /home/runner/actions-runner \
     && rm /tmp/runner.tgz
 
+# Keepalive for the connections the machine opens, which the runner's unit
+# turns on. A job otherwise ends half a minute after its last step: the reason
+# is in tcp-keepalive.c.
+COPY tcp-keepalive.c /tmp/
+RUN gcc -O2 -Wall -Werror -o /usr/local/sbin/beam-tcp-keepalive /tmp/tcp-keepalive.c \
+    && rm /tmp/tcp-keepalive.c
+
 COPY beam-github-runner.service /etc/systemd/system/
 RUN systemctl enable beam-github-runner.service
