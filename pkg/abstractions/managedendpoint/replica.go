@@ -186,10 +186,8 @@ func (c *controller) syncReplica(ctx context.Context, replica *types.EndpointRep
 		replica.EnterLoading(now, "")
 	}
 
-	if replica.HarnessEnabled {
-		if !replica.LastHeartbeat.IsZero() && c.silentFor(replica.LastHeartbeat, now) > c.s.config.ReplicaStaleAfter {
-			return c.stopAndFinish(ctx, replica, types.ReplicaStatusFailed, "harness heartbeat stale")
-		}
+	if c.s.silent(replica, now) {
+		return c.stopAndFinish(ctx, replica, types.ReplicaStatusFailed, "harness heartbeat stale")
 	}
 	if replica.Address != "" && (!replica.HarnessEnabled || replica.EngineReady) {
 		c.probeReplica(ctx, replica)

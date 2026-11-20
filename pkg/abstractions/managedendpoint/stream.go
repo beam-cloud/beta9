@@ -25,6 +25,10 @@ const (
 	providerName            = "beam"
 )
 
+// errStreamUnopened marks an upstream stream that broke before any of its
+// events reached the caller, who has seen only keepalive comments.
+var errStreamUnopened = errors.New("upstream stream ended before its first event")
+
 // relayStream forwards SSE as it arrives, keeping a silent reasoning step
 // connected with comments that count as neither output nor completion.
 // finalize runs on the terminal marker before it is relayed, so a response
@@ -73,6 +77,7 @@ func relayStreamWithKeepalive(w *echo.Response, body io.Reader, requestID string
 	const keepalive = ": keepalive\n\n"
 	var usage *types.Work
 	var ttft time.Duration
+	opened := false // an upstream event reached the caller
 	toolChoices := make(map[int]bool)
 	if err := write([]byte(keepalive)); err != nil {
 		return usage, ttft, err
@@ -86,11 +91,14 @@ func relayStreamWithKeepalive(w *echo.Response, body io.Reader, requestID string
 				return usage, ttft, err
 			}
 		case result := <-reads:
-			if result.err != nil {
-				if errors.Is(result.err, io.EOF) {
-					return usage, ttft, io.ErrUnexpectedEOF
+			if err := result.err; err != nil {
+				if errors.Is(err, io.EOF) {
+					err = io.ErrUnexpectedEOF
 				}
-				return usage, ttft, result.err
+				if !opened {
+					err = fmt.Errorf("%w: %w", errStreamUnopened, err)
+				}
+				return usage, ttft, err
 			}
 			payload, data := sseEventData(result.event)
 			if data && len(bytes.TrimSpace(payload)) > 0 {
@@ -115,6 +123,7 @@ func relayStreamWithKeepalive(w *echo.Response, body io.Reader, requestID string
 					usage = next
 				}
 				result.event = replaceSSEData(result.event, bytes.TrimSuffix(stampSSE(line, requestID, toolChoices), []byte("\n")))
+				opened = true
 			}
 			if err := write(result.event); err != nil {
 				return usage, ttft, err

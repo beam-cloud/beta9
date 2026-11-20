@@ -73,6 +73,13 @@ func (c *controller) silentFor(lastHeartbeat, now time.Time) time.Duration {
 	return now.Sub(lastHeartbeat)
 }
 
+// silent reports a harness replica whose heartbeats stopped: its engine or
+// its machine is gone, whatever its record still says.
+func (s *Service) silent(replica *types.EndpointReplica, now time.Time) bool {
+	return replica.HarnessEnabled && !replica.LastHeartbeat.IsZero() &&
+		s.controller.silentFor(replica.LastHeartbeat, now) > s.config.ReplicaStaleAfter
+}
+
 func (c *controller) reconcile(ctx context.Context) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
