@@ -100,8 +100,25 @@ var runnerSizes = []runnerSize{
 	{"beam-32vcpu-ubuntu-2404", 32000, 131072, runnerDisk},
 }
 
-func runnerSizeFor(label string) (runnerSize, bool) {
-	for _, size := range runnerSizes {
+// labelPrefix is what the label of every size starts with for this gateway.
+// One that shares repositories with production, as staging does, is given
+// another than beam-, and each then starts runners only for its own jobs.
+func (r *githubRunners) labelPrefix() string {
+	return cmp.Or(strings.ToLower(strings.TrimSpace(r.config.LabelPrefix)), runnerLabelPrefix)
+}
+
+// sizes are the sizes of runner, by the labels this gateway knows them by.
+func (r *githubRunners) sizes() []runnerSize {
+	sizes := slices.Clone(runnerSizes)
+	for i := range sizes {
+		sizes[i].Label = r.labelPrefix() + strings.TrimPrefix(sizes[i].Label, runnerLabelPrefix)
+	}
+
+	return sizes
+}
+
+func (r *githubRunners) sizeFor(label string) (runnerSize, bool) {
+	for _, size := range r.sizes() {
 		if size.Label == label {
 			return size, true
 		}
@@ -110,14 +127,14 @@ func runnerSizeFor(label string) (runnerSize, bool) {
 	return runnerSize{}, false
 }
 
-// runnerLabel is what the runs-on of a job that asks for a Beam runner says,
-// in lower case, as GitHub ignores the case of labels. A job gets a runner
-// only when that is the label of one size and nothing else, as a runner has
-// no other label. Any other job stays queued on GitHub, so it is recorded as
+// label is what the runs-on of a job that asks for a Beam runner says, in
+// lower case, as GitHub ignores the case of labels. A job gets a runner only
+// when that is the label of one size and nothing else, as a runner has no
+// other label. Any other job stays queued on GitHub, so it is recorded as
 // well, to say why.
-func runnerLabel(labels []string) (string, bool) {
+func (r *githubRunners) label(labels []string) (string, bool) {
 	asksForBeam := slices.ContainsFunc(labels, func(label string) bool {
-		return strings.HasPrefix(strings.ToLower(label), runnerLabelPrefix)
+		return strings.HasPrefix(strings.ToLower(label), r.labelPrefix())
 	})
 	return strings.ToLower(strings.Join(labels, ", ")), asksForBeam
 }
@@ -150,11 +167,18 @@ func (s *Service) initGitHubRunners(api *echo.Group) error {
 	group.POST("/:workspaceId/jobs/:jobId/stop", auth.WithStrictWorkspaceAuth(r.stopJob))
 	group.PUT("/:workspaceId/limit", auth.WithClusterAdminAuth(r.setLimit))
 	group.DELETE("/:workspaceId/limit", auth.WithClusterAdminAuth(r.setLimit))
+
+	// Checked before there is an App to enable, so that a prefix set ahead
+	// of one never sends a job meant for this gateway to production.
+	const section = "abstractions.vm.githubRunners"
+	if prefix := r.labelPrefix(); prefix != runnerLabelPrefix && strings.HasPrefix(prefix, runnerLabelPrefix) {
+		return fmt.Errorf("%s.labelPrefix %q starts with %s, so production would start runners for its jobs as well", section, prefix, runnerLabelPrefix)
+	}
+
 	if r.config.AppID == "" {
 		return nil
 	}
 
-	const section = "abstractions.vm.githubRunners"
 	var missing []string
 	for _, setting := range []struct{ key, value string }{
 		{"appSlug", r.config.AppSlug}, {"clientID", r.config.ClientID}, {"clientSecret", r.config.ClientSecret},
@@ -225,7 +249,7 @@ func (r *githubRunners) respond(c echo.Context, installation *types.GitHubRunner
 	status := runnerStatus{
 		Enabled:      r.github != nil,
 		Installation: installation,
-		Sizes:        runnerSizes,
+		Sizes:        r.sizes(),
 		Runners:      runners,
 	}
 	if installation != nil {
@@ -388,7 +412,7 @@ func (r *githubRunners) jobs(c echo.Context) error {
 			page.Jobs[i].Error = ""
 		}
 
-		page.Jobs[i].Waiting = runnerWaiting(page.Jobs[i], paused, full)
+		page.Jobs[i].Waiting = r.waiting(page.Jobs[i], paused, full)
 		page.Jobs[i].Timeline = runnerTimeline(page.Jobs[i])
 	}
 
@@ -401,18 +425,18 @@ func (r *githubRunners) full(ctx context.Context, workspaceId uint) (bool, error
 	return runners.Limit > 0 && runners.Running >= runners.Limit, err
 }
 
-// runnerWaiting says what a queued job that no runner has taken waits for,
-// in words that a user is shown as they are. It says nothing of a job that
-// no runner is started for any more, as its error says why: its runs-on
-// matches no size, or GitHub no longer lets its account's runners register.
-// Nor does it of a job that had no runner yet when its account disconnected,
-// which gets none.
+// waiting says what a queued job that no runner has taken waits for, in
+// words that a user is shown as they are. It says nothing of a job that no
+// runner is started for any more, as its error says why: its runs-on matches
+// no size, or GitHub no longer lets its account's runners register. Nor does
+// it of a job that had no runner yet when its account disconnected, which
+// gets none.
 //
 // What holds back every job of the account comes first: that it is paused,
 // or that its workspace is full, which a job waits for once it is due for a
 // runner. Then comes what the job's row says it waits for.
-func runnerWaiting(job types.GitHubRunnerJob, paused, full bool) string {
-	_, sized := runnerSizeFor(job.Label)
+func (r *githubRunners) waiting(job types.GitHubRunnerJob, paused, full bool) string {
+	_, sized := r.sizeFor(job.Label)
 	due := job.ProvisionAt != nil && !job.ProvisionAt.After(time.Now())
 	switch {
 	case job.Status != types.GitHubJobQueued || job.RunnerName != "":
@@ -557,7 +581,7 @@ func (r *githubRunners) stopJob(c echo.Context) error {
 	// GitHub refuses to unregister a runner that it gave a job, which spares
 	// the runner in reconcileRunner. Here its VM is deleted whatever GitHub
 	// answers, and GitHub fails the job.
-	if _, err := r.github.removeRunner(ctx, runner.InstallationID, runner.Repository, v.Name); err != nil {
+	if _, err := r.github.removeRunner(ctx, runner.InstallationID, registeredRunnerScope(v, runner), v.Name); err != nil {
 		log.Warn().Err(err).Str("vm_id", v.ID).Msg("unregister GitHub runner")
 	}
 
@@ -914,8 +938,16 @@ func (r *githubRunners) webhook(c echo.Context) error {
 }
 
 // installationChanged disconnects an account that removed or suspended the
-// App, which can no longer register runners for it.
+// App, which can no longer register runners for it, and forgets the token of
+// one that accepted the permissions the App has come to ask for.
 func (r *githubRunners) installationChanged(ctx context.Context, event runnerEvent) error {
+	// A token keeps the permissions it was issued with, so the next call
+	// asks for one that has those the account has now accepted.
+	if event.Action == "new_permissions_accepted" {
+		r.github.forget(event.Installation.ID)
+		return nil
+	}
+
 	if event.Action != "deleted" && event.Action != "suspend" {
 		return nil
 	}
@@ -940,7 +972,7 @@ func (r *githubRunners) installationChanged(ctx context.Context, event runnerEve
 // jobChanged records a job of a connected account that asks for a Beam
 // runner, which makes it due for one when it is new.
 func (r *githubRunners) jobChanged(ctx context.Context, event runnerEvent) error {
-	label, asksForBeam := runnerLabel(event.Job.Labels)
+	label, asksForBeam := r.label(event.Job.Labels)
 	status := event.Action
 	if !asksForBeam || !slices.Contains([]string{types.GitHubJobQueued, types.GitHubJobInProgress, types.GitHubJobCompleted}, status) {
 		return nil
@@ -1104,11 +1136,12 @@ func (r *githubRunners) provision(ctx context.Context, job types.GitHubRunnerJob
 		}
 	}
 
-	size, ok := runnerSizeFor(job.Label)
+	size, ok := r.sizeFor(job.Label)
 	switch {
 	case !ok:
-		labels := make([]string, len(runnerSizes))
-		for i, size := range runnerSizes {
+		sizes := r.sizes()
+		labels := make([]string, len(sizes))
+		for i, size := range sizes {
 			labels[i] = size.Label
 		}
 
@@ -1150,16 +1183,17 @@ var errRunnerDisconnected = errors.New("the GitHub account is disconnected")
 // runnerRefused reports whether an attempt to start a job's runner failed for
 // good: the account disconnected, or GitHub answered that the App is not
 // installed on it any more or is suspended, or that it can't reach the
-// repository or register runners in it. GitHub gives the same answer until
-// the account changes that, so the job ends with it. Once it has, the job
-// can be run again.
+// repository or register runners in it, or the runner group its organization
+// keeps for the repository can't be created or lets other repositories in.
+// GitHub gives the same answer until the account changes that, so the job
+// ends with it. Once it has, the job can be run again.
 func runnerRefused(err error) bool {
 	switch githubStatus(err) {
 	case http.StatusForbidden, http.StatusNotFound:
 		return true
 	}
 
-	return errors.Is(err, errRunnerDisconnected)
+	return errors.Is(err, errRunnerDisconnected) || errors.Is(err, errRunnerGroupUnavailable) || errors.Is(err, errRunnerGroupIsolation)
 }
 
 // runnerWaits says what a job waits for after an attempt to start its runner
@@ -1199,7 +1233,18 @@ func (r *githubRunners) launch(ctx context.Context, job types.GitHubRunnerJob, s
 		return errors.New("the Beam token that connected GitHub is inactive; connect again")
 	}
 
-	config, err := r.github.registerRunner(ctx, installation.ID, job.Repository, job.VM, size.Label)
+	scope, err := r.scope(ctx, installation, job.Repository)
+	if err != nil {
+		return err
+	}
+
+	// The runner's VM says where it registered (registeredRunnerScope).
+	metadata := map[string]string{"github.repository": job.Repository}
+	if scope.Organization != "" {
+		metadata["github.organization"] = scope.Organization
+	}
+
+	config, err := r.github.registerRunner(ctx, installation.ID, scope, job.VM, size.Label)
 	if err != nil {
 		return fmt.Errorf("register the runner with GitHub: %w", err)
 	}
@@ -1233,11 +1278,33 @@ func (r *githubRunners) launch(ctx context.Context, job types.GitHubRunnerJob, s
 			CaptureExitSnapshot: &captureExitSnapshot,
 			RootLayer:           layer,
 		},
-		Metadata: map[string]string{"github.repository": job.Repository},
+		Metadata: metadata,
 		// The job waits on GitHub for as long as its runner has to.
 		Queue: true,
 	})
 	return err
+}
+
+// scope is where the runner of an account's job registers. An organization
+// that lets the App register runners on it has them there, which takes no
+// Administration of its repositories. Every other account has them on the
+// job's repository, as before: a personal account, which has no runners but
+// its repositories', and an organization that installed the App before the
+// App asked for Self-hosted runners, until an owner accepts that.
+func (r *githubRunners) scope(ctx context.Context, installation *types.GitHubRunnerInstallation, repository string) (githubRunnerScope, error) {
+	scope := githubRunnerScope{Repository: repository}
+	if !r.config.OrganizationRunners || installation.AccountType != "Organization" {
+		return scope, nil
+	}
+
+	granted, err := r.github.organizationRunners(ctx, installation.ID)
+	if granted {
+		// The owner as the job names it, as an organization can be renamed
+		// after its account connects.
+		scope.Organization, _, _ = strings.Cut(repository, "/")
+	}
+
+	return scope, err
 }
 
 // reconcileRunner deletes a runner VM that has nothing left to do, as a
@@ -1336,9 +1403,16 @@ func (r *githubRunners) forget(ctx context.Context, v *types.VM, runner *types.G
 		return
 	}
 
-	if _, err := r.github.removeRunner(ctx, runner.InstallationID, runner.Repository, v.Name); err != nil {
+	if _, err := r.github.removeRunner(ctx, runner.InstallationID, registeredRunnerScope(v, runner), v.Name); err != nil {
 		log.Debug().Err(err).Str("vm_id", v.ID).Msg("remove a GitHub runner that never came online")
 	}
+}
+
+// registeredRunnerScope is where a runner registered, which its VM says, so
+// that it is found and removed there whatever runners register on by now. A
+// VM that names no organization registered on its repository.
+func registeredRunnerScope(v *types.VM, runner *types.GitHubRunner) githubRunnerScope {
+	return githubRunnerScope{Repository: runner.Repository, Organization: v.Metadata["github.organization"]}
 }
 
 // idle decides what becomes of a runner that is up and that GitHub has given
@@ -1369,8 +1443,9 @@ func (r *githubRunners) idle(ctx context.Context, v *types.VM, runner *types.Git
 		return false, false, err
 	}
 
+	scope := registeredRunnerScope(v, runner)
 	if surplus {
-		removed, err := r.github.removeRunner(ctx, runner.InstallationID, runner.Repository, v.Name)
+		removed, err := r.github.removeRunner(ctx, runner.InstallationID, scope, v.Name)
 		return removed, err == nil && !removed, err
 	}
 
@@ -1382,7 +1457,7 @@ func (r *githubRunners) idle(ctx context.Context, v *types.VM, runner *types.Git
 		return false, false, nil
 	}
 
-	listed, err := r.github.runners(ctx, runner.InstallationID, runner.Repository)
+	listed, err := r.github.runners(ctx, runner.InstallationID, scope)
 	if err != nil {
 		return false, false, err
 	}
@@ -1402,7 +1477,7 @@ func (r *githubRunners) idle(ctx context.Context, v *types.VM, runner *types.Git
 		// GitHub has it and does not say that it is gone.
 		return false, true, nil
 	default:
-		removed, err := r.github.deleteRunner(ctx, runner.InstallationID, runner.Repository, self)
+		removed, err := r.github.deleteRunner(ctx, runner.InstallationID, scope, self)
 		return removed, err == nil && !removed, err
 	}
 
@@ -1428,7 +1503,7 @@ func (r *githubRunners) idle(ctx context.Context, v *types.VM, runner *types.Git
 		return false, false, nil
 	}
 
-	removed, err := r.github.deleteRunner(ctx, runner.InstallationID, runner.Repository, self)
+	removed, err := r.github.deleteRunner(ctx, runner.InstallationID, scope, self)
 	return removed, err == nil && !removed, err
 }
 

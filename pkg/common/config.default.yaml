@@ -542,6 +542,16 @@ abstractions:
       serviceProxyVerify: false
   vm:
     githubRunners:
+      # Registers an organization's runners on the organization, with the
+      # App's Self-hosted runners (write) there, and not on its repositories,
+      # which takes Administration (write) of them. Each organization changes
+      # over once it has granted the former. One that has yet to accept it
+      # keeps registering on its repositories, as personal accounts do, so
+      # remove Administration from the App only when those are done with.
+      organizationRunners: false
+      # Empty keeps beam-. A staging prefix outside beam- prevents the
+      # production App from provisioning runners for staging test jobs.
+      labelPrefix: ""
       # The most GitHub runners a workspace has at once. The jobs past it stay
       # queued on GitHub until a runner finishes. 0 sets no limit. A cluster
       # administrator sets another number for one workspace with

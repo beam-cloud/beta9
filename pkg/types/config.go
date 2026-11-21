@@ -1650,14 +1650,17 @@ type VMConfig struct {
 }
 
 // GitHubRunnerConfig runs GitHub Actions jobs on ordinary CPU VMs through a
-// GitHub App. An empty AppID disables it; with one, every other field is
-// required.
+// GitHub App. An empty AppID disables it; with one, the App credentials,
+// webhook secret, and runner image are required.
 //
-// The App needs Actions (write, to cancel runs) and Administration (write) on
+// The App needs Actions (write, to cancel runs) and Metadata (read) on
 // repositories, Members (read) on organizations, and Workflow job events sent
-// to the gateway's /api/v1/vm/github-runners/webhook. Its setup URL, with
-// redirect on update, and its callback URL are both the dashboard's /vms
-// page; leave "Request user authorization (OAuth) during installation" off.
+// to the gateway's /api/v1/vm/github-runners/webhook. To register runners it
+// needs Administration (write) on repositories, or Self-hosted runners
+// (write) on organizations for those that OrganizationRunners covers. Its
+// setup URL, with redirect on update, and its callback URL are both the
+// dashboard's /vms page; leave "Request user authorization (OAuth) during
+// installation" off.
 type GitHubRunnerConfig struct {
 	AppID   string `key:"appID" json:"app_id"`
 	AppSlug string `key:"appSlug" json:"app_slug"` // as in github.com/apps/<slug>
@@ -1675,6 +1678,21 @@ type GitHubRunnerConfig struct {
 	// it stay queued on GitHub, and get theirs as runners finish, the jobs
 	// that have waited longest first. Zero or less sets no limit.
 	RunnerLimit int `key:"runnerLimit" json:"runner_limit"`
+	// LabelPrefix replaces "beam-" in workflow size labels. Empty uses
+	// "beam-"; values are trimmed and lowercased. Other prefixes starting
+	// with "beam-" are rejected because production runners recognize them
+	// too. Staging tests that share repositories with production must use
+	// a prefix outside "beam-", so the production App ignores their jobs.
+	LabelPrefix string `key:"labelPrefix" json:"label_prefix"`
+	// OrganizationRunners registers the runners of an organization on the
+	// organization, in a runner group that only their repository can use,
+	// which takes Self-hosted runners (write) there and no Administration of
+	// its repositories. Each organization changes over once it has granted
+	// that: one that installed the App before the App asked for it has to
+	// accept first, and registers runners on its repositories until then, as
+	// a personal account always does. Administration can come off the App
+	// when no account that is to keep its runners still depends on it.
+	OrganizationRunners bool `key:"organizationRunners" json:"organization_runners"`
 }
 
 // VMWebRTCConfig bounds authenticated kiosk media on the shared TCP gateway.
