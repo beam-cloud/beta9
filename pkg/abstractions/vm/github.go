@@ -48,6 +48,8 @@ type githubApp struct {
 type githubToken struct {
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expires_at"`
+	// The permissions that the installation gives the App, as read or write.
+	Permissions map[string]string `json:"permissions"`
 }
 
 type githubAccount struct {
@@ -246,6 +248,15 @@ func (s githubRunnerScope) path() string {
 	return "/repos/" + s.Repository + "/actions/runners"
 }
 
+// organizationRunners reports whether an installation lets the App register
+// runners on its organization. An organization that installed the App before
+// the App asked for Self-hosted runners lets it once an owner accepts that,
+// and not before.
+func (g *githubApp) organizationRunners(ctx context.Context, installation int64) (bool, error) {
+	token, err := g.token(ctx, installation)
+	return token.Permissions["organization_self_hosted_runners"] == "write", err
+}
+
 // registerRunner registers a runner that takes one job of a repository, and
 // returns the configuration it starts with. On the repository it joins the
 // default runner group, the only one a repository has. On the organization
@@ -379,7 +390,7 @@ func (g *githubApp) createRunnerGroup(ctx context.Context, installation int64, t
 
 		fallthrough
 	case http.StatusForbidden:
-		return nil, fmt.Errorf("%w; check the organization's runner policies and the App's Self-hosted runners (write) permission: %w", errRunnerGroupUnavailable, err)
+		return nil, fmt.Errorf("%w; check the organization's runner policies: %w", errRunnerGroupUnavailable, err)
 	}
 
 	return &created, err
@@ -635,31 +646,37 @@ func (g *githubApp) jwt() (string, error) {
 	return unsigned + "." + base64.RawURLEncoding.EncodeToString(signature), nil
 }
 
-// installationToken returns a token that authenticates as an installation,
-// which GitHub issues for an hour.
+// installationToken returns a token that authenticates as an installation.
 func (g *githubApp) installationToken(ctx context.Context, installation int64) (string, error) {
+	token, err := g.token(ctx, installation)
+	return token.Token, err
+}
+
+// token returns the token that GitHub issued for an installation, which
+// lasts an hour, with the permissions the installation gave the App then.
+func (g *githubApp) token(ctx context.Context, installation int64) (githubToken, error) {
 	g.lock.Lock()
 	cached := g.tokens[installation]
 	g.lock.Unlock()
 	if time.Until(cached.ExpiresAt) > 5*time.Minute {
-		return cached.Token, nil
+		return cached, nil
 	}
 
 	jwt, err := g.jwt()
 	if err != nil {
-		return "", err
+		return githubToken{}, err
 	}
 
 	var token githubToken
 	header, err := g.call(ctx, http.MethodPost, fmt.Sprintf("%s/app/installations/%d/access_tokens", g.apiURL, installation), jwt, nil, &token)
 	if err := g.heed(installation, header, err); err != nil {
-		return "", err
+		return githubToken{}, err
 	}
 
 	g.lock.Lock()
 	g.tokens[installation] = token
 	g.lock.Unlock()
-	return token.Token, nil
+	return token, nil
 }
 
 // forget drops what is remembered of an installation that is gone.

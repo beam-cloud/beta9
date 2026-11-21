@@ -826,9 +826,6 @@ func (r *githubRunners) ownedAccount(ctx context.Context, id int64, login string
 	if installation.SuspendedAt != nil {
 		return nil, echo.NewHTTPError(http.StatusForbidden, "the GitHub App installation is suspended")
 	}
-	if r.config.OrganizationRunners && installation.Account.Type != "Organization" {
-		return nil, echo.NewHTTPError(http.StatusBadRequest, errRunnerOrganizationRequired.Error())
-	}
 
 	installation.ID = id
 	owner, err := r.owns(ctx, installation, login)
@@ -856,7 +853,7 @@ func (r *githubRunners) ownedAccounts(ctx context.Context, login, token string) 
 	accounts := []runnerAccount{}
 	for i := range installations {
 		installation := &installations[i]
-		if installation.SuspendedAt != nil || r.config.OrganizationRunners && installation.Account.Type != "Organization" {
+		if installation.SuspendedAt != nil {
 			continue
 		}
 
@@ -1183,22 +1180,20 @@ func (r *githubRunners) provision(ctx context.Context, job types.GitHubRunnerJob
 
 var errRunnerDisconnected = errors.New("the GitHub account is disconnected")
 
-var errRunnerOrganizationRequired = errors.New("GitHub runners require a GitHub organization; personal accounts are not supported")
-
 // runnerRefused reports whether an attempt to start a job's runner failed for
 // good: the account disconnected, or GitHub answered that the App is not
 // installed on it any more or is suspended, or that it can't reach the
-// repository or register runners in it. GitHub gives the same answer until
-// the account changes that, so the job ends with it. Once it has, the job
-// can be run again.
+// repository or register runners in it, or the runner group its organization
+// keeps for the repository can't be created or lets other repositories in.
+// GitHub gives the same answer until the account changes that, so the job
+// ends with it. Once it has, the job can be run again.
 func runnerRefused(err error) bool {
 	switch githubStatus(err) {
 	case http.StatusForbidden, http.StatusNotFound:
 		return true
 	}
 
-	return errors.Is(err, errRunnerDisconnected) || errors.Is(err, errRunnerOrganizationRequired) ||
-		errors.Is(err, errRunnerGroupIsolation) || errors.Is(err, errRunnerGroupUnavailable)
+	return errors.Is(err, errRunnerDisconnected) || errors.Is(err, errRunnerGroupUnavailable) || errors.Is(err, errRunnerGroupIsolation)
 }
 
 // runnerWaits says what a job waits for after an attempt to start its runner
@@ -1223,9 +1218,6 @@ func (r *githubRunners) launch(ctx context.Context, job types.GitHubRunnerJob, s
 	if installation == nil {
 		return errRunnerDisconnected
 	}
-	if r.config.OrganizationRunners && installation.AccountType != "Organization" {
-		return errRunnerOrganizationRequired
-	}
 
 	workspace, err := r.s.backend.GetWorkspace(ctx, job.WorkspaceID)
 	if err != nil {
@@ -1241,13 +1233,14 @@ func (r *githubRunners) launch(ctx context.Context, job types.GitHubRunnerJob, s
 		return errors.New("the Beam token that connected GitHub is inactive; connect again")
 	}
 
+	scope, err := r.scope(ctx, installation, job.Repository)
+	if err != nil {
+		return err
+	}
+
 	// The runner's VM says where it registered (registeredRunnerScope).
-	scope := githubRunnerScope{Repository: job.Repository}
 	metadata := map[string]string{"github.repository": job.Repository}
-	if r.config.OrganizationRunners {
-		// The owner as the job names it, as an organization can be renamed
-		// after its account connects.
-		scope.Organization, _, _ = strings.Cut(job.Repository, "/")
+	if scope.Organization != "" {
 		metadata["github.organization"] = scope.Organization
 	}
 
@@ -1290,6 +1283,28 @@ func (r *githubRunners) launch(ctx context.Context, job types.GitHubRunnerJob, s
 		Queue: true,
 	})
 	return err
+}
+
+// scope is where the runner of an account's job registers. An organization
+// that lets the App register runners on it has them there, which takes no
+// Administration of its repositories. Every other account has them on the
+// job's repository, as before: a personal account, which has no runners but
+// its repositories', and an organization that installed the App before the
+// App asked for Self-hosted runners, until an owner accepts that.
+func (r *githubRunners) scope(ctx context.Context, installation *types.GitHubRunnerInstallation, repository string) (githubRunnerScope, error) {
+	scope := githubRunnerScope{Repository: repository}
+	if !r.config.OrganizationRunners || installation.AccountType != "Organization" {
+		return scope, nil
+	}
+
+	granted, err := r.github.organizationRunners(ctx, installation.ID)
+	if granted {
+		// The owner as the job names it, as an organization can be renamed
+		// after its account connects.
+		scope.Organization, _, _ = strings.Cut(repository, "/")
+	}
+
+	return scope, err
 }
 
 // reconcileRunner deletes a runner VM that has nothing left to do, as a

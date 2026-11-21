@@ -1655,11 +1655,12 @@ type VMConfig struct {
 //
 // The App needs Actions (write, to cancel runs) and Metadata (read) on
 // repositories, Members (read) on organizations, and Workflow job events sent
-// to the gateway's /api/v1/vm/github-runners/webhook. Its setup URL, with
-// redirect on update, and its callback URL are both the dashboard's /vms
-// page; leave "Request user authorization (OAuth) during installation" off.
-// OrganizationRunners needs Self-hosted runners (write) on organizations;
-// the legacy repository mode needs Administration (write) on repositories.
+// to the gateway's /api/v1/vm/github-runners/webhook. To register runners it
+// needs Administration (write) on repositories, or Self-hosted runners
+// (write) on organizations for those that OrganizationRunners covers. Its
+// setup URL, with redirect on update, and its callback URL are both the
+// dashboard's /vms page; leave "Request user authorization (OAuth) during
+// installation" off.
 type GitHubRunnerConfig struct {
 	AppID   string `key:"appID" json:"app_id"`
 	AppSlug string `key:"appSlug" json:"app_slug"` // as in github.com/apps/<slug>
@@ -1683,10 +1684,14 @@ type GitHubRunnerConfig struct {
 	// too. Staging tests that share repositories with production must use
 	// a prefix outside "beam-", so the production App ignores their jobs.
 	LabelPrefix string `key:"labelPrefix" json:"label_prefix"`
-	// OrganizationRunners registers runners on organizations, in a runner
-	// group restricted to their repository. Enable after the App installation
-	// accepts Self-hosted runners (write). Personal accounts are unsupported
-	// in this mode. Drain legacy runners before removing Administration.
+	// OrganizationRunners registers the runners of an organization on the
+	// organization, in a runner group that only their repository can use,
+	// which takes Self-hosted runners (write) there and no Administration of
+	// its repositories. Each organization changes over once it has granted
+	// that: one that installed the App before the App asked for it has to
+	// accept first, and registers runners on its repositories until then, as
+	// a personal account always does. Administration can come off the App
+	// when no account that is to keep its runners still depends on it.
 	OrganizationRunners bool `key:"organizationRunners" json:"organization_runners"`
 }
 

@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,13 +15,38 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// What GitHub issues an installation's token with once its organization has
+// granted the App Self-hosted runners.
+var organizationRunners = map[string]string{"organization_self_hosted_runners": "write"}
+
+// organizationGitHub is an App whose cached token for installation 42 has
+// that permission.
 func organizationGitHub(t *testing.T, handler http.HandlerFunc) *githubApp {
 	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	return &githubApp{id: "17", client: server.Client(), apiURL: server.URL,
-		tokens:    map[int64]githubToken{42: {Token: "installation-token", ExpiresAt: time.Now().Add(time.Hour)}},
+		tokens:    map[int64]githubToken{42: {Token: "installation-token", ExpiresAt: time.Now().Add(time.Hour), Permissions: organizationRunners}},
 		notBefore: map[int64]time.Time{}}
+}
+
+// grantOrganizationRunners turns organization runners on for a gateway whose
+// organization, acme, has granted the App the permission.
+func grantOrganizationRunners(r *githubRunners) {
+	r.config.OrganizationRunners = true
+	r.github.tokens[42] = githubToken{Token: "installation-token", ExpiresAt: time.Now().Add(time.Hour), Permissions: organizationRunners}
+}
+
+// registrations are the endpoints that runners registered on, of the calls
+// that a fake GitHub served.
+func registrations(calls []string) []string {
+	var endpoints []string
+	for _, call := range calls {
+		if endpoint, _, _ := strings.Cut(call, " {"); strings.HasSuffix(endpoint, "/generate-jitconfig") {
+			endpoints = append(endpoints, endpoint)
+		}
+	}
+	return endpoints
 }
 
 func TestOrganizationRunnerCreatesRepositoryRestrictedGroup(t *testing.T) {
@@ -317,7 +341,7 @@ func TestOrganizationRunnerLifecycleUsesOrganizationScope(t *testing.T) {
 // selected-repository group, while workflows keep their existing size label.
 func TestGitHubRunnerOrganizationLaunchPersistsRegistrationScope(t *testing.T) {
 	r, store, _, runtime := runnerFixture(t)
-	r.config.OrganizationRunners = true
+	grantOrganizationRunners(r)
 	// The organization is the one the job names, which a rename since the
 	// account connected leaves the installation behind on.
 	store.installation.Account = "acme-before-rename"
@@ -346,7 +370,7 @@ func TestGitHubRunnerOrganizationLaunchPersistsRegistrationScope(t *testing.T) {
 
 func TestGitHubRunnerOrganizationSeparatesRepositoriesWithSameLabel(t *testing.T) {
 	r, store, _, _ := runnerFixture(t)
-	r.config.OrganizationRunners = true
+	grantOrganizationRunners(r)
 	calls := fakeGitHub(t, r, map[string]string{
 		"GET /repos/acme/repo":  `200 {"id":123,"private":true}`,
 		"GET /repos/acme/other": `200 {"id":456,"private":true}`,
@@ -388,24 +412,48 @@ func TestGitHubRunnerOrganizationSeparatesRepositoriesWithSameLabel(t *testing.T
 	require.Equal(t, []int64{2, 3}, groups)
 }
 
-func TestGitHubRunnerOrganizationLaunchRejectsPersonalInstallations(t *testing.T) {
-	r, store, _, runtime := runnerFixture(t)
-	r.config.OrganizationRunners = true
-	store.installation.AccountType = "User"
-	calls := fakeGitHub(t, r, nil)
-	job := queuedJob(1)
-	job.VM = "ghr-personal"
-	err := r.launch(context.Background(), *job, runnerSizes[1])
-	require.Error(t, err)
-	require.Contains(t, strings.ToLower(err.Error()), "organization")
-	require.True(t, runnerRefused(err), "an unsupported account must not consume retries forever")
-	require.Empty(t, calls(), "personal installations never fall back to repository registration")
-	require.Empty(t, runtime.requests)
-	require.Empty(t, store.rows)
+const registersOrganizationRunner = "POST /orgs/acme/actions/runners/generate-jitconfig"
+
+// Runners register on an organization only once it has granted the App
+// Self-hosted runners. The accounts that installed the App before it asked
+// for that, and personal accounts, keep registering on their repositories.
+func TestGitHubRunnerRegistersOnTheOrganizationOnlyOnceItGrantsRunners(t *testing.T) {
+	for name, tc := range map[string]struct {
+		enabled     bool
+		accountType string
+		permissions map[string]string
+		registers   string
+	}{
+		"organization runners are off":         {false, "Organization", organizationRunners, registersRunner},
+		"organization that has yet to accept":  {true, "Organization", map[string]string{"administration": "write"}, registersRunner},
+		"organization that grants only a read": {true, "Organization", map[string]string{"organization_self_hosted_runners": "read"}, registersRunner},
+		"personal account":                     {true, "User", organizationRunners, registersRunner},
+		"organization that has accepted":       {true, "Organization", organizationRunners, registersOrganizationRunner},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, store, _, _ := runnerFixture(t)
+			r.config.OrganizationRunners = tc.enabled
+			store.installation.AccountType = tc.accountType
+			r.github.tokens[42] = githubToken{Token: "installation-token", ExpiresAt: time.Now().Add(time.Hour), Permissions: tc.permissions}
+			routes := map[string]string{tc.registers: `201 {"encoded_jit_config":"jit"}`}
+			metadata := map[string]string{"github.repository": "acme/repo"}
+			if tc.registers == registersOrganizationRunner {
+				routes["GET /repos/acme/repo"] = `200 {"id":123,"private":true}`
+				routes["GET /orgs/acme/actions/runner-groups"] = `200 {"runner_groups":[{"id":2,"name":"beam-1-123","visibility":"selected"}]}`
+				routes["GET /orgs/acme/actions/runner-groups/2/repositories"] = `200 {"total_count":1,"repositories":[{"id":123}]}`
+				metadata["github.organization"] = "acme"
+			}
+			calls := fakeGitHub(t, r, routes)
+			v := startRunner(t, r, store, 1, false)
+			require.Equal(t, []string{tc.registers}, registrations(calls()))
+			require.Equal(t, metadata, v.Metadata, "the VM says where its runner is removed from")
+		})
+	}
 }
 
-// The flag controls new registrations. Existing VMs retain their own scope
-// across a rollout or rollback so cleanup reaches the runner GitHub knows.
+// The flag, and what an organization grants, say where new runners register.
+// A VM keeps the scope its own runner registered on across a rollout or a
+// rollback, so cleanup reaches the runner GitHub knows.
 func TestGitHubRunnerCleanupUsesPersistedScopeAcrossRollout(t *testing.T) {
 	for _, tc := range []struct {
 		name, organization, endpoint string
@@ -457,35 +505,6 @@ func TestGitHubRunnerCleanupUsesPersistedScopeAcrossRollout(t *testing.T) {
 	}
 }
 
-func TestGitHubRunnerOrganizationModeOnlyOffersOrganizationAccounts(t *testing.T) {
-	r, _, _, _ := runnerFixture(t)
-	r.config.OrganizationRunners = true
-	calls := fakeGitHub(t, r, map[string]string{
-		"GET /user/installations":          `200 {"installations":[{"id":43,"account":{"login":"Alice","type":"User"}},{"id":42,"account":{"login":"acme","type":"Organization"}}]}`,
-		"GET /orgs/acme/memberships/alice": `200 {"state":"active","role":"admin"}`,
-	})
-	accounts, err := r.ownedAccounts(context.Background(), "alice", "user-token")
-	require.NoError(t, err)
-	require.Equal(t, []runnerAccount{{InstallationID: 42, Account: "acme", AccountType: "Organization"}}, accounts)
-	require.Equal(t, []string{"GET /user/installations", "GET /orgs/acme/memberships/alice"}, calls())
-}
-
-func TestGitHubRunnerOrganizationModeRejectsConnectingPersonalAccount(t *testing.T) {
-	r, store, info, _ := runnerFixture(t)
-	r.config.OrganizationRunners = true
-	store.installation = nil
-	calls := fakeGitHub(t, r, map[string]string{
-		"GET /app/installations/43": `200 {"account":{"login":"Alice","type":"User"}}`,
-	})
-	state := r.state(info, "alice", time.Now().Add(time.Minute).Unix())
-	code, step, message := connect(t, r, info, fmt.Sprintf(`{"installation_id":43,"state":%q}`, state))
-	require.Equal(t, 400, code, message)
-	require.Contains(t, strings.ToLower(message), "organization")
-	require.False(t, step.Connected)
-	require.Nil(t, store.installation)
-	require.Equal(t, []string{"GET /app/installations/43"}, calls())
-}
-
 func TestGitHubRunnerOrganizationStopUsesPersistedScope(t *testing.T) {
 	for _, deregister := range []string{"204", "422", "500"} {
 		t.Run(deregister, func(t *testing.T) {
@@ -520,7 +539,7 @@ func TestGitHubRunnerOrganizationStopUsesPersistedScope(t *testing.T) {
 
 func TestGitHubRunnerOrganizationIsolationRefusalEndsProvisioning(t *testing.T) {
 	r, store, _, runtime := runnerFixture(t)
-	r.config.OrganizationRunners = true
+	grantOrganizationRunners(r)
 	calls := fakeGitHub(t, r, map[string]string{
 		"GET /repos/acme/repo":                 `200 {"id":123,"private":true}`,
 		"GET /orgs/acme/actions/runner-groups": `200 {"runner_groups":[{"id":2,"name":"beam-1-123","visibility":"all"}]}`,
@@ -534,69 +553,47 @@ func TestGitHubRunnerOrganizationIsolationRefusalEndsProvisioning(t *testing.T) 
 	require.Equal(t, []string{"GET /repos/acme/repo", "GET /orgs/acme/actions/runner-groups"}, calls())
 }
 
-func TestGitHubRunnerAcceptedPermissionsRefreshesRegistrationToken(t *testing.T) {
+// An organization that installed the App before the App asked for Self-hosted
+// runners is not interrupted: its runners keep registering on its
+// repositories, and the first one after an owner accepts the permission
+// registers on the organization.
+func TestGitHubRunnerMovesToTheOrganizationWhenItAcceptsRunners(t *testing.T) {
 	r, store, _, _ := runnerFixture(t)
 	r.config.OrganizationRunners = true
 	cache := &types.GitHubRunnerCache{WorkspaceID: 7, Repository: "acme/repo", DiskName: types.RootLayerDiskPrefix + "existing",
 		SnapshotID: "existing-snapshot", CreatedAt: time.Now()}
 	store.caches = append(store.caches, cache)
-	var granted atomic.Bool
-	var tokens atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.Method == http.MethodPost && req.URL.Path == "/app/installations/42/access_tokens" {
-			tokens.Add(1)
-			fmt.Fprint(w, `{"token":"new-grant-token","expires_at":"2099-01-01T00:00:00Z"}`)
-			return
-		}
-		wantToken := "installation-token"
-		if granted.Load() {
-			wantToken = "new-grant-token"
-		}
-		if req.Header.Get("Authorization") != "Bearer "+wantToken {
-			w.WriteHeader(http.StatusForbidden)
-			fmt.Fprint(w, `{"message":"stale installation token permissions"}`)
-			return
-		}
-		switch req.Method + " " + req.URL.Path {
-		case "GET /repos/acme/repo":
-			fmt.Fprint(w, `{"id":123,"private":true}`)
-		case "GET /orgs/acme/actions/runner-groups":
-			if !granted.Load() {
-				w.WriteHeader(http.StatusForbidden)
-				fmt.Fprint(w, `{"message":"Resource not accessible by integration"}`)
-				return
-			}
-			fmt.Fprint(w, `{"runner_groups":[]}`)
-		case "POST /orgs/acme/actions/runner-groups":
-			fmt.Fprint(w, `{"id":2,"name":"beam-1-123","visibility":"selected"}`)
-		case "GET /orgs/acme/actions/runner-groups/2/repositories":
-			fmt.Fprint(w, `{"total_count":1,"repositories":[{"id":123}]}`)
-		case "POST /orgs/acme/actions/runners/generate-jitconfig":
-			fmt.Fprint(w, `{"encoded_jit_config":"new-grant-jit"}`)
-		default:
-			t.Errorf("unexpected GitHub request %s %s", req.Method, req.URL)
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	t.Cleanup(server.Close)
-	r.github.apiURL = server.URL
-	_, err := r.github.registerRunner(context.Background(), 42,
-		githubRunnerScope{Repository: "acme/repo", Organization: "acme"}, "ghr-before", beamLabels[0])
-	require.Equal(t, http.StatusForbidden, githubStatus(err), "the old grant lacks organization runner permission")
-	require.Zero(t, tokens.Load())
-	granted.Store(true)
+	calls := fakeGitHub(t, r, map[string]string{
+		registersRunner: `201 {"encoded_jit_config":"repository-jit"}`,
+		// The token GitHub issues once the organization has accepted.
+		"POST /app/installations/42/access_tokens":            `201 {"token":"accepted-token","expires_at":"2099-01-01T00:00:00Z","permissions":{"organization_self_hosted_runners":"write"}}`,
+		"GET /repos/acme/repo":                                `200 {"id":123,"private":true}`,
+		"GET /orgs/acme/actions/runner-groups":                `200 {"runner_groups":[]}`,
+		"POST /orgs/acme/actions/runner-groups":               `201 {"id":2,"name":"beam-1-123","visibility":"selected"}`,
+		"GET /orgs/acme/actions/runner-groups/2/repositories": `200 {"total_count":1,"repositories":[{"id":123}]}`,
+		registersOrganizationRunner:                           `201 {"encoded_jit_config":"organization-jit"}`,
+	})
+
+	before := startRunner(t, r, store, 1, false)
+	require.Contains(t, before.Spec.Env, "BEAM_GITHUB_JIT_CONFIG=repository-jit")
+	require.NotContains(t, before.Metadata, "github.organization")
+	require.Len(t, calls(), 1, "the token that the gateway holds says what the organization grants")
+
 	require.Equal(t, 202, deliver(t, r, "installation", "new_permissions_accepted", nil, queuedJob(0), true))
-	require.NotNil(t, store.installation, "permission acceptance must retain the connected workspace")
-	require.Equal(t, cache, store.current(7, "acme/repo"), "permission acceptance must retain the enhanced cache")
-	v := startRunner(t, r, store, 1, false)
-	require.EqualValues(t, 1, tokens.Load(), "registration refreshes the token before its original expiry")
-	require.Contains(t, v.Spec.Env, "BEAM_GITHUB_JIT_CONFIG=new-grant-jit")
-	require.Equal(t, cache.DiskName, v.Spec.RootLayer.DiskName)
+	require.NotNil(t, store.installation, "accepting a permission keeps the account connected")
+	require.Equal(t, cache, store.current(7, "acme/repo"), "and its cache")
+
+	after := startRunner(t, r, store, 2, false)
+	require.Contains(t, after.Spec.Env, "BEAM_GITHUB_JIT_CONFIG=organization-jit")
+	require.Equal(t, "acme", after.Metadata["github.organization"])
+	require.Equal(t, cache.DiskName, after.Spec.RootLayer.DiskName)
+	require.Equal(t, []string{registersRunner, registersOrganizationRunner}, registrations(calls()))
+	require.Equal(t, "accepted-token", r.github.tokens[42].Token, "the gateway asks for the token again when the permissions change")
 }
 
 func TestGitHubRunnerCustomLabelPrefixIsolatesStagingFromProduction(t *testing.T) {
 	r, store, info, runtime := runnerFixture(t)
-	r.config.OrganizationRunners = true
+	grantOrganizationRunners(r)
 	r.config.LabelPrefix = " Stage-Org-Permissions- "
 	stageLabel := "stage-org-permissions-2vcpu-ubuntu-2404"
 	stageLabels := []string{strings.ToUpper(stageLabel)}
