@@ -26,6 +26,7 @@ type workerRuntimeCredentialsBackendRepo struct {
 	workspaceByExternalIDCalls int
 	workspaceWithSigningCalls  int
 	workspaceCalls             int
+	secretLookupCalls          int
 }
 
 func (r *workerRuntimeCredentialsBackendRepo) GetWorkspaceByExternalId(ctx context.Context, externalID string) (types.Workspace, error) {
@@ -50,6 +51,7 @@ func (r *workerRuntimeCredentialsBackendRepo) GetWorkspace(ctx context.Context, 
 }
 
 func (r *workerRuntimeCredentialsBackendRepo) GetSecretsByNameDecrypted(ctx context.Context, workspace *types.Workspace, names []string) ([]types.Secret, error) {
+	r.secretLookupCalls++
 	return r.secrets, nil
 }
 
@@ -120,6 +122,7 @@ func TestGetContainerRuntimeCredentialsVendsPrivateRuntimeBundle(t *testing.T) {
 	storageRegion := "us-east-1"
 
 	stubConfig := types.StubConfigV1{
+		Secrets: []types.Secret{{Name: "SECRET"}},
 		Volumes: []*pb.Volume{{
 			Id:        "volume-id",
 			MountPath: "data",
@@ -193,6 +196,36 @@ func TestGetContainerRuntimeCredentialsVendsPrivateRuntimeBundle(t *testing.T) {
 	require.Len(t, resp.MountCredentials, 1)
 	require.Equal(t, "mount-access", resp.MountCredentials[0].Config.AccessKey)
 	require.Equal(t, "mount-secret", resp.MountCredentials[0].Config.SecretKey)
+}
+
+func TestGetContainerRuntimeCredentialsRejectsUndeclaredEnvironmentSecrets(t *testing.T) {
+	signingKey, _ := testSigningKey(t)
+	backend := &workerRuntimeCredentialsBackendRepo{
+		workspace: &types.Workspace{Id: 7, ExternalId: "workspace-id", SigningKey: &signingKey},
+		secrets:   []types.Secret{{Name: "UNDECLARED", Value: "unrelated"}},
+	}
+	service := &WorkerRepositoryService{
+		backendRepo: backend,
+		containerRepo: &workerRuntimeCredentialsContainerRepo{
+			state: &types.ContainerState{ContainerId: "container-id", WorkspaceId: "workspace-id", StubId: "stub-id", WorkerId: "worker-1"},
+		},
+	}
+	for _, tokenType := range []string{types.TokenTypeWorker, types.TokenTypeWorkerPrivate} {
+		resp, err := service.GetContainerRuntimeCredentials(
+			cacheRepositoryAuthContext(tokenType, "workspace-id"),
+			&pb.GetContainerRuntimeCredentialsRequest{
+				WorkspaceId: "workspace-id",
+				StubId:      "stub-id",
+				ContainerId: "container-id",
+				SecretNames: []string{"UNDECLARED"},
+			},
+		)
+		require.NoError(t, err)
+		require.False(t, resp.Ok)
+		require.Contains(t, resp.ErrorMsg, "not declared by stub")
+		require.Empty(t, resp.Env)
+	}
+	require.Zero(t, backend.secretLookupCalls)
 }
 
 func TestGetContainerRuntimeCredentialsVendsStubScopedSecretAlias(t *testing.T) {
@@ -681,9 +714,11 @@ func TestBrokeredSecretsVendOutsideEnvironment(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "rotated", response.SecretBindings[0].Value)
 	require.Equal(t, "beam_secret_a", response.SecretBindings[0].Placeholder)
+	backend.stub.Config = `{"secrets":[{"name":"KEY"}]}`
 	request.BindingNames = nil
 	request.SecretNames = []string{"KEY"}
 	response, err = service.GetContainerRuntimeCredentials(cacheRepositoryAuthContext(types.TokenTypeWorkerPrivate, "workspace-id"), request)
 	require.NoError(t, err)
 	require.False(t, response.Ok, "old workers cannot hydrate brokered secrets into env")
+	require.Contains(t, response.ErrorMsg, "secret binding support")
 }

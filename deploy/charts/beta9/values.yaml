@@ -43,7 +43,11 @@ images:
 
 cacheServer:
   enabled: false
-  configSecretName: beta9-config-helm
+  # Existing Secret in the release namespace with a dedicated cache-only config.yaml.
+  configSecretName: beta9-cache-server-config
+  serviceAccount:
+    # Optional cache-specific workload identity annotations.
+    annotations: {}
   poolName: default
   locality: default
   serverPort: 2050
@@ -133,9 +137,15 @@ ingress:
     labels: {}
 
 serviceAccount:
+  create: true
   name: beta9
   annotations: {}
   labels: {}
+
+workerRBAC:
+  # Set to the worker namespace when only external gateway config specifies it.
+  # Otherwise defaults to config.worker.namespace or Beta9's built-in beta9 namespace.
+  namespace: ""
 
 # -- In-memory cache for container images.
 # https://github.com/beam-cloud/blobcache/deploy/charts/blobcache/values.yaml

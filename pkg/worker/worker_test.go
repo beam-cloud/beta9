@@ -24,6 +24,32 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func TestValidateLocalGPURuntime(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		mode    types.PoolMode
+		runtime string
+		hasGPU  bool
+		wantErr bool
+	}{
+		{name: "CPU runc", mode: types.PoolModeLocal, runtime: types.ContainerRuntimeRunc.String()},
+		{name: "private GPU runc", mode: types.PoolModePrivate, runtime: types.ContainerRuntimeRunc.String(), hasGPU: true},
+		{name: "local GPU runc", mode: types.PoolModeLocal, runtime: types.ContainerRuntimeRunc.String(), hasGPU: true, wantErr: true},
+		{name: "local GPU unset", mode: types.PoolModeLocal, hasGPU: true, wantErr: true},
+		{name: "local GPU gVisor", mode: types.PoolModeLocal, runtime: types.ContainerRuntimeGvisor.String(), hasGPU: true},
+		{name: "local GPU microVM", mode: types.PoolModeLocal, runtime: types.ContainerRuntimeMicroVM.String(), hasGPU: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateLocalGPURuntime(types.WorkerPoolConfig{Mode: tt.mode, ContainerRuntime: tt.runtime}, tt.hasGPU)
+			if tt.wantErr {
+				require.ErrorContains(t, err, "explicit gvisor or microvm")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestGPUManagerForRequestUsesWorkerVirtualizationFlag(t *testing.T) {
 	physical := &testGPUManager{}
 	thunder := &testGPUManager{}

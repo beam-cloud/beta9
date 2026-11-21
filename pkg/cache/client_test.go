@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -2104,6 +2106,7 @@ func TestSelectedStoreHostAvailableRejectsLogicalOnlyHost(t *testing.T) {
 }
 
 type fakeStoreCacheClient struct {
+	proto.CacheClient
 	stream   proto.Cache_StoreContentClient
 	state    *proto.CacheGetStateResponse
 	stateErr error
@@ -2123,14 +2126,6 @@ func (f *fakeStoreCacheClient) GetContentStream(ctx context.Context, in *proto.C
 
 func (f *fakeStoreCacheClient) StoreContent(ctx context.Context, opts ...grpc.CallOption) (proto.Cache_StoreContentClient, error) {
 	return f.stream, nil
-}
-
-func (f *fakeStoreCacheClient) StoreContentFromSource(ctx context.Context, in *proto.CacheStoreContentFromSourceRequest, opts ...grpc.CallOption) (*proto.CacheStoreContentFromSourceResponse, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (f *fakeStoreCacheClient) StoreContentFromSourceWithLock(ctx context.Context, in *proto.CacheStoreContentFromSourceRequest, opts ...grpc.CallOption) (*proto.CacheStoreContentFromSourceWithLockResponse, error) {
-	return nil, errors.New("not implemented")
 }
 
 func (f *fakeStoreCacheClient) GetState(ctx context.Context, in *proto.CacheGetStateRequest, opts ...grpc.CallOption) (*proto.CacheGetStateResponse, error) {
@@ -2322,7 +2317,7 @@ func TestStoreContentStreamWritesSelectedRemoteHost(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
-func TestStoreContentFromS3SourceWaitsForLockedHashAlreadyPublished(t *testing.T) {
+func TestStoreContentFromS3Source(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -2375,6 +2370,38 @@ func TestStoreContentFromS3SourceWaitsForLockedHashAlreadyPublished(t *testing.T
 	got, err := client.StoreContentFromS3Source(S3ContentSource{Path: "objects/source.bin"}, StoreContentOptions{RoutingKey: hash, Lock: true})
 	require.NoError(t, err)
 	require.Equal(t, hash, got)
+
+	object := []byte("an object read by the cache client")
+	digest := fmt.Sprintf("%x", sha256.Sum256(object))
+	originReads := atomic.Int32{}
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet || req.URL.Path != "/bucket/object.bin" || req.Header.Get("Authorization") == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		originReads.Add(1)
+		_, _ = w.Write(object)
+	}))
+	t.Cleanup(origin.Close)
+	const cachePath = "/test/object.bin"
+	source := S3ContentSource{
+		Path: "object.bin", CachePath: cachePath, BucketName: "bucket", Region: "us-east-1",
+		EndpointURL: origin.URL, AccessKey: "test-key", SecretKey: "test-secret", ForcePathStyle: true,
+	}
+	got, err = client.StoreContentFromS3Source(source, StoreContentOptions{RoutingKey: digest, Lock: true})
+	require.NoError(t, err)
+	require.Equal(t, digest, got)
+	require.Equal(t, int32(1), originReads.Load())
+	require.True(t, remoteServer.HasCompleteContent(digest, int64(len(object))))
+	entry, err := metadataStore.GetFsNode(ctx, GenerateFsID(cachePath))
+	require.NoError(t, err)
+	require.Equal(t, digest, entry.Hash)
+
+	source.CachePath = "/test/invalid.bin"
+	_, err = client.StoreContentFromS3Source(source, StoreContentOptions{RoutingKey: strings.Repeat("a", 64), Lock: true})
+	require.ErrorContains(t, err, "content hash mismatch")
+	_, err = metadataStore.GetFsNode(ctx, GenerateFsID(source.CachePath))
+	require.Error(t, err)
 }
 
 func TestStoreContentUsesSelectedLocalLogicalHost(t *testing.T) {
@@ -2560,21 +2587,6 @@ func TestReadContentIntoSurvivesLogicalHostRegistrationReplacement(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, int64(len(content)), n)
 	require.Equal(t, content, afterReplacement)
-}
-
-func TestStoreContentSourceLockKeyUsesExpectedHash(t *testing.T) {
-	source := &proto.CacheSource{
-		Path:         "objects/path",
-		CachePath:    "cache/path",
-		ExpectedHash: strings.Repeat("a", sha256.Size*2),
-	}
-	require.Equal(t, storeContentHashLockKey(source.ExpectedHash), storeContentSourceLockKey(source))
-
-	source.ExpectedHash = ""
-	require.Equal(t, "/cache/path", storeContentSourceLockKey(source))
-
-	source.CachePath = ""
-	require.Equal(t, "objects/path", storeContentSourceLockKey(source))
 }
 
 type failFirstUnlockRegistry struct {

@@ -7,6 +7,31 @@
 
   {{/* Enforce default values */}}
   {{- $_ := include "beta9" . | fromYaml | merge .Values -}}
+
+  {{- include "beta9.gatewayIdentityEnv" . -}}
+{{- end -}}
+
+{{- define "beta9.gatewayIdentityEnv" -}}
+  {{- $main := .Values.controllers.gateway.containers.main -}}
+  {{- $env := $main.env | default dict -}}
+  {{- $fields := dict "BETA9_GATEWAY_SERVICE_ACCOUNT" "spec.serviceAccountName" "BETA9_GATEWAY_NAMESPACE" "metadata.namespace" -}}
+  {{- if kindIs "slice" $env -}}
+    {{- $merged := list -}}
+    {{- range $entry := $env -}}
+      {{- if not (hasKey $fields ($entry.name | default "")) -}}
+        {{- $merged = append $merged $entry -}}
+      {{- end -}}
+    {{- end -}}
+    {{- range $name, $field := $fields -}}
+      {{- $merged = append $merged (dict "name" $name "valueFrom" (dict "fieldRef" (dict "fieldPath" $field))) -}}
+    {{- end -}}
+    {{- $_ := set $main "env" $merged -}}
+  {{- else -}}
+    {{- range $name, $field := $fields -}}
+      {{- $_ := set $env $name (dict "valueFrom" (dict "fieldRef" (dict "fieldPath" $field))) -}}
+    {{- end -}}
+    {{- $_ := set $main "env" $env -}}
+  {{- end -}}
 {{- end -}}
 
 {{/* The stamped config and pod checksum must describe the same release. */}}
@@ -102,8 +127,6 @@ service:
 ingress:
   gateway:
     controller: gateway
-serviceAccount:
-  create: true
 persistence:
   config-helm:
     enabled: {{ if .Values.config }}true{{ else }}false{{ end }}

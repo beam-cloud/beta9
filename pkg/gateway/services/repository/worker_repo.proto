@@ -246,6 +246,8 @@ message UpdateWorkerCapacityResponse {
 }
 
 message SetWorkerKeepAliveRequest {
+  reserved 6, 7;
+  reserved "verified_local_gpu_runtime", "nvidia_driver_version";
   string worker_id = 1;
   string machine_id = 2;
   // idle is set when the worker runs no containers. Only an idle worker can
@@ -425,6 +427,11 @@ message GetCacheOriginCredentialsRequest {
   // Publish a filesystem export under this stub's generated image ID.
   string image_archive_upload_id = 5;
   bool image_archive_upload_data = 6;
+  // The recorded content item to restore during cache reconciliation.
+  string cache_locality = 7;
+  string source = 8;
+  string source_bucket = 9;
+  string source_hash = 10;
 }
 
 message GetCacheOriginCredentialsResponse {
@@ -446,6 +453,8 @@ message GetCacheOriginCredentialsResponse {
   string build_registry = 10;
   string build_repository_name = 11;
   bool build_registry_insecure = 12;
+  // Short-lived GET URL for the authorized workspace cache object.
+  string workspace_object_url = 13;
 }
 
 message RuntimeMountCredentialRequest {

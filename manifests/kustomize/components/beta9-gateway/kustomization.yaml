@@ -11,8 +11,8 @@ labels:
     app.kubernetes.io/managed-by: kustomize
 
 resources:
-- cluster-role-binding.yaml
-- cluster-role.yaml
+- role-binding.yaml
+- role.yaml
 - deployment.yaml
 - persistent-volume-claim.yaml
 - secret.yaml

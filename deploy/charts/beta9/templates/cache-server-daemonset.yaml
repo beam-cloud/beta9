@@ -1,8 +1,46 @@
 {{- if .Values.cacheServer.enabled -}}
+{{- $configSecretName := required "cacheServer.configSecretName must name a dedicated cache-server Secret" .Values.cacheServer.configSecretName -}}
+{{- $gatewaySecrets := list "beta9-config-helm" -}}
+{{- $gateway := .Values.controllers.gateway | default dict -}}
+{{- if dig "enabled" true $gateway -}}
+{{- $gatewayController := include "bjw-s.common.lib.controller.valuesToObject" (dict "rootContext" . "id" "gateway" "values" (deepCopy $gateway)) | fromYaml -}}
+{{- $gatewayPod := include "bjw-s.common.lib.pod.spec" (dict "rootContext" . "controllerObject" $gatewayController) | fromYaml -}}
+{{- range $gatewayPod.volumes -}}
+{{- $gatewaySecrets = append $gatewaySecrets (dig "secret" "secretName" "" .) -}}
+{{- range (dig "projected" "sources" (list) .) -}}
+{{- $gatewaySecrets = append $gatewaySecrets (dig "secret" "name" "" .) -}}
+{{- end -}}
+{{- end -}}
+{{- range concat (default (list) $gatewayPod.containers) (default (list) $gatewayPod.initContainers) -}}
+{{- range .env -}}
+{{- $gatewaySecrets = append $gatewaySecrets (dig "valueFrom" "secretKeyRef" "name" "" .) -}}
+{{- end -}}
+{{- range .envFrom -}}
+{{- $gatewaySecrets = append $gatewaySecrets (dig "secretRef" "name" "" .) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if has $configSecretName $gatewaySecrets -}}
+{{- fail "cacheServer.configSecretName cannot reference a Secret used by the gateway" -}}
+{{- end -}}
+{{- $serviceAccountName := printf "%s-cache-server" .Release.Name -}}
+{{- $gatewayServiceAccountName := include "bjw-s.common.lib.pod.field.serviceAccountName" (dict "ctx" (dict "rootContext" .)) | trim -}}
+{{- if eq $serviceAccountName $gatewayServiceAccountName -}}
+{{- fail "cache-server and gateway must use different service accounts" -}}
+{{- end -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $serviceAccountName }}
+  {{- with (.Values.cacheServer.serviceAccount | default dict).annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ .Release.Name }}-cache-server
+  name: {{ $serviceAccountName }}
   labels:
     {{- include "bjw-s.common.lib.metadata.allLabels" . | nindent 4 }}
     app.kubernetes.io/component: cache-server
@@ -17,8 +55,8 @@ spec:
         {{- include "bjw-s.common.lib.metadata.allLabels" . | nindent 8 }}
         app.kubernetes.io/component: cache-server
     spec:
-      serviceAccountName: {{ .Values.serviceAccount.name }}
-      automountServiceAccountToken: true
+      serviceAccountName: {{ $serviceAccountName }}
+      automountServiceAccountToken: false
       terminationGracePeriodSeconds: 60
       {{- with .Values.cacheServer.priorityClassName }}
       priorityClassName: {{ . | quote }}
@@ -60,6 +98,8 @@ spec:
         - name: CONFIG_PATH
           value: /etc/beta9/config.yaml
         - name: CACHE_SERVER_ONLY
+          value: "true"
+        - name: BEAM_WORKER_MINIMAL_CONFIG
           value: "true"
         - name: WORKER_POOL_NAME
           value: {{ .Values.cacheServer.poolName | quote }}
@@ -105,7 +145,10 @@ spec:
       volumes:
       - name: config
         secret:
-          secretName: {{ .Values.cacheServer.configSecretName }}
+          secretName: {{ $configSecretName | quote }}
+          items:
+          - key: config.yaml
+            path: config.yaml
       - name: cache
         hostPath:
           path: {{ .Values.cacheServer.hostPath }}

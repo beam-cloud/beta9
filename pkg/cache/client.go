@@ -2706,6 +2706,9 @@ func (c *Client) storeContentFromReaderToHostWithContext(ctx context.Context, ho
 		return "", ErrHostNotFound
 	}
 
+	if expectedHash != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, storeExpectedHashHeader, expectedHash)
+	}
 	stream, err := client.StoreContent(ctx)
 	if err != nil {
 		return "", err
@@ -2819,30 +2822,6 @@ func (c *Client) StoreContentFromFUSE(source struct {
 	})
 }
 
-// StoreContentFromLocalSource asks the selected cache host to read source.Path itself.
-// Prefer StoreContentFromLocalFile unless the source path is guaranteed to exist on cache hosts.
-func (c *Client) StoreContentFromLocalSource(source LocalContentSource, opts StoreContentOptions) (string, error) {
-	ctx, cancel := context.WithTimeout(c.ctx, storeContentRequestTimeout)
-	defer cancel()
-
-	if opts.RoutingKey == "" {
-		opts.RoutingKey = source.Path
-	}
-
-	req := &proto.CacheStoreContentFromSourceRequest{Source: &proto.CacheSource{Path: source.Path, CachePath: source.CachePath}}
-	if isContentHash(opts.RoutingKey) {
-		req.Source.ExpectedHash = opts.RoutingKey
-	}
-	hash, err := c.storeContentFromSource(ctx, req, source.Path, opts.RoutingKey, opts.Lock)
-	if errors.Is(err, ErrUnableToAcquireLock) && isContentHash(opts.RoutingKey) {
-		if c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, 0, storeContentLockWaitTimeout) {
-			return opts.RoutingKey, nil
-		}
-		hash, err = c.storeContentFromSource(ctx, req, source.Path, opts.RoutingKey, opts.Lock)
-	}
-	return hash, err
-}
-
 func (c *Client) StoreContentFromS3(source struct {
 	Path        string
 	BucketName  string
@@ -2868,6 +2847,8 @@ func (c *Client) StoreContentFromS3(source struct {
 	})
 }
 
+// StoreContentFromS3Source reads the object on the caller and streams its
+// contents to the selected cache host. The cache host receives no S3 credentials.
 func (c *Client) StoreContentFromS3Source(source S3ContentSource, opts StoreContentOptions) (string, error) {
 	ctx, cancel := context.WithTimeout(c.ctx, storeContentRequestTimeout)
 	defer cancel()
@@ -2875,87 +2856,37 @@ func (c *Client) StoreContentFromS3Source(source S3ContentSource, opts StoreCont
 	if opts.RoutingKey == "" {
 		opts.RoutingKey = fmt.Sprintf("%s/%s/%s/%s", source.EndpointURL, source.Region, source.BucketName, source.Path)
 	}
-
-	req := &proto.CacheStoreContentFromSourceRequest{Source: &proto.CacheSource{
-		Path:           source.Path,
-		CachePath:      source.CachePath,
-		BucketName:     source.BucketName,
-		Region:         source.Region,
-		EndpointUrl:    source.EndpointURL,
-		AccessKey:      source.AccessKey,
-		SecretKey:      source.SecretKey,
-		ForcePathStyle: source.ForcePathStyle,
-	}}
-	if isContentHash(opts.RoutingKey) {
-		req.Source.ExpectedHash = opts.RoutingKey
+	cachePath := source.CachePath
+	if cachePath != "" {
+		cachePath = filepath.Join("/", filepath.Clean(cachePath))
 	}
-	hash, err := c.storeContentFromSource(ctx, req, opts.RoutingKey, opts.RoutingKey, opts.Lock)
-	if errors.Is(err, ErrUnableToAcquireLock) && isContentHash(opts.RoutingKey) {
+	expectedHash := isContentHash(opts.RoutingKey)
+	store := func() (string, error) {
+		if expectedHash && cachePath == "" {
+			if check := c.selectedHostContentCheckWithTrace(ctx, opts.RoutingKey, opts.RoutingKey, 0, nil, ""); check.exists {
+				return opts.RoutingKey, nil
+			}
+		}
+		body, err := source.open(ctx)
+		if err != nil {
+			return "", err
+		}
+		defer body.Close()
+		hash, err := c.storeContentFromReaderWithContext(ctx, body, opts.RoutingKey, cachePath, nil)
+		if err == nil && expectedHash && hash != opts.RoutingKey {
+			return "", fmt.Errorf("stored content hash mismatch: expected %s, got %s", opts.RoutingKey, hash)
+		}
+		return hash, err
+	}
+	lockKey := storeContentLockKey(cachePath, opts.RoutingKey)
+	hash, err := c.withStoreFromContentLock(ctx, lockKey, opts.Lock, store)
+	if errors.Is(err, ErrUnableToAcquireLock) && expectedHash {
 		if c.waitForStoredContent(ctx, opts.RoutingKey, opts.RoutingKey, 0, storeContentLockWaitTimeout) {
 			return opts.RoutingKey, nil
 		}
-		hash, err = c.storeContentFromSource(ctx, req, opts.RoutingKey, opts.RoutingKey, opts.Lock)
+		hash, err = c.withStoreFromContentLock(ctx, lockKey, opts.Lock, store)
 	}
 	return hash, err
-}
-
-func (c *Client) storeContentFromSource(ctx context.Context, req *proto.CacheStoreContentFromSourceRequest, hash, routingKey string, lock bool) (string, error) {
-	var lastErr error
-
-	for attempt := 0; attempt < c.getContentAttempts(0); attempt++ {
-		client, host, err := c.getGRPCClientForHostIndex(ctx, ClientRequestTypeStorage, hash, routingKey, 0)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		if lock {
-			resp, err := client.StoreContentFromSourceWithLock(ctx, req)
-			if err != nil {
-				lastErr = err
-				if c.hostDirectory == nil || c.hostMap == nil {
-					break
-				}
-				c.removeHost(host)
-				_ = c.refreshRoutableHosts(ctx)
-				continue
-			}
-
-			if resp == nil {
-				lastErr = ErrUnableToPopulateContent
-				break
-			}
-			if resp.FailedToAcquireLock {
-				return "", ErrUnableToAcquireLock
-			}
-			if !resp.Ok {
-				lastErr = ErrUnableToPopulateContent
-				break
-			}
-			return resp.Hash, nil
-		}
-
-		resp, err := client.StoreContentFromSource(ctx, req)
-		if err != nil {
-			lastErr = err
-			if c.hostDirectory == nil || c.hostMap == nil {
-				break
-			}
-			c.removeHost(host)
-			_ = c.refreshRoutableHosts(ctx)
-			continue
-		}
-		if resp == nil || !resp.Ok {
-			lastErr = ErrUnableToPopulateContent
-			break
-		}
-		return resp.Hash, nil
-	}
-
-	if lastErr != nil {
-		return "", lastErr
-	}
-	return "", ErrHostNotFound
 }
 
 // PrimaryReadHost returns the host a read for routingKey would resolve to: the

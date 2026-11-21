@@ -106,6 +106,18 @@ func ensureGVisorMaxMapCount(path string) (bool, error) {
 	return true, nil
 }
 
+func validateLocalGPURuntime(pool types.WorkerPoolConfig, hasGPU bool) error {
+	if pool.Mode != types.PoolModeLocal || !hasGPU {
+		return nil
+	}
+	switch pool.ContainerRuntime {
+	case types.ContainerRuntimeGvisor.String(), types.ContainerRuntimeMicroVM.String():
+		return nil
+	default:
+		return errors.New("local GPU workers require an explicit gvisor or microvm containerRuntime")
+	}
+}
+
 type Worker struct {
 	checkpointCompatibilityKey string
 
@@ -542,6 +554,13 @@ func NewWorker() (_ *Worker, err error) {
 		return nil, err
 	}
 	config := configManager.GetConfig()
+	poolConfig, poolFound := config.Worker.Pools[workerPoolName]
+	if !poolFound {
+		return nil, errors.New("invalid worker pool name")
+	}
+	if err := validateLocalGPURuntime(poolConfig, gpuCount > 0); err != nil {
+		return nil, fmt.Errorf("worker pool %q: %w", workerPoolName, err)
+	}
 
 	// The delivery stream keeps this authenticated HTTP/2 connection live.
 	// Repository RPCs share it instead of paying for independent idle transports.
@@ -565,10 +584,6 @@ func NewWorker() (_ *Worker, err error) {
 
 	eventRepo := repo.NewWorkerEventClientRepo(config, workerRepoClient, workerId)
 
-	poolConfig, poolFound := config.Worker.Pools[workerPoolName]
-	if !poolFound {
-		return nil, errors.New("invalid worker pool name")
-	}
 	if err := hydrateManagedWorkerMetering(ctx, workerId, &config, poolConfig, workerRepoClient); err != nil {
 		return nil, err
 	}
@@ -591,7 +606,6 @@ func NewWorker() (_ *Worker, err error) {
 	}
 
 	// Create container runtimes based on pool configuration
-	// Always create runc as a fallback
 	runcRuntime, err := runtime.New(runtime.Config{
 		Type:  types.ContainerRuntimeRunc.String(),
 		Debug: config.DebugMode,
@@ -647,15 +661,13 @@ func NewWorker() (_ *Worker, err error) {
 			Debug:          config.DebugMode,
 		})
 		if err != nil {
-			log.Warn().Err(err).Msg("failed to create gvisor runtime, falling back to runc")
-			defaultRuntime = runcRuntime
-		} else {
-			defaultRuntime = gvisorRuntime
-			log.Info().
-				Str("platform", gvisorConfig.GVisorPlatform).
-				Str("root", gvisorConfig.GVisorRoot).
-				Msg("gVisor runtime initialized successfully")
+			return nil, fmt.Errorf("failed to create gvisor runtime: %w", err)
 		}
+		defaultRuntime = gvisorRuntime
+		log.Info().
+			Str("platform", gvisorConfig.GVisorPlatform).
+			Str("root", gvisorConfig.GVisorRoot).
+			Msg("gVisor runtime initialized successfully")
 	case types.ContainerRuntimeMicroVM.String():
 		// A pool declared as microvm must be one: falling back to runc would
 		// silently downgrade the isolation the sandbox asked for.
@@ -668,8 +680,7 @@ func NewWorker() (_ *Worker, err error) {
 		}
 		log.Info().Str("pool", workerPoolName).Msg("microvm runtime initialized")
 	default:
-		log.Warn().Str("runtime", runtimeType).Msg("unknown runtime type, using runc")
-		defaultRuntime = runcRuntime
+		return nil, runtime.ErrUnsupportedRuntime{Runtime: runtimeType}
 	}
 
 	containerStartLimit := containerStartLimitForPoolRuntime(poolConfig, config.Worker.ContainerRuntime, defaultRuntime.Name(), cpuLimit)
@@ -1082,7 +1093,6 @@ func (s *Worker) runContainerRequestWithRunner(
 		failRequest(err)
 		return
 	}
-
 	s.startContainerStatusHeartbeat(request)
 	heartbeatHandedOff := false
 	defer func() {

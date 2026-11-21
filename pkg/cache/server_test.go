@@ -82,26 +82,15 @@ func TestNewServerStartsDiskMonitor(t *testing.T) {
 	require.True(t, server.cas.diskMonitorStarted.Load())
 }
 
-func TestStoreContentFromSourceWithExpectedHashIsIdempotent(t *testing.T) {
+func TestCacheSourceRPCsAreDisabled(t *testing.T) {
 	ctx := context.Background()
-	store := newTestStore(t, 4)
-	content := []byte("already cached content")
-	sum := sha256.Sum256(content)
-	hash := hex.EncodeToString(sum[:])
-	storedHash, _, err := store.AddReader(ctx, bytes.NewReader(content))
-	require.NoError(t, err)
-	require.Equal(t, hash, storedHash)
+	server := &Server{}
+	req := &proto.CacheStoreContentFromSourceRequest{Source: &proto.CacheSource{Path: "/source"}}
 
-	server := &Server{cas: store}
-	resp, err := server.storeContentFromSource(ctx, &proto.CacheStoreContentFromSourceRequest{Source: &proto.CacheSource{
-		Path:         "missing/source",
-		BucketName:   "bucket",
-		ExpectedHash: hash,
-	}})
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-	require.True(t, resp.Ok)
-	require.Equal(t, hash, resp.Hash)
+	_, err := server.StoreContentFromSource(ctx, req)
+	require.Equal(t, codes.Unimplemented, status.Code(err))
+	_, err = server.StoreContentFromSourceWithLock(ctx, req)
+	require.Equal(t, codes.Unimplemented, status.Code(err))
 }
 
 func TestStoreReaderValidatesExpectedHashInMemoryFallback(t *testing.T) {

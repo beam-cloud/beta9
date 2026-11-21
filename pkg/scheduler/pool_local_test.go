@@ -59,22 +59,52 @@ func TestLocalWorkerPrometheusConfigurationSupportsHostNetworkBinPacking(t *test
 }
 
 func TestLocalWorkerConfigUsesGatewayServiceHostname(t *testing.T) {
-	controller := &LocalKubernetesWorkerPoolController{config: types.AppConfig{
-		GatewayService: types.GatewayServiceConfig{Host: "beta9-gateway"},
-		Worker:         types.WorkerConfig{UseGatewayServiceHostname: true},
-	}}
-	controller.config.GatewayService.GRPC = types.GRPCConfig{ExternalHost: "0.tcp.ngrok.io", ExternalPort: 12345, TLS: true, Port: 1993}
-	controller.config.GatewayService.HTTP = types.HTTPConfig{ExternalHost: "public.example.com", ExternalPort: 443, TLS: true, Port: 1994}
-
-	job, _ := controller.createWorkerJob("worker-1", 0, 0, "", 0, "token")
-	config := workerConfigFromEnvironment(t, job.Spec.Template.Spec.Containers[0].Env)
-	grpc := config.GatewayService.GRPC
-	if grpc.ExternalHost != "beta9-gateway" || grpc.ExternalPort != 1993 || grpc.TLS {
-		t.Fatalf("worker gRPC config = %+v", grpc)
-	}
-	http := config.GatewayService.HTTP
-	if http.ExternalHost != "beta9-gateway" || http.ExternalPort != 1994 || http.TLS {
-		t.Fatalf("worker HTTP config = %+v", http)
+	for _, test := range []struct {
+		name                     string
+		useGatewayService        bool
+		grpcHost, httpHost       string
+		grpcPort, httpPort       int
+		grpcEnvPort, httpEnvPort string
+		tls                      bool
+	}{
+		{"service", true, "beta9-gateway", "beta9-gateway", 1993, 1994, "1993", "1994", false},
+		{"external", false, "0.tcp.ngrok.io", "public.example.com", 12345, 4443, "443", "443", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			controller := &LocalKubernetesWorkerPoolController{config: types.AppConfig{
+				GatewayService: types.GatewayServiceConfig{
+					Host: "beta9-gateway",
+					GRPC: types.GRPCConfig{ExternalHost: "0.tcp.ngrok.io", ExternalPort: 12345, TLS: true, Port: 1993},
+					HTTP: types.HTTPConfig{ExternalHost: "public.example.com", ExternalPort: 4443, TLS: true, Port: 1994},
+				},
+				Worker: types.WorkerConfig{UseGatewayServiceHostname: test.useGatewayService},
+			}}
+			job, _ := controller.createWorkerJob("worker-1", 0, 0, "", 0, "token")
+			env := job.Spec.Template.Spec.Containers[0].Env
+			config := workerConfigFromEnvironment(t, env)
+			grpc := config.GatewayService.GRPC
+			if grpc.ExternalHost != test.grpcHost || grpc.ExternalPort != test.grpcPort || grpc.TLS != test.tls {
+				t.Fatalf("worker gRPC config = %+v", grpc)
+			}
+			http := config.GatewayService.HTTP
+			if http.ExternalHost != test.httpHost || http.ExternalPort != test.httpPort || http.TLS != test.tls {
+				t.Fatalf("worker HTTP config = %+v", http)
+			}
+			values := make(map[string]string, len(env))
+			for _, variable := range env {
+				values[variable.Name] = variable.Value
+			}
+			for name, want := range map[string]string{
+				types.ContainerGatewayGRPCHostEnv: test.grpcHost,
+				types.ContainerGatewayGRPCPortEnv: test.grpcEnvPort,
+				types.ContainerGatewayHTTPHostEnv: test.httpHost,
+				types.ContainerGatewayHTTPPortEnv: test.httpEnvPort,
+			} {
+				if got := values[name]; got != want {
+					t.Errorf("%s = %q, want %q", name, got, want)
+				}
+			}
+		})
 	}
 }
 
@@ -94,42 +124,219 @@ func TestLocalWorkerJobOmitsControlPlaneCredentials(t *testing.T) {
 	controller.config.ManagedCompute.Billing.PoolRoutes = []types.ManagedComputeBillingPoolRouteConfig{{AuthToken: "billing-route-token"}}
 	controller.config.ImageService.BuildRegistryCredentials.Credentials = map[string]string{"AWS_SECRET_ACCESS_KEY": "build-registry-secret"}
 	controller.config.ImageService.Registries.Docker.Password = "docker-password"
-	controller.config.ImageService.Registries.S3.AccessKey = "image-bucket-access-key"
-	controller.config.ImageService.Registries.S3.SecretKey = "image-bucket-secret"
+	controller.config.ImageService.Runner.BaseImageRegistry = "base-registry.example"
+	controller.config.ImageService.Runner.PythonStandalone.InstallScriptTemplate = "gateway-install-template"
 	controller.config.Cache.Server.Metadata.RedisPasswd = "cache-redis-password"
 	controller.config.Cache.Server.Metadata.ValkeyConfig.Password = "valkey-password"
 	controller.config.Cache.Coordinator.Token = "coordinator-token"
 	controller.config.Cache.Client.Token = "cache-client-token"
 	controller.config.Monitoring.Prometheus.AgentPassword = "prometheus-agent-password"
+	controller.config.Monitoring.VictoriaMetrics.WritePassword = "metrics-write-password"
+	controller.config.Monitoring.VictoriaMetrics.AuthToken = "metrics-push-token"
+	controller.config.Storage.WorkspaceStorage.Geese.AccessKey = "geese-access-key"
+	controller.config.Storage.WorkspaceStorage.Geese.SecretKey = "geese-secret-key"
+	controller.config.Abstractions.VM.GitHubRunners = types.GitHubRunnerConfig{
+		PrivateKey:    "app-private-key",
+		ClientSecret:  "app-client-secret",
+		WebhookSecret: "app-webhook-secret",
+	}
+	controller.config.Worker.Pools = map[string]types.WorkerPoolConfig{
+		"other-pool": {
+			ContainerRuntime: "gvisor",
+			JobSpec: types.WorkerPoolJobSpecConfig{
+				Env: []corev1.EnvVar{{Name: "OTHER_POOL_TOKEN", Value: "other-pool-token"}},
+			},
+		},
+	}
+	controller.workerPoolConfig.JobSpec.Env = []corev1.EnvVar{{Name: "LOCAL_POOL_SETTING", Value: "local-pool-setting"}}
 
 	job, _ := controller.createWorkerJob("worker-1", 0, 0, "", 0, "token")
 	pod := job.Spec.Template.Spec
 	if pod.AutomountServiceAccountToken == nil || *pod.AutomountServiceAccountToken {
 		t.Fatal("worker pod mounts a service account token")
 	}
-	var configJSON string
+	var configJSON, poolSetting string
 	for _, variable := range pod.Containers[0].Env {
-		if variable.Name == "CONFIG_JSON" {
+		switch variable.Name {
+		case "CONFIG_JSON":
 			configJSON = variable.Value
+		case "LOCAL_POOL_SETTING":
+			poolSetting = variable.Value
 		}
 	}
 	for _, secret := range []string{
 		"postgres-password", "sk_encryption-key", "redis-password", "storage-access-key", "storage-secret-key",
 		"hetzner-token", "tailscale-key", "tailscale-agent-key", "credit-gate-token", "build-registry-secret",
 		"docker-password", "cache-redis-password", "valkey-password", "coordinator-token", "prometheus-agent-password",
-		"billing-token",
+		"billing-token", "app-private-key", "app-client-secret", "app-webhook-secret",
+		"metrics-write-password", "geese-access-key", "geese-secret-key", "other-pool-token", "gateway-install-template",
 	} {
 		if strings.Contains(configJSON, secret) {
 			t.Errorf("worker config contains %q", secret)
 		}
 	}
-	for _, credential := range []string{"s2-key", "image-bucket-access-key", "image-bucket-secret", "cache-client-token", "billing-route-token"} {
+	for _, credential := range []string{"s2-key", "cache-client-token", "billing-route-token", "metrics-push-token"} {
 		if !strings.Contains(configJSON, credential) {
 			t.Errorf("worker config lacks %q", credential)
 		}
 	}
 	if controller.config.Database.Postgres.Password != "postgres-password" {
 		t.Fatal("worker config changed the gateway config")
+	}
+	if poolSetting != "local-pool-setting" || len(controller.config.Worker.Pools["other-pool"].JobSpec.Env) != 1 {
+		t.Fatal("worker config changed Job environment settings")
+	}
+	config := workerConfigFromEnvironment(t, pod.Containers[0].Env)
+	if config.Worker.Pools["other-pool"].ContainerRuntime != "gvisor" {
+		t.Fatal("worker config lost named pool runtime settings")
+	}
+	if config.ImageService.Runner.BaseImageRegistry != "base-registry.example" {
+		t.Fatal("worker config lost the runner base registry")
+	}
+}
+
+func TestLocalWorkerJobArchiveCredentialsFollowPoolMode(t *testing.T) {
+	archive := types.S3ImageRegistryConfig{
+		BucketName:     "images",
+		Region:         "us-east-1",
+		Endpoint:       "https://archive.example",
+		ForcePathStyle: true,
+		AccessKey:      "image-bucket-access-key",
+		SecretKey:      "image-bucket-secret",
+	}
+	for _, test := range []struct {
+		name string
+		mode types.PoolMode
+	}{
+		{"shared worker", types.PoolModeLocal},
+		{"default worker", ""},
+		{"private legacy worker", types.PoolModePrivate},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			controller := &LocalKubernetesWorkerPoolController{
+				config: types.AppConfig{ImageService: types.ImageServiceConfig{
+					RegistryStore: "s3", Registries: types.ImageRegistriesConfig{S3: archive},
+				}},
+				workerPoolConfig: types.WorkerPoolConfig{Mode: test.mode},
+			}
+			job, _ := controller.createWorkerJob("worker-1", 0, 0, "", 0, "token")
+			config := workerConfigFromEnvironment(t, job.Spec.Template.Spec.Containers[0].Env)
+			want := archive
+			if test.mode != types.PoolModePrivate {
+				want.AccessKey, want.SecretKey = "", ""
+			}
+			if config.ImageService.RegistryStore != "s3" || config.ImageService.Registries.S3 != want {
+				t.Fatal("worker Job has incorrect archive origin settings")
+			}
+			if controller.config.ImageService.Registries.S3 != archive {
+				t.Fatal("worker Job changed the gateway archive configuration")
+			}
+		})
+	}
+}
+
+func TestLocalWorkerJobUsesSeparateServiceAccount(t *testing.T) {
+	for _, test := range []struct {
+		name, gatewayAccount, workerNamespace, workerAccount string
+		wantCollision                                        bool
+	}{
+		{"same identity", "gateway", "beta9", "gateway", true},
+		{"implicit default worker account", "default", "beta9", "", true},
+		{"same name in different namespace", "gateway", "worker", "gateway", false},
+		{"different account", "gateway", "beta9", "worker", false},
+		{"external gateway without identity metadata", "", "beta9", "default", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv(gatewayNamespaceEnv, "beta9")
+			t.Setenv(gatewayServiceAccountEnv, test.gatewayAccount)
+			controller := &LocalKubernetesWorkerPoolController{
+				config: types.AppConfig{Worker: types.WorkerConfig{
+					Namespace: test.workerNamespace, ServiceAccountName: test.workerAccount,
+				}},
+			}
+			if got := controller.workerUsesGatewayServiceAccount(); got != test.wantCollision {
+				t.Fatalf("service account collision = %v, want %v", got, test.wantCollision)
+			}
+			if test.wantCollision {
+				if _, err := controller.addWorkerWithId("worker-1", 0, 0, "", 0); err == nil || !strings.Contains(err.Error(), "different service account") {
+					t.Fatalf("expected a service account error before token issuance, got %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestLocalWorkerJobRejectsReservedConfigBeforeIssuingToken(t *testing.T) {
+	for _, name := range []string{
+		types.WorkerConfigPathEnv, types.WorkerConfigJSONEnv, types.WorkerMinimalConfigEnv, types.WorkerTokenEnv, types.CacheServerOnlyEnv,
+	} {
+		t.Run(name, func(t *testing.T) {
+			controller := &LocalKubernetesWorkerPoolController{workerPoolConfig: types.WorkerPoolConfig{
+				JobSpec: types.WorkerPoolJobSpecConfig{Env: []corev1.EnvVar{{Name: name, Value: "override"}}},
+			}}
+			// A nil repository ensures validation occurs before any database or
+			// Kubernetes operation.
+			if _, err := controller.addWorkerWithId("worker-1", 0, 0, "", 0); err == nil || !strings.Contains(err.Error(), "jobSpec.env") {
+				t.Fatalf("expected a reserved environment error, got %v", err)
+			}
+		})
+	}
+	for _, test := range []struct {
+		name, spec, field string
+	}{
+		{"gateway env reference", `{"env":[{"name":"OTHER","valueFrom":{"secretKeyRef":{"name":"beta9-config","key":"config.yaml"}}}]}`, "jobSpec.env"},
+		{"gateway volume", `{"volumes":[{"name":"config","secret":{"secret_name":"beta9-config-helm"}}]}`, "jobSpec.volumes"},
+		{"cache config volume", `{"volumes":[{"name":"config","secret":{"secret_name":"beta9-cache-server-config"}}]}`, "jobSpec.volumes"},
+		{"shared config directory", `{"volume_mounts":[{"name":"config","mountPath":"/etc/beta9.d/"}]}`, "jobSpec.volumeMounts"},
+		{"shared config file", `{"volume_mounts":[{"name":"config","mountPath":"/etc/beta9.d/./config.yaml"}]}`, "jobSpec.volumeMounts"},
+		{"shared config ancestor", `{"volume_mounts":[{"name":"config","mountPath":"/etc"}]}`, "jobSpec.volumeMounts"},
+		{"root mount", `{"volume_mounts":[{"name":"config","mountPath":"/"}]}`, "jobSpec.volumeMounts"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			controller := &LocalKubernetesWorkerPoolController{}
+			if err := json.Unmarshal([]byte(test.spec), &controller.workerPoolConfig.JobSpec); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := controller.addWorkerWithId("worker-1", 0, 0, "", 0); err == nil || !strings.Contains(err.Error(), test.field) {
+				t.Fatalf("expected a %s error, got %v", test.field, err)
+			}
+		})
+	}
+}
+
+func TestLocalWorkerJobKeepsWorkerOnlySecretReferences(t *testing.T) {
+	const jobSpec = `{
+		"env":[{"name":"WORKER_SETTING","valueFrom":{"secretKeyRef":{"name":"worker-credentials","key":"value"}}}],
+		"volumes":[{"name":"credentials","secret":{"secret_name":"worker-credentials"}}],
+		"volume_mounts":[{"name":"credentials","mountPath":"/etc/beta9.d-worker-credentials","readOnly":true}]
+	}`
+	controller := &LocalKubernetesWorkerPoolController{}
+	if err := json.Unmarshal([]byte(jobSpec), &controller.workerPoolConfig.JobSpec); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateLocalWorkerJobSpec(controller.workerPoolConfig.JobSpec); err != nil {
+		t.Fatal(err)
+	}
+	job, _ := controller.createWorkerJob("worker-1", 0, 0, "", 0, "token")
+	pod := job.Spec.Template.Spec
+	env, volume, mount := false, false, false
+	for _, variable := range pod.Containers[0].Env {
+		if variable.Name == "WORKER_SETTING" && variable.ValueFrom != nil && variable.ValueFrom.SecretKeyRef != nil {
+			env = variable.ValueFrom.SecretKeyRef.Name == "worker-credentials"
+		}
+	}
+	for _, item := range pod.Volumes {
+		if item.Name == "credentials" && item.Secret != nil {
+			volume = item.Secret.SecretName == "worker-credentials"
+		}
+	}
+	for _, item := range pod.Containers[0].VolumeMounts {
+		if item.Name == "credentials" {
+			mount = item.MountPath == "/etc/beta9.d-worker-credentials" && item.ReadOnly
+		}
+	}
+	if !env || !volume || !mount {
+		t.Fatal("worker-only Secret references did not reach the Job")
 	}
 }
 

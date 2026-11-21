@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -29,6 +30,7 @@ const (
 	writeBufferSizeBytes           int   = 1024 * 1024
 	getContentStreamChunkSize      int64 = 4 * 1024 * 1024 // 4MB
 	cacheServerGracefulStopTimeout       = 30 * time.Second
+	storeExpectedHashHeader              = "x-beta9-cache-content-sha256"
 )
 
 type ServerOpts struct {
@@ -58,7 +60,6 @@ type Server struct {
 	rawReadConns    map[net.Conn]struct{}
 	rawReadClosing  bool
 	rawReadHandlers sync.WaitGroup
-	s3ClientCache   sync.Map
 	draining        atomic.Bool
 	closeOnce       sync.Once
 }
@@ -160,7 +161,6 @@ func NewServerWithOptions(ctx context.Context, cfg Config, locality string, opti
 		publicIpAddr:  publicIpAddr,
 		rawReadLimits: newRawReadAdmission(effectiveServerConfig.ReadTransport),
 		rawReadConns:  make(map[net.Conn]struct{}),
-		s3ClientCache: sync.Map{},
 	}
 
 	return cs, nil
@@ -904,11 +904,18 @@ func (cs *Server) StoreContent(stream proto.Cache_StoreContentServer) error {
 		return err
 	}
 	ctx := stream.Context()
+	var expectedHash string
+	if values := metadata.ValueFromIncomingContext(ctx, storeExpectedHashHeader); len(values) != 0 {
+		if len(values) != 1 || !isContentHash(values[0]) {
+			return status.Error(codes.InvalidArgument, "invalid expected content hash")
+		}
+		expectedHash = values[0]
+	}
 
 	Logger.Debugf("StoreContent[ACK]")
 
 	reader := &storeContentStreamReader{stream: stream}
-	hash, size, err := cs.storeReader(ctx, reader)
+	hash, size, err := cs.StoreReader(ctx, reader, expectedHash)
 	if err != nil {
 		return err
 	}
@@ -986,237 +993,4 @@ func (cs *Server) GetState(ctx context.Context, req *proto.CacheGetStateRequest)
 		PrivateIpAddr:    cs.privateIpAddr,
 		CapacityUsagePct: float32(cs.usagePct()),
 	}, nil
-}
-
-func (cs *Server) openLocalSource(localPath string) (io.ReadCloser, error) {
-	// Check if the file exists
-	if _, err := os.Stat(localPath); os.IsNotExist(err) {
-		Logger.Warnf("StoreFromContent[ERR] - source not found: %v", err)
-		return nil, err
-	}
-
-	// Open the file
-	file, err := os.Open(localPath)
-	if err != nil {
-		Logger.Warnf("StoreFromContent[ERR] - error reading source: %v", err)
-		return nil, err
-	}
-
-	return file, nil
-}
-
-func (cs *Server) s3ClientForSource(source *proto.CacheSource) (*S3Client, error) {
-	key := fmt.Sprintf("%s/%s/%s/%s/%t", source.EndpointUrl, source.Region, source.BucketName, source.AccessKey, source.ForcePathStyle)
-
-	var s3Client *S3Client
-	var err error
-
-	if cachedS3Client, ok := cs.s3ClientCache.Load(key); ok {
-		s3Client = cachedS3Client.(*S3Client)
-	} else {
-		s3Client, err = NewS3Client(cs.ctx, S3SourceConfig{
-			BucketName:     source.BucketName,
-			Region:         source.Region,
-			EndpointURL:    source.EndpointUrl,
-			AccessKey:      source.AccessKey,
-			SecretKey:      source.SecretKey,
-			ForcePathStyle: source.ForcePathStyle,
-		}, cs.serverConfig)
-		if err != nil {
-			return nil, err
-		}
-
-		cs.s3ClientCache.Store(key, s3Client)
-	}
-
-	return s3Client, nil
-}
-
-func (cs *Server) StoreContentFromSource(ctx context.Context, req *proto.CacheStoreContentFromSourceRequest) (*proto.CacheStoreContentFromSourceResponse, error) {
-	if err := cs.rejectIfDraining(); err != nil {
-		return nil, err
-	}
-	return cs.storeContentFromSource(ctx, req)
-}
-
-func (cs *Server) storeContentFromSource(ctx context.Context, req *proto.CacheStoreContentFromSourceRequest) (*proto.CacheStoreContentFromSourceResponse, error) {
-	if req == nil || req.Source == nil {
-		return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: "source is required"}, nil
-	}
-
-	localPath := filepath.Join("/", req.Source.Path)
-	cachePath := localPath
-	if req.Source.CachePath != "" {
-		cachePath = filepath.Join("/", filepath.Clean(req.Source.CachePath))
-	}
-	Logger.Debugf("StoreFromContent[ACK] - [source=%s cache_path=%s]", req.Source.Path, cachePath)
-	if req.Source.CachePath == "" && isContentHash(req.Source.ExpectedHash) && cs.cas.Exists(req.Source.ExpectedHash) {
-		Logger.Debugf("StoreFromContent[EXISTS] - [%s]", req.Source.ExpectedHash)
-		return &proto.CacheStoreContentFromSourceResponse{Ok: true, Hash: req.Source.ExpectedHash}, nil
-	}
-
-	var (
-		hash string
-		size uint64
-		err  error
-	)
-	if req.Source.BucketName == "" {
-		var reader io.ReadCloser
-		reader, err = cs.openLocalSource(localPath)
-		if err != nil {
-			return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, err
-		}
-		defer reader.Close()
-		hash, size, err = cs.storeReaderWithExpectedHash(ctx, reader, req.Source.ExpectedHash)
-	} else {
-		s3Client, err := cs.s3ClientForSource(req.Source)
-		if err != nil {
-			Logger.Errorf("StoreFromContent[ERR] - error caching source: %v", err)
-			return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, err
-		}
-
-		if req.Source.ExpectedHash != "" {
-			hash, size, err = cs.storeS3SourceWithExpectedHash(ctx, s3Client, req.Source.Path, req.Source.ExpectedHash)
-		} else {
-			var reader io.ReadCloser
-			reader, err = s3Client.Open(ctx, req.Source.Path)
-			if err != nil {
-				Logger.Errorf("StoreFromContent[ERR] - error opening source: %v", err)
-				return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, err
-			}
-			defer reader.Close()
-			hash, size, err = cs.storeReaderWithExpectedHash(ctx, reader, req.Source.ExpectedHash)
-		}
-	}
-
-	if err != nil {
-		Logger.Warnf("StoreFromContent[ERR] - error storing data in cache: %v", err)
-		return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-
-	// Store references in cachefs only when the caller is publishing a path into the
-	// cachefs namespace. Plain S3 source writes are content-addressed only.
-	if cs.metadataStore != nil {
-		var err error
-		if req.Source.BucketName == "" {
-			if req.Source.CachePath == "" {
-				err = cs.StoreContentInCacheFS(ctx, localPath, hash, size)
-			} else {
-				fileInfo, statErr := os.Stat(localPath)
-				if statErr != nil {
-					err = statErr
-				} else {
-					err = cs.storeContentInCacheFS(ctx, cachePath, hash, size, cacheFSFileMetadataFromInfo(fileInfo, hash, size))
-				}
-			}
-		} else if req.Source.CachePath != "" {
-			err = cs.StoreSyntheticContentInCacheFS(ctx, cachePath, hash, size)
-		}
-		if err != nil {
-			Logger.Warnf("Store[ERR] - [%s] unable to store content in cachefs<path=%s> - %v", hash, cachePath, err)
-			return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, nil
-		}
-	}
-
-	Logger.Debugf("StoreFromContent[OK] - [%s]", hash)
-
-	return &proto.CacheStoreContentFromSourceResponse{Ok: true, Hash: hash}, nil
-}
-
-func (cs *Server) storeS3SourceWithExpectedHash(ctx context.Context, s3Client *S3Client, path string, expectedHash string) (string, uint64, error) {
-	ok, head, err := s3Client.Head(ctx, path)
-	if err != nil {
-		return "", 0, err
-	}
-	if !ok || head == nil || head.ContentLength == nil {
-		return "", 0, fmt.Errorf("unable to resolve source size for %s", path)
-	}
-	size := *head.ContentLength
-	if size < 0 {
-		return "", 0, fmt.Errorf("invalid source size for %s: %d", path, size)
-	}
-
-	concurrency := int(s3Client.DownloadConcurrency)
-	hash, storedSize, err := cs.cas.AddPageSourceWithExpectedHash(ctx, expectedHash, size, concurrency, func(ctx context.Context, _ int64, start int64, dst []byte) (int, error) {
-		return s3Client.ReadRangeInto(ctx, path, start, dst)
-	})
-	return hash, uint64(storedSize), err
-}
-
-func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto.CacheStoreContentFromSourceRequest) (*proto.CacheStoreContentFromSourceWithLockResponse, error) {
-	if err := cs.rejectIfDraining(); err != nil {
-		return nil, err
-	}
-	if req == nil || req.Source == nil {
-		return &proto.CacheStoreContentFromSourceWithLockResponse{Ok: false, ErrorMsg: "source is required"}, nil
-	}
-
-	started := time.Now()
-	sourcePath := storeContentSourceLockKey(req.Source)
-	logSourcePath := req.Source.Path
-	if req.Source.CachePath != "" {
-		logSourcePath = filepath.Join("/", filepath.Clean(req.Source.CachePath))
-	}
-	Logger.Debugf("StoreContentFromSourceWithLock[ACK] - [source=%s bucket=%s cache_path=%s]", req.Source.Path, req.Source.BucketName, req.Source.CachePath)
-	if err := cs.metadataStore.SetStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
-		Logger.Debugf("StoreContentFromSourceWithLock[LOCK_MISS] - [source=%s lock=%s elapsed=%s err=%v]", logSourcePath, sourcePath, time.Since(started).Truncate(time.Millisecond), err)
-		return &proto.CacheStoreContentFromSourceWithLockResponse{Ok: false, FailedToAcquireLock: true, ErrorMsg: err.Error()}, nil
-	}
-	lockReleased := false
-	defer func() {
-		if lockReleased {
-			return
-		}
-		_ = removeStoreFromContentLock(ctx, cs.metadataStore, cs.locality, sourcePath, "StoreContentFromSourceWithLock")
-	}()
-
-	storeContext, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	go func() {
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-storeContext.Done():
-				return
-			case <-ticker.C:
-				Logger.Debugf("StoreContentFromSourceWithLock[REFRESH] - [%s]", sourcePath)
-				refreshStoreFromContentLock(storeContext, cs.metadataStore, cs.locality, sourcePath, "StoreContentFromSourceWithLock")
-			}
-		}
-	}()
-
-	storeContentFromSourceResp, err := cs.storeContentFromSource(storeContext, req)
-	if err != nil {
-		Logger.Warnf("StoreContentFromSourceWithLock[ERR] - [source=%s elapsed=%s err=%v]", sourcePath, time.Since(started).Truncate(time.Millisecond), err)
-		return &proto.CacheStoreContentFromSourceWithLockResponse{Hash: "", Ok: false, ErrorMsg: err.Error()}, nil
-	}
-	if storeContentFromSourceResp == nil || !storeContentFromSourceResp.Ok {
-		errorMsg := ""
-		if storeContentFromSourceResp != nil {
-			errorMsg = storeContentFromSourceResp.ErrorMsg
-		}
-		Logger.Warnf("StoreContentFromSourceWithLock[ERR] - [source=%s lock=%s elapsed=%s err=%s]", logSourcePath, sourcePath, time.Since(started).Truncate(time.Millisecond), errorMsg)
-		return &proto.CacheStoreContentFromSourceWithLockResponse{Hash: "", Ok: false, ErrorMsg: errorMsg}, nil
-	}
-
-	_ = removeStoreFromContentLock(ctx, cs.metadataStore, cs.locality, sourcePath, "StoreContentFromSourceWithLock")
-	lockReleased = true
-
-	Logger.Debugf("StoreContentFromSourceWithLock[OK] - [source=%s hash=%s elapsed=%s]", sourcePath, storeContentFromSourceResp.Hash, time.Since(started).Truncate(time.Millisecond))
-	return &proto.CacheStoreContentFromSourceWithLockResponse{Hash: storeContentFromSourceResp.Hash, Ok: true}, nil
-}
-
-func storeContentSourceLockKey(source *proto.CacheSource) string {
-	if source == nil {
-		return ""
-	}
-	if isContentHash(source.ExpectedHash) {
-		return storeContentHashLockKey(source.ExpectedHash)
-	}
-	if source.CachePath != "" {
-		return filepath.Join("/", filepath.Clean(source.CachePath))
-	}
-	return source.Path
 }

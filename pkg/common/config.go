@@ -55,8 +55,7 @@ type UnknownConfigKey struct {
 // It then loads the configuration from the /etc/beta9.d/ directory and
 // the user-specified configuration file from CONFIG_PATH. If the
 // CONFIG_JSON environment variable is set, it loads the configuration
-// from the JSON string. If debug mode is enabled, it prints the current
-// configuration.
+// from the JSON string.
 func NewConfigManager[T any]() (*ConfigManager[T], error) {
 	// Initialize a ConfigManager[T] with the specified 'T' type.
 	cm := &ConfigManager[T]{
@@ -118,11 +117,6 @@ func NewConfigManager[T any]() (*ConfigManager[T], error) {
 			log.Error().Err(err).Msg("failed to load config from CONFIG_JSON")
 			cm.tag = "key"
 		}
-	}
-
-	// If debug mode is enabled, print the current configuration.
-	if cm.kf.Bool("debugMode") {
-		log.Info().Str("config", cm.Print()).Msg("debug mode enabled. current configuration")
 	}
 
 	return cm, nil

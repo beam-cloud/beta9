@@ -1,0 +1,37 @@
+{{- if .Values.serviceAccount.create -}}
+{{- $workerConfig := (.Values.config | default dict).worker | default dict -}}
+{{- $namespace := .Values.workerRBAC.namespace | default $workerConfig.namespace | default "beta9" -}}
+{{- $serviceAccountName := include "bjw-s.common.lib.pod.field.serviceAccountName" (dict "ctx" (dict "rootContext" .)) | trim -}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $serviceAccountName }}-role
+  namespace: {{ $namespace | quote }}
+  labels:
+    {{- include "bjw-s.common.lib.metadata.allLabels" . | nindent 4 }}
+rules:
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "create", "delete"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $serviceAccountName }}-role-binding
+  namespace: {{ $namespace | quote }}
+  labels:
+    {{- include "bjw-s.common.lib.metadata.allLabels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $serviceAccountName }}-role
+subjects:
+- kind: ServiceAccount
+  name: {{ $serviceAccountName }}
+  namespace: {{ .Release.Namespace }}
+---
+{{- end -}}

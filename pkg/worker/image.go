@@ -1829,24 +1829,31 @@ var imageArchiveHTTPClient = &http.Client{
 	},
 }
 
+// openOriginObject expects a whole object. Keep signed URLs out of errors.
+func openOriginObject(ctx context.Context, url string) (io.ReadCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, errors.New("invalid origin URL")
+	}
+	resp, err := imageArchiveHTTPClient.Do(req)
+	if err != nil {
+		return nil, errors.New("origin request failed")
+	}
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("origin returned HTTP %d", resp.StatusCode)
+	}
+	return resp.Body, nil
+}
+
 func downloadImageArchiveURL(ctx context.Context, url, path string) error {
 	ctx, cancel := context.WithTimeout(ctx, imageArchiveDownloadTimeout)
 	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	body, err := openOriginObject(ctx, url)
 	if err != nil {
 		return err
 	}
-
-	resp, err := imageArchiveHTTPClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("image archive download failed: %s", resp.Status)
-	}
+	defer body.Close()
 
 	file, err := os.Create(path)
 	if err != nil {
@@ -1854,7 +1861,7 @@ func downloadImageArchiveURL(ctx context.Context, url, path string) error {
 	}
 	defer file.Close()
 
-	_, err = io.Copy(file, resp.Body)
+	_, err = io.Copy(file, body)
 	return err
 }
 

@@ -146,8 +146,9 @@ type ServerConfig struct {
 	ReadTransport                ServerReadTransportConfig `key:"readTransport" json:"read_transport"`
 	Metadata                     MetadataConfig            `key:"metadata" json:"metadata"`
 	Sources                      []SourceConfig            `key:"sources" json:"sources"`
-	S3DownloadConcurrency        int64                     `key:"s3DownloadConcurrency" json:"s3_download_concurrency"`
-	S3DownloadChunkSize          int64                     `key:"s3DownloadChunkSize" json:"s3_download_chunk_size"`
+	// Deprecated: cache fills stream objects from the caller. Retained for existing configurations.
+	S3DownloadConcurrency int64 `key:"s3DownloadConcurrency" json:"s3_download_concurrency,omitempty"`
+	S3DownloadChunkSize   int64 `key:"s3DownloadChunkSize" json:"s3_download_chunk_size,omitempty"`
 }
 
 type ServerReadTransportConfig struct {

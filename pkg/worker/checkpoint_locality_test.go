@@ -210,17 +210,9 @@ func checkpointBucket(t *testing.T, worker *Worker, checkpoint testCheckpoint) *
 		http.ServeContent(w, r, "", time.Unix(1700000000, 0), bytes.NewReader(object))
 	}))
 	t.Cleanup(bucket.Close)
-	worker.cacheManager.originCredsCache = make(map[string]*originCredentials)
 	worker.cacheManager.workerRepo = &fakeImageCredentialWorkerRepo{resp: &pb.GetCacheOriginCredentialsResponse{
-		Ok: true,
-		WorkspaceStorage: &pb.CacheWorkspaceStorageCredentials{
-			EndpointUrl:    bucket.URL,
-			Region:         "us-east-1",
-			BucketName:     "bucket",
-			AccessKey:      "test",
-			SecretKey:      "test",
-			ForcePathStyle: true,
-		},
+		Ok:                 true,
+		WorkspaceObjectUrl: bucket.URL + "/bucket/" + checkpoint.originKey(),
 	}}
 	return reads
 }

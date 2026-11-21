@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"os"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,6 +29,9 @@ import (
 )
 
 const (
+	gatewayServiceAccountEnv = "BETA9_GATEWAY_SERVICE_ACCOUNT"
+	gatewayNamespaceEnv      = "BETA9_GATEWAY_NAMESPACE"
+
 	// workerJobCreateTimeout is how long the cluster is given to accept a
 	// worker Job.
 	workerJobCreateTimeout = 30 * time.Second
@@ -137,6 +143,12 @@ func (wpc *LocalKubernetesWorkerPoolController) AddWorker(cpu int64, memory int6
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
+	if wpc.workerUsesGatewayServiceAccount() {
+		return nil, fmt.Errorf("worker pool %s: workers must use a different service account from the gateway", wpc.name)
+	}
+	if err := validateLocalWorkerJobSpec(wpc.workerPoolConfig.JobSpec); err != nil {
+		return nil, fmt.Errorf("worker pool %s: %w", wpc.name, err)
+	}
 	// A worker's token is the admin workspace's. The backend remembers the
 	// workspace, so it is asked each time: the pool's sizer and the requests
 	// that grow the pool add workers at the same time, and would race for a
@@ -179,6 +191,54 @@ func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string,
 	}
 
 	return worker, nil
+}
+
+func (wpc *LocalKubernetesWorkerPoolController) workerUsesGatewayServiceAccount() bool {
+	gatewayNamespace := os.Getenv(gatewayNamespaceEnv)
+	if gatewayNamespace == "" || gatewayNamespace != wpc.config.Worker.Namespace {
+		return false
+	}
+	workerServiceAccount := wpc.config.Worker.ServiceAccountName
+	if workerServiceAccount == "" {
+		workerServiceAccount = "default"
+	}
+	return workerServiceAccount == os.Getenv(gatewayServiceAccountEnv)
+}
+
+func validateLocalWorkerJobSpec(spec types.WorkerPoolJobSpecConfig) error {
+	for _, env := range spec.Env {
+		switch env.Name {
+		case types.WorkerConfigPathEnv, types.WorkerConfigJSONEnv, types.WorkerMinimalConfigEnv, types.WorkerTokenEnv, types.CacheServerOnlyEnv:
+			return fmt.Errorf("jobSpec.env cannot set %s", env.Name)
+		}
+		if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil && localWorkerReservedSecret(env.ValueFrom.SecretKeyRef.Name) {
+			return errors.New("jobSpec.env cannot reference a gateway or cache-server config Secret")
+		}
+	}
+	for _, volume := range spec.Volumes {
+		if localWorkerReservedSecret(volume.Secret.SecretName) {
+			return errors.New("jobSpec.volumes cannot mount a gateway or cache-server config Secret")
+		}
+	}
+	for _, mount := range spec.VolumeMounts {
+		// The shared config loader discovers YAML and JSON files here before
+		// applying the scheduler's worker projection.
+		const configDir = "/etc/beta9.d/"
+		mountDir := strings.TrimSuffix(path.Clean(mount.MountPath), "/") + "/"
+		if strings.HasPrefix(mountDir, configDir) || strings.HasPrefix(configDir, mountDir) {
+			return errors.New("jobSpec.volumeMounts cannot cover /etc/beta9.d")
+		}
+	}
+	return nil
+}
+
+func localWorkerReservedSecret(name string) bool {
+	switch name {
+	case "beta9-config", "beta9-config-helm", "beta9-cache-server-config":
+		return true
+	default:
+		return false
+	}
 }
 
 // revokeWorkerToken ends the token made for a worker that was not added, so
@@ -319,7 +379,66 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) workerPodConfig() types.AppConfig {
-	config := wpc.config
+	source := &wpc.config
+	storage := source.Storage.WorkspaceStorage
+	monitoring := source.Monitoring
+	image := source.ImageService
+	imageArchive := image.Registries.S3
+	if wpc.workerPoolConfig.Mode != types.PoolModePrivate {
+		// Shared workers use their workload identity for direct archive I/O.
+		imageArchive.AccessKey = ""
+		imageArchive.SecretKey = ""
+	}
+	config := types.AppConfig{
+		ClusterName: source.ClusterName,
+		DebugMode:   source.DebugMode,
+		PrettyLogs:  source.PrettyLogs,
+		Database:    types.DatabaseConfig{S2: source.Database.S2},
+		Events:      source.Events,
+		GatewayService: types.GatewayServiceConfig{
+			Host: source.GatewayService.Host,
+			GRPC: source.GatewayService.GRPC,
+			HTTP: source.GatewayService.HTTP,
+		},
+		ImageService: types.ImageServiceConfig{
+			LocalCacheEnabled:     image.LocalCacheEnabled,
+			RegistryStore:         image.RegistryStore,
+			Registries:            types.ImageRegistriesConfig{S3: imageArchive},
+			Runner:                types.RunnerConfig{BaseImageRegistry: image.Runner.BaseImageRegistry},
+			EnableTLS:             image.EnableTLS,
+			ClipVersion:           image.ClipVersion,
+			BuildRegistry:         image.BuildRegistry,
+			BuildRepositoryName:   image.BuildRepositoryName,
+			BuildRegistryInsecure: image.BuildRegistryInsecure,
+			LayeredBuilds:         image.LayeredBuilds,
+			BuildApt:              image.BuildApt,
+			BuildLayerCacheMaxPct: image.BuildLayerCacheMaxPct,
+		},
+		Storage: types.StorageConfig{WorkspaceStorage: types.WorkspaceStorageConfig{
+			BaseMountPath:      storage.BaseMountPath,
+			DefaultStorageMode: storage.DefaultStorageMode,
+			Geese:              storage.Geese,
+		}},
+		Worker: source.Worker,
+		Monitoring: types.MonitoringConfig{
+			MetricsCollector:         monitoring.MetricsCollector,
+			ContainerMetricsInterval: monitoring.ContainerMetricsInterval,
+			Prometheus: types.PrometheusConfig{
+				Port:          monitoring.Prometheus.Port,
+				ScrapeWorkers: monitoring.Prometheus.ScrapeWorkers,
+			},
+			VictoriaMetrics: types.VictoriaMetricsConfig{
+				PushURL:   monitoring.VictoriaMetrics.PushURL,
+				AuthToken: monitoring.VictoriaMetrics.AuthToken,
+				PushSecs:  monitoring.VictoriaMetrics.PushSecs,
+			},
+			OpenMeter:               monitoring.OpenMeter,
+			ContainerCostHookConfig: monitoring.ContainerCostHookConfig,
+		},
+		ManagedCompute: types.ManagedComputeConfig{Billing: source.ManagedCompute.Billing},
+		Abstractions:   types.AbstractionConfig{Pod: source.Abstractions.Pod},
+		Cache:          source.Cache,
+	}
 	if config.Worker.UseGatewayServiceHostname {
 		config.GatewayService.GRPC.ExternalHost = config.GatewayService.Host
 		config.GatewayService.GRPC.ExternalPort = config.GatewayService.GRPC.Port
@@ -333,21 +452,20 @@ func (wpc *LocalKubernetesWorkerPoolController) workerPodConfig() types.AppConfi
 		config.Monitoring.Prometheus.ScrapeWorkers = false
 	}
 
-	// Only the gateway uses these credentials. Workers reach Redis and the
-	// cache metadata through the gateway and get build registry credentials
-	// with each request.
-	config.Database.Postgres = types.PostgresConfig{}
-	config.Database.Redis = types.RedisConfig{}
+	// Workers use gateway-provided cache metadata and per-request registry and
+	// workspace mount credentials.
 	config.Cache.Server.Metadata = cache.MetadataConfig{}
 	config.Cache.Coordinator.Token = ""
-	config.Storage.WorkspaceStorage.DefaultAccessKey = ""
-	config.Storage.WorkspaceStorage.DefaultSecretKey = ""
-	config.ImageService.BuildRegistryCredentials = types.BuildRegistryCredentialsConfig{}
-	config.ImageService.Registries.Docker = types.DockerImageRegistryConfig{}
-	config.GatewayService.CreditGate = types.CreditGateConfig{}
-	config.Providers = types.ProviderConfig{}
-	config.Tailscale = types.TailscaleConfig{}
-	config.Monitoring.Prometheus.AgentPassword = ""
+	config.Storage.WorkspaceStorage.Geese.AccessKey = ""
+	config.Storage.WorkspaceStorage.Geese.SecretKey = ""
+
+	// JobSpec is applied when creating each Job. The worker only needs the
+	// pool's runtime settings, and never needs another pool's Job environment.
+	config.Worker.Pools = maps.Clone(config.Worker.Pools)
+	for name, pool := range config.Worker.Pools {
+		pool.JobSpec = types.WorkerPoolJobSpecConfig{}
+		config.Worker.Pools[name] = pool
+	}
 
 	// Workers report sandbox usage to the billing pool routes, so each route
 	// keeps the token it resolves to. Only the gateway uses the base token.
@@ -530,6 +648,12 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 		locality = wpc.config.Cache.Global.DefaultLocality
 	}
 
+	gateway := workerConfig.GatewayService
+	grpcPort, httpPort := 443, 443
+	if workerConfig.Worker.UseGatewayServiceHostname {
+		grpcPort, httpPort = gateway.GRPC.ExternalPort, gateway.HTTP.ExternalPort
+	}
+
 	envVars := []corev1.EnvVar{
 		{
 			Name:  "WORKER_ID",
@@ -552,7 +676,7 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 			Value: locality,
 		},
 		{
-			Name:  "WORKER_TOKEN",
+			Name:  types.WorkerTokenEnv,
 			Value: token,
 		},
 		{
@@ -615,56 +739,18 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 			Name:  "CACHE_HOST_NETWORK",
 			Value: strconv.FormatBool(wpc.config.Worker.HostNetwork),
 		},
+		{Name: types.ContainerGatewayGRPCHostEnv, Value: gateway.GRPC.ExternalHost},
+		{Name: types.ContainerGatewayGRPCPortEnv, Value: strconv.Itoa(grpcPort)},
+		{Name: types.ContainerGatewayHTTPHostEnv, Value: gateway.HTTP.ExternalHost},
+		{Name: types.ContainerGatewayHTTPPortEnv, Value: strconv.Itoa(httpPort)},
 	}
 
-	if wpc.config.Worker.UseGatewayServiceHostname {
-		envVars = append(envVars, []corev1.EnvVar{
-			{
-				Name:  "BETA9_GATEWAY_HOST",
-				Value: wpc.config.GatewayService.Host,
-			},
-			{
-				Name:  "BETA9_GATEWAY_PORT",
-				Value: fmt.Sprint(wpc.config.GatewayService.GRPC.Port),
-			},
-			{
-				Name:  "BETA9_GATEWAY_HOST_HTTP",
-				Value: wpc.config.GatewayService.Host,
-			},
-			{
-				Name:  "BETA9_GATEWAY_PORT_HTTP",
-				Value: fmt.Sprint(wpc.config.GatewayService.HTTP.Port),
-			},
-		}...)
-	} else {
-		envVars = append(envVars, []corev1.EnvVar{
-			{
-				Name:  "BETA9_GATEWAY_HOST",
-				Value: wpc.config.GatewayService.GRPC.ExternalHost,
-			},
-			{
-				Name:  "BETA9_GATEWAY_PORT",
-				Value: "443",
-			},
-			{
-				Name:  "BETA9_GATEWAY_HOST_HTTP",
-				Value: wpc.config.GatewayService.HTTP.ExternalHost,
-			},
-			{
-				Name:  "BETA9_GATEWAY_PORT_HTTP",
-				Value: "443",
-			},
-		}...)
-	}
-
-	if len(wpc.workerPoolConfig.JobSpec.Env) > 0 {
-		envVars = append(envVars, wpc.workerPoolConfig.JobSpec.Env...)
-	}
+	envVars = append(envVars, wpc.workerPoolConfig.JobSpec.Env...)
 
 	configJSON, err := json.MarshalIndent(workerConfig, "", "  ")
 	if err == nil {
 		envVars = append(envVars, corev1.EnvVar{
-			Name:  "CONFIG_JSON",
+			Name:  types.WorkerConfigJSONEnv,
 			Value: string(configJSON),
 		})
 	}
