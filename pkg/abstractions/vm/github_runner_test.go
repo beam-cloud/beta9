@@ -3,6 +3,7 @@ package vm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -140,6 +141,72 @@ func TestOrganizationRunnerValidatesAllGroupRepositoryPagesEveryTime(t *testing.
 	require.Equal(t, 2, memberships)
 }
 
+func TestOrganizationRunnerGroupCreationFailureStopsOnlyPermanentRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		status     int
+		retryAfter string
+		message    string
+		terminal   bool
+		limited    bool
+	}{
+		{name: "organization policy", status: 403, message: "Organization runner policy forbids this", terminal: true},
+		{name: "unsupported group configuration", status: 422, message: "Validation Failed", terminal: true},
+		{name: "secondary rate limit", status: 403, retryAfter: "60", message: "You have exceeded a secondary rate limit", limited: true},
+		{name: "too many requests", status: 429, message: "Too many requests", limited: true},
+		{name: "server failure", status: 500, message: "Server Error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, store, _, runtime := runnerFixture(t)
+			r.config.OrganizationRunners = true
+			lists := 0
+			r.github = organizationGitHub(t, func(w http.ResponseWriter, req *http.Request) {
+				switch req.Method + " " + req.URL.Path {
+				case "GET /repos/acme/repo":
+					fmt.Fprint(w, `{"id":123,"private":true}`)
+				case "GET /orgs/acme/actions/runner-groups":
+					lists++
+					fmt.Fprint(w, `{"runner_groups":[]}`)
+				case "POST /orgs/acme/actions/runner-groups":
+					if tc.retryAfter != "" {
+						w.Header().Set("Retry-After", tc.retryAfter)
+					}
+					w.WriteHeader(tc.status)
+					_ = json.NewEncoder(w).Encode(map[string]string{"message": tc.message})
+				default:
+					t.Errorf("unexpected GitHub request %s %s", req.Method, req.URL)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			})
+			ctx := context.Background()
+			require.NoError(t, store.SaveGitHubRunnerJob(ctx, queuedJob(1)))
+			err := r.provision(ctx, *store.jobs[1])
+			require.Error(t, err)
+			require.Equal(t, tc.terminal, runnerRefused(err))
+			var limit *githubLimit
+			require.Equal(t, tc.limited, errors.As(err, &limit))
+			if tc.terminal {
+				require.ErrorIs(t, err, errRunnerGroupUnavailable)
+				require.ErrorContains(t, err, "check organization runner policies")
+				require.Nil(t, store.jobs[1].ProvisionAt, "do not retry a permanent group refusal")
+				require.Contains(t, store.jobs[1].Error, tc.message)
+			} else {
+				require.NotErrorIs(t, err, errRunnerGroupUnavailable)
+				require.NotNil(t, store.jobs[1].ProvisionAt, "transient failures must remain retryable")
+				if tc.limited {
+					require.Equal(t, waitingGitHub, store.jobs[1].Waiting)
+				}
+			}
+			if tc.status == 422 {
+				require.Equal(t, 2, lists, "first resolve a possible concurrent group creation")
+			} else {
+				require.Equal(t, 1, lists)
+			}
+			require.Empty(t, runtime.requests, "never fall back to an unisolated runner")
+		})
+	}
+}
+
 func TestOrganizationRunnerConcurrentGroupCreation(t *testing.T) {
 	for _, raced := range []bool{true, false} {
 		t.Run(fmt.Sprintf("another gateway created it=%v", raced), func(t *testing.T) {
@@ -176,6 +243,8 @@ func TestOrganizationRunnerConcurrentGroupCreation(t *testing.T) {
 				require.Equal(t, "jit", config)
 			} else {
 				require.Equal(t, http.StatusUnprocessableEntity, githubStatus(err))
+				require.ErrorIs(t, err, errRunnerGroupUnavailable)
+				require.True(t, runnerRefused(err))
 				require.Empty(t, config)
 			}
 			require.Equal(t, 2, lists)
@@ -597,4 +666,39 @@ func TestGitHubRunnerCustomLabelPrefixReportsConfiguredSizes(t *testing.T) {
 	require.Empty(t, runtime.requests)
 	require.Empty(t, calls())
 	require.Nil(t, store.jobs[1].ProvisionAt)
+}
+
+func TestGitHubRunnerInitRejectsLabelPrefixesRecognizedByProduction(t *testing.T) {
+	for _, tc := range []struct {
+		name, prefix, normalized string
+		reject                   bool
+	}{
+		{name: "default", normalized: "beam-"},
+		{name: "whitespace default", prefix: " \t ", normalized: "beam-"},
+		{name: "explicit default", prefix: "beam-", normalized: "beam-"},
+		{name: "normalized default", prefix: " BEAM- ", normalized: "beam-"},
+		{name: "staging", prefix: "stage-org-permissions-", normalized: "stage-org-permissions-"},
+		{name: "normalized staging", prefix: " STAGE-ORG-PERMISSIONS- ", normalized: "stage-org-permissions-"},
+		{name: "similar safe prefix", prefix: "beamer-", normalized: "beamer-"},
+		{name: "overlapping staging", prefix: "beam-stage-", reject: true},
+		{name: "uppercase overlapping staging", prefix: "BEAM-STAGE-", reject: true},
+		{name: "trimmed overlapping staging", prefix: " Beam-Stage- ", reject: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, info, _, _ := fixture()
+			// Validate even before an App is enabled, so a dormant setting
+			// cannot later send an intended staging job to production.
+			s.config.GitHubRunners = types.GitHubRunnerConfig{LabelPrefix: tc.prefix}
+			c, _ := actionContext(info, "", "", "")
+			err := s.initGitHubRunners(c.Echo().Group("/api/v1/vm"))
+			if tc.reject {
+				require.ErrorContains(t, err, "abstractions.vm.githubRunners.labelPrefix")
+				require.ErrorContains(t, err, "would also be handled by production runners")
+				require.Nil(t, s.runners.github)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.normalized, s.runners.labelPrefix())
+		})
+	}
 }

@@ -281,6 +281,8 @@ type githubRunnerGroup struct {
 
 var errRunnerGroupIsolation = errors.New("the GitHub runner group does not isolate its repository")
 
+var errRunnerGroupUnavailable = errors.New("GitHub cannot create a repository-restricted runner group")
+
 // organizationRunnerGroup resolves a repository's group on every registration.
 // A group that has been broadened by its owner must never expose another
 // repository's cache, so its current access is checked before any runner joins.
@@ -345,10 +347,10 @@ func (g *githubApp) organizationRunnerGroup(ctx context.Context, installation in
 				return 0, lookupErr
 			}
 			if group == nil {
-				return 0, err
+				return 0, runnerGroupCreationError(scope.Organization, err)
 			}
 		} else if err != nil {
-			return 0, err
+			return 0, runnerGroupCreationError(scope.Organization, err)
 		} else {
 			group = &created
 		}
@@ -381,6 +383,17 @@ func (g *githubApp) organizationRunnerGroup(ctx context.Context, installation in
 		return 0, fmt.Errorf("%w: group %s does not allow this repository", errRunnerGroupIsolation, name)
 	}
 	return group.ID, nil
+}
+
+// A group creation refusal is a configuration or policy problem after the
+// concurrent-creation lookup failed. Rate limits have already been turned
+// into githubLimit by ask, and server/transport failures remain retryable.
+func runnerGroupCreationError(organization string, err error) error {
+	switch githubStatus(err) {
+	case http.StatusForbidden, http.StatusUnprocessableEntity:
+		return fmt.Errorf("%w for %s; check organization runner policies and the App's Self-hosted runners (write) permission: %w", errRunnerGroupUnavailable, organization, err)
+	}
+	return err
 }
 
 // githubRunner is a runner as GitHub lists it: online once it has connected

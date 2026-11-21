@@ -1678,9 +1678,10 @@ type GitHubRunnerConfig struct {
 	// that have waited longest first. Zero or less sets no limit.
 	RunnerLimit int `key:"runnerLimit" json:"runner_limit"`
 	// LabelPrefix replaces "beam-" in workflow size labels. Empty uses
-	// "beam-"; values are trimmed and lowercased. Staging tests that share
-	// repositories with production must use a prefix that does not start
-	// with "beam-", so the production App ignores their jobs.
+	// "beam-"; values are trimmed and lowercased. Other prefixes starting
+	// with "beam-" are rejected because production runners recognize them
+	// too. Staging tests that share repositories with production must use
+	// a prefix outside "beam-", so the production App ignores their jobs.
 	LabelPrefix string `key:"labelPrefix" json:"label_prefix"`
 	// OrganizationRunners registers runners on organizations, in a runner
 	// group restricted to their repository. Enable after the App installation

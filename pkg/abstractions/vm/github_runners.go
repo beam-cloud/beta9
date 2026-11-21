@@ -184,11 +184,15 @@ func (s *Service) initGitHubRunners(api *echo.Group) error {
 	group.POST("/:workspaceId/jobs/:jobId/stop", auth.WithStrictWorkspaceAuth(r.stopJob))
 	group.PUT("/:workspaceId/limit", auth.WithClusterAdminAuth(r.setLimit))
 	group.DELETE("/:workspaceId/limit", auth.WithClusterAdminAuth(r.setLimit))
+	const section = "abstractions.vm.githubRunners"
+	if prefix := r.labelPrefix(); prefix != runnerLabelPrefix && strings.HasPrefix(prefix, runnerLabelPrefix) {
+		return fmt.Errorf("%s.labelPrefix: custom prefix %q starts with %q and would also be handled by production runners; use %q or a prefix outside it",
+			section, prefix, runnerLabelPrefix, runnerLabelPrefix)
+	}
 	if r.config.AppID == "" {
 		return nil
 	}
 
-	const section = "abstractions.vm.githubRunners"
 	var missing []string
 	for _, setting := range []struct{ key, value string }{
 		{"appSlug", r.config.AppSlug}, {"clientID", r.config.ClientID}, {"clientSecret", r.config.ClientSecret},
@@ -1209,7 +1213,8 @@ func runnerRefused(err error) bool {
 		return true
 	}
 
-	return errors.Is(err, errRunnerDisconnected) || errors.Is(err, errRunnerOrganizationRequired) || errors.Is(err, errRunnerGroupIsolation)
+	return errors.Is(err, errRunnerDisconnected) || errors.Is(err, errRunnerOrganizationRequired) ||
+		errors.Is(err, errRunnerGroupIsolation) || errors.Is(err, errRunnerGroupUnavailable)
 }
 
 // runnerWaits says what a job waits for after an attempt to start its runner
