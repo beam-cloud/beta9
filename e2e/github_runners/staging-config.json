@@ -1,0 +1,10 @@
+{
+  "abstractions": {
+    "vm": {
+      "github_runners": {
+        "organization_runners": true,
+        "label_prefix": "stage-org-permissions-"
+      }
+    }
+  }
+}

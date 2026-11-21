@@ -228,21 +228,159 @@ func (g *githubApp) organizationRole(ctx context.Context, installation int64, or
 // under it end up in workflows, caches and build outputs written for them.
 const runnerWorkFolder = "/home/runner/work"
 
+// githubRunnerScope is where a runner was registered. Organization runners
+// still belong to one repository's pool: their group permits only that repo.
+// An empty Organization denotes the older repository registration API.
+type githubRunnerScope struct {
+	Repository   string
+	Organization string
+}
+
+func (s githubRunnerScope) path() string {
+	if s.Organization != "" {
+		return "/orgs/" + url.PathEscape(s.Organization) + "/actions/runners"
+	}
+	return "/repos/" + s.Repository + "/actions/runners"
+}
+
 // registerRunner registers a runner that takes one job of a repository, and
 // returns the configuration it starts with. It joins the default runner
 // group, which every repository of an account can use.
 func (g *githubApp) registerRunner(ctx context.Context, installation int64, repository, name, label string) (string, error) {
+	return g.registerScopedRunner(ctx, installation, githubRunnerScope{Repository: repository}, name, label)
+}
+
+func (g *githubApp) registerScopedRunner(ctx context.Context, installation int64, scope githubRunnerScope, name, label string) (string, error) {
 	token, err := g.installationToken(ctx, installation)
 	if err != nil {
 		return "", err
 	}
 
+	group := int64(1)
+	if scope.Organization != "" {
+		group, err = g.organizationRunnerGroup(ctx, installation, token, scope)
+		if err != nil {
+			return "", err
+		}
+	}
 	var runner struct {
 		Config string `json:"encoded_jit_config"`
 	}
-	_, err = g.ask(ctx, installation, http.MethodPost, g.apiURL+"/repos/"+repository+"/actions/runners/generate-jitconfig", token,
-		map[string]any{"name": name, "runner_group_id": 1, "labels": []string{label}, "work_folder": runnerWorkFolder}, &runner)
+	_, err = g.ask(ctx, installation, http.MethodPost, g.apiURL+scope.path()+"/generate-jitconfig", token,
+		map[string]any{"name": name, "runner_group_id": group, "labels": []string{label}, "work_folder": runnerWorkFolder}, &runner)
 	return runner.Config, err
+}
+
+type githubRunnerGroup struct {
+	ID                       int64  `json:"id"`
+	Name                     string `json:"name"`
+	Visibility               string `json:"visibility"`
+	Inherited                bool   `json:"inherited"`
+	AllowsPublicRepositories bool   `json:"allows_public_repositories"`
+}
+
+var errRunnerGroupIsolation = errors.New("the GitHub runner group does not isolate its repository")
+
+// organizationRunnerGroup resolves a repository's group on every registration.
+// A group that has been broadened by its owner must never expose another
+// repository's cache, so its current access is checked before any runner joins.
+// Existing groups are not repaired: they may have been changed deliberately.
+func (g *githubApp) organizationRunnerGroup(ctx context.Context, installation int64, token string, scope githubRunnerScope) (int64, error) {
+	owner, repository, ok := strings.Cut(scope.Repository, "/")
+	if !ok || repository == "" || strings.Contains(repository, "/") || !strings.EqualFold(owner, scope.Organization) {
+		return 0, fmt.Errorf("%w: the runner repository must belong to its organization", errRunnerGroupIsolation)
+	}
+	var repo struct {
+		ID      int64 `json:"id"`
+		Private *bool `json:"private"`
+	}
+	endpoint := g.apiURL + "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repository)
+	if _, err := g.ask(ctx, installation, http.MethodGet, endpoint, token, nil, &repo); err != nil {
+		return 0, err
+	}
+	if repo.ID <= 0 || repo.Private == nil || g.id == "" {
+		return 0, fmt.Errorf("%w: GitHub did not identify the runner repository or App", errRunnerGroupIsolation)
+	}
+
+	name := fmt.Sprintf("beam-%s-%d", g.id, repo.ID)
+	groups := g.apiURL + "/orgs/" + url.PathEscape(scope.Organization) + "/actions/runner-groups"
+	find := func() (*githubRunnerGroup, error) {
+		var found *githubRunnerGroup
+		for page := groups + "?per_page=100"; page != ""; {
+			var listed struct {
+				Groups []githubRunnerGroup `json:"runner_groups"`
+			}
+			header, err := g.ask(ctx, installation, http.MethodGet, page, token, nil, &listed)
+			if err != nil {
+				return nil, err
+			}
+			for _, group := range listed.Groups {
+				if strings.EqualFold(group.Name, name) {
+					if found != nil {
+						return nil, fmt.Errorf("%w: more than one group is named %s", errRunnerGroupIsolation, name)
+					}
+					copy := group
+					found = &copy
+				}
+			}
+			page = nextPage(header.Get("Link"))
+		}
+		return found, nil
+	}
+	group, err := find()
+	if err != nil {
+		return 0, err
+	}
+	if group == nil {
+		var created githubRunnerGroup
+		_, err = g.ask(ctx, installation, http.MethodPost, groups, token, map[string]any{
+			"name": name, "visibility": "selected", "selected_repository_ids": []int64{repo.ID},
+			"allows_public_repositories": !*repo.Private,
+		}, &created)
+		if githubStatus(err) == http.StatusUnprocessableEntity {
+			// Another gateway may have made this same group concurrently.
+			var lookupErr error
+			group, lookupErr = find()
+			if lookupErr != nil {
+				return 0, lookupErr
+			}
+			if group == nil {
+				return 0, err
+			}
+		} else if err != nil {
+			return 0, err
+		} else {
+			group = &created
+		}
+	}
+
+	if group.ID <= 0 || !strings.EqualFold(group.Name, name) || group.Inherited ||
+		group.Visibility != "selected" || group.AllowsPublicRepositories != !*repo.Private {
+		return 0, fmt.Errorf("%w: group %s has an unexpected access policy", errRunnerGroupIsolation, name)
+	}
+	count := 0
+	for page := fmt.Sprintf("%s/%d/repositories?per_page=100", groups, group.ID); page != ""; {
+		var listed struct {
+			Repositories []struct {
+				ID int64 `json:"id"`
+			} `json:"repositories"`
+		}
+		header, err := g.ask(ctx, installation, http.MethodGet, page, token, nil, &listed)
+		if err != nil {
+			return 0, err
+		}
+		for _, allowed := range listed.Repositories {
+			count++
+			if allowed.ID != repo.ID || count > 1 {
+				return 0, fmt.Errorf("%w: group %s allows another repository", errRunnerGroupIsolation, name)
+			}
+		}
+		page = nextPage(header.Get("Link"))
+	}
+	if count != 1 {
+		return 0, fmt.Errorf("%w: group %s does not allow this repository", errRunnerGroupIsolation, name)
+	}
+	return group.ID, nil
 }
 
 // githubRunner is a runner as GitHub lists it: online once it has connected
@@ -278,7 +416,11 @@ const githubRunnerListAge = 15 * time.Second
 // has them now or had them a few seconds ago. What GitHub did since is found
 // out when it is asked to remove one: it refuses a runner that got a job.
 func (g *githubApp) runners(ctx context.Context, installation int64, repository string) (map[string]githubRunner, error) {
-	key := fmt.Sprintf("%d/%s", installation, repository)
+	return g.scopedRunners(ctx, installation, githubRunnerScope{Repository: repository})
+}
+
+func (g *githubApp) scopedRunners(ctx context.Context, installation int64, scope githubRunnerScope) (map[string]githubRunner, error) {
+	key := fmt.Sprintf("%d/%s", installation, strings.ToLower(scope.path()))
 	g.lock.Lock()
 	cached, ok := g.listed[key]
 	g.lock.Unlock()
@@ -293,7 +435,7 @@ func (g *githubApp) runners(ctx context.Context, installation int64, repository 
 
 	now := time.Now()
 	runners := map[string]githubRunner{}
-	for page := g.apiURL + "/repos/" + repository + "/actions/runners?per_page=100"; page != ""; {
+	for page := g.apiURL + scope.path() + "?per_page=100"; page != ""; {
 		var listed struct {
 			Runners []githubRunner `json:"runners"`
 		}
@@ -327,36 +469,51 @@ func (g *githubApp) runners(ctx context.Context, installation int64, repository 
 // removeRunner unregisters a runner that has no job. It reports false when
 // GitHub refuses, which it does once it has given the runner a job.
 func (g *githubApp) removeRunner(ctx context.Context, installation int64, repository, name string) (bool, error) {
+	return g.removeScopedRunner(ctx, installation, githubRunnerScope{Repository: repository}, name)
+}
+
+func (g *githubApp) removeScopedRunner(ctx context.Context, installation int64, scope githubRunnerScope, name string) (bool, error) {
 	token, err := g.installationToken(ctx, installation)
 	if err != nil {
 		return false, err
 	}
 
-	var registered struct {
-		Runners []githubRunner `json:"runners"`
-	}
-	endpoint := g.apiURL + "/repos/" + repository + "/actions/runners"
-	_, err = g.ask(ctx, installation, http.MethodGet, endpoint+"?name="+url.QueryEscape(name), token, nil, &registered)
-	if err == nil {
+	endpoint := g.apiURL + scope.path()
+	for page := endpoint + "?name=" + url.QueryEscape(name) + "&per_page=100"; page != ""; {
+		var registered struct {
+			Runners []githubRunner `json:"runners"`
+		}
+		header, lookupErr := g.ask(ctx, installation, http.MethodGet, page, token, nil, &registered)
+		if lookupErr != nil {
+			return removedRunner(lookupErr)
+		}
 		for _, runner := range registered.Runners {
+			if scope.Organization != "" && runner.Name != name {
+				continue
+			}
 			if _, err = g.ask(ctx, installation, http.MethodDelete, fmt.Sprintf("%s/%d", endpoint, runner.ID), token, nil, nil); err != nil {
-				break
+				return removedRunner(err)
 			}
 		}
+		page = nextPage(header.Get("Link"))
 	}
 
-	return removedRunner(err)
+	return true, nil
 }
 
 // deleteRunner unregisters a runner that GitHub listed, as removeRunner does
 // one it has yet to find.
 func (g *githubApp) deleteRunner(ctx context.Context, installation int64, repository string, runner githubRunner) (bool, error) {
+	return g.deleteScopedRunner(ctx, installation, githubRunnerScope{Repository: repository}, runner)
+}
+
+func (g *githubApp) deleteScopedRunner(ctx context.Context, installation int64, scope githubRunnerScope, runner githubRunner) (bool, error) {
 	token, err := g.installationToken(ctx, installation)
 	if err != nil {
 		return false, err
 	}
 
-	endpoint := fmt.Sprintf("%s/repos/%s/actions/runners/%d", g.apiURL, repository, runner.ID)
+	endpoint := fmt.Sprintf("%s%s/%d", g.apiURL, scope.path(), runner.ID)
 	_, err = g.ask(ctx, installation, http.MethodDelete, endpoint, token, nil, nil)
 	return removedRunner(err)
 }

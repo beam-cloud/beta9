@@ -542,6 +542,13 @@ abstractions:
       serviceProxyVerify: false
   vm:
     githubRunners:
+      # Staging rollout: organization runner groups need the App's
+      # Self-hosted runners (write) organization permission. Drain existing
+      # repository runners before removing repository Administration.
+      organizationRunners: false
+      # Empty keeps beam-. A staging prefix outside beam- prevents the
+      # production App from provisioning runners for staging test jobs.
+      labelPrefix: ""
       # The most GitHub runners a workspace has at once. The jobs past it stay
       # queued on GitHub until a runner finishes. 0 sets no limit. A cluster
       # administrator sets another number for one workspace with

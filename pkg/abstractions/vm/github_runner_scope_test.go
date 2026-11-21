@@ -1,0 +1,360 @@
+package vm
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/stretchr/testify/require"
+)
+
+// Org runners keep each repository's cache and job pool isolated through a
+// selected-repository group, while workflows keep their existing size label.
+func TestGitHubRunnerOrganizationLaunchPersistsRegistrationScope(t *testing.T) {
+	r, store, _, runtime := runnerFixture(t)
+	r.config.OrganizationRunners = true
+	calls := fakeGitHub(t, r, map[string]string{
+		"GET /repos/acme/repo":                                `200 {"id":123,"private":true}`,
+		"GET /orgs/acme/actions/runner-groups":                `200 {"runner_groups":[]}`,
+		"POST /orgs/acme/actions/runner-groups":               `201 {"id":2,"name":"beam-1-123","visibility":"selected","allows_public_repositories":false}`,
+		"GET /orgs/acme/actions/runner-groups/2/repositories": `200 {"repositories":[{"id":123}]}`,
+		"POST /orgs/acme/actions/runners/generate-jitconfig":  `201 {"encoded_jit_config":"org-jit-secret"}`,
+	})
+	v := startRunner(t, r, store, 1, false)
+	require.Equal(t, map[string]string{"github.repository": "acme/repo", "github.organization": "acme"}, v.Metadata)
+	require.Contains(t, v.Spec.Env, "BEAM_GITHUB_JIT_CONFIG=org-jit-secret")
+	require.EqualValues(t, 4000, v.Spec.CPU)
+	require.Len(t, runtime.requests, 1)
+	require.NotNil(t, v.Spec.RootLayer, "org registration retains the repository's enhanced cache")
+	var jit string
+	for _, call := range calls() {
+		require.NotContains(t, call, "/repos/acme/repo/actions/runners", "org registration needs no repository administration")
+		if strings.HasPrefix(call, "POST /orgs/acme/actions/runners/generate-jitconfig ") {
+			jit = strings.TrimPrefix(call, "POST /orgs/acme/actions/runners/generate-jitconfig ")
+		}
+	}
+	require.JSONEq(t, fmt.Sprintf(`{"name":%q,"runner_group_id":2,"labels":["beam-4vcpu-ubuntu-2404"],"work_folder":"/home/runner/work"}`, v.Name), jit)
+}
+
+func TestGitHubRunnerOrganizationSeparatesRepositoriesWithSameLabel(t *testing.T) {
+	r, store, _, _ := runnerFixture(t)
+	r.config.OrganizationRunners = true
+	calls := fakeGitHub(t, r, map[string]string{
+		"GET /repos/acme/repo":  `200 {"id":123,"private":true}`,
+		"GET /repos/acme/other": `200 {"id":456,"private":true}`,
+		"GET /orgs/acme/actions/runner-groups": `200 {"runner_groups":[
+			{"id":2,"name":"beam-1-123","visibility":"selected"},
+			{"id":3,"name":"beam-1-456","visibility":"selected"}]}`,
+		"GET /orgs/acme/actions/runner-groups/2/repositories": `200 {"repositories":[{"id":123}]}`,
+		"GET /orgs/acme/actions/runner-groups/3/repositories": `200 {"repositories":[{"id":456}]}`,
+		"POST /orgs/acme/actions/runners/generate-jitconfig":  `201 {"encoded_jit_config":"jit"}`,
+	})
+	first := startRunner(t, r, store, 1, false)
+	otherJob := queuedJob(2)
+	otherJob.Repository = "acme/other"
+	// deliver's webhook fixture always names acme/repo, so queue the
+	// second repository directly in the store.
+	require.NoError(t, store.SaveGitHubRunnerJob(context.Background(), otherJob))
+	require.NoError(t, r.provision(context.Background(), *store.jobs[2]))
+	second := store.vm(7, store.jobs[2].VM)
+	require.NotNil(t, second)
+	require.NotNil(t, first.Spec.RootLayer)
+	require.NotNil(t, second.Spec.RootLayer)
+	require.NotEqual(t, first.Spec.RootLayer.DiskName, second.Spec.RootLayer.DiskName, "repositories must never start with one another's enhanced cache")
+	require.Equal(t, "acme/repo", first.Metadata["github.repository"])
+	require.Equal(t, "acme/other", second.Metadata["github.repository"])
+	groups := []int64{}
+	for _, call := range calls() {
+		const prefix = "POST /orgs/acme/actions/runners/generate-jitconfig "
+		if !strings.HasPrefix(call, prefix) {
+			continue
+		}
+		var body struct {
+			Group  int64    `json:"runner_group_id"`
+			Labels []string `json:"labels"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(call, prefix)), &body))
+		require.Equal(t, beamLabels, body.Labels, "identical workflow labels are isolated by their repository groups")
+		groups = append(groups, body.Group)
+	}
+	require.Equal(t, []int64{2, 3}, groups)
+}
+
+func TestGitHubRunnerOrganizationLaunchRejectsPersonalInstallations(t *testing.T) {
+	r, store, _, runtime := runnerFixture(t)
+	r.config.OrganizationRunners = true
+	store.installation.AccountType = "User"
+	calls := fakeGitHub(t, r, nil)
+	job := queuedJob(1)
+	job.VM = "ghr-personal"
+	err := r.launch(context.Background(), *job, runnerSizes[1])
+	require.Error(t, err)
+	require.Contains(t, strings.ToLower(err.Error()), "organization")
+	require.True(t, runnerRefused(err), "an unsupported account must not consume retries forever")
+	require.Empty(t, calls(), "personal installations never fall back to repository registration")
+	require.Empty(t, runtime.requests)
+	require.Empty(t, store.rows)
+}
+
+// The flag controls new registrations. Existing VMs retain their own scope
+// across a rollout or rollback so cleanup reaches the runner GitHub knows.
+func TestGitHubRunnerCleanupUsesPersistedScopeAcrossRollout(t *testing.T) {
+	for _, tc := range []struct {
+		name, organization, endpoint string
+		organizationRunners          bool
+	}{
+		{"old repository runner after enabling org mode", "", "/repos/acme/repo/actions/runners", true},
+		{"organization runner after rollback", "acme", "/orgs/acme/actions/runners", false},
+	} {
+		for _, operation := range []string{"offline", "never connected", "busy"} {
+			t.Run(tc.name+"/"+operation, func(t *testing.T) {
+				r, store, _, _ := runnerFixture(t)
+				r.config.OrganizationRunners = tc.organizationRunners
+				store.jobs[1] = queuedJob(1)
+				store.jobs[1].VM = "ghr-scope"
+				v := &types.VM{ID: "vm-scope", Name: "ghr-scope", WorkspaceID: 7,
+					DesiredState: types.VMStateRunning, Status: types.VMStateRunning,
+					UpdatedAt: time.Now().Add(-runnerIdle - time.Minute),
+					Metadata:  map[string]string{"github.repository": "acme/repo"}}
+				if tc.organization != "" {
+					v.Metadata["github.organization"] = tc.organization
+				}
+				store.rows[v.ID] = v
+				busy := operation == "busy"
+				routes := map[string]string{
+					"GET " + tc.endpoint: fmt.Sprintf(`200 {"runners":[{"id":9,"name":"ghr-scope","status":"offline","busy":%t}]}`, busy),
+				}
+				if !busy {
+					routes["DELETE "+tc.endpoint+"/9"] = "204 {}"
+				}
+				calls := fakeGitHub(t, r, routes)
+				runner, err := store.GetGitHubRunner(context.Background(), 7, v.Name)
+				require.NoError(t, err)
+				require.NotNil(t, runner)
+				if operation == "never connected" {
+					r.forget(context.Background(), v, runner)
+				} else {
+					removed, renew, err := r.idle(context.Background(), v, runner)
+					require.NoError(t, err)
+					require.Equal(t, !busy, removed)
+					require.Equal(t, busy, renew)
+				}
+				expected := []string{"GET " + tc.endpoint}
+				if !busy {
+					expected = append(expected, "DELETE "+tc.endpoint+"/9")
+				}
+				require.Equal(t, expected, calls())
+			})
+		}
+	}
+}
+
+func TestGitHubRunnerOrganizationModeOnlyOffersOrganizationAccounts(t *testing.T) {
+	r, _, _, _ := runnerFixture(t)
+	r.config.OrganizationRunners = true
+	calls := fakeGitHub(t, r, map[string]string{
+		"GET /user/installations":          `200 {"installations":[{"id":43,"account":{"login":"Alice","type":"User"}},{"id":42,"account":{"login":"acme","type":"Organization"}}]}`,
+		"GET /orgs/acme/memberships/alice": `200 {"state":"active","role":"admin"}`,
+	})
+	accounts, err := r.ownedAccounts(context.Background(), "alice", "user-token")
+	require.NoError(t, err)
+	require.Equal(t, []runnerAccount{{InstallationID: 42, Account: "acme", AccountType: "Organization"}}, accounts)
+	require.Equal(t, []string{"GET /user/installations", "GET /orgs/acme/memberships/alice"}, calls())
+}
+
+func TestGitHubRunnerOrganizationModeRejectsConnectingPersonalAccount(t *testing.T) {
+	r, store, info, _ := runnerFixture(t)
+	r.config.OrganizationRunners = true
+	store.installation = nil
+	calls := fakeGitHub(t, r, map[string]string{
+		"GET /app/installations/43": `200 {"account":{"login":"Alice","type":"User"}}`,
+	})
+	state := r.state(info, "alice", time.Now().Add(time.Minute).Unix())
+	code, step, message := connect(t, r, info, fmt.Sprintf(`{"installation_id":43,"state":%q}`, state))
+	require.Equal(t, 400, code, message)
+	require.Contains(t, strings.ToLower(message), "organization")
+	require.False(t, step.Connected)
+	require.Nil(t, store.installation)
+	require.Equal(t, []string{"GET /app/installations/43"}, calls())
+}
+
+func TestGitHubRunnerOrganizationStopUsesPersistedScope(t *testing.T) {
+	for _, deregister := range []string{"204", "422", "500"} {
+		t.Run(deregister, func(t *testing.T) {
+			r, store, info, runtime := runnerFixture(t)
+			// A rollback changes where new runners register, not where this
+			// already registered runner is stopped.
+			r.config.OrganizationRunners = false
+			calls := fakeGitHub(t, r, map[string]string{
+				"GET /orgs/acme/actions/runners":      `200 {"runners":[{"id":9,"name":"ghr-stop"}]}`,
+				"DELETE /orgs/acme/actions/runners/9": deregister + " {}",
+			})
+			store.jobs[1] = queuedJob(1)
+			store.jobs[1].VM = "ghr-stop"
+			job := queuedJob(2)
+			job.Status, job.RunnerName = types.GitHubJobInProgress, "ghr-stop"
+			store.jobs[2] = job
+			v := &types.VM{ID: "vm-stop", Name: "ghr-stop", WorkspaceID: 7, TokenID: "token",
+				DesiredState: types.VMStateRunning, Status: types.VMStateRunning, EverRunning: true,
+				ContainerID: "runner-container", StubID: "stub", CreatedAt: time.Now(),
+				Metadata: map[string]string{"github.repository": "acme/repo", "github.organization": "acme"}}
+			runtime.containers.states[v.ContainerID] = &types.ContainerState{ContainerId: v.ContainerID, Status: types.ContainerStatusRunning}
+			store.rows[v.ID] = v
+			code, body := runnerRequest(t, info, r.stopJob, "2", "")
+			require.Equal(t, 202, code, body)
+			require.Empty(t, body)
+			require.Equal(t, types.VMStateDeleted, store.rows[v.ID].Status)
+			require.Equal(t, 1, r.s.gateway.(*vmGateway).stops, "explicit stop removes the VM even if GitHub refuses or is unreachable")
+			require.Equal(t, []string{"GET /orgs/acme/actions/runners", "DELETE /orgs/acme/actions/runners/9"}, calls())
+		})
+	}
+}
+
+func TestGitHubRunnerOrganizationIsolationRefusalEndsProvisioning(t *testing.T) {
+	r, store, _, runtime := runnerFixture(t)
+	r.config.OrganizationRunners = true
+	calls := fakeGitHub(t, r, map[string]string{
+		"GET /repos/acme/repo":                 `200 {"id":123,"private":true}`,
+		"GET /orgs/acme/actions/runner-groups": `200 {"runner_groups":[{"id":2,"name":"beam-1-123","visibility":"all"}]}`,
+	})
+	require.NoError(t, store.SaveGitHubRunnerJob(context.Background(), queuedJob(1)))
+	err := r.provision(context.Background(), *store.jobs[1])
+	require.ErrorIs(t, err, errRunnerGroupIsolation)
+	require.Nil(t, store.jobs[1].ProvisionAt, "an invalid group requires an owner to repair it before a workflow is rerun")
+	require.Contains(t, store.jobs[1].Error, "does not isolate")
+	require.Empty(t, runtime.requests)
+	require.Equal(t, []string{"GET /repos/acme/repo", "GET /orgs/acme/actions/runner-groups"}, calls())
+}
+
+func TestGitHubRunnerAcceptedPermissionsRefreshesRegistrationToken(t *testing.T) {
+	r, store, _, _ := runnerFixture(t)
+	r.config.OrganizationRunners = true
+	cache := &types.GitHubRunnerCache{WorkspaceID: 7, Repository: "acme/repo", DiskName: types.RootLayerDiskPrefix + "existing",
+		SnapshotID: "existing-snapshot", CreatedAt: time.Now()}
+	store.caches = append(store.caches, cache)
+	var granted atomic.Bool
+	var tokens atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodPost && req.URL.Path == "/app/installations/42/access_tokens" {
+			tokens.Add(1)
+			fmt.Fprint(w, `{"token":"new-grant-token","expires_at":"2099-01-01T00:00:00Z"}`)
+			return
+		}
+		wantToken := "installation-token"
+		if granted.Load() {
+			wantToken = "new-grant-token"
+		}
+		if req.Header.Get("Authorization") != "Bearer "+wantToken {
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"message":"stale installation token permissions"}`)
+			return
+		}
+		switch req.Method + " " + req.URL.Path {
+		case "GET /repos/acme/repo":
+			fmt.Fprint(w, `{"id":123,"private":true}`)
+		case "GET /orgs/acme/actions/runner-groups":
+			if !granted.Load() {
+				w.WriteHeader(http.StatusForbidden)
+				fmt.Fprint(w, `{"message":"Resource not accessible by integration"}`)
+				return
+			}
+			fmt.Fprint(w, `{"runner_groups":[]}`)
+		case "POST /orgs/acme/actions/runner-groups":
+			fmt.Fprint(w, `{"id":2,"name":"beam-1-123","visibility":"selected"}`)
+		case "GET /orgs/acme/actions/runner-groups/2/repositories":
+			fmt.Fprint(w, `{"repositories":[{"id":123}]}`)
+		case "POST /orgs/acme/actions/runners/generate-jitconfig":
+			fmt.Fprint(w, `{"encoded_jit_config":"new-grant-jit"}`)
+		default:
+			t.Errorf("unexpected GitHub request %s %s", req.Method, req.URL)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	r.github.apiURL = server.URL
+	_, err := r.github.registerScopedRunner(context.Background(), 42,
+		githubRunnerScope{Repository: "acme/repo", Organization: "acme"}, "ghr-before", beamLabels[0])
+	require.Equal(t, http.StatusForbidden, githubStatus(err), "the old grant lacks organization runner permission")
+	require.Zero(t, tokens.Load())
+	granted.Store(true)
+	require.Equal(t, 202, deliver(t, r, "installation", "new_permissions_accepted", nil, queuedJob(0), true))
+	require.NotNil(t, store.installation, "permission acceptance must retain the connected workspace")
+	require.Equal(t, cache, store.current(7, "acme/repo"), "permission acceptance must retain the enhanced cache")
+	v := startRunner(t, r, store, 1, false)
+	require.EqualValues(t, 1, tokens.Load(), "registration refreshes the token before its original expiry")
+	require.Contains(t, v.Spec.Env, "BEAM_GITHUB_JIT_CONFIG=new-grant-jit")
+	require.Equal(t, cache.DiskName, v.Spec.RootLayer.DiskName)
+}
+
+func TestGitHubRunnerCustomLabelPrefixIsolatesStagingFromProduction(t *testing.T) {
+	r, store, info, runtime := runnerFixture(t)
+	r.config.OrganizationRunners = true
+	r.config.LabelPrefix = " Stage-Org-Permissions- "
+	stageLabel := "stage-org-permissions-2vcpu-ubuntu-2404"
+	stageLabels := []string{strings.ToUpper(stageLabel)}
+	calls := fakeGitHub(t, r, map[string]string{
+		"GET /repos/acme/repo":                                `200 {"id":123,"private":true}`,
+		"GET /orgs/acme/actions/runner-groups":                `200 {"runner_groups":[]}`,
+		"POST /orgs/acme/actions/runner-groups":               `201 {"id":2,"name":"beam-1-123","visibility":"selected"}`,
+		"GET /orgs/acme/actions/runner-groups/2/repositories": `200 {"repositories":[{"id":123}]}`,
+		"POST /orgs/acme/actions/runners/generate-jitconfig":  `201 {"encoded_jit_config":"stage-jit"}`,
+	})
+	production, productionStore, _, _ := runnerFixture(t)
+	productionCalls := fakeGitHub(t, production, nil)
+	require.Equal(t, 202, deliver(t, production, "workflow_job", "queued", stageLabels, queuedJob(1), true))
+	require.Empty(t, productionStore.jobs, "production ignores staging labels even when its App receives the same repo webhook")
+	require.Empty(t, productionCalls())
+	require.Equal(t, 202, deliver(t, r, "workflow_job", "queued", beamLabels, queuedJob(1), true))
+	require.Empty(t, store.jobs, "staging ignores production labels")
+	require.Equal(t, 202, deliver(t, r, "workflow_job", "queued", stageLabels, queuedJob(2), true))
+	require.Equal(t, stageLabel, store.jobs[2].Label, "GitHub labels are case insensitive")
+	require.Equal(t, waitingStart, r.waiting(*store.jobs[2], false, false))
+	page := listedJobs(t, r, info)
+	var waiting string
+	require.NoError(t, json.Unmarshal(page[2]["waiting"], &waiting))
+	require.Equal(t, waitingStart, waiting, "the jobs API recognizes configured size labels")
+	c, rec := actionContext(info, "", "", "")
+	require.NoError(t, r.status(c))
+	var status runnerStatus
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &status))
+	require.Len(t, status.Sizes, len(runnerSizes))
+	for i, size := range status.Sizes {
+		require.Equal(t, "stage-org-permissions-"+strings.TrimPrefix(runnerSizes[i].Label, runnerLabelPrefix), size.Label)
+		require.Equal(t, runnerSizes[i].CPU, size.CPU)
+	}
+	require.NoError(t, r.provision(context.Background(), *store.jobs[2]))
+	v := store.vm(7, store.jobs[2].VM)
+	require.NotNil(t, v)
+	require.EqualValues(t, 2000, v.Spec.CPU)
+	require.Len(t, runtime.requests, 1)
+	var jit string
+	for _, call := range calls() {
+		const prefix = "POST /orgs/acme/actions/runners/generate-jitconfig "
+		if strings.HasPrefix(call, prefix) {
+			jit = strings.TrimPrefix(call, prefix)
+		}
+	}
+	require.JSONEq(t, fmt.Sprintf(`{"name":%q,"runner_group_id":2,"labels":[%q],"work_folder":"/home/runner/work"}`, v.Name, stageLabel), jit)
+}
+
+func TestGitHubRunnerCustomLabelPrefixReportsConfiguredSizes(t *testing.T) {
+	r, store, _, runtime := runnerFixture(t)
+	r.config.LabelPrefix = "stage-org-permissions-"
+	calls := fakeGitHub(t, r, nil)
+	job := queuedJob(1)
+	job.Label = "stage-org-permissions-3vcpu-ubuntu-2404"
+	require.NoError(t, store.SaveGitHubRunnerJob(context.Background(), job))
+	require.NoError(t, r.provision(context.Background(), *store.jobs[1]))
+	require.Contains(t, store.jobs[1].Error, "runs-on must be exactly one of stage-org-permissions-2vcpu-ubuntu-2404")
+	require.NotContains(t, store.jobs[1].Error, "beam-")
+	require.Empty(t, runtime.requests)
+	require.Empty(t, calls())
+	require.Nil(t, store.jobs[1].ProvisionAt)
+}

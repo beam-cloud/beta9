@@ -1650,14 +1650,16 @@ type VMConfig struct {
 }
 
 // GitHubRunnerConfig runs GitHub Actions jobs on ordinary CPU VMs through a
-// GitHub App. An empty AppID disables it; with one, every other field is
-// required.
+// GitHub App. An empty AppID disables it; with one, the App credentials,
+// webhook secret, and runner image are required.
 //
-// The App needs Actions (write, to cancel runs) and Administration (write) on
+// The App needs Actions (write, to cancel runs) and Metadata (read) on
 // repositories, Members (read) on organizations, and Workflow job events sent
 // to the gateway's /api/v1/vm/github-runners/webhook. Its setup URL, with
 // redirect on update, and its callback URL are both the dashboard's /vms
 // page; leave "Request user authorization (OAuth) during installation" off.
+// OrganizationRunners needs Self-hosted runners (write) on organizations;
+// the legacy repository mode needs Administration (write) on repositories.
 type GitHubRunnerConfig struct {
 	AppID   string `key:"appID" json:"app_id"`
 	AppSlug string `key:"appSlug" json:"app_slug"` // as in github.com/apps/<slug>
@@ -1675,6 +1677,16 @@ type GitHubRunnerConfig struct {
 	// it stay queued on GitHub, and get theirs as runners finish, the jobs
 	// that have waited longest first. Zero or less sets no limit.
 	RunnerLimit int `key:"runnerLimit" json:"runner_limit"`
+	// LabelPrefix replaces "beam-" in workflow size labels. Empty uses
+	// "beam-"; values are trimmed and lowercased. Staging tests that share
+	// repositories with production must use a prefix that does not start
+	// with "beam-", so the production App ignores their jobs.
+	LabelPrefix string `key:"labelPrefix" json:"label_prefix"`
+	// OrganizationRunners registers runners on organizations, in a runner
+	// group restricted to their repository. Enable after the App installation
+	// accepts Self-hosted runners (write). Personal accounts are unsupported
+	// in this mode. Drain legacy runners before removing Administration.
+	OrganizationRunners bool `key:"organizationRunners" json:"organization_runners"`
 }
 
 // VMWebRTCConfig bounds authenticated kiosk media on the shared TCP gateway.
