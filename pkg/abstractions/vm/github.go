@@ -228,29 +228,29 @@ func (g *githubApp) organizationRole(ctx context.Context, installation int64, or
 // under it end up in workflows, caches and build outputs written for them.
 const runnerWorkFolder = "/home/runner/work"
 
-// githubRunnerScope is where a runner was registered. Organization runners
-// still belong to one repository's pool: their group permits only that repo.
-// An empty Organization denotes the older repository registration API.
+// githubRunnerScope is where the runners of a repository register: on the
+// repository, which takes the App's Administration of it, or, with an
+// Organization, on the organization that owns it, which takes Self-hosted
+// runners of the organization and nothing of the repository.
 type githubRunnerScope struct {
 	Repository   string
 	Organization string
 }
 
+// path is where GitHub's API has the runners that are registered there.
 func (s githubRunnerScope) path() string {
 	if s.Organization != "" {
 		return "/orgs/" + url.PathEscape(s.Organization) + "/actions/runners"
 	}
+
 	return "/repos/" + s.Repository + "/actions/runners"
 }
 
 // registerRunner registers a runner that takes one job of a repository, and
-// returns the configuration it starts with. It joins the default runner
-// group, which every repository of an account can use.
-func (g *githubApp) registerRunner(ctx context.Context, installation int64, repository, name, label string) (string, error) {
-	return g.registerScopedRunner(ctx, installation, githubRunnerScope{Repository: repository}, name, label)
-}
-
-func (g *githubApp) registerScopedRunner(ctx context.Context, installation int64, scope githubRunnerScope, name, label string) (string, error) {
+// returns the configuration it starts with. On the repository it joins the
+// default runner group, the only one a repository has. On the organization
+// it joins the group that only the repository can use.
+func (g *githubApp) registerRunner(ctx context.Context, installation int64, scope githubRunnerScope, name, label string) (string, error) {
 	token, err := g.installationToken(ctx, installation)
 	if err != nil {
 		return "", err
@@ -258,11 +258,11 @@ func (g *githubApp) registerScopedRunner(ctx context.Context, installation int64
 
 	group := int64(1)
 	if scope.Organization != "" {
-		group, err = g.organizationRunnerGroup(ctx, installation, token, scope)
-		if err != nil {
+		if group, err = g.runnerGroup(ctx, installation, token, scope); err != nil {
 			return "", err
 		}
 	}
+
 	var runner struct {
 		Config string `json:"encoded_jit_config"`
 	}
@@ -271,129 +271,118 @@ func (g *githubApp) registerScopedRunner(ctx context.Context, installation int64
 	return runner.Config, err
 }
 
+// githubRunnerGroup is a runner group of an organization, as far as it says
+// which repositories can use its runners.
 type githubRunnerGroup struct {
-	ID                       int64  `json:"id"`
-	Name                     string `json:"name"`
-	Visibility               string `json:"visibility"`
-	Inherited                bool   `json:"inherited"`
-	AllowsPublicRepositories bool   `json:"allows_public_repositories"`
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	Visibility string `json:"visibility"`
+	// An enterprise's group, which all of its organizations share.
+	Inherited    bool `json:"inherited"`
+	AllowsPublic bool `json:"allows_public_repositories"`
 }
 
-var errRunnerGroupIsolation = errors.New("the GitHub runner group does not isolate its repository")
+// Why an organization's runner can't register. An owner of the organization
+// has to change either, so the job ends with it (runnerRefused).
+var (
+	errRunnerGroupUnavailable = errors.New("GitHub cannot create a repository-restricted runner group")
+	errRunnerGroupIsolation   = errors.New("the GitHub runner group does not isolate its repository")
+)
 
-var errRunnerGroupUnavailable = errors.New("GitHub cannot create a repository-restricted runner group")
-
-// organizationRunnerGroup resolves a repository's group on every registration.
-// A group that has been broadened by its owner must never expose another
-// repository's cache, so its current access is checked before any runner joins.
-// Existing groups are not repaired: they may have been changed deliberately.
-func (g *githubApp) organizationRunnerGroup(ctx context.Context, installation int64, token string, scope githubRunnerScope) (int64, error) {
-	owner, repository, ok := strings.Cut(scope.Repository, "/")
-	if !ok || repository == "" || strings.Contains(repository, "/") || !strings.EqualFold(owner, scope.Organization) {
-		return 0, fmt.Errorf("%w: the runner repository must belong to its organization", errRunnerGroupIsolation)
-	}
+// runnerGroup returns the runner group that a repository's runners join on
+// its organization. Only that repository can use the group, so its runners,
+// and the cache they start with, never take another repository's jobs.
+//
+// The group is created the first time, and what it allows is read every time
+// after, as an owner of the organization can change it. One that allows more
+// is refused rather than put back, as it may have been changed on purpose.
+func (g *githubApp) runnerGroup(ctx context.Context, installation int64, token string, scope githubRunnerScope) (int64, error) {
 	var repo struct {
 		ID      int64 `json:"id"`
-		Private *bool `json:"private"`
+		Private bool  `json:"private"`
 	}
-	endpoint := g.apiURL + "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repository)
-	if _, err := g.ask(ctx, installation, http.MethodGet, endpoint, token, nil, &repo); err != nil {
+	if _, err := g.ask(ctx, installation, http.MethodGet, g.apiURL+"/repos/"+scope.Repository, token, nil, &repo); err != nil {
 		return 0, err
 	}
-	if repo.ID <= 0 || repo.Private == nil || g.id == "" {
-		return 0, fmt.Errorf("%w: GitHub did not identify the runner repository or App", errRunnerGroupIsolation)
-	}
 
-	name := fmt.Sprintf("beam-%s-%d", g.id, repo.ID)
+	// The group is named for the App, as an organization may have more than
+	// one of Beam's, and for the repository's ID, which a rename leaves as it
+	// is. It takes public repositories only if its own is one.
+	name, public := fmt.Sprintf("beam-%s-%d", g.id, repo.ID), !repo.Private
 	groups := g.apiURL + "/orgs/" + url.PathEscape(scope.Organization) + "/actions/runner-groups"
-	find := func() (*githubRunnerGroup, error) {
-		var found *githubRunnerGroup
-		for page := groups + "?per_page=100"; page != ""; {
-			var listed struct {
-				Groups []githubRunnerGroup `json:"runner_groups"`
-			}
-			header, err := g.ask(ctx, installation, http.MethodGet, page, token, nil, &listed)
-			if err != nil {
-				return nil, err
-			}
-			for _, group := range listed.Groups {
-				if strings.EqualFold(group.Name, name) {
-					if found != nil {
-						return nil, fmt.Errorf("%w: more than one group is named %s", errRunnerGroupIsolation, name)
-					}
-					copy := group
-					found = &copy
-				}
-			}
-			page = nextPage(header.Get("Link"))
-		}
-		return found, nil
+	group, err := g.findRunnerGroup(ctx, installation, token, groups, name)
+	if err == nil && group == nil {
+		group, err = g.createRunnerGroup(ctx, installation, token, groups, name, repo.ID, public)
 	}
-	group, err := find()
 	if err != nil {
 		return 0, err
 	}
-	if group == nil {
-		var created githubRunnerGroup
-		_, err = g.ask(ctx, installation, http.MethodPost, groups, token, map[string]any{
-			"name": name, "visibility": "selected", "selected_repository_ids": []int64{repo.ID},
-			"allows_public_repositories": !*repo.Private,
-		}, &created)
-		if githubStatus(err) == http.StatusUnprocessableEntity {
-			// Another gateway may have made this same group concurrently.
-			var lookupErr error
-			group, lookupErr = find()
-			if lookupErr != nil {
-				return 0, lookupErr
-			}
-			if group == nil {
-				return 0, runnerGroupCreationError(scope.Organization, err)
-			}
-		} else if err != nil {
-			return 0, runnerGroupCreationError(scope.Organization, err)
-		} else {
-			group = &created
-		}
-	}
 
-	if group.ID <= 0 || !strings.EqualFold(group.Name, name) || group.Inherited ||
-		group.Visibility != "selected" || group.AllowsPublicRepositories != !*repo.Private {
+	if group.Inherited || group.Visibility != "selected" || group.AllowsPublic != public {
 		return 0, fmt.Errorf("%w: group %s has an unexpected access policy", errRunnerGroupIsolation, name)
 	}
-	count := 0
-	for page := fmt.Sprintf("%s/%d/repositories?per_page=100", groups, group.ID); page != ""; {
+
+	var allowed struct {
+		Total        int `json:"total_count"`
+		Repositories []struct {
+			ID int64 `json:"id"`
+		} `json:"repositories"`
+	}
+	if _, err := g.ask(ctx, installation, http.MethodGet, fmt.Sprintf("%s/%d/repositories", groups, group.ID), token, nil, &allowed); err != nil {
+		return 0, err
+	}
+
+	if allowed.Total != 1 || len(allowed.Repositories) != 1 || allowed.Repositories[0].ID != repo.ID {
+		return 0, fmt.Errorf("%w: group %s must allow this repository and no other", errRunnerGroupIsolation, name)
+	}
+
+	return group.ID, nil
+}
+
+// findRunnerGroup returns the runner group of an organization that has a
+// name, or nil if none has. GitHub lists the groups a page at a time.
+func (g *githubApp) findRunnerGroup(ctx context.Context, installation int64, token, groups, name string) (*githubRunnerGroup, error) {
+	for page := groups + "?per_page=100"; page != ""; {
 		var listed struct {
-			Repositories []struct {
-				ID int64 `json:"id"`
-			} `json:"repositories"`
+			Groups []githubRunnerGroup `json:"runner_groups"`
 		}
 		header, err := g.ask(ctx, installation, http.MethodGet, page, token, nil, &listed)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
-		for _, allowed := range listed.Repositories {
-			count++
-			if allowed.ID != repo.ID || count > 1 {
-				return 0, fmt.Errorf("%w: group %s allows another repository", errRunnerGroupIsolation, name)
+
+		for _, group := range listed.Groups {
+			if strings.EqualFold(group.Name, name) {
+				return &group, nil
 			}
 		}
 		page = nextPage(header.Get("Link"))
 	}
-	if count != 1 {
-		return 0, fmt.Errorf("%w: group %s does not allow this repository", errRunnerGroupIsolation, name)
-	}
-	return group.ID, nil
+
+	return nil, nil
 }
 
-// A group creation refusal is a configuration or policy problem after the
-// concurrent-creation lookup failed. Rate limits have already been turned
-// into githubLimit by ask, and server/transport failures remain retryable.
-func runnerGroupCreationError(organization string, err error) error {
+// createRunnerGroup creates the runner group that only one repository of an
+// organization can use. GitHub refuses a group that the organization does
+// not allow, and gives that answer until an owner changes what it allows.
+func (g *githubApp) createRunnerGroup(ctx context.Context, installation int64, token, groups, name string, repository int64, public bool) (*githubRunnerGroup, error) {
+	var created githubRunnerGroup
+	_, err := g.ask(ctx, installation, http.MethodPost, groups, token, map[string]any{
+		"name": name, "visibility": "selected", "selected_repository_ids": []int64{repository}, "allows_public_repositories": public,
+	}, &created)
 	switch githubStatus(err) {
-	case http.StatusForbidden, http.StatusUnprocessableEntity:
-		return fmt.Errorf("%w for %s; check organization runner policies and the App's Self-hosted runners (write) permission: %w", errRunnerGroupUnavailable, organization, err)
+	case http.StatusUnprocessableEntity:
+		// Another gateway may have created it since it was looked for.
+		if found, err := g.findRunnerGroup(ctx, installation, token, groups, name); found != nil || err != nil {
+			return found, err
+		}
+
+		fallthrough
+	case http.StatusForbidden:
+		return nil, fmt.Errorf("%w; check the organization's runner policies and the App's Self-hosted runners (write) permission: %w", errRunnerGroupUnavailable, err)
 	}
-	return err
+
+	return &created, err
 }
 
 // githubRunner is a runner as GitHub lists it: online once it has connected
@@ -413,27 +402,24 @@ func (r githubRunner) free() bool {
 	return r.Status == "online" && !r.Busy
 }
 
-// githubRunnerList is the runners of a repository as GitHub listed them at a
-// time, by name.
+// githubRunnerList is the runners of a repository or an organization as
+// GitHub listed them at a time, by name.
 type githubRunnerList struct {
 	at      time.Time
 	runners map[string]githubRunner
 }
 
-// How long a list of a repository's runners is used for. Every idle runner
-// of the repository asks for it on each pass over the VMs, so the list is
-// read once for all of them, and a few times a minute at most.
+// How long a list of runners is used for. Every idle runner that is
+// registered where the list is of asks for it on each pass over the VMs, so
+// the list is read once for all of them, and a few times a minute at most.
 const githubRunnerListAge = 15 * time.Second
 
-// runners lists the runners registered in a repository, by name, as GitHub
-// has them now or had them a few seconds ago. What GitHub did since is found
-// out when it is asked to remove one: it refuses a runner that got a job.
-func (g *githubApp) runners(ctx context.Context, installation int64, repository string) (map[string]githubRunner, error) {
-	return g.scopedRunners(ctx, installation, githubRunnerScope{Repository: repository})
-}
-
-func (g *githubApp) scopedRunners(ctx context.Context, installation int64, scope githubRunnerScope) (map[string]githubRunner, error) {
-	key := fmt.Sprintf("%d/%s", installation, strings.ToLower(scope.path()))
+// runners lists the runners registered in a repository or an organization,
+// by name, as GitHub has them now or had them a few seconds ago. What GitHub
+// did since is found out when it is asked to remove one: it refuses a runner
+// that got a job.
+func (g *githubApp) runners(ctx context.Context, installation int64, scope githubRunnerScope) (map[string]githubRunner, error) {
+	key := fmt.Sprintf("%d%s", installation, scope.path())
 	g.lock.Lock()
 	cached, ok := g.listed[key]
 	g.lock.Unlock()
@@ -481,46 +467,37 @@ func (g *githubApp) scopedRunners(ctx context.Context, installation int64, scope
 
 // removeRunner unregisters a runner that has no job. It reports false when
 // GitHub refuses, which it does once it has given the runner a job.
-func (g *githubApp) removeRunner(ctx context.Context, installation int64, repository, name string) (bool, error) {
-	return g.removeScopedRunner(ctx, installation, githubRunnerScope{Repository: repository}, name)
-}
-
-func (g *githubApp) removeScopedRunner(ctx context.Context, installation int64, scope githubRunnerScope, name string) (bool, error) {
+func (g *githubApp) removeRunner(ctx context.Context, installation int64, scope githubRunnerScope, name string) (bool, error) {
 	token, err := g.installationToken(ctx, installation)
 	if err != nil {
 		return false, err
 	}
 
+	var registered struct {
+		Runners []githubRunner `json:"runners"`
+	}
 	endpoint := g.apiURL + scope.path()
-	for page := endpoint + "?name=" + url.QueryEscape(name) + "&per_page=100"; page != ""; {
-		var registered struct {
-			Runners []githubRunner `json:"runners"`
-		}
-		header, lookupErr := g.ask(ctx, installation, http.MethodGet, page, token, nil, &registered)
-		if lookupErr != nil {
-			return removedRunner(lookupErr)
-		}
+	_, err = g.ask(ctx, installation, http.MethodGet, endpoint+"?name="+url.QueryEscape(name), token, nil, &registered)
+	if err == nil {
 		for _, runner := range registered.Runners {
+			// An organization has runners that are not Beam's as well, and
+			// none of them is removed, however GitHub matches the name.
 			if scope.Organization != "" && runner.Name != name {
 				continue
 			}
+
 			if _, err = g.ask(ctx, installation, http.MethodDelete, fmt.Sprintf("%s/%d", endpoint, runner.ID), token, nil, nil); err != nil {
-				return removedRunner(err)
+				break
 			}
 		}
-		page = nextPage(header.Get("Link"))
 	}
 
-	return true, nil
+	return removedRunner(err)
 }
 
 // deleteRunner unregisters a runner that GitHub listed, as removeRunner does
 // one it has yet to find.
-func (g *githubApp) deleteRunner(ctx context.Context, installation int64, repository string, runner githubRunner) (bool, error) {
-	return g.deleteScopedRunner(ctx, installation, githubRunnerScope{Repository: repository}, runner)
-}
-
-func (g *githubApp) deleteScopedRunner(ctx context.Context, installation int64, scope githubRunnerScope, runner githubRunner) (bool, error) {
+func (g *githubApp) deleteRunner(ctx context.Context, installation int64, scope githubRunnerScope, runner githubRunner) (bool, error) {
 	token, err := g.installationToken(ctx, installation)
 	if err != nil {
 		return false, err

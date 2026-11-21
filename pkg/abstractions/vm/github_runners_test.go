@@ -685,22 +685,23 @@ func deliver(t *testing.T, r *githubRunners, event, action string, labels []stri
 }
 
 func TestGitHubRunnerLabels(t *testing.T) {
-	label, ok := runnerLabel([]string{"Beam-8vCPU-Ubuntu-2404"})
+	r := &githubRunners{}
+	label, ok := r.label([]string{"Beam-8vCPU-Ubuntu-2404"})
 	require.True(t, ok)
-	size, ok := runnerSizeFor(label)
+	size, ok := r.sizeFor(label)
 	require.True(t, ok)
 	require.Equal(t, runnerSize{"beam-8vcpu-ubuntu-2404", 8000, 32768, "50Gi"}, size)
 
 	for _, labels := range [][]string{nil, {"ubuntu-latest"}, {"self-hosted", "linux"}} {
-		_, ok := runnerLabel(labels)
+		_, ok := r.label(labels)
 		require.False(t, ok, "%v does not ask for Beam", labels)
 	}
 
 	// These ask for Beam, but match no runner.
 	for _, labels := range [][]string{{"beam-3vcpu-ubuntu-2404"}, {"self-hosted", "beam-4vcpu-ubuntu-2404"}} {
-		label, ok := runnerLabel(labels)
+		label, ok := r.label(labels)
 		require.True(t, ok, labels)
-		_, ok = runnerSizeFor(label)
+		_, ok = r.sizeFor(label)
 		require.False(t, ok, labels)
 	}
 }
@@ -874,7 +875,7 @@ func TestGitHubRunnerProvisionRetriesWhatPasses(t *testing.T) {
 		require.WithinDuration(t, time.Now().Add(waits[min(attempt, len(waits))-1]), *job.ProvisionAt, time.Second, "retries back off, up to a minute")
 		require.Contains(t, job.Error, "inactive")
 		require.Equal(t, "Retrying", job.Waiting)
-		require.Equal(t, "Retrying", runnerWaiting(*job, false, false))
+		require.Equal(t, "Retrying", r.waiting(*job, false, false))
 		require.NoError(t, r.provision(ctx, *job), "a job is not tried before it is due")
 		require.Equal(t, attempt, job.Attempts)
 		job.ProvisionAt = at(time.Now())
@@ -948,7 +949,7 @@ func TestGitHubRunnerProvisionEndsOnWhatStands(t *testing.T) {
 			require.Nil(t, job.ProvisionAt, "no runner is started for the job any more")
 			require.Equal(t, tc.err, job.Error)
 			require.Equal(t, 1, job.Attempts)
-			require.Empty(t, runnerWaiting(*job, false, false), "the job waits for nothing, and its error says why")
+			require.Empty(t, r.waiting(*job, false, false), "the job waits for nothing, and its error says why")
 			require.Len(t, calls(), len(tc.routes))
 			require.Empty(t, runtime.requests)
 		})
@@ -1601,6 +1602,7 @@ func TestGitHubRunnerPause(t *testing.T) {
 }
 
 func TestGitHubRunnerJobsSayWhatTheyWaitFor(t *testing.T) {
+	r, store, info, _ := runnerFixture(t)
 	due, later := at(time.Now()), at(time.Now().Add(time.Minute))
 	for name, tc := range map[string]struct {
 		job     types.GitHubRunnerJob
@@ -1644,11 +1646,10 @@ func TestGitHubRunnerJobsSayWhatTheyWaitFor(t *testing.T) {
 	} {
 		// Queued for a size there is, unless it says otherwise.
 		tc.job.Status, tc.job.Label = cmp.Or(tc.job.Status, types.GitHubJobQueued), cmp.Or(tc.job.Label, beamLabels[0])
-		require.Equal(t, tc.waiting, runnerWaiting(tc.job, tc.paused, tc.full), name)
+		require.Equal(t, tc.waiting, r.waiting(tc.job, tc.paused, tc.full), name)
 	}
 
 	// A job keeps its error, which says why it waits.
-	r, store, info, _ := runnerFixture(t)
 	store.jobs[1] = queuedJob(1)
 	store.jobs[1].ProvisionAt, store.jobs[1].Error = due, "boom"
 	listed := func() types.GitHubRunnerJob {
@@ -2254,7 +2255,7 @@ func TestGitHubRunnerWaitsWhileGitHubLimitsRequests(t *testing.T) {
 		require.NoError(t, r.provision(ctx, *job))
 		require.Equal(t, attempts, job.Attempts, id)
 		require.Equal(t, limit.Until, *job.ProvisionAt, id)
-		require.Equal(t, "GitHub is limiting requests", runnerWaiting(*job, false, false), id)
+		require.Equal(t, "GitHub is limiting requests", r.waiting(*job, false, false), id)
 	}
 	code, body := runnerRequest(t, info, r.cancelJob, "1", "")
 	require.Equal(t, 429, code)
@@ -2455,7 +2456,7 @@ func TestGitHubRunnerJobWaitsForCapacity(t *testing.T) {
 	waits := func() string {
 		t.Helper()
 		require.NoError(t, r.s.reconcileVM(ctx, v))
-		return runnerWaiting(*job, false, false)
+		return r.waiting(*job, false, false)
 	}
 
 	require.Equal(t, "Starting a runner", waits(), "a runner takes a moment to be given a worker")
@@ -2533,7 +2534,7 @@ func TestGitHubRunnerWaitsForRoomInTheWorkspaceLimit(t *testing.T) {
 		require.Equal(t, types.VMStateQueued, status, "it is never seen starting or in error between two refusals")
 	}
 	require.Equal(t, types.VMStateRunning, v.DesiredState)
-	require.Equal(t, "Workspace CPU limit reached", runnerWaiting(*job, false, false))
+	require.Equal(t, "Workspace CPU limit reached", r.waiting(*job, false, false))
 	require.Nil(t, job.ProvisionAt, "no runner is started in its place")
 	require.Equal(t, 1, job.Attempts)
 	require.Empty(t, job.Error)
@@ -2556,7 +2557,7 @@ func TestGitHubRunnerWaitsForRoomInTheWorkspaceLimit(t *testing.T) {
 	require.Equal(t, types.VMStateStarting, store.rows[v.ID].Status)
 	require.Empty(t, store.rows[v.ID].Waiting)
 	require.Len(t, runtime.requests, 1, "it is not started again")
-	require.Equal(t, "Starting a runner", runnerWaiting(*job, false, false))
+	require.Equal(t, "Starting a runner", r.waiting(*job, false, false))
 	require.Equal(t, types.VMStateRunning, v.DesiredState)
 
 	// A runner that fails to start for any other reason is given up on.
@@ -2596,7 +2597,7 @@ func TestGitHubRunnerWaitsForCredit(t *testing.T) {
 	// It was refused a moment ago, and is not started again yet.
 	require.NoError(t, r.s.reconcileVM(ctx, v))
 	require.Equal(t, 1, asked())
-	require.Equal(t, "Workspace is out of credits", runnerWaiting(*job, false, false))
+	require.Equal(t, "Workspace is out of credits", r.waiting(*job, false, false))
 
 	// The scheduler refuses a VM that has its stub in the same words.
 	gateway.refuse = ""
@@ -2700,7 +2701,7 @@ func TestGitHubRunnerLeftInErrorByAnOlderGatewayIsQueued(t *testing.T) {
 	require.Equal(t, "Workspace CPU limit reached", v.Waiting)
 	require.Empty(t, v.Error)
 	require.Equal(t, types.VMStateRunning, v.DesiredState)
-	require.Equal(t, "Workspace CPU limit reached", runnerWaiting(*job, false, false))
+	require.Equal(t, "Workspace CPU limit reached", r.waiting(*job, false, false))
 	require.Nil(t, job.ProvisionAt, "no runner is started in its place")
 	require.Empty(t, calls(), "GitHub keeps the runner")
 
