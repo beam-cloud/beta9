@@ -56,6 +56,7 @@ const (
 	shutdownDrainMax               time.Duration = 5 * time.Second
 	shutdownForceWait              time.Duration = 5 * time.Second
 	shutdownCleanupReserve         time.Duration = 5 * time.Second
+	shutdownUsageFlushTimeout      time.Duration = 10 * time.Second
 	workerShutdownRPCTimeout       time.Duration = 5 * time.Second
 	containerStartupTimeout        time.Duration = 15 * time.Minute
 	stuckContainerAbortDelay       time.Duration = 2 * time.Minute
@@ -1792,6 +1793,15 @@ func (s *Worker) shutdown() error {
 
 	s.waitForActiveContainersBeforeShutdown()
 	s.stopActiveContainersForShutdown()
+
+	// The containers have stopped. Deliver their last usage, and any the
+	// metering endpoint refused earlier, while the rest of the cleanup runs.
+	usageDelivered := make(chan struct{})
+	go func() {
+		defer close(usageDelivered)
+		s.workerUsageMetrics.Flush(shutdownUsageFlushTimeout)
+	}()
+
 	if s.diskManager != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), durableDiskCleanupGrace)
 		if err := s.diskManager.Close(ctx); err != nil {
@@ -1851,6 +1861,7 @@ func (s *Worker) shutdown() error {
 		s.gvisorRuntime.Close()
 	}
 
+	<-usageDelivered
 	return s.finishShutdown(errs)
 }
 

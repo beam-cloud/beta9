@@ -186,18 +186,6 @@ func (c *ContainerCostClient) lookup(ctx context.Context, key ContainerCostReque
 	}
 }
 
-// GetContainerCostPerMs keeps the scalar interface used by older callers.
-func (c *ContainerCostClient) GetContainerCostPerMs(request *types.ContainerRequest) (float64, error) {
-	quote, err := c.GetContainerCostQuote(context.Background(), request)
-	if !quote.Valid || !quote.ValidUntil.IsZero() && !quote.ValidUntil.After(c.now()) {
-		if err == nil {
-			err = fmt.Errorf("container cost quote is unavailable or expired")
-		}
-		return 0, err
-	}
-	return quote.CostPerMs, err
-}
-
 func (c *ContainerCostClient) fetch(ctx context.Context, request ContainerCostRequest) (ContainerCostQuote, time.Time, error) {
 	body, err := json.Marshal(request)
 	if err != nil {

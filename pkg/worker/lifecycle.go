@@ -1922,7 +1922,13 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		})
 	}()
 
-	defer cancel()
+	// Metering starts further down and stops here, once the container's state
+	// has been cleaned up: the same end the billed interval has always had.
+	stopMetering := func() {}
+	defer func() {
+		cancel()
+		stopMetering()
+	}()
 
 	exitCode := -1
 	exitReported := false
@@ -2139,8 +2145,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		restoringRuntimeCheckpoint = false
 	}
 
-	// Log metrics
-	go s.workerUsageMetrics.EmitContainerUsage(ctx, request)
+	// Metered until stopMetering, not until ctx ends: a worker that is shutting
+	// down cancels ctx and then leaves the container running for its stop grace.
+	stopMetering = s.workerUsageMetrics.TrackContainer(request)
 
 	startedChan := make(chan int, 1)
 	checkpointPIDChan := make(chan int, 1)
